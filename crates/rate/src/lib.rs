@@ -60,6 +60,25 @@ pub struct TickRecord {
     pub metal: bool,
 }
 
+/// Autoware Safety Island skips the control tick on missing input.
+/// This gate does the opposite: missing sensor this tick → PassiveFallback.
+pub fn missing_input_forces_passive(sensor_this_tick: bool) -> bool {
+    !sensor_this_tick
+}
+
+pub fn certify_tick(
+    u_nom: &[f64],
+    dq: &[f64],
+    envelope: &BoundedTrustEnvelope,
+    hold: bool,
+    sensor_this_tick: bool,
+) -> DisposeStatus {
+    if missing_input_forces_passive(sensor_this_tick) {
+        return certify_dispose_step(u_nom, dq, envelope, true);
+    }
+    certify_dispose_step(u_nom, dq, envelope, hold)
+}
+
 pub fn budget_us(mode: ExecutionMode) -> f64 {
     match mode {
         ExecutionMode::TrustedFastpath => BUDGET_FASTPATH_US,
@@ -142,5 +161,18 @@ mod tests {
         assert!(ticks.iter().all(|t| t.mode == "TRUSTED_FASTPATH"));
         let ok = run_dispose_ticks(8, 1000.0, &[0.1], &[0.0], &env, false, 5.0);
         assert!(ok.iter().all(|t| !t.deadline_miss));
+    }
+
+    #[test]
+    fn missing_sensor_this_tick_is_passive_not_skip() {
+        let env = BoundedTrustEnvelope {
+            tau_max: vec![1.0],
+            dq_max: vec![10.0],
+            is_valid: true,
+        };
+        let st = certify_tick(&[0.2], &[0.0], &env, false, false);
+        assert_eq!(st.mode, ExecutionMode::PassiveFallback);
+        let st2 = certify_tick(&[0.2], &[0.0], &env, false, true);
+        assert_eq!(st2.mode, ExecutionMode::TrustedFastpath);
     }
 }
