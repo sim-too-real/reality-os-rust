@@ -167,6 +167,10 @@ impl<P: Plant> RuntimeSession<P> {
         self.safe_state = state;
     }
 
+    pub fn last_sensor_hash(&self) -> Option<&str> {
+        self.last_sensor_hash.as_deref()
+    }
+
     pub fn ingest_sensor(
         &mut self,
         samples: &[(String, f64)],

@@ -14,6 +14,14 @@ pub enum PlantError {
     EstopEngaged,
     #[error("plant has no live driver")]
     NoDriver,
+    #[error("driver not connected")]
+    Disconnected,
+    #[error("egress disabled; use RuntimeGovernor")]
+    EgressDisabled,
+    #[error("fieldbus not attached (named hole)")]
+    FieldbusNotAttached,
+    #[error("named hole: {0}")]
+    NamedHole(&'static str),
 }
 
 impl PlantError {

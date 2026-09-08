@@ -285,10 +285,21 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "realityos-kernel",
+ "realityos-physics",
  "realityos-plant",
  "serde",
  "serde_json",
  "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "realityos-data"
+version = "0.1.0"
+dependencies = [
+ "realityos-kernel",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 
@@ -307,6 +318,15 @@ dependencies = [
 name = "realityos-kernel"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "realityos-physics"
+version = "0.1.0"
+dependencies = [
+ "realityos-kernel",
  "serde",
  "thiserror",
 ]
@@ -339,9 +359,11 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "realityos-core",
+ "realityos-data",
  "realityos-governor",
  "realityos-kernel",
  "realityos-plant",
+ "realityos-ros2",
  "serde",
  "serde_json",
  "sha2",

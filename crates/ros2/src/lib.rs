@@ -3,9 +3,15 @@
 //! Product path is RuntimeGovernor. This crate publishes veto/status shapes
 //! so a future rclrs node can wrap the gate without owning authority.
 
+pub mod chain;
+pub mod codec;
+
 use realityos_governor::RuntimeTrace;
 use realityos_kernel::DecisionStatus;
 use serde::{Deserialize, Serialize};
+
+pub use chain::{architecture_map, ConnectionLayer, LinkState};
+pub use codec::{JointCommand, JointState, Wrench};
 
 /// Fail-closed default: veto is true until a live gate says otherwise.
 pub const DEFAULT_VETO: bool = true;
@@ -72,6 +78,8 @@ pub const TOPICS: &[(&str, &str)] = &[
     ("/reality_os/decision", "std_msgs/String"),
     ("/reality_os/allowed", "std_msgs/Bool"),
     ("/reality_os/safe_action", "std_msgs/Float64MultiArray"),
+    ("/joint_states", "sensor_msgs/JointState"),
+    ("/ft_sensor/wrench", "geometry_msgs/WrenchStamped"),
 ];
 
 #[cfg(test)]

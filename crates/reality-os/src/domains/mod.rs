@@ -2,7 +2,10 @@
 //! Physics formulas stay screens. Unknown kind refuses.
 
 mod actuator;
+mod energy;
+mod motor;
 mod pfl;
+mod stop;
 mod workspace;
 
 use std::collections::BTreeMap;
@@ -12,7 +15,10 @@ use crate::plan::{Intent, PhysicalPlan};
 use realityos_kernel::DecisionStatus;
 
 pub use actuator::ActuatorEnvelope;
+pub use energy::EnergyEnvelope;
+pub use motor::MotorTorque;
 pub use pfl::{BodyRegion, PflScreen};
+pub use stop::StopDistance;
 pub use workspace::WorkspaceBoundary;
 
 pub trait DomainPlugin: Send + Sync {
@@ -32,6 +38,17 @@ pub struct WorldView {
     pub pixels_present: bool,
     pub scene_compiled: bool,
     pub pose_std_m: Option<f64>,
+    pub mass_kg: Option<f64>,
+    pub speed_m_s: Option<f64>,
+    pub decel_m_s2: Option<f64>,
+    pub max_stop_m: Option<f64>,
+    pub ke_limit_j: Option<f64>,
+    pub omega_rad_s: Option<f64>,
+    pub inertia_kg_m2: Option<f64>,
+    pub kt_nm_per_a: Option<f64>,
+    pub current_a: Option<f64>,
+    pub gear_ratio: Option<f64>,
+    pub motor_eta: Option<f64>,
 }
 
 #[derive(Default)]
@@ -45,6 +62,9 @@ impl DomainRegistry {
         r.register(Box::new(ActuatorEnvelope));
         r.register(Box::new(WorkspaceBoundary));
         r.register(Box::new(PflScreen::sim_defaults()));
+        r.register(Box::new(StopDistance));
+        r.register(Box::new(EnergyEnvelope));
+        r.register(Box::new(MotorTorque));
         r
     }
 
@@ -81,6 +101,9 @@ impl DomainRegistry {
             "move" | "reach" => "workspace_boundary",
             "contact" | "push" | "pfl" => "pfl_contact",
             "place" | "pick" | "precision_place" | "grasp" | "insert" => "workspace_boundary",
+            "stop" | "halt" | "estop_distance" => "stop_distance",
+            "energy" | "ke" => "energy_envelope",
+            "motor" | "current" => "motor_torque",
             _ => "actuator_envelope",
         };
         self.plugins.contains_key(mapped).then_some(mapped)

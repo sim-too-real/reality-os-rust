@@ -19,4 +19,8 @@ SIM software. Never metal. Never invent.
 | PFL table is a SIM screen, not ISO 10218 / TS 15066 certified | ACTIVE | `domains/pfl.rs` |
 | ROS2 node is adapter; hardware writes default off | ACTIVE | `crates/ros2` |
 | Attestation chain ≠ driver consume journal | ACTIVE | two types: `CertificateLedger` vs `CommandLedger` |
+| First-principles stop/energy/motor screens (SIM formulas) | ACTIVE | `crates/physics` + domain plugins |
+| Typed `Violation`/`Layer` + event store | ACTIVE | `crates/kernel`, `crates/data` |
+| HardwareDriverPort → BackedPlant → Governor | ACTIVE | `crates/plant` harness; metal clamped false |
+| Fieldbus / metal robot | **NAMED_HOLE** | `FieldbusLink::named_hole`; `docs/ROBOT_CONNECTION.md` |
 | ONLINE metal / MEASURED / ISO PL/SIL | **NOT_EVIDENCE** | type system + this ledger |

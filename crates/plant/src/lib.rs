@@ -3,27 +3,38 @@
 //! Governor depends on this crate. Reality OS issues commands that implement
 //! [`ActuationCommand`]. No invent. No learned last-write.
 
+pub mod backed;
 pub mod caps;
 pub mod command;
+pub mod egress;
 pub mod error;
 pub mod execute;
+pub mod fieldbus;
+pub mod harness;
 pub mod ledger;
 pub mod signing;
 pub mod sim;
 pub mod traits;
 pub mod write_guard;
 
+pub use backed::HardwareBackedPlant;
 pub use caps::{ActionParams, PlantCaps, PlantRealized};
 pub use command::{ActuationCommand, ExecuteBind};
+pub use egress::{CommandEgress, RecordingCommandEgress, RefuseCommandEgress};
 pub use error::{PlantError, PlantResult};
 pub use execute::{execute_certified_command, ExecuteResult};
+pub use fieldbus::{FieldbusKind, FieldbusLink, LinkState};
+pub use harness::SimulatedHardwarePort;
 pub use ledger::{CommandLedger, ContinuityState};
 pub use signing::{
     action_within_issuer_envelope, command_payload_hash, sign_payload, signature_violations,
     SIGNING_SCHEME,
 };
 pub use sim::SimPlant;
-pub use traits::{HardwareDriverPort, HardwareIdentity, Plant, SensorPacket};
+pub use traits::{
+    hash_sensor_samples, HardwareDriverPort, HardwareIdentity, Plant, SensorPacket,
+    HARNESS_EVIDENCE,
+};
 pub use write_guard::{
     in_certified_write, plant_requires_certified_write, refuse_uncertified_online_write,
     with_certified_write,

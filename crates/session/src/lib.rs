@@ -3,10 +3,12 @@
 //! Foundry compiles embodiments. Reality OS compiles CertifiedCommand.
 //! Governor proves permission. This crate alone binds identity and acknowledges.
 
+pub mod bridge;
 pub mod mode;
 pub mod packages;
 pub mod session;
 
+pub use bridge::HardwareControlBridge;
 pub use mode::{RuntimeMode, SessionStartError};
 pub use packages::{GovernorPackage, PackageReport, RealityOsPackage, SafetyEdge};
 pub use session::{DispatchResult, RuntimeSession, StartArgs};
@@ -18,7 +20,7 @@ mod tests {
     use super::*;
     use realityos_core::{Certificate, CertifiedCommand, Intent, RealityOs, WorldView};
     use realityos_kernel::DecisionStatus;
-    use realityos_plant::{ActionParams, SimPlant};
+    use realityos_plant::{ActionParams, Plant, SimPlant};
 
     #[test]
     fn online_refuses_rail_opt_out() {
@@ -93,5 +95,69 @@ mod tests {
         let sess = RuntimeSession::start(StartArgs::simulation("rel-sim-dd"), plant, 1.0).unwrap();
         let out = sess.refuse_bare_action(&[1.0]);
         assert!(!out.ok);
+    }
+
+    #[test]
+    fn harness_bridge_e2e_records_data_and_refuses_bare_online_act() {
+        let mut br = HardwareControlBridge::sim_harness("rel-harness-1", 10.0).unwrap();
+        let js = realityos_ros2::JointState {
+            name: vec!["j1".into()],
+            position: vec![0.1],
+            velocity: vec![0.0],
+            effort: vec![0.0],
+            timestamp_s: 10.0,
+        };
+        br.ingest_joint_state(&js, 10.0).unwrap();
+        let mut ros = RealityOs::new();
+        let d = ros.decide(realityos_core::DecideRequest::new(
+            Intent::language("hold", "hold"),
+            WorldView {
+                tau_max: vec![5.0],
+                ..WorldView::default()
+            },
+            10.0,
+        ));
+        let mut cmd = d.command.expect("allow");
+        cmd.release_hash.clear();
+        let out = br.dispatch(cmd, 10.0);
+        assert!(out.ok, "{:?}", out.violations);
+        assert!(!br.events.is_empty());
+        let report = br.connection_report();
+        assert!(report
+            .iter()
+            .any(|l| l.name == "fieldbus" && l.state == realityos_ros2::LinkState::NamedHole));
+        let err = br
+            .session
+            .governor
+            .plant
+            .act(&[0.3], &ActionParams::empty())
+            .unwrap_err();
+        match err {
+            realityos_plant::PlantError::UncertifiedOnline { method } => {
+                assert_eq!(method, "act");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(!br.snapshot().metal);
+        assert!(!br.fieldbus.attached);
+    }
+
+    #[test]
+    fn stop_distance_domain_refuses_too_fast() {
+        let mut ros = RealityOs::new();
+        let mut req = realityos_core::DecideRequest::new(
+            Intent::language("stop", "stop"),
+            WorldView {
+                speed_m_s: Some(10.0),
+                decel_m_s2: Some(1.0),
+                max_stop_m: Some(1.0),
+                ..WorldView::default()
+            },
+            1.0,
+        );
+        req.intent.require_scene = false;
+        let d = ros.decide(req);
+        assert_eq!(d.status, DecisionStatus::Refuse);
+        assert!(d.command.is_none());
     }
 }

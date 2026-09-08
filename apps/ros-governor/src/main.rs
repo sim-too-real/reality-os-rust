@@ -52,6 +52,10 @@ enum Commands {
     },
     /// Print ROS 2 adapter contracts.
     Topics,
+    /// Print every connection layer from first principles to metal (holes named).
+    Chain,
+    /// Dump data-layer events after a SIM harness decide+dispatch.
+    Debug,
 }
 
 fn main() -> Result<()> {
@@ -68,6 +72,8 @@ fn main() -> Result<()> {
         Commands::Estop { reason } => estop(&reason),
         Commands::Edge { verb } => edge(&verb),
         Commands::Topics => topics(),
+        Commands::Chain => chain(),
+        Commands::Debug => debug_run(),
     }
 }
 
@@ -170,5 +176,61 @@ fn topics() -> Result<()> {
         "hardware_writes_enabled: {}",
         realityos_ros2::HARDWARE_WRITES_ENABLED
     );
+    Ok(())
+}
+
+fn chain() -> Result<()> {
+    for layer in realityos_ros2::architecture_map() {
+        println!(
+            "{:02}  {:<24}  {:<12}  {}",
+            layer.index,
+            layer.name,
+            format!("{:?}", layer.state).to_ascii_lowercase(),
+            layer.note
+        );
+    }
+    println!("metal: false");
+    println!("fieldbus_tx: named_hole");
+    Ok(())
+}
+
+fn debug_run() -> Result<()> {
+    use realityos_session::HardwareControlBridge;
+    let mut br =
+        HardwareControlBridge::sim_harness("rel-debug", 1.0).map_err(|e| anyhow::anyhow!(e))?;
+    let js = realityos_ros2::JointState {
+        name: vec!["j1".into()],
+        position: vec![0.0],
+        velocity: vec![0.0],
+        effort: vec![0.0],
+        timestamp_s: 1.0,
+    };
+    br.ingest_joint_state(&js, 1.0)
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let mut ros = RealityOs::new();
+    let d = ros.decide(realityos_core::DecideRequest::new(
+        Intent::language("hold", "hold"),
+        WorldView {
+            tau_max: vec![5.0],
+            ..WorldView::default()
+        },
+        1.0,
+    ));
+    if let Some(mut cmd) = d.command {
+        cmd.release_hash.clear();
+        let _ = br.dispatch(cmd, 1.0);
+    }
+    println!("{}", serde_json::to_string_pretty(&br.snapshot())?);
+    println!("events: {}", br.events.len());
+    for e in br.events.events() {
+        println!(
+            "  seq={} {} {} ok={} corr={}",
+            e.seq,
+            e.layer,
+            e.kind.as_str(),
+            e.ok,
+            e.correlation_id
+        );
+    }
     Ok(())
 }

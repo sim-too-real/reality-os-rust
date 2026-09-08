@@ -1,0 +1,16 @@
+[package]
+name = "realityos-physics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "First-principles SI formulas for the last-gate. Screens, not MEASURED."
+readme = false
+
+[dependencies]
+realityos-kernel.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

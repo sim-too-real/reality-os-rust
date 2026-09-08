@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
     "crates/kernel",
+    "crates/physics",
+    "crates/data",
     "crates/plant",
     "crates/governor",
     "crates/reality-os",
@@ -11,6 +13,8 @@ members = [
 ]
 default-members = [
     "crates/kernel",
+    "crates/physics",
+    "crates/data",
     "crates/plant",
     "crates/governor",
     "crates/reality-os",
@@ -30,6 +34,8 @@ repository = "https://github.com/theworld/reality-os-rust"
 
 [workspace.dependencies]
 realityos-kernel = { path = "crates/kernel" }
+realityos-physics = { path = "crates/physics" }
+realityos-data = { path = "crates/data" }
 realityos-plant = { path = "crates/plant" }
 realityos-governor = { path = "crates/governor" }
 realityos-core = { path = "crates/reality-os" }

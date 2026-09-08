@@ -28,15 +28,17 @@ That choke point is the wedge. See [docs/COMPETITOR_WEDGE.md](docs/COMPETITOR_WE
 
 | Crate | Owns | Must not own |
 |-------|------|----------------|
-| `realityos-kernel` | Verdicts, honesty stamp, IDs | Plants, ROS, invent |
-| `realityos-plant` | `Plant` trait, ledger, certified-write uniqueness | Task planning |
+| `realityos-kernel` | Verdicts, honesty, typed `Violation`/`Layer` | Plants, ROS, invent |
+| `realityos-physics` | First-principles SI (stop, energy, motor, Nyquist) | MEASURED dyno |
+| `realityos-data` | Event store, query, snapshots | Actuation |
+| `realityos-plant` | `Plant`, backed plant, harness, refuse egress | Task planning |
 | `realityos-governor` | Identity, e-stop, envelope, `write_driver` | `decide()`, Foundry |
-| `realityos-core` | `RealityOs.decide`, domain plugins, see-before-act | `plant.act` |
-| `realityos-session` | `RuntimeSession`, sealed packages | Invent modules |
-| `realityos-ros2` | Topic contracts, fail-closed veto | Veto *logic* (lives in governor) |
-| `ros-governor` | CLI composition root | Metal / ONLINE motion |
+| `realityos-core` | `decide` + domain plugins | `plant.act` |
+| `realityos-session` | Session + `HardwareControlBridge` | Invent modules |
+| `realityos-ros2` | Codecs, veto topics, connection map | Veto *logic* |
+| `ros-governor` | CLI (`chain`, `debug`) | Metal / ONLINE motion |
 
-Physics formula domains stay **plugins**. This repo ships three screens (`actuator_envelope`, `workspace_boundary`, `pfl_contact`) as the growth pattern — not a second oracle for Coulomb / grasp closed forms.
+Physics formula domains are **plugins**. EtherCAT/metal stay **named holes**.
 
 ## Build
 
@@ -45,7 +47,11 @@ cargo test --workspace
 cargo run -p ros-governor -- status
 cargo run -p ros-governor -- decide --verb hold
 cargo run -p ros-governor -- dispatch --verb hold
+cargo run -p ros-governor -- chain
+cargo run -p ros-governor -- debug
 ```
+
+Robot connection (holes named): `docs/ROBOT_CONNECTION.md`. Formulas: `docs/FIRST_PRINCIPLES.md`.
 
 ## Honesty
 
