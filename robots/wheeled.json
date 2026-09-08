@@ -1,0 +1,9 @@
+{
+  "id": "wheeled",
+  "kind": "differential_drive",
+  "source": "2-DoF wheel rates (Nav2-class, not a certified AMR)",
+  "joints": [
+    { "name": "left_wheel", "q_min": -1e9, "q_max": 1e9, "tau_max": 5.0, "dq_max": 20.0 },
+    { "name": "right_wheel", "q_min": -1e9, "q_max": 1e9, "tau_max": 5.0, "dq_max": 20.0 }
+  ]
+}

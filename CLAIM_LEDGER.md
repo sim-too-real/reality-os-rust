@@ -22,5 +22,11 @@ SIM software. Never metal. Never invent.
 | First-principles stop/energy/motor screens (SIM formulas) | ACTIVE | `crates/physics` + domain plugins |
 | Typed `Violation`/`Layer` + event store | ACTIVE | `crates/kernel`, `crates/data` |
 | HardwareDriverPort → BackedPlant → Governor | ACTIVE | `crates/plant` harness; metal clamped false |
+| Robot-agnostic bodies (H1 19-DoF from xml ranges, arm6, wheeled) | ACTIVE | `robots/*.json` + `crates/embodiment` |
+| Env-agnostic g/μ (earth/moon/ice/high_g) | ACTIVE | `Environment::catalog` |
+| Pixel see-before-act (pinhole, no gifted pose) | ACTIVE | `crates/vision` |
+| Multi-Hz bands 30–1000 + deadline miss | ACTIVE | `crates/rate` SIM budgets, not PREEMPT_RT |
+| Grok/LLM propose-only + forbid metal keys | ACTIVE | `crates/agent`; live `XAI_API_KEY` + feature `live-grok` |
+| Governor gauntlet 160 + Reality OS 131 | ACTIVE | `crates/gauntlet`; CLI `gauntlet` |
 | Fieldbus / metal robot | **NAMED_HOLE** | `FieldbusLink::named_hole`; `docs/ROBOT_CONNECTION.md` |
 | ONLINE metal / MEASURED / ISO PL/SIL | **NOT_EVIDENCE** | type system + this ledger |

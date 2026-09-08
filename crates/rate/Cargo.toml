@@ -1,0 +1,17 @@
+[package]
+name = "realityos-rate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Multi-Hz screen/dispose/telemetry scheduler. SIM deadlines, not PREEMPT_RT."
+readme = false
+
+[dependencies]
+realityos-kernel.workspace = true
+realityos-physics.workspace = true
+realityos-core.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

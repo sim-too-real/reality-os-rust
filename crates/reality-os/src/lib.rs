@@ -18,7 +18,7 @@ pub use authority::{
     assert_no_learned_actuator_authority, is_forbidden_tool, is_learned_source,
     screen_external_proposal,
 };
-pub use bounded_trust::{certify_dispose_step, ExecutionMode};
+pub use bounded_trust::{certify_dispose_step, BoundedTrustEnvelope, DisposeStatus, ExecutionMode};
 pub use certificate::Certificate;
 pub use command::{narrow_certified_command, CertifiedCommand};
 pub use decide::{DecideRequest, KernelDecision, RealityOs};

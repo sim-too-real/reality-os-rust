@@ -1,0 +1,8 @@
+{
+  "id": "uniaxial",
+  "kind": "prismatic",
+  "source": "analytic 1-DoF slide/press plant",
+  "joints": [
+    { "name": "slide", "q_min": -1.0, "q_max": 1.0, "tau_max": 10.0, "dq_max": 2.0 }
+  ]
+}

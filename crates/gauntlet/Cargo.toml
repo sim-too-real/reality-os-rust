@@ -1,32 +1,25 @@
 [package]
-name = "ros-governor"
+name = "realityos-gauntlet"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "CLI composition root for Reality OS + Governor (SIM). Never metal."
+description = "Large scenario matrices for Governor + Reality OS. SIM."
 readme = false
-
-[[bin]]
-name = "ros-governor"
-path = "src/main.rs"
 
 [dependencies]
 realityos-kernel.workspace = true
+realityos-physics.workspace = true
 realityos-plant.workspace = true
 realityos-governor.workspace = true
 realityos-core.workspace = true
 realityos-session.workspace = true
-realityos-ros2.workspace = true
-realityos-gauntlet.workspace = true
-realityos-agent.workspace = true
-realityos-rate.workspace = true
 realityos-embodiment.workspace = true
-anyhow.workspace = true
-clap.workspace = true
+realityos-vision.workspace = true
+realityos-rate.workspace = true
+realityos-agent.workspace = true
+realityos-data.workspace = true
 serde_json.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

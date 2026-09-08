@@ -1,0 +1,17 @@
+[package]
+name = "realityos-vision"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "See-before-act: pixels, pinhole unproject, no gifted pose. SIM."
+readme = false
+
+[dependencies]
+realityos-kernel.workspace = true
+sha2.workspace = true
+hex.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "realityos-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Grok/LLM propose-only skill programs. Never motor write."
+readme = false
+
+[dependencies]
+realityos-kernel.workspace = true
+realityos-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ureq = { version = "2", optional = true }
+
+[features]
+default = []
+live-grok = ["ureq"]
+
+[lints]
+workspace = true

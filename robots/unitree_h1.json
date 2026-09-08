@@ -1,0 +1,26 @@
+{
+  "id": "unitree_h1",
+  "kind": "biped",
+  "source": "C:/projects/theworld/robots/unitree_h1/h1.xml joint ranges only — meshes not imported, not metal",
+  "joints": [
+    { "name": "left_hip_yaw", "q_min": -0.43, "q_max": 0.43, "tau_max": 120.0, "dq_max": 8.0 },
+    { "name": "left_hip_roll", "q_min": -0.43, "q_max": 0.43, "tau_max": 120.0, "dq_max": 8.0 },
+    { "name": "left_hip_pitch", "q_min": -1.57, "q_max": 1.57, "tau_max": 200.0, "dq_max": 8.0 },
+    { "name": "left_knee", "q_min": -0.26, "q_max": 2.05, "tau_max": 200.0, "dq_max": 10.0 },
+    { "name": "left_ankle", "q_min": -0.87, "q_max": 0.52, "tau_max": 45.0, "dq_max": 12.0 },
+    { "name": "right_hip_yaw", "q_min": -0.43, "q_max": 0.43, "tau_max": 120.0, "dq_max": 8.0 },
+    { "name": "right_hip_roll", "q_min": -0.43, "q_max": 0.43, "tau_max": 120.0, "dq_max": 8.0 },
+    { "name": "right_hip_pitch", "q_min": -1.57, "q_max": 1.57, "tau_max": 200.0, "dq_max": 8.0 },
+    { "name": "right_knee", "q_min": -0.26, "q_max": 2.05, "tau_max": 200.0, "dq_max": 10.0 },
+    { "name": "right_ankle", "q_min": -0.87, "q_max": 0.52, "tau_max": 45.0, "dq_max": 12.0 },
+    { "name": "torso", "q_min": -2.35, "q_max": 2.35, "tau_max": 80.0, "dq_max": 6.0 },
+    { "name": "left_shoulder_pitch", "q_min": -2.87, "q_max": 2.87, "tau_max": 40.0, "dq_max": 10.0 },
+    { "name": "left_shoulder_roll", "q_min": -0.34, "q_max": 3.11, "tau_max": 40.0, "dq_max": 10.0 },
+    { "name": "left_shoulder_yaw", "q_min": -1.3, "q_max": 4.45, "tau_max": 18.0, "dq_max": 12.0 },
+    { "name": "left_elbow", "q_min": -1.25, "q_max": 2.61, "tau_max": 18.0, "dq_max": 12.0 },
+    { "name": "right_shoulder_pitch", "q_min": -2.87, "q_max": 2.87, "tau_max": 40.0, "dq_max": 10.0 },
+    { "name": "right_shoulder_roll", "q_min": -3.11, "q_max": 0.34, "tau_max": 40.0, "dq_max": 10.0 },
+    { "name": "right_shoulder_yaw", "q_min": -4.45, "q_max": 1.3, "tau_max": 18.0, "dq_max": 12.0 },
+    { "name": "right_elbow", "q_min": -1.25, "q_max": 2.61, "tau_max": 18.0, "dq_max": 12.0 }
+  ]
+}

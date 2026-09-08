@@ -56,6 +56,15 @@ enum Commands {
     Chain,
     /// Dump data-layer events after a SIM harness decide+dispatch.
     Debug,
+    /// Run Governor + Reality OS scenario matrices (100s of cases).
+    Gauntlet,
+    /// Grok/offline skill propose (never motors).
+    Propose {
+        #[arg(long, default_value = "hold the payload")]
+        prompt: String,
+    },
+    /// Print first-principles rate bands.
+    Rates,
 }
 
 fn main() -> Result<()> {
@@ -74,6 +83,9 @@ fn main() -> Result<()> {
         Commands::Topics => topics(),
         Commands::Chain => chain(),
         Commands::Debug => debug_run(),
+        Commands::Gauntlet => gauntlet(),
+        Commands::Propose { prompt } => propose(&prompt),
+        Commands::Rates => rates(),
     }
 }
 
@@ -232,5 +244,41 @@ fn debug_run() -> Result<()> {
             e.correlation_id
         );
     }
+    Ok(())
+}
+
+fn gauntlet() -> Result<()> {
+    let g = realityos_gauntlet::governor_matrix();
+    let r = realityos_gauntlet::reality_os_matrix();
+    let (gn, gb) = realityos_gauntlet::summarize(&g);
+    let (rn, rb) = realityos_gauntlet::summarize(&r);
+    println!("governor_scenarios: {gn} fail: {gb}");
+    println!("reality_os_scenarios: {rn} fail: {rb}");
+    println!("robots: uniaxial, arm6, wheeled, unitree_h1");
+    println!("envs: earth, moon, ice, high_g");
+    println!("metal: false");
+    if gb + rb > 0 {
+        bail!("gauntlet failures governor={gb} reality_os={rb}");
+    }
+    Ok(())
+}
+
+fn propose(prompt: &str) -> Result<()> {
+    let p = realityos_agent::offline_propose(prompt);
+    println!("{}", serde_json::to_string_pretty(&p)?);
+    println!("learned_actuator_authority: false");
+    println!("live_grok: enable feature live-grok + XAI_API_KEY (not on 1kHz path)");
+    Ok(())
+}
+
+fn rates() -> Result<()> {
+    for b in realityos_rate::bands() {
+        println!("{}  {} Hz  period={:.6}s", b.name, b.hz, b.period_s());
+    }
+    println!(
+        "dispose_budget_fastpath_us: {}",
+        realityos_rate::BUDGET_FASTPATH_US
+    );
+    println!("not_preempt_rt: true");
     Ok(())
 }

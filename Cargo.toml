@@ -9,6 +9,11 @@ members = [
     "crates/reality-os",
     "crates/session",
     "crates/ros2",
+    "crates/embodiment",
+    "crates/vision",
+    "crates/rate",
+    "crates/agent",
+    "crates/gauntlet",
     "apps/ros-governor",
 ]
 default-members = [
@@ -20,6 +25,11 @@ default-members = [
     "crates/reality-os",
     "crates/session",
     "crates/ros2",
+    "crates/embodiment",
+    "crates/vision",
+    "crates/rate",
+    "crates/agent",
+    "crates/gauntlet",
     "apps/ros-governor",
 ]
 
@@ -41,6 +51,11 @@ realityos-governor = { path = "crates/governor" }
 realityos-core = { path = "crates/reality-os" }
 realityos-session = { path = "crates/session" }
 realityos-ros2 = { path = "crates/ros2" }
+realityos-embodiment = { path = "crates/embodiment" }
+realityos-vision = { path = "crates/vision" }
+realityos-rate = { path = "crates/rate" }
+realityos-agent = { path = "crates/agent" }
+realityos-gauntlet = { path = "crates/gauntlet" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

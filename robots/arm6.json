@@ -1,0 +1,13 @@
+{
+  "id": "arm6",
+  "kind": "serial_arm",
+  "source": "generic 6-DoF manipulator envelope (SIM screens, not URDF mesh)",
+  "joints": [
+    { "name": "j1", "q_min": -3.14, "q_max": 3.14, "tau_max": 80.0, "dq_max": 3.0 },
+    { "name": "j2", "q_min": -2.0, "q_max": 2.0, "tau_max": 80.0, "dq_max": 3.0 },
+    { "name": "j3", "q_min": -2.5, "q_max": 2.5, "tau_max": 40.0, "dq_max": 4.0 },
+    { "name": "j4", "q_min": -3.14, "q_max": 3.14, "tau_max": 20.0, "dq_max": 6.0 },
+    { "name": "j5", "q_min": -1.57, "q_max": 1.57, "tau_max": 20.0, "dq_max": 6.0 },
+    { "name": "j6", "q_min": -3.14, "q_max": 3.14, "tau_max": 10.0, "dq_max": 8.0 }
+  ]
+}

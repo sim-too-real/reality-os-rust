@@ -49,6 +49,9 @@ cargo run -p ros-governor -- decide --verb hold
 cargo run -p ros-governor -- dispatch --verb hold
 cargo run -p ros-governor -- chain
 cargo run -p ros-governor -- debug
+cargo run -p ros-governor -- gauntlet
+cargo run -p ros-governor -- rates
+cargo run -p ros-governor -- propose --prompt "pick and place"
 ```
 
 Robot connection (holes named): `docs/ROBOT_CONNECTION.md`. Formulas: `docs/FIRST_PRINCIPLES.md`.

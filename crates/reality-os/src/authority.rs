@@ -15,6 +15,8 @@ pub const LEARNED_SOURCE_MARKERS: &[&str] = &[
     "embodied-reasoner",
     "er2",
     "er_2",
+    "grok",
+    "xai",
 ];
 
 const FORBIDDEN_TOOLS: &[&str] = &[
