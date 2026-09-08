@@ -1,0 +1,16 @@
+[package]
+name = "realityos-ros2"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "ROS 2 topic/service contracts and veto polarity. Adapter, not a second last-gate."
+readme = false
+
+[dependencies]
+realityos-kernel.workspace = true
+realityos-governor.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

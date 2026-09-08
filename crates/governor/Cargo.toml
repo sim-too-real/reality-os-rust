@@ -1,0 +1,18 @@
+[package]
+name = "realityos-governor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Last driver gate: identity, e-stop, envelope, continuity. Does not invent. Does not plan tasks."
+readme = false
+
+[dependencies]
+realityos-kernel.workspace = true
+realityos-plant.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

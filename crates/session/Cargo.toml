@@ -1,0 +1,21 @@
+[package]
+name = "realityos-session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "RuntimeSession composition root: bind identity and dispatch CertifiedCommand through Governor."
+readme = false
+
+[dependencies]
+realityos-kernel.workspace = true
+realityos-plant.workspace = true
+realityos-governor.workspace = true
+realityos-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[lints]
+workspace = true

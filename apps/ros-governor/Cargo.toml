@@ -1,0 +1,28 @@
+[package]
+name = "ros-governor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "CLI composition root for Reality OS + Governor (SIM). Never metal."
+readme = false
+
+[[bin]]
+name = "ros-governor"
+path = "src/main.rs"
+
+[dependencies]
+realityos-kernel.workspace = true
+realityos-plant.workspace = true
+realityos-governor.workspace = true
+realityos-core.workspace = true
+realityos-session.workspace = true
+realityos-ros2.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

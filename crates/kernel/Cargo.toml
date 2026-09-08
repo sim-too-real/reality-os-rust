@@ -1,0 +1,15 @@
+[package]
+name = "realityos-kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Shared honesty types, five-word verdicts, and identifiers. No plant I/O."
+readme = false
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

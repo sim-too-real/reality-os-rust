@@ -1,0 +1,60 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kernel",
+    "crates/plant",
+    "crates/governor",
+    "crates/reality-os",
+    "crates/session",
+    "crates/ros2",
+    "apps/ros-governor",
+]
+default-members = [
+    "crates/kernel",
+    "crates/plant",
+    "crates/governor",
+    "crates/reality-os",
+    "crates/session",
+    "crates/ros2",
+    "apps/ros-governor",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.80"
+authors = ["TheWorld Reality OS"]
+description = "Last-gate Governor + Reality OS kernel in Rust. SIM ≠ metal. Learned systems never write motors."
+repository = "https://github.com/theworld/reality-os-rust"
+
+[workspace.dependencies]
+realityos-kernel = { path = "crates/kernel" }
+realityos-plant = { path = "crates/plant" }
+realityos-governor = { path = "crates/governor" }
+realityos-core = { path = "crates/reality-os" }
+realityos-session = { path = "crates/session" }
+realityos-ros2 = { path = "crates/ros2" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "allow", priority = -1 }
+too_many_arguments = "allow"
+derivable_impls = "allow"
+collapsible_match = "allow"
+manual_range_contains = "allow"
+needless_pass_by_value = "allow"
