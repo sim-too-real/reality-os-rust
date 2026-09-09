@@ -30,6 +30,10 @@ pub const ADDR_SECONDARY_ID: u16 = 12;
 pub const SECONDARY_ID_DISABLED: u8 = 255;
 /// EEPROM. Signed. Wizard "zero the horn" shifts Present outside 0–4095.
 pub const ADDR_HOMING_OFFSET: u16 = 20;
+/// EEPROM. Unit ≈ 0.229 rpm. Moving=1 only while |Present Velocity| > this.
+/// Factory 10. Wizard ≥ profile velocity keeps Moving=0 for the whole nudge.
+pub const ADDR_MOVING_THRESHOLD: u16 = 24;
+pub const FACTORY_MOVING_THRESHOLD: u32 = 10;
 /// EEPROM. Unit 0.1 V. Factory XL330 max 70 / min 35.
 pub const ADDR_MAX_VOLTAGE_LIMIT: u16 = 32;
 pub const ADDR_MIN_VOLTAGE_LIMIT: u16 = 34;
@@ -72,7 +76,8 @@ pub const ADDR_PRESENT_VELOCITY: u16 = 128;
 pub const ADDR_PRESENT_POSITION: u16 = 132;
 pub const ADDR_PRESENT_VOLTAGE: u16 = 144;
 pub const ADDR_REALTIME_TICK: u16 = 120;
-/// RAM. 1 while the profile is traveling; 0 when Goal ≈ Present.
+/// RAM. 1 while |Present Velocity| > Moving Threshold (addr 24). That is
+/// not "arrived": accel below the threshold leaves Moving=0 at the old present.
 pub const ADDR_MOVING: u16 = 122;
 
 const CRC_TABLE: [u16; 256] = [

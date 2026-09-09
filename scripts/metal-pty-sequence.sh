@@ -30,6 +30,10 @@ if [[ -f "$REPO/docs/metal_proof.json" ]]; then
   exit 2
 fi
 
+# Real XL330 does not teleport present, and Moving stays 0 until velocity
+# exceeds Moving Threshold. The old campaign treated the first Moving=0 as
+# settled and would record nudge delta=0 on a live horn.
+export REALITYOS_METAL_PTY_DELAY_MOTION=1
 python3 "$RESPONDER" >"$ROOT.responder.out" 2>"$ROOT.responder.err" &
 RESP_PID=$!
 cleanup() {

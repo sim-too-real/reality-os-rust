@@ -177,6 +177,10 @@ def init_regs() -> bytearray:
     regs[132:136] = struct.pack("<i", 2048)
     if os.environ.get("REALITYOS_METAL_PTY_PRESENT_OUTSIDE") == "1":
         regs[132:136] = struct.pack("<i", 100)
+    if os.environ.get("REALITYOS_METAL_PTY_HIGH_MOVING_THRESHOLD") == "1":
+        regs[24:28] = struct.pack("<I", 1023)
+    else:
+        regs[24:28] = struct.pack("<I", 10)
     if os.environ.get("REALITYOS_METAL_PTY_HOMING") == "1":
         regs[20:24] = struct.pack("<i", 10000)
         regs[132:136] = struct.pack("<i", 12048)
@@ -197,6 +201,31 @@ def status_wanted(srl: int, inst: int) -> bool:
 
 _motion_block_reads = 0
 _corrupt_next_crc = False
+_travel_reads = 0
+_travel_from: int | None = None
+_travel_to: int | None = None
+
+
+def advance_delayed_travel(regs: bytearray) -> None:
+    """Real XL330 does not teleport present. Moving stays 0 until velocity
+    exceeds Moving Threshold. Used by the campaign PTY sequence."""
+    global _travel_reads, _travel_from, _travel_to
+    if os.environ.get("REALITYOS_METAL_PTY_DELAY_MOTION") != "1" or _travel_to is None:
+        return
+    assert _travel_from is not None
+    _travel_reads += 1
+    if _travel_reads < 2:
+        regs[132:136] = struct.pack("<i", _travel_from)
+        regs[122] = 0
+    elif _travel_reads < 4:
+        mid = (_travel_from + _travel_to) // 2
+        regs[132:136] = struct.pack("<i", mid)
+        regs[122] = 1
+    else:
+        regs[132:136] = struct.pack("<i", _travel_to)
+        regs[122] = 0
+        _travel_to = None
+        _travel_from = None
 
 
 def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
@@ -217,6 +246,7 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             return b"", 0x80  # torque is on; do not skip the post-enable check
         if addr == 120:
             _motion_block_reads += 1
+            advance_delayed_travel(regs)
         chunk = bytearray(regs[addr : addr + ln])
         # After two motion-block reads, flip model/fw so live confirm_eeprom
         # sees a physical servo swap on the same UART (not just hot_swap.json).
@@ -291,9 +321,19 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             if p_gain > 0 and pwm_limit > 0 and vel_p > 0:
                 old_present = struct.unpack_from("<i", regs, 132)[0]
                 new_goal = struct.unpack_from("<i", data)[0]
-                regs[132:136] = data[:4]
-                if new_goal != old_present:
-                    regs[122] = 1
+                if (
+                    new_goal != old_present
+                    and os.environ.get("REALITYOS_METAL_PTY_DELAY_MOTION") == "1"
+                ):
+                    global _travel_from, _travel_to, _travel_reads
+                    _travel_from = old_present
+                    _travel_to = new_goal
+                    _travel_reads = 0
+                    regs[122] = 0
+                else:
+                    regs[132:136] = data[:4]
+                    if new_goal != old_present:
+                        regs[122] = 1
         return b"", 0
     if inst == INST_REBOOT:
         regs[70] = 0

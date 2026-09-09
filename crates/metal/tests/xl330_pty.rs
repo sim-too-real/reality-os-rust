@@ -233,6 +233,51 @@ fn xl330_pty_raises_wizard_velocity_limit_so_nudge_can_finish() {
 }
 
 #[test]
+fn xl330_pty_lowers_wizard_moving_threshold_so_moving_can_assert() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_HIGH_MOVING_THRESHOLD", "1")]);
+    let root = metal_test_root("pty-move-th");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver =
+        Xl330Driver::open(cfg, &root).expect("lower Moving Threshold 1023 to factory 10");
+    assert_eq!(driver.applied_moving_threshold(), 10);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_delayed_present_does_not_teleport_on_goal_write() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_DELAY_MOTION", "1")]);
+    let root = metal_test_root("pty-delay-motion");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("identify");
+    driver.read_sensor(0.0).expect("sensor before nudge");
+    assert_eq!(driver.last_present_position(), 2048);
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("nudge");
+    driver
+        .read_sensor(0.0)
+        .expect("first live sample must still be the parked present");
+    assert_eq!(
+        driver.last_present_position(),
+        2048,
+        "a real XL330 does not teleport present on the goal write"
+    );
+    for _ in 0..4 {
+        driver.read_sensor(0.0).expect("travel sample");
+    }
+    assert_eq!(
+        driver.last_present_position(),
+        2080,
+        "present must reach the 32-tick goal after the delayed profile"
+    );
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_raises_wizard_zero_p_gain_so_nudge_can_track() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_P", "1")]);

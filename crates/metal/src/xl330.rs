@@ -27,13 +27,14 @@ use crate::protocol::{
     ADDR_BUS_WATCHDOG, ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE, ADDR_FIRMWARE_VERSION,
     ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR, ADDR_HOMING_OFFSET, ADDR_ID, ADDR_MAX_POSITION_LIMIT,
     ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER,
-    ADDR_MOVING, ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION,
-    ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_PWM_LIMIT,
-    ADDR_REALTIME_TICK, ADDR_SECONDARY_ID, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE,
-    ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN, BROADCAST_ID,
-    DRIVE_MODE_VELOCITY_BASED, FACTORY_POSITION_P_GAIN, FACTORY_PWM_LIMIT, FACTORY_VELOCITY_I_GAIN,
-    FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN, MIN_PWM_LIMIT, MIN_VELOCITY_I_GAIN,
-    MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION, SECONDARY_ID_DISABLED, STATUS_RETURN_ALL,
+    ADDR_MOVING, ADDR_MOVING_THRESHOLD, ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN,
+    ADDR_PRESENT_POSITION, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY,
+    ADDR_PWM_LIMIT, ADDR_REALTIME_TICK, ADDR_SECONDARY_ID, ADDR_STATUS_RETURN_LEVEL,
+    ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN,
+    BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN,
+    FACTORY_PWM_LIMIT, FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN,
+    MIN_PWM_LIMIT, MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION,
+    SECONDARY_ID_DISABLED, STATUS_RETURN_ALL,
 };
 
 pub struct Xl330Driver {
@@ -67,6 +68,7 @@ pub struct Xl330Driver {
     pwm_limit: u16,
     homing_offset: i32,
     bus_watchdog: u8,
+    moving_threshold: u32,
 }
 
 impl Xl330Driver {
@@ -129,6 +131,7 @@ impl Xl330Driver {
             pwm_limit: 0,
             homing_offset: 0,
             bus_watchdog: 0,
+            moving_threshold: 0,
         };
         driver.connect_serial()?;
         driver.refresh_identity();
@@ -240,6 +243,10 @@ impl Xl330Driver {
 
     pub fn applied_bus_watchdog(&self) -> u8 {
         self.bus_watchdog
+    }
+
+    pub fn applied_moving_threshold(&self) -> u32 {
+        self.moving_threshold
     }
 
     pub fn torque_is_enabled(&self) -> bool {
@@ -487,6 +494,26 @@ impl Xl330Driver {
             None,
             false,
         )?;
+        let got_mt = self
+            .read_reg(ADDR_MOVING_THRESHOLD, 4)
+            .ok()
+            .and_then(|b| le_u32(&b))
+            .unwrap_or(0);
+        self.moving_threshold = got_mt;
+        // Moving=1 only while |velocity| > this. A Wizard value ≥ profile
+        // velocity keeps Moving=0 for the whole 32-tick nudge. Campaign
+        // settle waits for present≈goal, but lower the threshold so Moving
+        // is still a usable in-motion flag.
+        if got_mt > self.cfg.max_profile_velocity {
+            self.write_reg(
+                ADDR_MOVING_THRESHOLD,
+                &FACTORY_MOVING_THRESHOLD.to_le_bytes(),
+                "setup_moving_threshold",
+                None,
+                false,
+            )?;
+            self.moving_threshold = FACTORY_MOVING_THRESHOLD;
+        }
         let got_p = self
             .read_reg(ADDR_POSITION_P_GAIN, 2)
             .ok()

@@ -435,23 +435,37 @@ present() { cat "$ROOT/bus/present" 2>/dev/null || echo ""; }
 goalpos() { cat "$ROOT/bus/goal" 2>/dev/null || echo ""; }
 moving() { cat "$ROOT/bus/moving" 2>/dev/null || echo ""; }
 
-# Wait until XL330 Moving (addr 122) is 0, then re-acquire present.
-# Profile velocity 20 + accel 10 is ~230 ms for a 32-tick step; a fixed
-# 300 ms sample can catch the horn still traveling or still hunting.
-# Missing bus/moving (older serve) settles after the first sensor.
+# Hold-still band — same as MetalProof::HOLD_STILL_MAX_ABS_TICKS.
+HOLD_STILL_MAX_ABS_TICKS="${HOLD_STILL_MAX_ABS_TICKS:-4}"
+
+present_near_goal() {
+  local p="$1" g="$2"
+  [[ "$p" =~ ^-?[0-9]+$ && "$g" =~ ^-?[0-9]+$ ]] || return 1
+  local d=$((p - g))
+  (( d < 0 )) && d=$((-d))
+  (( d <= HOLD_STILL_MAX_ABS_TICKS ))
+}
+
+# Wait until present is inside the hold-still band of the written goal and
+# Moving is not 1. A real XL330 leaves Moving=0 while accel is still below
+# Moving Threshold — that is "not yet traveling", not arrived. The PTY used
+# to teleport present on the goal write, so a first Moving=0 looked settled.
+# Missing bus/moving (older serve) is treated as not-Moving.
 settle_after_write() {
-  local i mv
+  local i mv p g
   for i in $(seq 1 30); do
     as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1 || true
     mv="$(moving)"
-    if [[ "$mv" == "0" || -z "$mv" ]]; then
+    p="$(present)"
+    g="$(goalpos)"
+    if present_near_goal "$p" "$g" && [[ "$mv" != "1" ]]; then
       sleep 0.05
       as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1 || true
       return 0
     fi
     sleep 0.05
   done
-  echo "warning: XL330 Moving stayed set for 1.5s; sampling present anyway" >&2
+  echo "warning: XL330 present did not reach goal within 1.5s; sampling anyway" >&2
   as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1 || true
 }
 
@@ -634,9 +648,9 @@ measure() {
     echo '{"ok":false,"executed":false,"stage":"ipc","status":"error"}' >"$respfile"
   fi
   # bus/present is the pre-write sample. After an authorized goal write,
-  # wait for Moving=0 and re-acquire so observed_motion is device present,
-  # not the cached tick. action=0.2 uses the full 32-tick cap; plastic-gear
-  # backlash can hide an 8-tick step. Hold-still allows |delta|<=4 hunt.
+  # wait until present is inside the hold-still band of the new goal (not
+  # merely Moving=0 — a real XL330 is still parked then). action=0.2 uses
+  # the full 32-tick cap; plastic-gear backlash can hide an 8-tick step.
   if [[ "$expected" == "true" ]] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("ok") else 1)' "$respfile"; then
     settle_after_write
   fi

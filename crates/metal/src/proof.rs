@@ -384,6 +384,7 @@ pub fn default_unresolved() -> Vec<String> {
         "live EEPROM identity re-read is skipped when the motion-block read already took >=15 ms; that cycle keeps the previously latched identity".into(),
         "identity CRC/NAK after a good motion sample keeps the previous latched identity for that cycle".into(),
         "a half-duplex TTL/RS485 adapter that needs more than 500 µs after host TX, or more than 500 ms after DTR-RESET, is still a first-contact hole".into(),
+        "campaign settle treats present inside the hold-still band of the written goal as arrived; Moving=0 alone is not arrived (accel below Moving Threshold)".into(),
         "no STO/SS1/PLC/SIL/ISO is provided or claimed".into(),
     ]
 }
