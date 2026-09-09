@@ -28,6 +28,10 @@ pub const OPERATING_MODE_POSITION: u8 = 3;
 /// EEPROM. 255 = disabled. Wizard can make one servo answer a second ID.
 pub const ADDR_SECONDARY_ID: u16 = 12;
 pub const SECONDARY_ID_DISABLED: u8 = 255;
+/// EEPROM. 2 = Protocol 2.0 (factory). Wizard 20/21/22 is S.BUS / iBUS / RC-PWM
+/// (auto torque-on if that RC signal is seen at boot).
+pub const ADDR_PROTOCOL_TYPE: u16 = 13;
+pub const PROTOCOL_TYPE_2: u8 = 2;
 /// EEPROM. Signed. Wizard "zero the horn" shifts Present outside 0–4095.
 pub const ADDR_HOMING_OFFSET: u16 = 20;
 /// EEPROM. Unit ≈ 0.229 rpm. Moving=1 only while |Present Velocity| > this.
@@ -63,6 +67,9 @@ pub const FACTORY_VELOCITY_P_GAIN: u16 = 100;
 pub const MIN_VELOCITY_P_GAIN: u16 = 20;
 /// RAM. Factory 400. Wizard 0 means the servo never tracks a goal.
 pub const ADDR_POSITION_P_GAIN: u16 = 84;
+/// RAM. Factory 0. Wizard feedforward makes a 32-tick goal overshoot.
+pub const ADDR_FEEDFORWARD_2ND: u16 = 88;
+pub const ADDR_FEEDFORWARD_1ST: u16 = 90;
 pub const FACTORY_POSITION_P_GAIN: u16 = 400;
 /// Below this, a 32-tick nudge will not finish before the campaign Moving wait.
 pub const MIN_POSITION_P_GAIN: u16 = 80;

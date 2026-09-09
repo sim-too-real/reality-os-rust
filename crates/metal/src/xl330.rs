@@ -24,17 +24,18 @@ use crate::identity::{is_pty_path, usb_identity_for_tty, MeasuredIdentity};
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
     instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, unique_status_ids, ProtocolError,
-    ADDR_BUS_WATCHDOG, ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE, ADDR_FIRMWARE_VERSION,
-    ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR, ADDR_HOMING_OFFSET, ADDR_ID, ADDR_MAX_POSITION_LIMIT,
-    ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER,
-    ADDR_MOVING, ADDR_MOVING_THRESHOLD, ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN,
-    ADDR_PRESENT_POSITION, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY,
+    ADDR_BUS_WATCHDOG, ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE, ADDR_FEEDFORWARD_1ST,
+    ADDR_FEEDFORWARD_2ND, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR,
+    ADDR_HOMING_OFFSET, ADDR_ID, ADDR_MAX_POSITION_LIMIT, ADDR_MAX_VOLTAGE_LIMIT,
+    ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER, ADDR_MOVING,
+    ADDR_MOVING_THRESHOLD, ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION,
+    ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_PROTOCOL_TYPE,
     ADDR_PWM_LIMIT, ADDR_REALTIME_TICK, ADDR_SECONDARY_ID, ADDR_STATUS_RETURN_LEVEL,
     ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN,
     BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN,
     FACTORY_PWM_LIMIT, FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN,
     MIN_PWM_LIMIT, MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION,
-    SECONDARY_ID_DISABLED, STATUS_RETURN_ALL,
+    PROTOCOL_TYPE_2, SECONDARY_ID_DISABLED, STATUS_RETURN_ALL,
 };
 
 pub struct Xl330Driver {
@@ -69,6 +70,9 @@ pub struct Xl330Driver {
     homing_offset: i32,
     bus_watchdog: u8,
     moving_threshold: u32,
+    protocol_type: u8,
+    feedforward_1st: u16,
+    feedforward_2nd: u16,
 }
 
 impl Xl330Driver {
@@ -132,6 +136,9 @@ impl Xl330Driver {
             homing_offset: 0,
             bus_watchdog: 0,
             moving_threshold: 0,
+            protocol_type: 0,
+            feedforward_1st: 0,
+            feedforward_2nd: 0,
         };
         driver.connect_serial()?;
         driver.refresh_identity();
@@ -247,6 +254,18 @@ impl Xl330Driver {
 
     pub fn applied_moving_threshold(&self) -> u32 {
         self.moving_threshold
+    }
+
+    pub fn applied_protocol_type(&self) -> u8 {
+        self.protocol_type
+    }
+
+    pub fn applied_feedforward_1st(&self) -> u16 {
+        self.feedforward_1st
+    }
+
+    pub fn applied_feedforward_2nd(&self) -> u16 {
+        self.feedforward_2nd
     }
 
     pub fn torque_is_enabled(&self) -> bool {
@@ -410,6 +429,25 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
+            eeprom_changed = true;
+        }
+        let proto = self
+            .read_reg(ADDR_PROTOCOL_TYPE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        self.protocol_type = proto.unwrap_or(0);
+        // Wizard 20/21/22 is S.BUS / iBUS / RC-PWM. RC-detected boot auto
+        // torque-ons and stops speaking Protocol 2.0. A no-RC fallback still
+        // talks 2.0; write 2 so a line glitch cannot switch mid-campaign.
+        if proto != Some(PROTOCOL_TYPE_2) {
+            self.write_reg(
+                ADDR_PROTOCOL_TYPE,
+                &[PROTOCOL_TYPE_2],
+                "setup_protocol_type_2",
+                None,
+                false,
+            )?;
+            self.protocol_type = PROTOCOL_TYPE_2;
             eeprom_changed = true;
         }
         let drive = self
@@ -578,6 +616,38 @@ impl Xl330Driver {
             )?;
             self.pwm_limit = FACTORY_PWM_LIMIT;
         }
+        let ff2 = self
+            .read_reg(ADDR_FEEDFORWARD_2ND, 2)
+            .ok()
+            .and_then(|b| le_u16(&b))
+            .unwrap_or(0);
+        let ff1 = self
+            .read_reg(ADDR_FEEDFORWARD_1ST, 2)
+            .ok()
+            .and_then(|b| le_u16(&b))
+            .unwrap_or(0);
+        self.feedforward_2nd = ff2;
+        self.feedforward_1st = ff1;
+        // Factory 0. Wizard feedforward makes the certified 32-tick step
+        // overshoot; that is not a tiny bounded nudge.
+        if ff1 != 0 || ff2 != 0 {
+            self.write_reg(
+                ADDR_FEEDFORWARD_2ND,
+                &0u16.to_le_bytes(),
+                "setup_feedforward_2nd_zero",
+                None,
+                false,
+            )?;
+            self.write_reg(
+                ADDR_FEEDFORWARD_1ST,
+                &0u16.to_le_bytes(),
+                "setup_feedforward_1st_zero",
+                None,
+                false,
+            )?;
+            self.feedforward_2nd = 0;
+            self.feedforward_1st = 0;
+        }
         // EEPROM writes can NAK the next instruction if we immediately continue.
         std::thread::sleep(Duration::from_millis(50));
         let max_v = self
@@ -720,6 +790,53 @@ impl Xl330Driver {
             )));
         }
         self.torque_enabled = true;
+        // Robotis: Present resets to absolute-within-one-rotation when
+        // torque turns on in Position Control. Goal still holds the
+        // pre-reset value and the horn yanks before any certified write.
+        let after = match self
+            .read_reg(ADDR_PRESENT_POSITION, 4)
+            .ok()
+            .and_then(|b| le_i32(&b))
+        {
+            Some(p) => p,
+            None => {
+                let _ = self.write_reg(
+                    ADDR_TORQUE_ENABLE,
+                    &[0],
+                    "setup_torque_off_present_unread",
+                    None,
+                    false,
+                );
+                self.torque_enabled = false;
+                return Err(PlantError::refused("dxl_present_unreadable_after_torque"));
+            }
+        };
+        if after != self.last_present {
+            if after < self.min_position || after > self.max_position {
+                let _ = self.write_reg(
+                    ADDR_TORQUE_ENABLE,
+                    &[0],
+                    "setup_torque_off_present_jump",
+                    None,
+                    false,
+                );
+                self.torque_enabled = false;
+                return Err(PlantError::refused(format!(
+                    "dxl_present_outside_wizard_limits_after_torque:present={after}:min={}:max={}",
+                    self.min_position, self.max_position
+                )));
+            }
+            self.write_reg(
+                ADDR_GOAL_POSITION,
+                &after.to_le_bytes(),
+                "setup_goal_match_present_after_torque",
+                Some(after),
+                false,
+            )?;
+            self.last_present = after;
+            self.last_goal = Some(after);
+            self.persist_positions();
+        }
         Ok(())
     }
 
@@ -1223,13 +1340,13 @@ fn clear_hupcl(device: &Path) {
 }
 
 /// Cheap TTL/RS485 adapters need DE/RE after host TX. U2D2 does this
-/// internally. PTY has no half-duplex. 500 µs stays inside the 40 ms live
-/// deadline and avoids reading while the line is still driven.
+/// internally. PTY has no half-duplex. 1.5 ms stays inside the 40 ms live
+/// deadline and covers cheap MAX485 DE/RE that need more than 500 µs.
 fn half_duplex_turnaround(device: &Path) {
     if is_pty_path(device) {
         return;
     }
-    std::thread::sleep(Duration::from_micros(500));
+    std::thread::sleep(Duration::from_micros(1500));
 }
 
 fn open_settle(device: &Path) {

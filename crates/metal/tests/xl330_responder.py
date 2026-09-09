@@ -132,6 +132,7 @@ def init_regs() -> bytearray:
     regs[12] = 255
     if os.environ.get("REALITYOS_METAL_PTY_SECONDARY") == "1":
         regs[12] = 7
+    regs[13] = 20 if os.environ.get("REALITYOS_METAL_PTY_PROTOCOL_RC") == "1" else 2
     regs[10] = 4 if os.environ.get("REALITYOS_METAL_PTY_TIME_BASED") == "1" else 0
     regs[11] = 3
     regs[32:34] = struct.pack("<H", 70)
@@ -160,6 +161,9 @@ def init_regs() -> bytearray:
         regs[11] = 16
     p_gain = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_P") == "1" else 400
     regs[84:86] = struct.pack("<H", p_gain)
+    if os.environ.get("REALITYOS_METAL_PTY_FEEDFORWARD") == "1":
+        regs[88:90] = struct.pack("<H", 8000)
+        regs[90:92] = struct.pack("<H", 8000)
     vel_p = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_VEL_P") == "1" else 100
     regs[78:80] = struct.pack("<H", vel_p)
     vel_i = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_VEL_I") == "1" else 1600
@@ -302,6 +306,11 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
                 present = struct.unpack_from("<i", regs, 132)[0]
                 if goal != present:
                     regs[132:136] = regs[116:120]
+                if os.environ.get("REALITYOS_METAL_PTY_TORQUE_JUMP_PRESENT") == "1":
+                    # Robotis resets Present to absolute-within-one-rotation
+                    # on torque-on in Position Control.
+                    jumped = struct.unpack_from("<i", regs, 132)[0] + 80
+                    regs[132:136] = struct.pack("<i", jumped)
             return b"", 0
         # Protocol 2.0 access error: EEPROM (0–63) is read-only while torque is on.
         if addr < 64 and regs[64] == 1:
