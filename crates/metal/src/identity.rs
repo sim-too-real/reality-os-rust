@@ -1,6 +1,6 @@
 //! Hardware vs deployment identity. Do not silently treat one as the other.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use realityos_plant::HardwareIdentity;
 use serde::{Deserialize, Serialize};
@@ -207,6 +207,79 @@ pub fn usb_identity_for_tty(tty: &Path) -> (Option<String>, Option<String>) {
     (serial, fallback)
 }
 
+/// USB-UART nodes that may replace a vanished `ttyUSB*` after udev rename.
+pub fn iter_usb_uart_candidates() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for dir in ["/dev/serial/by-id", "/dev/serial/by-path"] {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.exists() {
+                out.push(p);
+            }
+        }
+    }
+    if let Ok(rd) = std::fs::read_dir("/dev") {
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("ttyUSB")
+                || name.starts_with("ttyACM")
+                || name.starts_with("ttyCH341")
+            {
+                let p = e.path();
+                if p.exists() {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Adapter+servo-id serial string for a live tty. Model/firmware are not used.
+pub fn adapter_serial_for_tty(tty: &Path, servo_id: u8) -> String {
+    let (usb, fb) = usb_identity_for_tty(tty);
+    let mut cfg = MetalConfig::example(tty);
+    cfg.servo_id = servo_id;
+    MeasuredIdentity::from_hardware(&cfg, usb, fb, 0, 0, false).serial
+}
+
+/// Find a live USB-UART whose measured adapter serial matches `probe` bind.
+pub fn find_tty_for_expected_serial(expected_serial: &str, servo_id: u8) -> Option<PathBuf> {
+    let want = expected_serial.trim();
+    if want.is_empty() {
+        return None;
+    }
+    for p in iter_usb_uart_candidates() {
+        if adapter_serial_for_tty(&p, servo_id) == want {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Prefer an existing env/config path, then the path still in metal.json, then
+/// a USB-UART whose measured serial matches the bound identity. CH340/CP2102
+/// often have no USB serial; udev `change` can rename `ttyUSB0` → `ttyUSB1`
+/// and a stale `KERNEL==ttyUSB0` path misses the servo.
+pub fn pick_live_device(
+    preferred: PathBuf,
+    fallback: PathBuf,
+    expected_serial: &str,
+    servo_id: u8,
+) -> PathBuf {
+    if preferred.exists() {
+        return preferred;
+    }
+    if fallback.exists() {
+        return fallback;
+    }
+    find_tty_for_expected_serial(expected_serial, servo_id).unwrap_or(preferred)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,5 +352,37 @@ mod tests {
             tty_sysfs_name(Path::new("/dev/ttyUSB0")).as_deref(),
             Some("ttyUSB0")
         );
+    }
+
+    #[test]
+    fn pick_live_device_keeps_existing_preferred() {
+        assert_eq!(
+            pick_live_device(
+                PathBuf::from("/dev/null"),
+                PathBuf::from("/dev/zero"),
+                "",
+                1
+            ),
+            PathBuf::from("/dev/null")
+        );
+    }
+
+    #[test]
+    fn pick_live_device_falls_back_when_preferred_vanished() {
+        assert_eq!(
+            pick_live_device(
+                PathBuf::from("/dev/missing-metal-tty"),
+                PathBuf::from("/dev/null"),
+                "",
+                1
+            ),
+            PathBuf::from("/dev/null")
+        );
+    }
+
+    #[test]
+    fn find_tty_for_expected_serial_none_on_empty_or_unknown() {
+        assert!(find_tty_for_expected_serial("", 1).is_none());
+        assert!(find_tty_for_expected_serial("no-such-adapter:id1", 1).is_none());
     }
 }

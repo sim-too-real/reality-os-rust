@@ -30,9 +30,24 @@ impl MetalAuthority {
     pub fn start(root: impl AsRef<Path>, first_online: bool) -> anyhow::Result<Self> {
         let root = root.as_ref().to_path_buf();
         std::fs::create_dir_all(&root)?;
-        let cfg = MetalConfig::load(root.join(CONFIG_FILE))?;
+        let cfg_path = root.join(CONFIG_FILE);
+        let mut cfg = MetalConfig::load(&cfg_path)?;
         if !cfg.expected_ready() {
             anyhow::bail!("metal_expected_identity_missing:run_probe_then_bind_measured");
+        }
+        let json_device = cfg.device.clone();
+        cfg.apply_process_env();
+        let live = crate::identity::pick_live_device(
+            cfg.device.clone(),
+            json_device.clone(),
+            &cfg.expected_serial,
+            cfg.servo_id,
+        );
+        if live != json_device {
+            cfg.device = live;
+            cfg.save(&cfg_path)?;
+        } else {
+            cfg.device = live;
         }
         if !cfg.device.exists() {
             anyhow::bail!("metal_device_missing:{}", cfg.device.display());

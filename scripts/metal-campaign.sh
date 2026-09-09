@@ -128,9 +128,26 @@ usb_sysfs_value() {
   return 1
 }
 
+# busnum:devpath:idVendor:idProduct. CH340/CP2102 often have an empty
+# USB serial; udev change can still keep this port key.
+usb_sysfs_port_key() {
+  local dev="$1"
+  local bus dest vid pid
+  bus="$(usb_sysfs_value "$dev" busnum || true)"
+  dest="$(usb_sysfs_value "$dev" devpath || true)"
+  vid="$(usb_sysfs_value "$dev" idVendor || true)"
+  pid="$(usb_sysfs_value "$dev" idProduct || true)"
+  if [[ -n "$vid" && -n "$pid" ]]; then
+    echo "${bus:-0}:${dest:-nodevpath}:${vid}:${pid}"
+    return 0
+  fi
+  return 1
+}
+
 # udev change / MM stop can re-enumerate FTDI as ttyUSB1. A KERNEL==ttyUSB0
 # rule and a stale DEVICE then miss the servo. Prefer /dev/serial/by-id,
-# else the tty whose USB serial still matches.
+# else by-path (CH340 often has no by-id), else the tty whose USB serial
+# or port key still matches.
 find_tty_by_usb_serial() {
   local want="$1"
   local p real got
@@ -147,9 +164,60 @@ find_tty_by_usb_serial() {
       fi
     done
   fi
+  if [[ -d /dev/serial/by-path ]]; then
+    for p in /dev/serial/by-path/*; do
+      [[ -e "$p" ]] || continue
+      real="$(readlink -f "$p" 2>/dev/null || true)"
+      [[ -n "$real" ]] || continue
+      got="$(usb_sysfs_value "$real" serial || true)"
+      if [[ "$got" == "$want" ]]; then
+        echo "$p"
+        return 0
+      fi
+    done
+  fi
   for p in /dev/ttyUSB* /dev/ttyACM* /dev/ttyCH341*; do
     [[ -e "$p" ]] || continue
     got="$(usb_sysfs_value "$p" serial || true)"
+    if [[ "$got" == "$want" ]]; then
+      echo "$p"
+      return 0
+    fi
+  done
+  return 1
+}
+
+find_tty_by_usb_port() {
+  local want="$1"
+  local p real got
+  [[ -n "$want" ]] || return 1
+  if [[ -d /dev/serial/by-path ]]; then
+    for p in /dev/serial/by-path/*; do
+      [[ -e "$p" ]] || continue
+      real="$(readlink -f "$p" 2>/dev/null || true)"
+      [[ -n "$real" ]] || continue
+      got="$(usb_sysfs_port_key "$real" || true)"
+      if [[ "$got" == "$want" ]]; then
+        echo "$p"
+        return 0
+      fi
+    done
+  fi
+  if [[ -d /dev/serial/by-id ]]; then
+    for p in /dev/serial/by-id/*; do
+      [[ -e "$p" ]] || continue
+      real="$(readlink -f "$p" 2>/dev/null || true)"
+      [[ -n "$real" ]] || continue
+      got="$(usb_sysfs_port_key "$real" || true)"
+      if [[ "$got" == "$want" ]]; then
+        echo "$p"
+        return 0
+      fi
+    done
+  fi
+  for p in /dev/ttyUSB* /dev/ttyACM* /dev/ttyCH341*; do
+    [[ -e "$p" ]] || continue
+    got="$(usb_sysfs_port_key "$p" || true)"
     if [[ "$got" == "$want" ]]; then
       echo "$p"
       return 0
@@ -179,6 +247,14 @@ stabilize_metal_device() {
         return 0
       fi
     fi
+    if [[ -n "${METAL_USB_PORT:-}" ]]; then
+      p="$(find_tty_by_usb_port "$METAL_USB_PORT" || true)"
+      if [[ -n "$p" ]]; then
+        echo "metal-campaign: $real vanished after udev; continuing on $p (USB port $METAL_USB_PORT)" >&2
+        echo "$p"
+        return 0
+      fi
+    fi
     echo "$dev"
     return 0
   fi
@@ -194,6 +270,20 @@ stabilize_metal_device() {
       fi
     done
   fi
+  # CH340/CP2102 usually have no USB serial, so by-id is missing. by-path
+  # stays on the same USB port across ttyUSB0 → ttyUSB1.
+  if [[ -d /dev/serial/by-path ]]; then
+    for p in /dev/serial/by-path/*; do
+      [[ -e "$p" ]] || continue
+      if [[ "$(readlink -f "$p" 2>/dev/null || true)" == "$real" ]]; then
+        if [[ "$p" != "$dev" ]]; then
+          echo "metal-campaign: using stable $p (no by-id serial; udev can rename $name)" >&2
+        fi
+        echo "$p"
+        return 0
+      fi
+    done
+  fi
   echo "$real"
 }
 
@@ -203,6 +293,7 @@ UDEV_RULE=""
 STOPPED_BRLTTY=0
 STOPPED_MM=0
 METAL_USB_SERIAL=""
+METAL_USB_PORT=""
 
 wait_tty_free() {
   local real="$1"
@@ -217,6 +308,27 @@ wait_tty_free() {
     sleep 0.1
   done
   return 1
+}
+
+# serve reads metal.json, not only REALITYOS_METAL_DEVICE. A udev rename
+# after probe would leave serve opening the vanished ttyUSB0.
+sync_metal_device_config() {
+  local cfg="$ROOT/metal.json"
+  [[ -f "$cfg" && -n "${DEVICE:-}" ]] || return 0
+  python3 - "$cfg" "$DEVICE" <<'PY'
+import json, sys
+path, dev = sys.argv[1], sys.argv[2]
+try:
+    cfg = json.load(open(path))
+except Exception:
+    raise SystemExit(0)
+if cfg.get("device") == dev:
+    raise SystemExit(0)
+cfg["device"] = dev
+json.dump(cfg, open(path, "w"), indent=2)
+print("metal-campaign: metal.json device -> %s" % (dev,), file=sys.stderr)
+PY
+  chown "$AUTHORITY_USER:$AUTHORITY_USER" "$cfg" 2>/dev/null || true
 }
 
 release_foreign_tty_holders() {
@@ -270,9 +382,14 @@ prepare_usb_serial_host() {
   if [[ -z "${METAL_USB_SERIAL:-}" ]]; then
     METAL_USB_SERIAL="$(usb_sysfs_value "$real" serial || true)"
   fi
+  if [[ -z "${METAL_USB_PORT:-}" ]]; then
+    METAL_USB_PORT="$(usb_sysfs_port_key "$real" || true)"
+  fi
   if [[ -d /run/udev/rules.d ]]; then
     if [[ -n "$METAL_USB_SERIAL" ]]; then
       rules="/run/udev/rules.d/99-realityos-metal-usb.rules"
+    elif [[ -n "$METAL_USB_PORT" ]]; then
+      rules="/run/udev/rules.d/99-realityos-metal-usbport.rules"
     else
       rules="/run/udev/rules.d/99-realityos-metal-${name}.rules"
     fi
@@ -280,6 +397,11 @@ prepare_usb_serial_host() {
       if [[ -n "$METAL_USB_SERIAL" ]]; then
         cat >"$rules" <<EOF
 ACTION=="add|change", SUBSYSTEM=="tty", ATTRS{serial}=="${METAL_USB_SERIAL}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_BRLTTY}="0", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
+EOF
+      elif [[ -n "$METAL_USB_PORT" ]]; then
+        IFS=: read -r usb_bus usb_dest usb_vid usb_pid <<<"$METAL_USB_PORT"
+        cat >"$rules" <<EOF
+ACTION=="add|change", SUBSYSTEM=="tty", ATTRS{idVendor}=="${usb_vid}", ATTRS{idProduct}=="${usb_pid}", ATTRS{busnum}=="${usb_bus}", ATTRS{devpath}=="${usb_dest}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_BRLTTY}="0", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
 EOF
       else
         cat >"$rules" <<EOF
@@ -297,6 +419,7 @@ EOF
   fi
   DEVICE="$(stabilize_metal_device "$dev")"
   export REALITYOS_METAL_DEVICE="$DEVICE"
+  sync_metal_device_config
   real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
   if [[ -e "$real" ]]; then
     chown "$AUTHORITY_USER:$AUTHORITY_USER" "$real" 2>/dev/null || true

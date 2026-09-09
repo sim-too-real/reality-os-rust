@@ -117,7 +117,8 @@ fn main() -> anyhow::Result<()> {
         "serve" => {
             let cfg_path = root.join(CONFIG_FILE);
             if cfg_path.exists() {
-                let cfg = MetalConfig::load(&cfg_path)?;
+                let mut cfg = MetalConfig::load(&cfg_path)?;
+                cfg.apply_process_env();
                 if realityos_metal::identity::is_pty_path(&cfg.device)
                     && env::var("REALITYOS_METAL_ALLOW_PTY").ok().as_deref() != Some("1")
                 {
@@ -129,6 +130,7 @@ fn main() -> anyhow::Result<()> {
                     let cfg_path = root.join(CONFIG_FILE);
                     if cfg_path.exists() {
                         let mut cfg = MetalConfig::load(&cfg_path)?;
+                        cfg.apply_process_env();
                         cfg.campaign_hooks = true;
                         cfg.save(&cfg_path)?;
                     }
