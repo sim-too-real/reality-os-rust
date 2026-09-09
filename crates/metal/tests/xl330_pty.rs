@@ -20,6 +20,21 @@ fn pty_serial() -> std::sync::MutexGuard<'static, ()> {
     LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Journal+seal fsync on the runner disk exceeds 100 ms and labels identity
+/// refuse as `software_watchdog_miss`. Prefer tmpfs (`/dev/shm`), same
+/// constraint as `scripts/metal-campaign.sh`.
+fn metal_test_root(name: &str) -> PathBuf {
+    let base = if Path::new("/dev/shm").is_dir() {
+        PathBuf::from("/dev/shm")
+    } else {
+        std::env::temp_dir()
+    };
+    let dir = base.join(format!("realityos-metal-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
 fn journal_lines(root: &Path) -> usize {
     std::fs::read_to_string(root.join("driver.jsonl"))
         .map(|s| s.lines().filter(|l| !l.is_empty()).count())
@@ -80,10 +95,7 @@ fn spawn_responder() -> (ChildGuard, String) {
 fn xl330_pty_firmware_survives_sensor_and_echoed_status() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder();
-    let root =
-        std::env::temp_dir().join(format!("realityos-metal-pty-driver-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let root = metal_test_root("pty-driver");
     let mut cfg = MetalConfig::example(&tty);
     cfg.campaign_hooks = false;
     let mut driver = Xl330Driver::open(cfg, &root).expect("open pty xl330");
@@ -111,10 +123,7 @@ fn xl330_pty_start_online_hold_is_not_a_metal_proof() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder();
     assert!(is_pty_path(std::path::Path::new(&tty)));
-    let root =
-        std::env::temp_dir().join(format!("realityos-metal-pty-online-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let root = metal_test_root("pty-online");
     let mut cfg = MetalConfig::example(&tty);
     {
         let driver = Xl330Driver::open(cfg.clone(), &root).expect("identify");
@@ -161,10 +170,7 @@ fn xl330_pty_start_online_hold_is_not_a_metal_proof() {
 fn xl330_pty_serve_hold_survives_idle_watchdog() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder();
-    let root =
-        std::env::temp_dir().join(format!("realityos-metal-pty-idle-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let root = metal_test_root("pty-idle");
     let mut cfg = MetalConfig::example(&tty);
     {
         let driver = Xl330Driver::open(cfg.clone(), &root).expect("identify");
@@ -208,9 +214,7 @@ fn recover_req(id: &str) -> MetalRequest {
 fn xl330_pty_firmware_mismatch_kills_session_not_watchdog() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder();
-    let root = std::env::temp_dir().join(format!("realityos-metal-pty-fw-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let root = metal_test_root("pty-fw");
     let mut cfg = MetalConfig::example(&tty);
     cfg.campaign_hooks = true;
     {
@@ -268,10 +272,7 @@ fn xl330_pty_firmware_mismatch_kills_session_not_watchdog() {
 fn xl330_pty_disconnect_overlay_kills_session_via_verify() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder();
-    let root =
-        std::env::temp_dir().join(format!("realityos-metal-pty-disc-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let root = metal_test_root("pty-disc");
     let mut cfg = MetalConfig::example(&tty);
     cfg.campaign_hooks = true;
     {
@@ -324,12 +325,7 @@ fn xl330_pty_disconnect_overlay_kills_session_via_verify() {
 fn xl330_pty_bus_timeout_requires_online_restart() {
     let _serial = pty_serial();
     let (guard, tty) = spawn_responder();
-    let root = std::env::temp_dir().join(format!(
-        "realityos-metal-pty-busloss-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let root = metal_test_root("pty-busloss");
     let mut cfg = MetalConfig::example(&tty);
     {
         let driver = Xl330Driver::open(cfg.clone(), &root).expect("identify");
