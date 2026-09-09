@@ -11,7 +11,16 @@ AUTONOMY_USER="${REALITYOS_AUTONOMY_USER:-realityos-autonomy}"
 IPC_GROUP="${REALITYOS_IPC_GROUP:-realityos-ipc}"
 ROOT="${REALITYOS_METAL_ROOT:-/tmp/realityos-metal-boundary}"
 # Unique per invocation so a leaked serve cannot rewrite another run's journal.
-IPC_ROOT="${REALITYOS_METAL_IPC_ROOT:-/tmp/realityos-metal-ipc-$$}"
+# Watchdog emit fsyncs journal+seal. GHA /tmp is a disk; a >100 ms fsync
+# latches software_watchdog_miss on the first PTY hold (os-users flake).
+# Prefer /dev/shm (tmpfs), same constraint as metal-campaign.sh.
+if [[ -n "${REALITYOS_METAL_IPC_ROOT:-}" ]]; then
+  IPC_ROOT="$REALITYOS_METAL_IPC_ROOT"
+elif [[ -d /dev/shm ]]; then
+  IPC_ROOT="/dev/shm/realityos-metal-ipc-$$"
+else
+  IPC_ROOT="/tmp/realityos-metal-ipc-$$"
+fi
 BIN_DIR="${REALITYOS_METAL_BIN:-}"
 DUMMY="${REALITYOS_METAL_DUMMY_DEVICE:-/tmp/realityos-metal-dummy-tty}"
 
@@ -135,6 +144,7 @@ if [[ "$(readlink -f "$TTY")" != /dev/pts/* ]]; then
 fi
 
 AUTH_PID=""
+IPC_MOUNTED=0
 cleanup_ipc() {
   if [[ -n "${AUTH_PID:-}" ]]; then
     kill "$AUTH_PID" 2>/dev/null || true
@@ -144,10 +154,28 @@ cleanup_ipc() {
   kill "$RESP_PID" 2>/dev/null || true
   wait "$RESP_PID" 2>/dev/null || true
   rm -f "$RESP_OUT"
+  if [[ "${IPC_MOUNTED:-0}" == "1" ]]; then
+    umount "$IPC_ROOT" 2>/dev/null || true
+    IPC_MOUNTED=0
+  fi
 }
 trap cleanup_ipc EXIT
 
 rm -rf "$IPC_ROOT"
+install -d -m 0755 "$IPC_ROOT"
+ipc_fstype=""
+if command -v findmnt >/dev/null 2>&1; then
+  ipc_fstype="$(findmnt -n -o FSTYPE --target "$IPC_ROOT" 2>/dev/null || true)"
+fi
+if [[ "$ipc_fstype" != "tmpfs" ]]; then
+  if mount -t tmpfs -o size=32M,mode=0755 realityos-metal-ipc "$IPC_ROOT"; then
+    IPC_MOUNTED=1
+    echo "metal-os-boundary: mounted tmpfs on $IPC_ROOT (journal+seal fsync must stay under 100 ms)"
+  else
+    echo "error: $IPC_ROOT is not tmpfs and mount failed; a disk fsync >100 ms latches software_watchdog_miss" >&2
+    exit 2
+  fi
+fi
 export REALITYOS_METAL_ROOT="$IPC_ROOT"
 export REALITYOS_METAL_DEVICE="$TTY"
 "$SCRIPT_DIR/metal-deploy.sh"
