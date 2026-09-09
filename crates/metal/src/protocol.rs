@@ -44,6 +44,8 @@ pub const ADDR_POSITION_P_GAIN: u16 = 84;
 pub const FACTORY_POSITION_P_GAIN: u16 = 400;
 /// Below this, a 2-tick nudge will not settle in the campaign sample window.
 pub const MIN_POSITION_P_GAIN: u16 = 80;
+/// RAM. Unit 20 ms. 0 = off; 0xFF (-1) = tripped (goal registers read-only).
+pub const ADDR_BUS_WATCHDOG: u16 = 98;
 pub const ADDR_PROFILE_ACCEL: u16 = 108;
 pub const ADDR_PROFILE_VELOCITY: u16 = 112;
 pub const ADDR_GOAL_POSITION: u16 = 116;

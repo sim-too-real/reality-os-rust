@@ -144,6 +144,10 @@ def init_regs() -> bytearray:
         regs[11] = 16
     p_gain = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_P") == "1" else 400
     regs[84:86] = struct.pack("<H", p_gain)
+    # Default Goal Position is 0 (unset). Present is 2048. Torque-on without
+    # syncing goal jumps present — that is the stale-Wizard-goal landmine.
+    if os.environ.get("REALITYOS_METAL_PTY_BUS_WATCHDOG") == "1":
+        regs[98] = 0xFF  # tripped; Goal Position is read-only until written 0
     regs[68] = 0 if os.environ.get("REALITYOS_METAL_PTY_SRL0") == "1" else 2
     regs[120:122] = struct.pack("<H", 1234)
     regs[126:128] = struct.pack("<h", 0)
@@ -174,11 +178,22 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         addr = struct.unpack_from("<H", params)[0]
         data = params[2:]
         if addr == 116 and len(data) >= 4:
+            if regs[98] == 0xFF:
+                return b"", 0x08  # Bus Watchdog error: goal is read-only
             goal = struct.unpack_from("<i", data)[0]
             max_p = struct.unpack_from("<i", regs, 48)[0]
             min_p = struct.unpack_from("<i", regs, 52)[0]
             if goal < min_p or goal > max_p:
                 return b"", 0x08  # Protocol 2.0 data range
+        if addr == 64 and data:
+            was = regs[64]
+            regs[64] = data[0]
+            if was == 0 and data[0] == 1:
+                goal = struct.unpack_from("<i", regs, 116)[0]
+                present = struct.unpack_from("<i", regs, 132)[0]
+                if goal != present:
+                    regs[132:136] = regs[116:120]
+            return b"", 0
         regs[addr : addr + len(data)] = data
         if addr == 116 and len(data) >= 4:
             p_gain = struct.unpack_from("<H", regs, 84)[0]
@@ -188,6 +203,7 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
     if inst == INST_REBOOT:
         regs[70] = 0
         regs[68] = 2  # RAM reset; factory Status Return Level
+        regs[98] = 0
         return b"", 0
     return b"", 0
 

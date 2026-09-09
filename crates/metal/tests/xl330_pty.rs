@@ -234,6 +234,41 @@ fn xl330_pty_raises_wizard_zero_p_gain_so_nudge_can_track() {
 }
 
 #[test]
+fn xl330_pty_syncs_stale_goal_before_torque_so_present_does_not_jump() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder();
+    let root = metal_test_root("pty-stale-goal");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("sync goal to present before torque-on");
+    driver.read_sensor(0.0).expect("sensor");
+    assert_eq!(
+        driver.last_present_position(),
+        2048,
+        "stale Goal Position 0 must not yank present on torque-on"
+    );
+    assert_eq!(driver.last_goal_position(), Some(2048));
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_clears_bus_watchdog_error_so_goal_writes_are_live() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_BUS_WATCHDOG", "1")]);
+    let root = metal_test_root("pty-bus-wd");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("clear Bus Watchdog 0xFF before goal");
+    assert_eq!(driver.applied_bus_watchdog(), 0);
+    driver.read_sensor(0.0).expect("sensor");
+    driver
+        .write_action(&[0.05], &ActionParams::empty())
+        .expect("goal write after clearing watchdog error");
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_time_based_drive_mode_is_forced_velocity_based() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_TIME_BASED", "1")]);

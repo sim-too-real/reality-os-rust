@@ -24,9 +24,11 @@ use crate::identity::{is_pty_path, usb_identity_for_tty, MeasuredIdentity};
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
     instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE,
-    ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR, ADDR_MAX_POSITION_LIMIT,
-    ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER,
-    ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL,
+    ADDR_BUS_WATCHDOG, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR,
+    ADDR_MAX_POSITION_LIMIT, ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT,
+    ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER,
+    ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION, ADDR_PRESENT_VOLTAGE,
+    ADDR_PROFILE_ACCEL,
     ADDR_PROFILE_VELOCITY, ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE,
     ADDR_VELOCITY_LIMIT, BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_POSITION_P_GAIN,
     MIN_POSITION_P_GAIN, OPERATING_MODE_POSITION, STATUS_RETURN_ALL,
@@ -58,6 +60,7 @@ pub struct Xl330Driver {
     velocity_limit: u32,
     drive_mode: u8,
     position_p_gain: u16,
+    bus_watchdog: u8,
 }
 
 impl Xl330Driver {
@@ -115,6 +118,7 @@ impl Xl330Driver {
             velocity_limit: 0,
             drive_mode: 0,
             position_p_gain: 0,
+            bus_watchdog: 0,
         };
         driver.connect_serial()?;
         driver.refresh_identity();
@@ -201,6 +205,10 @@ impl Xl330Driver {
 
     pub fn applied_position_p_gain(&self) -> u16 {
         self.position_p_gain
+    }
+
+    pub fn applied_bus_watchdog(&self) -> u8 {
+        self.bus_watchdog
     }
 
     pub fn torque_is_enabled(&self) -> bool {
@@ -464,8 +472,39 @@ impl Xl330Driver {
                 )));
             }
         }
-        // Torque-on here (watchdog not running yet) so the first certified
-        // write is a single goal_position xfer, not torque_on + goal.
+        // Wizard Bus Watchdog (20 ms units). Non-zero trips after a quiet
+        // gap and latches 0xFF; Goal Position then NAKs with data-range.
+        let wd = self
+            .read_reg(ADDR_BUS_WATCHDOG, 1)
+            .ok()
+            .and_then(|b| b.first().copied())
+            .unwrap_or(0);
+        self.bus_watchdog = wd;
+        if wd != 0 {
+            self.write_reg(ADDR_BUS_WATCHDOG, &[0], "setup_bus_watchdog_off", None, false)?;
+            self.bus_watchdog = 0;
+        }
+        // Torque-on tracks Goal Position. A stale Wizard goal (often 0)
+        // would move before any certified command. Match present first.
+        // Not counted as command egress.
+        let present = self
+            .read_reg(ADDR_PRESENT_POSITION, 4)
+            .ok()
+            .and_then(|b| le_i32(&b))
+            .unwrap_or(self.last_present)
+            .clamp(self.min_position, self.max_position);
+        self.last_present = present;
+        self.write_reg(
+            ADDR_GOAL_POSITION,
+            &present.to_le_bytes(),
+            "setup_goal_match_present",
+            Some(present),
+            false,
+        )?;
+        self.last_goal = Some(present);
+        self.persist_positions();
+        // Torque-on here (software watchdog not running yet) so the first
+        // certified write is a single goal_position xfer, not torque_on + goal.
         self.write_reg(ADDR_TORQUE_ENABLE, &[1], "setup_torque_on", None, false)?;
         self.torque_enabled = true;
         Ok(())
