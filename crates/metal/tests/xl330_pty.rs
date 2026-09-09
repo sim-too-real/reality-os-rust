@@ -1013,9 +1013,9 @@ fn xl330_pty_eeprom_identity_change_refuses_write() {
     {
         let driver = Xl330Driver::open(cfg.clone(), &root).expect("identify");
         let measured = driver.measured();
+        assert_eq!(measured.firmware_id, "xl330-m288:1190:46");
         cfg.expected_serial = measured.serial;
         cfg.expected_firmware = measured.firmware_id;
-        assert_eq!(measured.firmware_id, "xl330-m288:1190:46");
     }
     cfg.save(root.join(CONFIG_FILE)).unwrap();
     let mut auth = MetalAuthority::start(&root, true).expect("start_online");
