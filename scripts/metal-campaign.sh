@@ -135,10 +135,9 @@ prepare_usb_serial_host() {
       wait_tty_free "$real" || true
     fi
     if fuser "$real" >/dev/null 2>&1; then
-      echo "error: $real is already open (ModemManager/brltty/another process)." >&2
+      echo "metal-campaign: $real still open:" >&2
       fuser -v "$real" >&2 || true
-      echo "error: stop that process, then re-run. First contact cannot share the tty." >&2
-      exit 2
+      return 1
     fi
   fi
   case "$name" in
@@ -190,7 +189,11 @@ trap cleanup_usb_serial_host EXIT
 # it cannot rewrite the journal after the wipe.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
-prepare_usb_serial_host "$DEVICE"
+if ! prepare_usb_serial_host "$DEVICE"; then
+  echo "error: $DEVICE is already open (ModemManager/brltty/another process)." >&2
+  echo "error: stop that process, then re-run. First contact cannot share the tty." >&2
+  exit 2
+fi
 
 metal_fstype() {
   local target="$1"
@@ -320,7 +323,14 @@ start_auth() {
   # busy for a beat; retry the open instead of failing the campaign.
   for attempt in 1 2 3 4 5; do
     rm -f "$ROOT/ipc.sock" "$ROOT/serve.err"
-    prepare_usb_serial_host "$DEVICE"
+    # After crash_if / process::exit the USB-serial node can still look
+    # held for a beat. Do not exit 2 here — that skipped the open retry
+    # and would abort the first XL330 crash-replay.
+    if ! prepare_usb_serial_host "$DEVICE"; then
+      "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
+      sleep 0.4
+      continue
+    fi
     if [[ "$first" == "1" ]]; then
       as_authority "$SMOKE" --root "$ROOT" --first-online serve \
         >"$ROOT/authority.out" 2>"$ROOT/authority.err" &

@@ -107,12 +107,20 @@ pub fn bind_socket(root: impl AsRef<Path>) -> anyhow::Result<UnixListener> {
     Ok(listener)
 }
 
+fn parse_response_line(line: &str) -> anyhow::Result<MetalResponse> {
+    let t = line.trim();
+    if t.is_empty() {
+        anyhow::bail!("ipc_empty_response:serve_closed_or_timeout");
+    }
+    Ok(serde_json::from_str(t)?)
+}
+
 pub fn call(root: impl AsRef<Path>, req: &MetalRequest) -> anyhow::Result<MetalResponse> {
     let mut stream = connect_ipc(root)?;
     writeln!(stream, "{}", serde_json::to_string(req)?)?;
     let mut line = String::new();
     BufReader::new(&stream).read_line(&mut line)?;
-    Ok(serde_json::from_str(line.trim())?)
+    parse_response_line(&line)
 }
 
 pub fn call_raw(root: impl AsRef<Path>, line: &str) -> anyhow::Result<MetalResponse> {
@@ -120,7 +128,7 @@ pub fn call_raw(root: impl AsRef<Path>, line: &str) -> anyhow::Result<MetalRespo
     writeln!(stream, "{line}")?;
     let mut resp = String::new();
     BufReader::new(stream).read_line(&mut resp)?;
-    Ok(serde_json::from_str(resp.trim())?)
+    parse_response_line(&resp)
 }
 
 pub fn wait_for_ipc(root: impl AsRef<Path>, timeout_ms: u64) -> bool {
@@ -152,6 +160,15 @@ mod tests {
     #[test]
     fn client_io_timeout_is_bounded() {
         assert_eq!(super::CLIENT_IO_TIMEOUT, Duration::from_secs(20));
+    }
+
+    #[test]
+    fn empty_ipc_line_is_serve_closed_not_serde_eof() {
+        let err = super::parse_response_line("").unwrap_err().to_string();
+        assert!(
+            err.contains("ipc_empty_response"),
+            "crash_if closes the socket; do not print serde EOF: {err}"
+        );
     }
 
     #[test]
