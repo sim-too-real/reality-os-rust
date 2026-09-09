@@ -173,15 +173,15 @@ pub fn match_expected_to_measured(
     if !measured.connected {
         return Err("online_hardware_disconnected".into());
     }
-    if measured.is_placeholder() {
-        return Err("online_hardware_placeholder_or_sim".into());
-    }
     if measured.serial.trim().is_empty()
         || measured.firmware_id.trim().is_empty()
         || measured.calibration_id.trim().is_empty()
         || measured.design_content_hash.trim().is_empty()
     {
         return Err("online_hardware_identity_missing".into());
+    }
+    if measured.is_placeholder() {
+        return Err("online_hardware_placeholder_or_sim".into());
     }
     if expected.serial_str() != measured.serial {
         return Err(format!(

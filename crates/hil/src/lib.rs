@@ -223,7 +223,7 @@ impl Authority {
             governor,
             root,
             clock,
-            next_sequence: 0,
+            next_sequence: governor.ledger().last_sequence().max(0),
         })
     }
 

@@ -288,7 +288,7 @@ mod tests {
         let report = ProofReport::from_measured_cases(cases, extras).unwrap();
         assert_eq!(report.valid_driver_writes, 1);
         assert_eq!(report.unauthorized_driver_writes, 2);
-        assert!(report.cases[1].unauthorized_write == false);
+        assert!(!report.cases[1].unauthorized_write);
         assert!(report.cases[2].unauthorized_write);
         verify_proof_consistency(&report).unwrap();
     }
