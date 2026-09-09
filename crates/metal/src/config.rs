@@ -107,7 +107,7 @@ impl MetalConfig {
         }
         if let Ok(id) = std::env::var("REALITYOS_METAL_SERVO_ID") {
             if let Ok(n) = id.parse::<u8>() {
-                if n != 0 && n != 254 {
+                if n != 254 {
                     self.servo_id = n;
                 }
             }
@@ -200,7 +200,7 @@ pub fn candidate_bauds(configured: u32, extra: Option<u32>) -> Vec<u32> {
 pub fn candidate_servo_ids(configured: u8, extra: Option<u8>) -> Vec<u8> {
     let mut out = Vec::new();
     for id in std::iter::once(configured).chain(extra).chain([1_u8, 2]) {
-        if id != 0 && id != 254 && !out.contains(&id) {
+        if id != 254 && !out.contains(&id) {
             out.push(id);
         }
     }
@@ -258,10 +258,10 @@ mod tests {
     }
 
     #[test]
-    fn candidate_ids_skip_broadcast_and_zero() {
+    fn candidate_ids_skip_broadcast_and_keep_id_zero() {
         let ids = candidate_servo_ids(7, Some(0));
         assert_eq!(ids[0], 7);
-        assert!(!ids.contains(&0));
+        assert!(ids.contains(&0), "Protocol 2.0 ID 0 is a valid Wizard ID");
         assert!(!ids.contains(&254));
         assert!(ids.contains(&1));
     }

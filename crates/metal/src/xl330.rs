@@ -28,9 +28,10 @@ use crate::protocol::{
     ADDR_HARDWARE_ERROR, ADDR_MAX_POSITION_LIMIT, ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT,
     ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN,
     ADDR_PRESENT_POSITION, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY,
-    ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE, ADDR_VELOCITY_LIMIT,
-    BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_POSITION_P_GAIN, MIN_POSITION_P_GAIN,
-    OPERATING_MODE_POSITION, STATUS_RETURN_ALL,
+    ADDR_PWM_LIMIT, ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE,
+    ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN, BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED,
+    FACTORY_POSITION_P_GAIN, FACTORY_PWM_LIMIT, FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN,
+    MIN_PWM_LIMIT, MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION, STATUS_RETURN_ALL,
 };
 
 pub struct Xl330Driver {
@@ -59,6 +60,8 @@ pub struct Xl330Driver {
     velocity_limit: u32,
     drive_mode: u8,
     position_p_gain: u16,
+    velocity_p_gain: u16,
+    pwm_limit: u16,
     bus_watchdog: u8,
 }
 
@@ -117,6 +120,8 @@ impl Xl330Driver {
             velocity_limit: 0,
             drive_mode: 0,
             position_p_gain: 0,
+            velocity_p_gain: 0,
+            pwm_limit: 0,
             bus_watchdog: 0,
         };
         driver.connect_serial()?;
@@ -126,6 +131,10 @@ impl Xl330Driver {
                 .apply_bench_limits()
                 .map_err(|e| io::Error::other(e.to_string()))?;
             driver.enter_live_io();
+        } else if driver.connected {
+            // Startup Configuration can enable torque after a DTR reboot.
+            // Identify-only must not leave the horn tracking a stale goal.
+            driver.quiesce_found_torque();
         }
         Ok(driver)
     }
@@ -205,6 +214,14 @@ impl Xl330Driver {
 
     pub fn applied_position_p_gain(&self) -> u16 {
         self.position_p_gain
+    }
+
+    pub fn applied_velocity_p_gain(&self) -> u16 {
+        self.velocity_p_gain
+    }
+
+    pub fn applied_pwm_limit(&self) -> u16 {
+        self.pwm_limit
     }
 
     pub fn applied_bus_watchdog(&self) -> u8 {
@@ -447,6 +464,38 @@ impl Xl330Driver {
             )?;
             self.position_p_gain = FACTORY_POSITION_P_GAIN;
         }
+        let got_vp = self
+            .read_reg(ADDR_VELOCITY_P_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b))
+            .unwrap_or(0);
+        self.velocity_p_gain = got_vp;
+        if got_vp < MIN_VELOCITY_P_GAIN {
+            self.write_reg(
+                ADDR_VELOCITY_P_GAIN,
+                &FACTORY_VELOCITY_P_GAIN.to_le_bytes(),
+                "setup_velocity_p_gain",
+                None,
+                false,
+            )?;
+            self.velocity_p_gain = FACTORY_VELOCITY_P_GAIN;
+        }
+        let got_pwm = self
+            .read_reg(ADDR_PWM_LIMIT, 2)
+            .ok()
+            .and_then(|b| le_u16(&b))
+            .unwrap_or(0);
+        self.pwm_limit = got_pwm;
+        if got_pwm < MIN_PWM_LIMIT {
+            self.write_reg(
+                ADDR_PWM_LIMIT,
+                &FACTORY_PWM_LIMIT.to_le_bytes(),
+                "setup_pwm_limit",
+                None,
+                false,
+            )?;
+            self.pwm_limit = FACTORY_PWM_LIMIT;
+        }
         // EEPROM writes can NAK the next instruction if we immediately continue.
         std::thread::sleep(Duration::from_millis(50));
         let max_v = self
@@ -522,6 +571,27 @@ impl Xl330Driver {
         self.write_reg(ADDR_TORQUE_ENABLE, &[1], "setup_torque_on", None, false)?;
         self.torque_enabled = true;
         Ok(())
+    }
+
+    /// Startup Configuration torque-on (after DTR reboot) tracks the last
+    /// Wizard goal. Probe does not enable torque; it only writes 0 if the
+    /// register is already 1. Not command egress.
+    fn quiesce_found_torque(&mut self) {
+        let on = self
+            .read_reg(ADDR_TORQUE_ENABLE, 1)
+            .ok()
+            .and_then(|b| b.first().copied())
+            == Some(1);
+        if on {
+            let _ = self.write_reg(
+                ADDR_TORQUE_ENABLE,
+                &[0],
+                "probe_quiesce_torque",
+                None,
+                false,
+            );
+        }
+        self.torque_enabled = false;
     }
 
     fn refresh_position_limits(&mut self) -> PlantResult<()> {
@@ -981,7 +1051,7 @@ fn open_xl330_serial_with(
 fn prefer_servo_id(ids: &[u8], found: Option<u8>) -> Vec<u8> {
     let mut out = Vec::new();
     if let Some(id) = found {
-        if id != 0 && id != BROADCAST_ID {
+        if id != BROADCAST_ID {
             out.push(id);
         }
     }

@@ -128,11 +128,13 @@ def init_regs() -> bytearray:
         own = int(os.environ.get("REALITYOS_METAL_PTY_ID", "1"))
     except ValueError:
         own = 1
-    regs[7] = own if own not in (0, 254) else 1
+    regs[7] = own if own != 254 else 1
     regs[10] = 4 if os.environ.get("REALITYOS_METAL_PTY_TIME_BASED") == "1" else 0
     regs[11] = 3
     regs[32:34] = struct.pack("<H", 70)
     regs[34:36] = struct.pack("<H", 60 if os.environ.get("REALITYOS_METAL_PTY_HIGH_MINVIN") == "1" else 35)
+    pwm = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_PWM") == "1" else 885
+    regs[36:38] = struct.pack("<H", pwm)
     regs[38:40] = struct.pack("<H", 200)
     vel = 1 if os.environ.get("REALITYOS_METAL_PTY_SLOW_VEL") == "1" else 445
     regs[44:48] = struct.pack("<I", vel)
@@ -147,10 +149,14 @@ def init_regs() -> bytearray:
         regs[11] = 16
     p_gain = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_P") == "1" else 400
     regs[84:86] = struct.pack("<H", p_gain)
+    vel_p = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_VEL_P") == "1" else 100
+    regs[78:80] = struct.pack("<H", vel_p)
     # Default Goal Position is 0 (unset). Present is 2048. Torque-on without
     # syncing goal jumps present — that is the stale-Wizard-goal landmine.
     if os.environ.get("REALITYOS_METAL_PTY_BUS_WATCHDOG") == "1":
         regs[98] = 0xFF  # tripped; Goal Position is read-only until written 0
+    if os.environ.get("REALITYOS_METAL_PTY_STARTUP_TORQUE") == "1":
+        regs[64] = 1
     regs[68] = 0 if os.environ.get("REALITYOS_METAL_PTY_SRL0") == "1" else 2
     regs[120:122] = struct.pack("<H", 1234)
     regs[126:128] = struct.pack("<h", 0)
@@ -204,7 +210,9 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         regs[addr : addr + len(data)] = data
         if addr == 116 and len(data) >= 4:
             p_gain = struct.unpack_from("<H", regs, 84)[0]
-            if p_gain > 0:
+            pwm_limit = struct.unpack_from("<H", regs, 36)[0]
+            vel_p = struct.unpack_from("<H", regs, 78)[0]
+            if p_gain > 0 and pwm_limit > 0 and vel_p > 0:
                 regs[132:136] = data[:4]
         return b"", 0
     if inst == INST_REBOOT:
@@ -236,7 +244,7 @@ def main() -> None:
             continue
         req_id, inst, params, _consumed = parsed
         del buf[:]
-        own = regs[7] or 1
+        own = regs[7]
         if req_id not in (254, own):
             continue
         if (

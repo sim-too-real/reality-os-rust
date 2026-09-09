@@ -480,9 +480,10 @@ measure() {
   fi
   # bus/present is the pre-write sample. After an authorized goal write,
   # settle and re-acquire so observed_motion is device present, not the
-  # cached tick. Profile velocity 20 moves 2 ticks in well under 100 ms.
+  # cached tick. action=0.2 uses the full 8-tick cap; profile 20 + accel 10
+  # finishes that step in well under 200 ms.
   if [[ "$expected" == "true" ]] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("ok") else 1)' "$respfile"; then
-    sleep 0.12
+    sleep 0.20
     as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1 || true
   fi
   after="$(writes)"
@@ -560,7 +561,7 @@ open(path, "w").write(json.dumps(a))
 }
 
 add_case "$(measure valid_hold 'verb=hold' NONE true "$PROP" --root "$ROOT" --id metal-hold --verb hold propose)"
-add_case "$(measure valid_nudge 'verb=drive action=0.05' NONE true "$PROP" --root "$ROOT" --id metal-nudge --verb drive --action 0.05 propose)"
+add_case "$(measure valid_nudge 'verb=drive action=0.2' NONE true "$PROP" --root "$ROOT" --id metal-nudge --verb drive --action 0.2 propose)"
 add_case "$(measure unsupported_action 'verb=dance' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" unsupported)"
 add_case "$(measure oversized_action 'action=1e6' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" oversized)"
 add_case "$(measure nan_action 'action=NaN' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" --id metal-nan --verb drive --action nan propose)"

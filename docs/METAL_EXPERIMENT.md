@@ -13,7 +13,7 @@ Physical-evidence milestone. Not a kernel redesign. Not certified safety.
 | Max configured velocity | Profile Velocity **20** (≈ 4.6 rpm) |
 | Max configured effort | Current Limit **200 mA**; Reality OS `tau_max` **0.2** |
 | Operating mode | Driver sets EEPROM **position control (3)** if it is not already |
-| Mechanical constraint | Horn fixture or zip-tie stop; **no load**, no linkage, no person in the sweep |
+| Mechanical constraint | Horn fixture or zip-tie stop that still allows the certified **8-tick** (~0.7°) step; **no load**, no linkage, no person in the sweep |
 
 Why this is low-energy: stall torque is about **0.52 N·m** at 5 V, plastic gears, no mobile base, no high-voltage bus. Unexpected motion cannot throw a mass or travel.
 
@@ -64,7 +64,7 @@ Identity/disconnect ESTOP is not a software-watchdog miss. `serve` pets the watc
 * Freshness: authority monotonic receive time stamped by `ingest_sensor_packet`.
 * Threshold: `freshness_threshold_s` in `metal.json` (default 2 s), recorded into the proof from `bus/sensor_freshness.json`.
 * Autonomy cannot ingest or refresh evidence (`sensor_samples` is refused).
-* Observed motion is measured from `bus/present` / `bus/goal` (device registers), not inferred from IPC status. `bus/present` is the last acquired sample (pre-write during propose). After an authorized hold/nudge the campaign settles (~120 ms) and re-acquires so `valid_nudge` records a present change; a goal write against a stale cache is not motion.
+* Observed motion is measured from `bus/present` / `bus/goal` (device registers), not inferred from IPC status. `bus/present` is the last acquired sample (pre-write during propose). After an authorized hold/nudge the campaign settles (~200 ms) and re-acquires so `valid_nudge` records a present change; a goal write against a stale cache is not motion. The certified nudge is `action=0.2` (the full 8-tick cap) so plastic-gear backlash is less likely to hide the step.
 
 ## Proof
 
@@ -101,8 +101,8 @@ First-contact script invariants (found on the PTY sequence, would fail the first
 * Wizard PWM/velocity/current mode is EEPROM. After forcing position mode (3), setup waits and re-identifies before RAM profile/torque writes.
 * `valid_nudge` must change device present, not only increment the egress write count. Propose persists the pre-write present; the campaign re-samples after a short settle.
 * Wizard baud 3 Mbps / 4 Mbps and a non-1/2 servo ID would miss the candidate list. Probe broadcast-PINGs at each baud (PING still answers at SRL 0) and includes those bauds.
-* Wizard EEPROM Velocity Limit `0`/`1` caps motion so a 2-tick nudge is still sitting at the old present after 120 ms. Setup raises that limit to at least `max_profile_velocity` (does not raise a higher factory cap). Time-based Drive Mode is forced to velocity-based so profile velocity stays in rpm, not milliseconds.
-* `probe` / `open_discovering` identify only. They must not write EEPROM or enable torque. `serve` / `open` apply bench limits and torque-on. Drop torque-off runs only when this process enabled torque; identify-only close used to write `torque_enable=0` and increment egress before serve.
+* Wizard EEPROM Velocity Limit `0`/`1` caps motion so an 8-tick nudge is still sitting at the old present after 200 ms. Setup raises that limit to at least `max_profile_velocity` (does not raise a higher factory cap). Time-based Drive Mode is forced to velocity-based so profile velocity stays in rpm, not milliseconds.
+* `probe` / `open_discovering` identify only. They must not write EEPROM or enable torque. If Startup Configuration already enabled torque (DTR reboot), probe writes torque-off and does not count it as command egress. `serve` / `open` apply bench limits and torque-on. Drop torque-off runs only when this process enabled torque; identify-only close used to write `torque_enable=0` and increment egress before serve.
 * Setup refuses torque-on when Present Input Voltage is outside Wizard min/max voltage EEPROM (`dxl_vin_outside_wizard_limits`). It does not widen those limits. Broadcast sniff does not take `TIOCEXCL` so probe cannot steal exclusive from the next serve open.
 * CI `os-users` runs `scripts/metal-pty-sequence.sh` so campaign-script first-contact bugs (empty `METAL_CMD_ID`, crash-replay hang, replay latch, identify-only probe, PTY `fuser` exclusive) fail before the XL330 bench. That job is not physical evidence. The sequence must skip exclusive-tty fail on `/dev/pts/*`; the responder holding the master is not ModemManager.
 * Wizard baud index 0 is 9 600. Probe tries it last so a factory 57 600 bus does not wait on a slow miss.
@@ -111,5 +111,9 @@ First-contact script invariants (found on the PTY sequence, would fail the first
 * Wizard Position P Gain `0` never tracks a goal. Setup raises it to factory **400** when it is below 80. It does not lower a higher Wizard P.
 * Torque-on tracks Goal Position. A stale Wizard goal (often 0) would move before any certified command. Setup writes goal = present before torque-on. That write is not command egress. If present cannot be read, setup refuses (`dxl_present_unreadable_before_torque`) instead of inventing goal 0. If present is outside Wizard min/max, setup refuses (`dxl_present_outside_wizard_limits`) instead of clamping onto the edge and yanking.
 * Wizard Bus Watchdog (addr 98, 20 ms units) trips after a quiet gap and latches `0xFF`; Goal Position then NAKs data-range. Setup writes 0 if the register is non-zero. This is not a certified safety watchdog.
+* Wizard PWM Limit `0` produces no output. Setup writes factory **885** when the register is below 80. It does not lower a higher Wizard PWM cap.
+* Wizard Velocity P Gain `0` leaves the profile loop dead. Setup writes factory **100** when the register is below 20. It does not lower a higher Wizard P.
+* Protocol 2.0 ID **0** is valid. Broadcast sniff and `prefer_servo_id` used to drop it as empty, so a Wizard ID-0 bus never bound.
+* `valid_nudge` uses `action=0.2` (8 ticks at `tau_max=0.2`). The old `0.05` step was 2 ticks and can disappear into plastic-gear backlash on a real horn.
 
-This Cloud Agent VM has **no** USB/serial actuator and **no** self-hosted worker. Attach a Cursor self-hosted worker (`cursor worker start`) on the bench host that can see `/dev/ttyUSB*` / `/dev/ttyACM*`. Until that happens, the experiment is blocked. That is not a software-architecture remaining task.
+This Cloud Agent VM has **no** USB/serial actuator and **no** self-hosted worker. Attach a Cursor self-hosted worker (`cursor worker start`) on the bench host that can see `/dev/ttyUSB*` / `/dev/ttyACM*` / `/dev/ttyCH341*`. Until that happens, the experiment is blocked. That is not a software-architecture remaining task.

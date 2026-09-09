@@ -234,6 +234,54 @@ fn xl330_pty_raises_wizard_zero_p_gain_so_nudge_can_track() {
 }
 
 #[test]
+fn xl330_pty_raises_wizard_zero_pwm_limit_so_nudge_can_move() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_PWM", "1")]);
+    let root = metal_test_root("pty-zero-pwm");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("raise PWM Limit 0 to factory 885");
+    assert_eq!(driver.applied_pwm_limit(), 885);
+    driver.read_sensor(0.0).expect("sensor");
+    let before = driver.last_present_position();
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("nudge after restoring PWM limit");
+    driver.read_sensor(0.1).expect("sensor");
+    let after = driver.last_present_position();
+    assert_ne!(
+        after, before,
+        "Wizard PWM Limit 0 must not leave present stuck after setup"
+    );
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_raises_wizard_zero_velocity_p_so_nudge_can_track() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_VEL_P", "1")]);
+    let root = metal_test_root("pty-zero-vel-p");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("raise Velocity P Gain 0 to factory 100");
+    assert_eq!(driver.applied_velocity_p_gain(), 100);
+    driver.read_sensor(0.0).expect("sensor");
+    let before = driver.last_present_position();
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("nudge after restoring Velocity P");
+    driver.read_sensor(0.1).expect("sensor");
+    let after = driver.last_present_position();
+    assert_ne!(
+        after, before,
+        "Wizard Velocity P=0 must not leave present stuck after setup"
+    );
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_refuses_torque_when_present_outside_wizard_limits() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_PRESENT_OUTSIDE", "1")]);
@@ -375,6 +423,47 @@ fn xl330_pty_discover_finds_wizard_id_via_broadcast() {
         recorded_writes(root.join("bus")),
         0,
         "identify-only close must not write torque-off"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_discover_finds_wizard_id_zero() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ID", "0")]);
+    let root = metal_test_root("pty-id0");
+    let cfg = MetalConfig::example(&tty);
+    assert_eq!(cfg.servo_id, 1);
+    let (mut driver, bound) =
+        Xl330Driver::open_discovering(cfg, &root).expect("broadcast PING must find Wizard ID 0");
+    assert_eq!(bound.servo_id, 0);
+    assert_eq!(driver.measured().actuator_id, "xl330:0");
+    assert!(
+        !driver.torque_is_enabled(),
+        "probe/discover must not torque-on"
+    );
+    driver.close();
+    assert_eq!(recorded_writes(root.join("bus")), 0);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_discover_quiesces_startup_torque_without_command_egress() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_STARTUP_TORQUE", "1")]);
+    let root = metal_test_root("pty-startup-torque");
+    let cfg = MetalConfig::example(&tty);
+    let (mut driver, _) =
+        Xl330Driver::open_discovering(cfg, &root).expect("probe must open with torque already on");
+    assert!(
+        !driver.torque_is_enabled(),
+        "probe must not claim it enabled torque"
+    );
+    driver.close();
+    assert_eq!(
+        recorded_writes(root.join("bus")),
+        0,
+        "probe torque-off is not command egress"
     );
     let _ = std::fs::remove_dir_all(&root);
 }

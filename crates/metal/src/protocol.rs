@@ -28,8 +28,13 @@ pub const OPERATING_MODE_POSITION: u8 = 3;
 /// EEPROM. Unit 0.1 V. Factory XL330 max 70 / min 35.
 pub const ADDR_MAX_VOLTAGE_LIMIT: u16 = 32;
 pub const ADDR_MIN_VOLTAGE_LIMIT: u16 = 34;
+/// EEPROM. Unit 0.113%. Factory 885. Wizard 0 produces no PWM output.
+pub const ADDR_PWM_LIMIT: u16 = 36;
+pub const FACTORY_PWM_LIMIT: u16 = 885;
+/// Below this, an 8-tick no-load step will not move present.
+pub const MIN_PWM_LIMIT: u16 = 80;
 pub const ADDR_CURRENT_LIMIT: u16 = 38;
-/// EEPROM. Unit ≈ 0.229 rpm. 0 or 1 makes a 2-tick nudge miss a 120 ms sample.
+/// EEPROM. Unit ≈ 0.229 rpm. 0 or 1 makes an 8-tick nudge miss a 200 ms sample.
 pub const ADDR_VELOCITY_LIMIT: u16 = 44;
 /// EEPROM. Factory max 4095 / min 0. Wizard can shrink this window.
 pub const ADDR_MAX_POSITION_LIMIT: u16 = 48;
@@ -39,10 +44,14 @@ pub const ADDR_TORQUE_ENABLE: u16 = 64;
 pub const ADDR_STATUS_RETURN_LEVEL: u16 = 68;
 pub const STATUS_RETURN_ALL: u8 = 2;
 pub const ADDR_HARDWARE_ERROR: u16 = 70;
+/// RAM. Factory 100. Wizard 0 means the profile velocity loop does not track.
+pub const ADDR_VELOCITY_P_GAIN: u16 = 78;
+pub const FACTORY_VELOCITY_P_GAIN: u16 = 100;
+pub const MIN_VELOCITY_P_GAIN: u16 = 20;
 /// RAM. Factory 400. Wizard 0 means the servo never tracks a goal.
 pub const ADDR_POSITION_P_GAIN: u16 = 84;
 pub const FACTORY_POSITION_P_GAIN: u16 = 400;
-/// Below this, a 2-tick nudge will not settle in the campaign sample window.
+/// Below this, an 8-tick nudge will not settle in the campaign sample window.
 pub const MIN_POSITION_P_GAIN: u16 = 80;
 /// RAM. Unit 20 ms. 0 = off; 0xFF (-1) = tripped (goal registers read-only).
 pub const ADDR_BUS_WATCHDOG: u16 = 98;
@@ -230,7 +239,8 @@ pub fn unique_status_ids(buf: &[u8]) -> Vec<u8> {
         let start = search + rel;
         match decode_status(&buf[start..]) {
             Ok(st) => {
-                if st.id != 0 && st.id != BROADCAST_ID && !out.contains(&st.id) {
+                // Protocol 2.0 ID 0 is valid (Wizard). Only 254 is broadcast.
+                if st.id != BROADCAST_ID && !out.contains(&st.id) {
                     out.push(st.id);
                 }
                 search = start + 4;
@@ -381,6 +391,8 @@ mod tests {
         let mut both = a;
         both.extend_from_slice(&b);
         assert_eq!(unique_status_ids(&both), vec![1, 7]);
+        let zero = encode_packet(0, INST_STATUS, &[0]);
+        assert_eq!(unique_status_ids(&zero), vec![0]);
     }
 
     #[test]
