@@ -71,7 +71,8 @@ Users: `realityos-authority` owns the tty, key, journal, and process. `realityos
 ## How to run (bench host)
 
 ```text
-# as a user who can sudo, with the XL330 powered and the cutoff closed
+# 1) Operator-test the VIN cutoff first (servo loses holding torque).
+# 2) Close the cutoff again, then:
 cargo build -p realityos-metal --bins
 sudo -E env REALITYOS_METAL_DEVICE=/dev/ttyUSB0 \
   REALITYOS_METAL_BIN=$PWD/target/debug \
@@ -80,7 +81,9 @@ sudo -E env REALITYOS_METAL_DEVICE=/dev/ttyUSB0 \
   scripts/metal-campaign.sh
 ```
 
-`REALITYOS_METAL_BAUD` and `REALITYOS_METAL_SERVO_ID` are optional. Probe tries the configured pair first, then common XL330 baud/id pairs, and writes the working pair into `metal.json`. Each campaign kills leftover `realityos-metal-smoke --root <root>` processes, wipes `REALITYOS_METAL_ROOT`, and mounts tmpfs on that path when the parent filesystem is a disk so `--first-online` is not refused by a leftover journal and idle journal fsyncs stay inside 100 ms.
+The campaign exits 2 before `init`/`probe` (which enable torque) unless `REALITYOS_METAL_CUTOFF_TESTED=1`. That flag is an operator observation, not a certified STO/SS1 function.
+
+`REALITYOS_METAL_BAUD` and `REALITYOS_METAL_SERVO_ID` are optional. Probe tries the configured pair first, then common XL330 baud/id pairs, and writes the working pair into `metal.json`. Each campaign kills leftover `realityos-metal-smoke --root <root>` processes, wipes `REALITYOS_METAL_ROOT`, and mounts tmpfs on that path when the parent filesystem is a disk so `--first-online` is not refused by a leftover journal and idle journal fsyncs stay inside 100 ms. Set `REALITYOS_METAL_CUTOFF_TESTED=1` only after opening VIN and seeing lost holding torque; the campaign will not torque or write without it.
 
 `scripts/metal-os-boundary.sh` (CI `os-users`) proves the 0751 / device-open counting path with a dummy 0600 file, then a two-UID `serve` + hold on the PTY Protocol 2.0 stand-in (`REALITYOS_METAL_ALLOW_PTY=1`). That is **not** a substitute for the XL330 campaign and does not write `metal_proof.json`.
 
