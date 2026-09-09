@@ -83,6 +83,35 @@ set_usb_serial_latency() {
   done
 }
 
+# Ubuntu usbcore autosuspend is often 2 s. An idle gap between campaign
+# cases then makes the next USB-UART xfer miss the 40 ms live deadline
+# and look like bus_lost / a watchdog miss. PTY has no sysfs node.
+disable_usb_autosuspend() {
+  local dev="$1"
+  local real name node
+  real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
+  name="$(basename "$real")"
+  case "$name" in
+    ttyUSB*|ttyACM*|ttyCH341*) ;;
+    *) return 0 ;;
+  esac
+  node="$(readlink -f "/sys/class/tty/${name}/device" 2>/dev/null || true)"
+  while [[ -n "$node" && "$node" != / && "$node" != /sys ]]; do
+    if [[ -f "$node/power/control" ]]; then
+      if echo on >"$node/power/control" 2>/dev/null; then
+        echo "metal-campaign: set $node/power/control=on (USB autosuspend can miss the 40 ms live deadline)"
+      fi
+    fi
+    if [[ -f "$node/power/autosuspend_delay_ms" ]]; then
+      echo -1 >"$node/power/autosuspend_delay_ms" 2>/dev/null || true
+    fi
+    if [[ -f "$node/idVendor" ]]; then
+      break
+    fi
+    node="$(dirname "$node")"
+  done
+}
+
 # ModemManager/brltty grab ttyUSB on typical Ubuntu benches. Between probe
 # close and serve open nobody holds TIOCEXCL.
 UDEV_RULE=""
@@ -178,6 +207,7 @@ EOF
     /bin/stty -F "$real" -hupcl >/dev/null 2>&1 || true
   fi
   set_usb_serial_latency "$dev"
+  disable_usb_autosuspend "$dev"
 }
 
 cleanup_usb_serial_host() {
