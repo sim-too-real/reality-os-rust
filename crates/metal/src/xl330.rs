@@ -496,8 +496,16 @@ impl Xl330Driver {
             .read_reg(ADDR_PRESENT_POSITION, 4)
             .ok()
             .and_then(|b| le_i32(&b))
-            .ok_or_else(|| PlantError::refused("dxl_present_unreadable_before_torque"))?
-            .clamp(self.min_position, self.max_position);
+            .ok_or_else(|| PlantError::refused("dxl_present_unreadable_before_torque"))?;
+        // Do not yank present onto the Wizard window. Clamping then
+        // torque-on would move before any certified command and break
+        // the zero-motion baseline.
+        if present < self.min_position || present > self.max_position {
+            return Err(PlantError::refused(format!(
+                "dxl_present_outside_wizard_limits:present={present}:min={}:max={}",
+                self.min_position, self.max_position
+            )));
+        }
         self.last_present = present;
         self.write_reg(
             ADDR_GOAL_POSITION,

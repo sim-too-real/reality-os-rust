@@ -140,6 +140,9 @@ def init_regs() -> bytearray:
     regs[52:56] = struct.pack("<i", 0)
     if os.environ.get("REALITYOS_METAL_PTY_AT_MAX") == "1":
         regs[48:52] = struct.pack("<i", 2048)
+    if os.environ.get("REALITYOS_METAL_PTY_PRESENT_OUTSIDE") == "1":
+        regs[48:52] = struct.pack("<i", 2100)
+        regs[52:56] = struct.pack("<i", 2000)
     if os.environ.get("REALITYOS_METAL_PTY_PWM") == "1":
         regs[11] = 16
     p_gain = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_P") == "1" else 400
@@ -153,6 +156,8 @@ def init_regs() -> bytearray:
     regs[126:128] = struct.pack("<h", 0)
     regs[128:132] = struct.pack("<i", 0)
     regs[132:136] = struct.pack("<i", 2048)
+    if os.environ.get("REALITYOS_METAL_PTY_PRESENT_OUTSIDE") == "1":
+        regs[132:136] = struct.pack("<i", 100)
     regs[144:146] = struct.pack("<H", 50)
     return regs
 

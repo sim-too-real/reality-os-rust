@@ -234,6 +234,24 @@ fn xl330_pty_raises_wizard_zero_p_gain_so_nudge_can_track() {
 }
 
 #[test]
+fn xl330_pty_refuses_torque_when_present_outside_wizard_limits() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_PRESENT_OUTSIDE", "1")]);
+    let root = metal_test_root("pty-present-outside");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("present 100 in window 2000..2100 must not yank to the edge"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("dxl_present_outside_wizard_limits"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_refuses_torque_when_present_cannot_be_read() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_NO_PRESENT", "1")]);
