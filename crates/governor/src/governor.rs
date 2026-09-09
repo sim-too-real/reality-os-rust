@@ -260,6 +260,22 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
         self.last_heartbeat_s
     }
 
+    /// Authority seconds since the last software-watchdog stamp.
+    ///
+    /// The stamp is taken at the start of the tick, so this includes that
+    /// tick's journal+seal persist time. Idle serve must use this, not a
+    /// wall Instant schedule, when deciding whether the next tick is due.
+    pub fn watchdog_age_s(&self) -> f64 {
+        let now = self.clock.monotonic_now().secs();
+        if !now.is_finite() {
+            return f64::INFINITY;
+        }
+        if self.last_watchdog_s <= 0.0 {
+            return now.max(0.0);
+        }
+        (now - self.last_watchdog_s).max(0.0)
+    }
+
     pub fn last_sensor_s(&self) -> f64 {
         self.last_sensor_s
     }

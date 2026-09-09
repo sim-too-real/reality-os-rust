@@ -336,6 +336,10 @@ impl MetalAuthority {
         t.ok && !self.session.governor.estop()
     }
 
+    fn watchdog_age_s(&self) -> f64 {
+        self.session.governor.watchdog_age_s()
+    }
+
     fn pet_heartbeat(&mut self) {
         let _ = self.session.governor.heartbeat_now();
     }
@@ -353,8 +357,7 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
         }
     };
     // new_online already ticked; one watchdog pet covers bind without a
-    // heartbeat fsync. Schedule the next idle pet from *before* emit so a
-    // slow journal fsync cannot push the following gap past 100 ms.
+    // heartbeat fsync.
     if !auth.pet_watchdog() {
         let msg = "software_watchdog_miss_before_bind";
         let _ = std::fs::write(root.join("serve.err"), format!("{msg}\n"));
@@ -364,36 +367,83 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
     listener.set_nonblocking(true)?;
     // Each watchdog/heartbeat emit fsyncs journal+seal. 10 ms pets of both
     // were ~400 fsyncs/s and can miss the 100 ms watchdog on a bench disk.
-    let mut next_watchdog = std::time::Instant::now() + Duration::from_millis(40);
+    // Idle pets follow the authority-clock gap (stamp is pre-persist). A
+    // wall Instant schedule can skip a due tick, then accept+handle miss
+    // with an empty serve.err.
     let mut next_heartbeat = std::time::Instant::now() + Duration::from_millis(800);
     loop {
         if root.join("stop_serve").exists() {
             break Ok(());
         }
-        let now = std::time::Instant::now();
-        if now >= next_watchdog {
-            next_watchdog = now + Duration::from_millis(40);
-            if !auth.pet_watchdog() {
-                let _ = std::fs::write(root.join("serve.err"), "software_watchdog_miss_idle\n");
-            }
-        }
-        if now >= next_heartbeat {
-            next_heartbeat = now + Duration::from_millis(800);
-            auth.pet_heartbeat();
-        }
+        // Accept before idle heartbeat. Heartbeat persist in the same
+        // iteration as handle() was software_watchdog_miss after ~800 ms
+        // idle (serve.err empty; refuse at handle's first pet).
         let mut stream = match listener.accept() {
             Ok((s, _)) => s,
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                let wait = next_watchdog.saturating_duration_since(std::time::Instant::now());
-                std::thread::sleep(wait.min(Duration::from_millis(20)));
+                if auth.watchdog_age_s() >= 0.040 && !auth.pet_watchdog() {
+                    let _ = std::fs::write(root.join("serve.err"), "software_watchdog_miss_idle\n");
+                }
+                let now = std::time::Instant::now();
+                if now >= next_heartbeat {
+                    // Heartbeat persist can consume the 100 ms window if the
+                    // last watchdog stamp is already tens of ms old.
+                    if auth.watchdog_age_s() >= 0.020 && !auth.pet_watchdog() {
+                        let _ =
+                            std::fs::write(root.join("serve.err"), "software_watchdog_miss_idle\n");
+                    }
+                    next_heartbeat = now + Duration::from_millis(800);
+                    auth.pet_heartbeat();
+                    // Heartbeat is another journal+seal pair. Refresh so
+                    // the next accept does not inherit that persist gap.
+                    if !auth.pet_watchdog() {
+                        let _ = std::fs::write(
+                            root.join("serve.err"),
+                            "software_watchdog_miss_after_heartbeat\n",
+                        );
+                    }
+                }
+                let remain = ((0.040 - auth.watchdog_age_s()) * 1000.0).max(0.0) as u64;
+                std::thread::sleep(Duration::from_millis(remain.min(20)));
                 continue;
             }
             Err(_) => continue,
         };
-        stream.set_nonblocking(false)?;
-        let mut line = String::new();
-        if BufReader::new(&stream).read_line(&mut line).is_err() {
+        if auth.watchdog_age_s() >= 0.040 && !auth.pet_watchdog() {
+            let _ = std::fs::write(
+                root.join("serve.err"),
+                "software_watchdog_miss_before_handle\n",
+            );
             continue;
+        }
+        stream.set_nonblocking(false)?;
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(25)));
+        let mut line = String::new();
+        {
+            let mut reader = BufReader::new(&stream);
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => break,
+                    Err(e)
+                        if e.kind() == ErrorKind::TimedOut || e.kind() == ErrorKind::WouldBlock =>
+                    {
+                        if !auth.pet_watchdog() {
+                            let _ = std::fs::write(
+                                root.join("serve.err"),
+                                "software_watchdog_miss_before_handle\n",
+                            );
+                            line.clear();
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        line.clear();
+                        break;
+                    }
+                }
+            }
         }
         if line.trim().is_empty() {
             continue;

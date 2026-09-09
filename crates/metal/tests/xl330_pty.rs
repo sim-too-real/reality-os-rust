@@ -182,12 +182,14 @@ fn xl330_pty_serve_hold_survives_idle_watchdog() {
         "serve did not bind ipc.sock: {}",
         std::fs::read_to_string(root.join("serve.err")).unwrap_or_default()
     );
-    std::thread::sleep(Duration::from_millis(250));
+    // Cover idle watchdog (~40 ms) and idle heartbeat (~800 ms). Heartbeat
+    // persist in the same serve iteration as handle() was a 100 ms miss.
+    std::thread::sleep(Duration::from_millis(900));
     let resp = realityos_metal::ipc::call(&root, &MetalRequest::propose("pty-idle-hold", "hold"))
         .expect("ipc hold after idle");
     assert!(
         resp.ok,
-        "first hold after idle watchdog gap must succeed: {resp:?} serve.err={}",
+        "first hold after idle watchdog/heartbeat must succeed: {resp:?} serve.err={}",
         std::fs::read_to_string(root.join("serve.err")).unwrap_or_default()
     );
     assert!(!resp.metal);

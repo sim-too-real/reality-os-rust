@@ -159,6 +159,11 @@ mod tests {
             t.ok && !g.estop(),
             "start heartbeat persist must not consume the 100ms watchdog budget: {t:?}"
         );
+        assert!(
+            g.watchdog_age_s() < 0.05,
+            "age is measured from the tick stamp, got {}",
+            g.watchdog_age_s()
+        );
     }
 
     fn online_identity() -> RuntimeIdentity {
