@@ -832,6 +832,7 @@ fi
 
 PROBE="$(as_autonomy env METAL_AUTHORITY_PID="${SMOKE_PID:-$AUTH_PID}" "$PROP" --root "$ROOT" --authority-pid "${SMOKE_PID:-$AUTH_PID}" os-probe)"
 echo "os-probe=$PROBE"
+printf '%s\n' "$PROBE" >"$ROOT/os_probe.json"
 
 python3 - <<'PY' "$PROBE"
 import json, sys
@@ -971,9 +972,12 @@ as_authority rm -f "$ROOT/bus/fail_sensor"
 require_live_session() {
   local sensor
   sensor="$(as_autonomy "$PROP" --root "$ROOT" sensor)"
-  python3 - <<PY
+  # Do not interpolate JSON into python '''...'''. A USB serial or
+  # violation token with an apostrophe would abort after hold/nudge.
+  printf '%s\n' "$sensor" >"$ROOT/last_sensor.json"
+  python3 - "$ROOT/last_sensor.json" <<'PY'
 import json, sys
-r = json.loads('''$sensor''')
+r = json.load(open(sys.argv[1]))
 if not r.get("ok"):
     sys.exit("error: session is not live before the next measured case: %s" % (r,))
 print("session-live")
@@ -1002,10 +1006,10 @@ as_authority rm -f "$ROOT/bus/force_disconnect"
 add_case "$(MEASURE_REQUIRE='hardware_session_requires_online_restart|dispatch_safe_state_latched' MEASURE_FORBID=software_watchdog_miss measure reconnect_after_disconnect 'cleared hook cannot revive instance' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-disc-re "$PROP" --root "$ROOT" propose-id)"
 
 BEFORE="$(writes)"
-PROBE_REC="$(python3 - <<PY
-import json
-p = json.loads('''$PROBE''')
-before = int("$BEFORE")
+PROBE_REC="$(python3 - "$ROOT/os_probe.json" "$BEFORE" <<'PY'
+import json, sys
+p = json.load(open(sys.argv[1]))
+before = int(sys.argv[2])
 print(json.dumps({
     "name": "autonomy_uid_direct_device",
     "expected_authorization": False,
@@ -1161,13 +1165,30 @@ fi
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMMIT="$(git -C "$REPO" -c safe.directory="$REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
 DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-MEASURED="$(cat "$ROOT/measured.json" 2>/dev/null || echo '{}')"
-FRESH="$(cat "$ROOT/bus/sensor_freshness.json" 2>/dev/null || echo '{}')"
-python3 - <<PY
-import json, os
-p = json.loads('''$PROBE''')
-measured = json.loads('''$MEASURED''')
-fresh = json.loads('''$FRESH''') if '''$FRESH'''.strip() else {}
+# Read measured/fresh/os-probe from files. Embedding JSON in '''$VAR'''
+# dies on an apostrophe in a USB serial or provenance note after the
+# physical campaign has already run.
+python3 - \
+  "$ROOT/os_probe.json" \
+  "$ROOT/measured.json" \
+  "$ROOT/bus/sensor_freshness.json" \
+  "$ROOT/proof_meta.json" \
+  "$COMMIT" \
+  "$AUTHORITY_USER" \
+  "$AUTONOMY_USER" \
+  "$DATE" \
+  <<'PY'
+import json, os, sys
+probe_p, measured_p, fresh_p, out_p, commit, auth, auto, date = sys.argv[1:9]
+p = json.load(open(probe_p))
+try:
+    measured = json.load(open(measured_p))
+except Exception:
+    measured = {}
+try:
+    fresh = json.load(open(fresh_p))
+except Exception:
+    fresh = {}
 if isinstance(measured, dict) and fresh.get("vin_0.1v") is not None:
     measured = dict(measured)
     measured["vin_0.1v"] = fresh.get("vin_0.1v")
@@ -1192,10 +1213,10 @@ meta = {
   "hardware_model": hardware_model,
   "controller_model": controller,
   "real_device_identity": measured,
-  "software_commit_sha": "$COMMIT",
-  "authority_uid": "$AUTHORITY_USER",
-  "autonomy_uid": "$AUTONOMY_USER",
-  "test_date": "$DATE",
+  "software_commit_sha": commit,
+  "authority_uid": auth,
+  "autonomy_uid": auto,
+  "test_date": date,
   "hardware_present": True,
   "used_os_monotonic_clock": True,
   "used_hardware_driver_port": True,
@@ -1209,7 +1230,7 @@ meta = {
   "authority_receive_s": fresh.get("authority_receive_s"),
   "freshness_threshold_s": fresh.get("freshness_threshold_s"),
 }
-open("$ROOT/proof_meta.json","w").write(json.dumps(meta, indent=2))
+open(out_p, "w").write(json.dumps(meta, indent=2))
 print("meta-written")
 PY
 
