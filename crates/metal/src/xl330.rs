@@ -142,7 +142,15 @@ impl Xl330Driver {
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| io::Error::other("metal_discover_failed")))
+        // Configured pair is first, when the adapter is coldest. One more
+        // attempt after the scan has opened the tty — discover does not
+        // retry a pair, so a single cold first ping would skip the real bus.
+        let configured = cfg.clone();
+        match Self::open(configured.clone(), root.as_ref()) {
+            Ok(driver) => Ok((driver, configured)),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(e),
+            Err(e) => Err(last_err.unwrap_or(e)),
+        }
     }
 
     pub fn bus_dir(&self) -> &Path {
@@ -183,6 +191,10 @@ impl Xl330Driver {
             .open()
             .map_err(io::Error::other)?;
         port.write_data_terminal_ready(true).ok();
+        // U2D2/FTDI often drops the first packet if we ping immediately
+        // after open. Discover tries each baud/id pair once; a cold miss
+        // on the real pair never comes back.
+        std::thread::sleep(Duration::from_millis(100));
         self.port = Some(port);
         match self.ping_and_identify() {
             Ok(()) => {

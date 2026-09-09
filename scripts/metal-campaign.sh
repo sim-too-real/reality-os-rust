@@ -109,14 +109,21 @@ prepare_usb_serial_host() {
   if [[ -d /run/udev/rules.d ]]; then
     rules="/run/udev/rules.d/99-realityos-metal-${name}.rules"
     if [[ ! -f "$rules" ]]; then
-      echo "metal-campaign: installing $rules (ID_MM_DEVICE_IGNORE + 0600 ${AUTHORITY_USER})"
-    fi
-    cat >"$rules" <<EOF
+      cat >"$rules" <<EOF
 ACTION=="add|change", KERNEL=="${name}", ENV{ID_MM_DEVICE_IGNORE}="1", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
 EOF
-    UDEV_RULE="$rules"
-    udevadm control --reload 2>/dev/null || true
-    udevadm trigger --action=change --sysname-match="$name" 2>/dev/null || true
+      UDEV_RULE="$rules"
+      udevadm control --reload 2>/dev/null || true
+      udevadm trigger --action=change --sysname-match="$name" 2>/dev/null || true
+      udevadm settle --timeout=2 2>/dev/null || true
+      echo "metal-campaign: installed $rules (ID_MM_DEVICE_IGNORE + 0600 ${AUTHORITY_USER})"
+    else
+      UDEV_RULE="$rules"
+    fi
+  fi
+  if [[ -e "$real" ]]; then
+    chown "$AUTHORITY_USER:$AUTHORITY_USER" "$real" 2>/dev/null || true
+    chmod 0600 "$real" 2>/dev/null || true
   fi
   set_usb_serial_latency "$dev"
 }
