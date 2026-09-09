@@ -23,15 +23,14 @@ use crate::egress::EgressLog;
 use crate::identity::{is_pty_path, usb_identity_for_tty, MeasuredIdentity};
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
-    instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE,
-    ADDR_BUS_WATCHDOG, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR,
+    instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, ADDR_BUS_WATCHDOG, ADDR_CURRENT_LIMIT,
+    ADDR_DRIVE_MODE, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR,
     ADDR_MAX_POSITION_LIMIT, ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT,
-    ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER,
-    ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION, ADDR_PRESENT_VOLTAGE,
-    ADDR_PROFILE_ACCEL,
-    ADDR_PROFILE_VELOCITY, ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE,
-    ADDR_VELOCITY_LIMIT, BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_POSITION_P_GAIN,
-    MIN_POSITION_P_GAIN, OPERATING_MODE_POSITION, STATUS_RETURN_ALL,
+    ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN,
+    ADDR_PRESENT_POSITION, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY,
+    ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE, ADDR_VELOCITY_LIMIT,
+    BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_POSITION_P_GAIN, MIN_POSITION_P_GAIN,
+    OPERATING_MODE_POSITION, STATUS_RETURN_ALL,
 };
 
 pub struct Xl330Driver {
@@ -481,7 +480,13 @@ impl Xl330Driver {
             .unwrap_or(0);
         self.bus_watchdog = wd;
         if wd != 0 {
-            self.write_reg(ADDR_BUS_WATCHDOG, &[0], "setup_bus_watchdog_off", None, false)?;
+            self.write_reg(
+                ADDR_BUS_WATCHDOG,
+                &[0],
+                "setup_bus_watchdog_off",
+                None,
+                false,
+            )?;
             self.bus_watchdog = 0;
         }
         // Torque-on tracks Goal Position. A stale Wizard goal (often 0)
