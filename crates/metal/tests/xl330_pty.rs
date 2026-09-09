@@ -363,8 +363,9 @@ fn xl330_pty_third_replay_refuse_latches_restart_unless_reset_hold() {
     {
         let mut auth = MetalAuthority::start(&root, true).expect("first-online");
         assert!(auth.handle(MetalRequest::propose("rl-a", "hold")).ok);
-        // Three refuses, no successful write between them. A hold here would
-        // reset identity_refuse_n.
+        // Each replay refuse also abort-latches *this* instance. Three
+        // journaled refuses (no successful driver_write) latch the next
+        // --restart via continuity repeated_refuse_n.
         assert!(!auth.handle(MetalRequest::propose("rl-a", "hold")).ok);
         assert!(!auth.handle(MetalRequest::propose("rl-a", "hold")).ok);
         assert!(!auth.handle(MetalRequest::propose("rl-a", "hold")).ok);
@@ -389,6 +390,11 @@ fn xl330_pty_third_replay_refuse_latches_restart_unless_reset_hold() {
         assert!(auth.handle(MetalRequest::propose("rr-a", "hold")).ok);
         assert!(!auth.handle(MetalRequest::propose("rr-a", "hold")).ok);
         assert!(!auth.handle(MetalRequest::propose("rr-a", "hold")).ok);
+        // Same instance is abort-latched; reset hold must be a new process.
+    }
+    {
+        let mut auth =
+            MetalAuthority::start(&root2, false).expect("restart while refuse_n is 2 must be live");
         assert!(
             auth.handle(MetalRequest::propose("rr-reset", "hold")).ok,
             "reset hold must succeed while refuse_n is still 2"
