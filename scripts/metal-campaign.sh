@@ -396,8 +396,24 @@ crash_replay() {
     exit 1
   fi
   as_autonomy "$PROP" --root "$ROOT" --id "$cid" --verb hold propose >/tmp/metal-"$cid".json || true
+  # crash_if exits the smoke child. If propose was refused first (watchdog,
+  # dead session), wait would hang and the crash/restart case is unmeasured.
+  local died=0
+  for _ in $(seq 1 50); do
+    if ! resolve_metal_smoke_pid "$ROOT" >/dev/null; then
+      died=1
+      break
+    fi
+    sleep 0.1
+  done
   wait "$AUTH_PID" 2>/dev/null || true
   "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
+  if [[ "$died" != "1" ]]; then
+    echo "error: serve did not crash at $point; crash/restart was not measured" >&2
+    cat /tmp/metal-"$cid".json >&2 || true
+    cat "$ROOT/authority.err" >&2 || true
+    exit 1
+  fi
   if ! start_auth 0; then
     echo "error: restart after $point crash failed" >&2
     exit 1
