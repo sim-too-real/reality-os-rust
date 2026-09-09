@@ -148,6 +148,9 @@ def init_regs() -> bytearray:
     if os.environ.get("REALITYOS_METAL_PTY_PRESENT_OUTSIDE") == "1":
         regs[48:52] = struct.pack("<i", 2100)
         regs[52:56] = struct.pack("<i", 2000)
+    if os.environ.get("REALITYOS_METAL_PTY_INV_LIMITS") == "1":
+        regs[48:52] = struct.pack("<i", 1000)
+        regs[52:56] = struct.pack("<i", 3000)
     if os.environ.get("REALITYOS_METAL_PTY_PWM") == "1":
         regs[11] = 16
     if os.environ.get("REALITYOS_METAL_PTY_HW_ERROR") == "1":
@@ -199,6 +202,14 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         addr, ln = struct.unpack_from("<HH", params)
         if os.environ.get("REALITYOS_METAL_PTY_NO_PRESENT") == "1" and addr == 132:
             return b"", 0x80  # refuse present so setup cannot invent goal=0
+        if os.environ.get("REALITYOS_METAL_PTY_NO_VLIMIT") == "1" and addr in (32, 34):
+            return b"", 0x80  # refuse voltage EEPROM so setup cannot invent 35/70
+        if (
+            os.environ.get("REALITYOS_METAL_PTY_NO_HWERR") == "1"
+            and addr == 70
+            and regs[64] == 1
+        ):
+            return b"", 0x80  # torque is on; do not skip the post-enable check
         return bytes(regs[addr : addr + ln]), 0
     if inst == INST_WRITE and len(params) >= 2:
         addr = struct.unpack_from("<H", params)[0]
@@ -219,6 +230,9 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
                 regs[64] = 0
                 regs[70] = 4
                 return b"", 0
+            if was == 0 and data[0] == 1 and os.environ.get("REALITYOS_METAL_PTY_HW_AFTER_TORQUE") == "1":
+                # Torque sticks; Hardware Error Status latches after enable.
+                regs[70] = 4
             if was == 0 and data[0] == 1:
                 goal = struct.unpack_from("<i", regs, 116)[0]
                 present = struct.unpack_from("<i", regs, 132)[0]

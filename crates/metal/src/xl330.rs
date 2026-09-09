@@ -556,12 +556,14 @@ impl Xl330Driver {
             .read_reg(ADDR_MAX_VOLTAGE_LIMIT, 2)
             .ok()
             .and_then(|b| le_u16(&b))
-            .unwrap_or(70);
+            .filter(|v| *v != 0)
+            .ok_or_else(|| PlantError::refused("dxl_voltage_limits_unreadable_before_torque"))?;
         let min_v = self
             .read_reg(ADDR_MIN_VOLTAGE_LIMIT, 2)
             .ok()
             .and_then(|b| le_u16(&b))
-            .unwrap_or(35);
+            .filter(|v| *v != 0)
+            .ok_or_else(|| PlantError::refused("dxl_voltage_limits_unreadable_before_torque"))?;
         let vin = self
             .read_reg(ADDR_PRESENT_VOLTAGE, 2)
             .ok()
@@ -660,22 +662,34 @@ impl Xl330Driver {
                 still_on.unwrap_or(0)
             )));
         }
-        if let Ok(b) = self.read_reg(ADDR_HARDWARE_ERROR, 1) {
-            self.last_hw_error = b.first().copied().unwrap_or(0);
-            if self.last_hw_error != 0 {
-                let _ = self.write_reg(
-                    ADDR_TORQUE_ENABLE,
-                    &[0],
-                    "setup_torque_off_hw_error",
-                    None,
-                    false,
-                );
-                self.torque_enabled = false;
-                return Err(PlantError::refused(format!(
-                    "dxl_hardware_error_after_torque_on:{}",
-                    self.last_hw_error
-                )));
-            }
+        let hw = self
+            .read_reg(ADDR_HARDWARE_ERROR, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        let Some(hw) = hw else {
+            let _ = self.write_reg(
+                ADDR_TORQUE_ENABLE,
+                &[0],
+                "setup_torque_off_hw_unread",
+                None,
+                false,
+            );
+            self.torque_enabled = false;
+            return Err(PlantError::refused("dxl_hw_error_unreadable_after_torque"));
+        };
+        self.last_hw_error = hw;
+        if hw != 0 {
+            let _ = self.write_reg(
+                ADDR_TORQUE_ENABLE,
+                &[0],
+                "setup_torque_off_hw_error",
+                None,
+                false,
+            );
+            self.torque_enabled = false;
+            return Err(PlantError::refused(format!(
+                "dxl_hardware_error_after_torque_on:{hw}"
+            )));
         }
         self.torque_enabled = true;
         Ok(())
@@ -705,12 +719,17 @@ impl Xl330Driver {
     fn refresh_position_limits(&mut self) -> PlantResult<()> {
         let max_b = self.read_reg(ADDR_MAX_POSITION_LIMIT, 4)?;
         let min_b = self.read_reg(ADDR_MIN_POSITION_LIMIT, 4)?;
-        let max = le_i32(&max_b).unwrap_or(4095).clamp(0, 4095);
-        let min = le_i32(&min_b).unwrap_or(0).clamp(0, 4095);
-        if min <= max {
-            self.min_position = min;
-            self.max_position = max;
+        let max =
+            le_i32(&max_b).ok_or_else(|| PlantError::refused("dxl_position_limits_unreadable"))?;
+        let min =
+            le_i32(&min_b).ok_or_else(|| PlantError::refused("dxl_position_limits_unreadable"))?;
+        if !(0..=4095).contains(&min) || !(0..=4095).contains(&max) || min > max {
+            return Err(PlantError::refused(format!(
+                "dxl_position_limits_invalid:min={min}:max={max}"
+            )));
         }
+        self.min_position = min;
+        self.max_position = max;
         Ok(())
     }
 

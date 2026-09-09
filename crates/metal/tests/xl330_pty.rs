@@ -483,6 +483,77 @@ fn xl330_pty_refuses_torque_when_vin_cannot_be_read() {
 }
 
 #[test]
+fn xl330_pty_refuses_torque_when_voltage_limits_cannot_be_read() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_NO_VLIMIT", "1")]);
+    let root = metal_test_root("pty-no-vlimit");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("unreadable voltage EEPROM must not invent 35/70 and torque-on"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("dxl_voltage_limits_unreadable_before_torque"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_hw_error_unreadable_after_torque() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_NO_HWERR", "1")]);
+    let root = metal_test_root("pty-no-hwerr");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("unreadable Hardware Error Status must not leave torque on"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("dxl_hw_error_unreadable_after_torque"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_hw_error_latches_after_torque_on() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_HW_AFTER_TORQUE", "1")]);
+    let root = metal_test_root("pty-hw-after-torque");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("latched Hardware Error after torque-on must not look like a live hold"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("dxl_hardware_error_after_torque_on"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_inverted_wizard_position_limits() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_INV_LIMITS", "1")]);
+    let root = metal_test_root("pty-inv-limits");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("inverted min/max must not fall back to invented 0..=4095"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_position_limits_invalid"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_discover_collapses_wizard_secondary_id_to_one_servo() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_SECONDARY", "1")]);
