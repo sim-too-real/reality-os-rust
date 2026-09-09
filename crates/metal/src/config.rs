@@ -184,10 +184,7 @@ pub fn candidate_bauds(configured: u32, extra: Option<u32>) -> Vec<u32> {
 
 pub fn candidate_servo_ids(configured: u8, extra: Option<u8>) -> Vec<u8> {
     let mut out = Vec::new();
-    for id in std::iter::once(configured)
-        .chain(extra)
-        .chain([1_u8, 2])
-    {
+    for id in std::iter::once(configured).chain(extra).chain([1_u8, 2]) {
         if id != 0 && id != 254 && !out.contains(&id) {
             out.push(id);
         }
