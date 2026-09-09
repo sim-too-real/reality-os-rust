@@ -25,6 +25,9 @@ pub struct MetalRequest {
     pub now_s: Option<f64>,
     #[serde(default)]
     pub fault: Option<serde_json::Value>,
+    /// Autonomy-supplied samples. Always refused; authority acquires from the device.
+    #[serde(default)]
+    pub sensor_samples: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -59,13 +62,14 @@ impl MetalRequest {
             proposer: "autonomy".into(),
             now_s: None,
             fault: None,
+            sensor_samples: None,
         }
     }
 
     pub fn production_ops_only(&self) -> bool {
         matches!(
             self.op.as_str(),
-            "propose" | "sensor" | "heartbeat" | "status"
+            "propose" | "sensor" | "heartbeat" | "status" | "recover"
         )
     }
 
@@ -73,6 +77,10 @@ impl MetalRequest {
         self.op == "hil_fault"
             || self.fault.is_some()
             || (self.op == "propose" && self.now_s.is_some())
+    }
+
+    pub fn injects_sensor_evidence(&self) -> bool {
+        self.sensor_samples.is_some()
     }
 }
 
@@ -140,5 +148,8 @@ mod tests {
         r.op = "hil_fault".into();
         assert!(r.injects_caller_time_or_hil());
         assert!(!r.production_ops_only());
+        r.op = "propose".into();
+        r.sensor_samples = Some(serde_json::json!([{"q0": 1.0}]));
+        assert!(r.injects_sensor_evidence());
     }
 }

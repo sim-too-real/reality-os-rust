@@ -56,8 +56,9 @@ Users: `realityos-authority` owns the tty, key, journal, and process. `realityos
 
 * Device capture: XL330 Realtime Tick (wrapping 1 ms counter) as `timestamp_s`.
 * Freshness: authority monotonic receive time stamped by `ingest_sensor_packet`.
-* Threshold: `GovernorConfig.sensor_stale_s` (default 2 s) / `freshness_threshold_s` in `metal.json`.
-* Autonomy cannot ingest evidence.
+* Threshold: `freshness_threshold_s` in `metal.json` (default 2 s), recorded into the proof from `bus/sensor_freshness.json`.
+* Autonomy cannot ingest or refresh evidence (`sensor_samples` is refused).
+* Observed motion is measured from `bus/present` / `bus/goal` (device registers), not inferred from IPC status.
 
 ## Proof
 

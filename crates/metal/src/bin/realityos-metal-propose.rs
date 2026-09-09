@@ -31,7 +31,9 @@ fn main() -> anyhow::Result<()> {
                 let _ = args.next();
             }
             "propose" | "propose-id" | "unsupported" | "oversized" | "replay" | "raw"
-            | "hil_fault" | "caller_time" | "os-probe" | "status" => cmd = a,
+            | "hil_fault" | "caller_time" | "os-probe" | "status" | "recover" | "forged-sensor" => {
+                cmd = a
+            }
             other if other.starts_with('{') => raw = Some(other.to_string()),
             other => anyhow::bail!("unknown_arg:{other}"),
         }
@@ -90,6 +92,16 @@ fn main() -> anyhow::Result<()> {
         "caller_time" => {
             let mut r = MetalRequest::propose("metal-time", "hold");
             r.now_s = Some(99.0);
+            println!("{}", serde_json::to_string(&call(&root, &r)?)?);
+        }
+        "recover" => {
+            let mut r = MetalRequest::propose(&id, "hold");
+            r.op = "recover".into();
+            println!("{}", serde_json::to_string(&call(&root, &r)?)?);
+        }
+        "forged-sensor" => {
+            let mut r = MetalRequest::propose("metal-forge-sensor", "hold");
+            r.sensor_samples = Some(serde_json::json!([{"q0": 0.0, "ts": 1e9}]));
             println!("{}", serde_json::to_string(&call(&root, &r)?)?);
         }
         "os-probe" => {

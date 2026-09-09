@@ -14,7 +14,7 @@ use realityos_plant::{
 };
 use serialport::SerialPort;
 
-use crate::config::{MetalConfig, BUS_DIR, LOCK_FILE};
+use crate::config::{MetalConfig, BUS_DIR, GOAL_FILE, LOCK_FILE, PRESENT_FILE};
 use crate::egress::EgressLog;
 use crate::identity::{usb_identity_for_tty, MeasuredIdentity};
 use crate::protocol::{
@@ -223,8 +223,19 @@ impl Xl330Driver {
         self.last_identity = id;
     }
 
+    fn persist_positions(&self) {
+        let _ = std::fs::write(self.bus.join(PRESENT_FILE), self.last_present.to_string());
+        if let Some(g) = self.last_goal {
+            let _ = std::fs::write(self.bus.join(GOAL_FILE), g.to_string());
+        }
+    }
+
     fn campaign_disconnected(&self) -> bool {
         self.cfg.campaign_hooks && self.bus.join("force_disconnect").exists()
+    }
+
+    fn campaign_fail_sensor(&self) -> bool {
+        self.cfg.campaign_hooks && self.bus.join("fail_sensor").exists()
     }
 
     fn campaign_hot_swap(&self) -> Option<serde_json::Value> {
@@ -292,6 +303,7 @@ impl Xl330Driver {
             self.egress
                 .record_attempt(instruction, addr, data.len(), goal)
                 .map_err(|e| PlantError::refused(format!("egress_log:{e}")))?;
+            realityos_plant::hil_faults::crash_if("during_write");
         }
         match self.xfer(&frame, true) {
             Ok(st) => {
@@ -348,6 +360,7 @@ impl Xl330Driver {
         let b = self.read_reg(ADDR_PRESENT_POSITION, 4)?;
         let q = le_i32(&b).ok_or_else(|| PlantError::refused("dxl_short_present_position"))?;
         self.last_present = q;
+        self.persist_positions();
         Ok(q)
     }
 
@@ -392,6 +405,9 @@ impl HardwareDriverPort for Xl330Driver {
         // the device realtime tick, not the authority clock.
         if !self.bus_up() {
             return Err(PlantError::Disconnected);
+        }
+        if self.campaign_fail_sensor() {
+            return Err(PlantError::refused("metal_sensor_missing"));
         }
         let pos = self.read_present_position()?;
         let vel = le_i32(&self.read_reg(ADDR_PRESENT_VELOCITY, 4)?).unwrap_or(0);
@@ -461,6 +477,7 @@ impl HardwareDriverPort for Xl330Driver {
         )?;
         self.last_goal = Some(goal);
         let present = self.read_present_position().unwrap_or(self.last_present);
+        self.persist_positions();
         Ok(PlantRealized {
             ok: true,
             values: vec![

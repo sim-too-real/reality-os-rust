@@ -7,7 +7,9 @@ use realityos_governor::OnlineLocked;
 use realityos_plant::{ActionParams, HardwareBackedPlant};
 use realityos_session::{RuntimeMode, RuntimeSession, StartArgs};
 
-use crate::config::{MetalConfig, CONFIG_FILE, JOURNAL, SIGNING_KEY_FILE};
+use crate::config::{
+    MetalConfig, CONFIG_FILE, FRESHNESS_FILE, GOAL_FILE, JOURNAL, PRESENT_FILE, SIGNING_KEY_FILE,
+};
 use crate::egress::{recorded_acks, recorded_writes};
 use crate::ipc::{MetalRequest, MetalResponse};
 use crate::xl330::Xl330Driver;
@@ -90,6 +92,13 @@ impl MetalAuthority {
     }
 
     pub fn handle(&mut self, req: MetalRequest) -> MetalResponse {
+        if req.injects_sensor_evidence() {
+            return self.refuse(
+                "protocol",
+                "refuse",
+                vec!["autonomy_cannot_refresh_evidence".into()],
+            );
+        }
         if req.injects_caller_time_or_hil() {
             return self.refuse(
                 "protocol",
@@ -111,6 +120,7 @@ impl MetalAuthority {
                 self.ok("observe")
             }
             "status" => self.ok("status"),
+            "recover" => self.recover(),
             "propose" => self.propose(req),
             other => self.refuse("protocol", "refuse", vec![format!("unknown_op:{other}")]),
         }
@@ -122,10 +132,49 @@ impl MetalAuthority {
                 let mut r = self.ok("sensor");
                 r.authority_receive_s = Some(self.session.governor.authority_now_s());
                 r.device_capture_s = Some(self.session.governor.last_device_capture_s());
+                self.persist_freshness(r.device_capture_s, r.authority_receive_s);
                 r
             }
             Err(e) => self.refuse("observe", "refuse", vec![e]),
         }
+    }
+
+    fn recover(&mut self) -> MetalResponse {
+        let t = self
+            .session
+            .governor
+            .clear_estop_requires_recovery_now(true);
+        let mut r = if t.ok {
+            self.ok("recover")
+        } else {
+            self.refuse("authorize", "refuse", t.violations)
+        };
+        r.present_position = read_i32(self.root.join(crate::config::BUS_DIR).join(PRESENT_FILE));
+        r.goal_position = read_i32(self.root.join(crate::config::BUS_DIR).join(GOAL_FILE));
+        r
+    }
+
+    fn persist_freshness(&self, capture: Option<f64>, receive: Option<f64>) {
+        let v = serde_json::json!({
+            "sensor_source": "xl330 present_position/velocity/current; capture=Realtime Tick (ms/1000)",
+            "device_capture_s": capture,
+            "authority_receive_s": receive,
+            "freshness_threshold_s": self.cfg.freshness_threshold_s,
+            "clock": "OsMonotonicClock",
+            "acquisition": "authority acquire_sensor on propose/sensor; autonomy cannot ingest",
+        });
+        let _ = std::fs::write(
+            self.root.join(crate::config::BUS_DIR).join(FRESHNESS_FILE),
+            v.to_string(),
+        );
+    }
+
+    fn positions(&self) -> (Option<i32>, Option<i32>) {
+        let bus = self.root.join(crate::config::BUS_DIR);
+        (
+            read_i32(bus.join(PRESENT_FILE)),
+            read_i32(bus.join(GOAL_FILE)),
+        )
     }
 
     fn propose(&mut self, req: MetalRequest) -> MetalResponse {
@@ -133,6 +182,10 @@ impl MetalAuthority {
         if let Err(e) = self.session.acquire_sensor() {
             return self.refuse("authorize", "refuse", vec![e]);
         }
+        self.persist_freshness(
+            Some(self.session.governor.last_device_capture_s()),
+            Some(self.session.governor.authority_now_s()),
+        );
         self.next_sequence = self.next_sequence.saturating_add(1);
         let now = self.session.governor.authority_now_s();
         let mut dreq = DecideRequest::new(
@@ -187,8 +240,8 @@ impl MetalAuthority {
             command_id: cid,
             metal: true,
             clock: "OsMonotonicClock".into(),
-            present_position: None,
-            goal_position: None,
+            present_position: self.positions().0,
+            goal_position: self.positions().1,
             device_capture_s: Some(self.session.governor.last_device_capture_s()),
             authority_receive_s: Some(self.session.governor.authority_now_s()),
         };
@@ -313,4 +366,10 @@ fn fill_random(buf: &mut [u8]) -> anyhow::Result<()> {
     use std::io::Read;
     f.read_exact(buf)?;
     Ok(())
+}
+
+fn read_i32(path: impl AsRef<Path>) -> Option<i32> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
 }

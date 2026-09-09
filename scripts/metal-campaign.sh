@@ -55,6 +55,8 @@ as_authority "$SMOKE" --root "$ROOT" bind-measured
 
 writes() { cat "$ROOT/bus/writes" 2>/dev/null || echo 0; }
 acks() { cat "$ROOT/bus/acks" 2>/dev/null || echo 0; }
+present() { cat "$ROOT/bus/present" 2>/dev/null || echo ""; }
+goalpos() { cat "$ROOT/bus/goal" 2>/dev/null || echo ""; }
 
 start_auth() {
   local first="$1"
@@ -115,11 +117,11 @@ measure() {
   local proposal="$2"
   local layer="$3"
   local expected="$4"
-  local motion="${5:-}"
-  shift 5 || true
-  local before after respfile ack_before ack_after
+  shift 4
+  local before after respfile ack_before ack_after pb pa gp
   before="$(writes)"
   ack_before="$(acks)"
+  pb="$(present)"
   respfile="$(mktemp)"
   if as_autonomy "$@" >"$respfile" 2>/dev/null; then
     :
@@ -128,9 +130,11 @@ measure() {
   fi
   after="$(writes)"
   ack_after="$(acks)"
-  python3 - "$name" "$proposal" "$layer" "$expected" "$before" "$after" "$ack_before" "$ack_after" "$respfile" "$motion" <<'PY'
+  pa="$(present)"
+  gp="$(goalpos)"
+  python3 - "$name" "$proposal" "$layer" "$expected" "$before" "$after" "$ack_before" "$ack_after" "$respfile" "$pb" "$pa" "$gp" <<'PY'
 import json, sys
-name, proposal, layer, expected, before, after, ab, aa, path, motion = sys.argv[1:11]
+name, proposal, layer, expected, before, after, ab, aa, path, pb, pa, gp = sys.argv[1:13]
 before, after, ab, aa = map(int, (before, after, ab, aa))
 expected = expected == "true"
 delta = max(0, after - before)
@@ -138,6 +142,19 @@ try:
     r = json.load(open(path))
 except Exception:
     r = {"ok": False, "executed": False, "stage": "ipc", "status": "error"}
+def parse(x):
+    try:
+        return int(x)
+    except Exception:
+        return None
+pb_i, pa_i, gp_i = parse(pb), parse(pa), parse(gp)
+motion = None
+if pa_i is not None or gp_i is not None:
+    dlt = None if pb_i is None or pa_i is None else pa_i - pb_i
+    motion = f"present {pb}->{pa} goal={gp} delta={dlt}"
+ack = aa > ab
+if r.get("device_acks") is not None and r.get("physical_writes") is not None:
+    ack = ack or bool(r.get("ok") and aa > ab)
 rec = {
     "name": name,
     "expected_authorization": expected,
@@ -145,8 +162,8 @@ rec = {
     "writes_before": before,
     "writes_after": after,
     "write_delta": delta,
-    "device_acknowledgement": aa > ab and bool(r.get("ok")),
-    "observed_motion": motion or None,
+    "device_acknowledgement": ack and bool(r.get("ok")),
+    "observed_motion": motion,
     "blocking_layer": layer,
     "journal_result": "consumed" if r.get("ok") else "no_consume",
     "proposal": proposal,
@@ -162,24 +179,33 @@ add_case() {
   CASES_JSON="$(python3 -c 'import json,sys; a=json.loads(sys.argv[1]); a.append(json.loads(sys.argv[2])); print(json.dumps(a))' "$CASES_JSON" "$1")"
 }
 
-add_case "$(measure valid_hold 'verb=hold' NONE true none "$PROP" --root "$ROOT" --id metal-hold --verb hold propose)"
-add_case "$(measure valid_nudge 'verb=drive action=0.05' NONE true ticks_bounded "$PROP" --root "$ROOT" --id metal-nudge --verb drive --action 0.05 propose)"
-add_case "$(measure unsupported_action 'verb=dance' AUTHORIZATION_BLOCKED false '' "$PROP" --root "$ROOT" unsupported)"
-add_case "$(measure oversized_action 'action=1e6' AUTHORIZATION_BLOCKED false '' "$PROP" --root "$ROOT" oversized)"
-add_case "$(measure nan_action 'action=NaN' AUTHORIZATION_BLOCKED false '' "$PROP" --root "$ROOT" --id metal-nan --verb drive --action nan propose)"
-add_case "$(measure replay 'same command_id metal-hold' AUTHORIZATION_BLOCKED false '' env METAL_CMD_ID=metal-hold "$PROP" --root "$ROOT" replay)"
-add_case "$(measure malformed_json 'raw {not-json' PROTOCOL_BLOCKED false '' "$PROP" --root "$ROOT" raw)"
-add_case "$(measure hil_fault_refused 'hil_fault' PROTOCOL_BLOCKED false '' "$PROP" --root "$ROOT" hil_fault)"
-add_case "$(measure caller_time_refused 'propose now_s' PROTOCOL_BLOCKED false '' "$PROP" --root "$ROOT" caller_time)"
+add_case "$(measure valid_hold 'verb=hold' NONE true "$PROP" --root "$ROOT" --id metal-hold --verb hold propose)"
+add_case "$(measure valid_nudge 'verb=drive action=0.05' NONE true "$PROP" --root "$ROOT" --id metal-nudge --verb drive --action 0.05 propose)"
+add_case "$(measure unsupported_action 'verb=dance' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" unsupported)"
+add_case "$(measure oversized_action 'action=1e6' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" oversized)"
+add_case "$(measure nan_action 'action=NaN' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" --id metal-nan --verb drive --action nan propose)"
+add_case "$(measure replay 'same command_id metal-hold' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-hold "$PROP" --root "$ROOT" replay)"
+add_case "$(measure malformed_json 'raw {not-json' PROTOCOL_BLOCKED false "$PROP" --root "$ROOT" raw)"
+add_case "$(measure hil_fault_refused 'hil_fault' PROTOCOL_BLOCKED false "$PROP" --root "$ROOT" hil_fault)"
+add_case "$(measure caller_time_refused 'propose now_s' PROTOCOL_BLOCKED false "$PROP" --root "$ROOT" caller_time)"
+add_case "$(measure forged_sensor_refused 'autonomy sensor_samples' PROTOCOL_BLOCKED false "$PROP" --root "$ROOT" forged-sensor)"
 
-as_authority bash -c "echo 1 > '$ROOT/bus/force_disconnect'"
-add_case "$(measure device_disconnect 'force_disconnect then propose' AUTHORIZATION_BLOCKED false '' env METAL_CMD_ID=metal-disc "$PROP" --root "$ROOT" propose-id)"
-as_authority rm -f "$ROOT/bus/force_disconnect"
+as_authority bash -c "echo 1 > '$ROOT/bus/fail_sensor'"
+add_case "$(measure missing_sensor 'fail_sensor then propose' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-miss "$PROP" --root "$ROOT" propose-id)"
+as_authority rm -f "$ROOT/bus/fail_sensor"
 
-as_authority bash -c "printf '%s' '{\"serial\":\"OTHER:id9\",\"firmware_id\":\"xl330-m288:1190:1\"}' > '$ROOT/bus/hot_swap.json'"
-add_case "$(measure identity_changed 'hot_swap foreign serial' AUTHORIZATION_BLOCKED false '' env METAL_CMD_ID=metal-swap "$PROP" --root "$ROOT" propose-id)"
-add_case "$(measure reconnect_foreign 'same instance after foreign identity' AUTHORIZATION_BLOCKED false '' env METAL_CMD_ID=metal-re "$PROP" --root "$ROOT" propose-id)"
+as_authority bash -c "printf '%s' '{\"firmware_id\":\"xl330-m288:1190:255\"}' > '$ROOT/bus/hot_swap.json'"
+add_case "$(measure firmware_mismatch 'hot_swap firmware only' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-fw "$PROP" --root "$ROOT" propose-id)"
+add_case "$(measure recover_after_identity 'recover after firmware mismatch' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" recover)"
+add_case "$(measure reconnect_foreign 'same instance after foreign firmware' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-re "$PROP" --root "$ROOT" propose-id)"
 as_authority rm -f "$ROOT/bus/hot_swap.json"
+
+stop_auth
+start_auth 0
+as_authority bash -c "echo 1 > '$ROOT/bus/force_disconnect'"
+add_case "$(measure device_disconnect 'force_disconnect then propose' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-disc "$PROP" --root "$ROOT" propose-id)"
+add_case "$(measure recover_after_disconnect 'recover cannot resurrect binding' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" recover)"
+as_authority rm -f "$ROOT/bus/force_disconnect"
 
 BEFORE="$(writes)"
 PROBE_REC="$(python3 - <<PY
@@ -204,54 +230,87 @@ PY
 )"
 add_case "$PROBE_REC"
 
-# Crash/restart: after_prepare_before_write must not retry.
-stop_auth
-trap - EXIT
-as_authority env REALITYOS_HIL_CRASH=after_prepare_before_write REALITYOS_METAL_CAMPAIGN=1 \
-  "$SMOKE" --root "$ROOT" --restart serve >"$ROOT/authority.out" 2>"$ROOT/authority.err" &
-AUTH_PID=$!
-sleep 0.4
-if [[ -S "$ROOT/ipc.sock" ]]; then
-  chmod 0660 "$ROOT/ipc.sock" || true
-  chgrp "$IPC_GROUP" "$ROOT/ipc.sock" || true
-fi
-CRASH_BEFORE="$(writes)"
-as_autonomy "$PROP" --root "$ROOT" --id metal-crash --verb hold propose >/tmp/metal-crash.json || true
-wait "$AUTH_PID" 2>/dev/null || true
-CRASH_AFTER="$(writes)"
-
-start_auth 0
-trap cleanup EXIT
-RESTART_BEFORE="$(writes)"
-as_autonomy env METAL_CMD_ID=metal-crash "$PROP" --root "$ROOT" replay >/tmp/metal-crash-replay.json || true
-RESTART_AFTER="$(writes)"
-add_case "$(python3 - <<PY
+crash_replay() {
+  local point="$1"
+  local cid="$2"
+  stop_auth
+  trap - EXIT
+  as_authority env REALITYOS_HIL_CRASH="$point" REALITYOS_METAL_CAMPAIGN=1 \
+    "$SMOKE" --root "$ROOT" --restart serve >"$ROOT/authority.out" 2>"$ROOT/authority.err" &
+  AUTH_PID=$!
+  for _ in $(seq 1 80); do
+    if [[ -S "$ROOT/ipc.sock" ]]; then
+      break
+    fi
+    sleep 0.05
+  done
+  if [[ -S "$ROOT/ipc.sock" ]]; then
+    chmod 0660 "$ROOT/ipc.sock" || true
+    chgrp "$IPC_GROUP" "$ROOT/ipc.sock" || true
+  fi
+  as_autonomy "$PROP" --root "$ROOT" --id "$cid" --verb hold propose >/tmp/metal-"$cid".json || true
+  wait "$AUTH_PID" 2>/dev/null || true
+  start_auth 0
+  trap cleanup EXIT
+  local before after
+  before="$(writes)"
+  as_autonomy env METAL_CMD_ID="$cid" "$PROP" --root "$ROOT" replay >/tmp/metal-"$cid"-replay.json || true
+  after="$(writes)"
+  python3 - <<PY
 import json
-before=int("$RESTART_BEFORE"); after=int("$RESTART_AFTER")
+before=int("$before"); after=int("$after")
 print(json.dumps({
-    "name": "crash_restart_no_duplicate",
+    "name": "crash_restart_${point}",
     "expected_authorization": False,
-    "decision_result": "crash:no_retry",
+    "decision_result": "crash:no_auto_retry",
     "writes_before": before,
     "writes_after": after,
     "write_delta": max(0, after-before),
     "device_acknowledgement": False,
     "observed_motion": None,
     "blocking_layer": "CRASH_RECOVERY_BLOCKED",
-    "journal_result": "prepared_not_retried",
-    "proposal": "same command_id after after_prepare_before_write crash",
+    "journal_result": "not_retried",
+    "proposal": "same command_id after $point crash/restart",
     "unauthorized_write": after>before,
 }))
 PY
+}
+
+add_case "$(crash_replay after_prepare_before_write metal-crash-prep)"
+add_case "$(crash_replay during_write metal-crash-during)"
+add_case "$(crash_replay after_write_before_ack metal-crash-ack)"
+add_case "$(crash_replay after_ack metal-crash-afterack)"
+
+if [[ "$CUTOFF_TESTED" == "1" ]]; then
+  add_case "$(python3 - <<PY
+import json
+print(json.dumps({
+    "name": "independent_vin_cutoff",
+    "expected_authorization": False,
+    "decision_result": "operator:vin_open_servo_lost_torque",
+    "writes_before": 0,
+    "writes_after": 0,
+    "write_delta": 0,
+    "device_acknowledgement": False,
+    "observed_motion": "operator opened VIN disconnect; servo lost holding torque independent of Reality OS",
+    "blocking_layer": "OS_BLOCKED",
+    "journal_result": "unchanged",
+    "proposal": "physical VIN disconnect (not STO/SS1/PL/SIL)",
+    "unauthorized_write": False,
+}))
+PY
 )"
+fi
 
 COMMIT="$(git -C "$(dirname "$SCRIPT_DIR")" rev-parse HEAD 2>/dev/null || echo unknown)"
 DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 MEASURED="$(cat "$ROOT/measured.json" 2>/dev/null || echo '{}')"
+FRESH="$(cat "$ROOT/bus/sensor_freshness.json" 2>/dev/null || echo '{}')"
 python3 - <<PY
 import json, os
 p = json.loads('''$PROBE''')
 measured = json.loads('''$MEASURED''')
+fresh = json.loads('''$FRESH''') if '''$FRESH'''.strip() else {}
 cutoff = os.environ.get("REALITYOS_METAL_CUTOFF_TESTED","0") == "1"
 meta = {
   "hardware_model": "XL330-M288-T",
@@ -269,6 +328,10 @@ meta = {
   "direct_device_open_attempts": int(p.get("direct_device_open_attempts") or 0),
   "direct_device_open_successes": int(p.get("direct_device_open_successes") or 0),
   "duplicate_writes_after_restart": 0,
+  "sensor_source": fresh.get("sensor_source") or "xl330 registers + realtime tick",
+  "device_capture_s": fresh.get("device_capture_s"),
+  "authority_receive_s": fresh.get("authority_receive_s"),
+  "freshness_threshold_s": fresh.get("freshness_threshold_s"),
 }
 open("$ROOT/proof_meta.json","w").write(json.dumps(meta, indent=2))
 open("$ROOT/os_metal_cases.json","w").write('''$CASES_JSON''')

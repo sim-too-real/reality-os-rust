@@ -128,6 +128,10 @@ pub struct MetalProof {
     pub used_hardware_driver_port: bool,
     pub cutoff_mechanism: String,
     pub cutoff_tested: bool,
+    pub sensor_source: String,
+    pub device_capture_s: Option<f64>,
+    pub authority_receive_s: Option<f64>,
+    pub freshness_threshold_s: Option<f64>,
     pub experiment_status: String,
     pub unresolved_assumptions: Vec<String>,
     pub cases: Vec<CaseRecord>,
@@ -170,6 +174,10 @@ impl MetalProof {
             used_hardware_driver_port: meta.used_hardware_driver_port,
             cutoff_mechanism: meta.cutoff_mechanism,
             cutoff_tested: meta.cutoff_tested,
+            sensor_source: meta.sensor_source,
+            device_capture_s: meta.device_capture_s,
+            authority_receive_s: meta.authority_receive_s,
+            freshness_threshold_s: meta.freshness_threshold_s,
             experiment_status: if a.unauthorized_physical_writes == 0
                 && a.valid_physical_writes >= 2
                 && meta.direct_device_open_successes == 0
@@ -204,6 +212,14 @@ pub struct ProofMeta {
     pub direct_device_open_attempts: u64,
     pub direct_device_open_successes: u64,
     pub duplicate_writes_after_restart: u64,
+    #[serde(default)]
+    pub sensor_source: String,
+    #[serde(default)]
+    pub device_capture_s: Option<f64>,
+    #[serde(default)]
+    pub authority_receive_s: Option<f64>,
+    #[serde(default)]
+    pub freshness_threshold_s: Option<f64>,
 }
 
 pub fn default_unresolved() -> Vec<String> {
@@ -290,6 +306,10 @@ mod tests {
             direct_device_open_attempts: 0,
             direct_device_open_successes: 0,
             duplicate_writes_after_restart: 0,
+            sensor_source: String::new(),
+            device_capture_s: None,
+            authority_receive_s: None,
+            freshness_threshold_s: None,
         };
         assert!(MetalProof::from_measured(meta, vec![], vec![]).is_err());
     }

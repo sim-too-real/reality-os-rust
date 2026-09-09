@@ -138,4 +138,7 @@ pub const WRITES_FILE: &str = "writes";
 pub const ACKS_FILE: &str = "acks";
 pub const EGRESS_LOG: &str = "egress.jsonl";
 pub const LOCK_FILE: &str = "actuator.lock";
+pub const PRESENT_FILE: &str = "present";
+pub const GOAL_FILE: &str = "goal";
+pub const FRESHNESS_FILE: &str = "sensor_freshness.json";
 pub const IPC_SOCKET_MODE: u32 = 0o660;
