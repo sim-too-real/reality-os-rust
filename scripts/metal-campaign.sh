@@ -634,7 +634,7 @@ crash_replay() {
   before="$(writes)"
   as_autonomy env METAL_CMD_ID="$cid" "$PROP" --root "$ROOT" replay >/tmp/metal-"$cid"-replay.json || true
   after="$(writes)"
-  python3 - <<PY
+  rec="$(python3 - <<PY
 import json, sys
 before=int("$before"); after=int("$after")
 if after > before:
@@ -654,6 +654,26 @@ print(json.dumps({
     "unauthorized_write": after>before,
 }))
 PY
+)"
+  # Journal continuity treats "replayed" as an identity marker.
+  # repeated_refuse_n defaults to 3. metal-hold replay + two crash-replays
+  # latch the next --restart as abort_latched:replayed, so
+  # after_write_before_ack never reaches crash_if (PTY sequence failure).
+  # A successful driver_write resets the counter. Do that here, quietly
+  # (stdout is the case JSON for add_case).
+  stop_auth
+  if ! start_auth 0; then
+    echo "error: restart after $point replay failed; next crash point would be unmeasured" >&2
+    exit 1
+  fi
+  as_autonomy "$PROP" --root "$ROOT" --id "${cid}-reset" --verb hold propose >"$ROOT/reset-${cid}.json" || true
+  python3 - "$ROOT/reset-${cid}.json" "$point" <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1]))
+if not r.get("ok"):
+    sys.exit("error: reset hold after %s failed (journal would abort-latch the next crash point): %s" % (sys.argv[2], r))
+PY
+  printf '%s\n' "$rec"
 }
 
 add_case "$(crash_replay after_prepare_before_write metal-crash-prep)"

@@ -349,6 +349,65 @@ fn xl330_pty_campaign_restarts_are_live_after_identity_and_disconnect() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Continuity counts `replayed` toward `repeated_refuse_n` (default 3).
+/// The campaign metal-hold replay plus two crash-replays latch the next
+/// `--restart` as `abort_latched:replayed` unless a successful write resets
+/// the counter. That is why after_write_before_ack never reached crash_if.
+#[test]
+fn xl330_pty_third_replay_refuse_latches_restart_unless_reset_hold() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder();
+    let root = metal_test_root("pty-replay-latch");
+    bind_pty_cfg(&root, &tty);
+
+    {
+        let mut auth = MetalAuthority::start(&root, true).expect("first-online");
+        assert!(auth.handle(MetalRequest::propose("rl-a", "hold")).ok);
+        // Three refuses, no successful write between them. A hold here would
+        // reset identity_refuse_n.
+        assert!(!auth.handle(MetalRequest::propose("rl-a", "hold")).ok);
+        assert!(!auth.handle(MetalRequest::propose("rl-a", "hold")).ok);
+        assert!(!auth.handle(MetalRequest::propose("rl-a", "hold")).ok);
+    }
+    {
+        let mut auth = MetalAuthority::start(&root, false).expect("restart after 3 replays");
+        let hold = auth.handle(MetalRequest::propose("rl-d", "hold"));
+        assert!(
+            !hold.ok
+                && hold
+                    .violations
+                    .iter()
+                    .any(|v| v.contains("abort_latched:replayed")),
+            "third replay refuse must latch the next restart: {hold:?}"
+        );
+    }
+
+    let root2 = metal_test_root("pty-replay-reset");
+    bind_pty_cfg(&root2, &tty);
+    {
+        let mut auth = MetalAuthority::start(&root2, true).expect("first-online");
+        assert!(auth.handle(MetalRequest::propose("rr-a", "hold")).ok);
+        assert!(!auth.handle(MetalRequest::propose("rr-a", "hold")).ok);
+        assert!(!auth.handle(MetalRequest::propose("rr-a", "hold")).ok);
+        assert!(
+            auth.handle(MetalRequest::propose("rr-reset", "hold")).ok,
+            "reset hold must succeed while refuse_n is still 2"
+        );
+        assert!(!auth.handle(MetalRequest::propose("rr-a", "hold")).ok);
+    }
+    {
+        let mut auth =
+            MetalAuthority::start(&root2, false).expect("restart after reset hold must be live");
+        let hold = auth.handle(MetalRequest::propose("rr-d", "hold"));
+        assert!(
+            hold.ok,
+            "successful write must reset replay refuse count: {hold:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&root2);
+}
+
 #[test]
 fn xl330_pty_firmware_mismatch_kills_session_not_watchdog() {
     let _serial = pty_serial();
