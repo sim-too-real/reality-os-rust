@@ -29,6 +29,24 @@ pub trait ActuationCommand {
     fn follow_waypoints(&self) -> Option<&[Vec<f64>]> {
         None
     }
+    fn parent_payload_hash(&self) -> &str {
+        ""
+    }
+    fn mode(&self) -> &str {
+        ""
+    }
+    fn frame_id(&self) -> &str {
+        ""
+    }
+    fn units(&self) -> &str {
+        ""
+    }
+    fn policy_hash(&self) -> &str {
+        ""
+    }
+    fn config_hash(&self) -> &str {
+        ""
+    }
 }
 
 #[derive(Debug, Clone)]

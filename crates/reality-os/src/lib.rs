@@ -8,10 +8,13 @@ pub mod authority;
 pub mod bounded_trust;
 pub mod certificate;
 pub mod command;
+pub mod control;
 pub mod decide;
 pub mod domains;
 pub mod plan;
 pub mod see;
+pub mod skills;
+pub mod trajectory;
 
 pub use attestation::CertificateLedger;
 pub use authority::{
@@ -21,9 +24,14 @@ pub use authority::{
 pub use bounded_trust::{certify_dispose_step, BoundedTrustEnvelope, DisposeStatus, ExecutionMode};
 pub use certificate::Certificate;
 pub use command::{narrow_certified_command, CertifiedCommand};
+pub use control::{
+    runtime_assurance, AssuranceAction, ComponentClamp, ControlProposal, Controller,
+};
 pub use decide::{DecideRequest, KernelDecision, RealityOs};
 pub use domains::{DomainPlugin, DomainRegistry, WorldView};
 pub use plan::{Intent, PhysicalPlan, PolicyProposal};
+pub use skills::{GoalIR, SkillIR};
+pub use trajectory::TrajectoryReference;
 
 pub const SCHEMA: &str = "realityos.kernel_loop/1";
 
@@ -36,11 +44,7 @@ mod tests {
     fn gifted_pose_without_pixels_refuses_place() {
         let mut ros = RealityOs::new();
         let intent = Intent::language("place the part", "place");
-        let world = WorldView {
-            pixels_present: false,
-            scene_compiled: false,
-            ..WorldView::default()
-        };
+        let world = WorldView::default();
         let d = ros.decide(DecideRequest::new(intent, world, 1.0));
         assert_eq!(d.status, DecisionStatus::Refuse);
         assert!(d.command.is_none());
@@ -58,7 +62,7 @@ mod tests {
         let d = ros.decide(DecideRequest::new(intent, world, 1.0));
         assert_eq!(d.status, DecisionStatus::Allow);
         assert!(d.command.is_some());
-        assert!(!d.command.unwrap().acknowledged);
+        assert!(!d.command.unwrap().is_acknowledged());
     }
 
     #[test]
@@ -81,6 +85,24 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("only narrow"));
+    }
+
+    #[test]
+    fn unknown_verb_refuses_without_limit_synthesis() {
+        let mut ros = RealityOs::new();
+        let d = ros.decide(DecideRequest::new(
+            Intent::language("dance", "dance"),
+            WorldView {
+                tau_max: vec![10.0],
+                ..WorldView::default()
+            },
+            1.0,
+        ));
+        assert_eq!(d.status, DecisionStatus::Refuse);
+        assert!(d.command.is_none());
+        assert!(
+            d.physical_reason.contains("no domain") || d.physical_reason.contains("unsupported")
+        );
     }
 
     #[test]

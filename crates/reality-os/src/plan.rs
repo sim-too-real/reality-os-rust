@@ -6,6 +6,18 @@ pub struct PhysicalPlan {
     pub kind: String,
     #[serde(default)]
     pub rationale: String,
+    #[serde(default)]
+    pub frame_id: String,
+    #[serde(default)]
+    pub units: String,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub duration_s: Option<f64>,
+    #[serde(default)]
+    pub provenance: String,
+    #[serde(default)]
+    pub completion: String,
 }
 
 impl PhysicalPlan {
@@ -14,11 +26,34 @@ impl PhysicalPlan {
             action,
             kind: kind.into(),
             rationale: String::new(),
+            frame_id: String::new(),
+            units: String::new(),
+            mode: String::new(),
+            duration_s: None,
+            provenance: String::new(),
+            completion: String::new(),
         }
+    }
+
+    pub fn hold(kind: impl Into<String>, dof: usize) -> Self {
+        let mut p = Self::new(kind, vec![0.0; dof.max(1)]);
+        p.mode = "hold".into();
+        p.units = "effort".into();
+        p.provenance = "explicit_hold".into();
+        p.completion = "hold_zero_effort".into();
+        p
     }
 
     pub fn finite(&self) -> bool {
         self.action.iter().all(|x| x.is_finite())
+            && self
+                .duration_s
+                .map(|d| d.is_finite() && d >= 0.0)
+                .unwrap_or(true)
+    }
+
+    pub fn lacks_explicit_target(&self) -> bool {
+        self.action.is_empty()
     }
 }
 

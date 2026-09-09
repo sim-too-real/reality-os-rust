@@ -10,3 +10,4 @@ runs/
 scratchpad/
 *.log
 graphify-out/
+crates/plant/wip/

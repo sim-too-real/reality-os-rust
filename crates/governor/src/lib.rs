@@ -75,7 +75,7 @@ mod tests {
             calibration_id: Some(CalibrationId::new("SIM_CAL").unwrap()),
         };
         let mut g = RuntimeGovernor::new(id, SimPlant::new("p", 1, 1.0));
-        g.config.require_online_identity = true;
+        g.config_mut().require_online_identity = true;
         g.heartbeat(1.0);
         g.mark_sensor(1.0, None);
         let errs = g.pre_actuation_check(1.0);

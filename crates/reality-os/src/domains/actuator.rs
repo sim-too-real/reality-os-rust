@@ -11,13 +11,11 @@ impl DomainPlugin for ActuatorEnvelope {
         "actuator_envelope"
     }
 
-    fn plan(&self, _intent: &Intent, world: &WorldView) -> PhysicalPlan {
-        let action = if world.tau_max.is_empty() {
-            vec![0.0]
-        } else {
-            world.tau_max.iter().map(|t| t * 0.5).collect()
-        };
-        PhysicalPlan::new("actuator_envelope", action)
+    fn plan(&self, intent: &Intent, world: &WorldView) -> PhysicalPlan {
+        if intent.verb == "hold" && !world.tau_max.is_empty() {
+            return PhysicalPlan::hold("actuator_envelope", world.tau_max.len());
+        }
+        PhysicalPlan::new("actuator_envelope", vec![])
     }
 
     fn certify(&self, plan: &PhysicalPlan, world: &WorldView) -> Certificate {
@@ -29,8 +27,16 @@ impl DomainPlugin for ActuatorEnvelope {
             return Certificate::new(DecisionStatus::Refuse, "actuator_undeclared")
                 .with_reasons(["actuator_undeclared"]);
         }
+        if plan.action.is_empty() {
+            return Certificate::new(DecisionStatus::Refuse, "plan_lacks_explicit_target")
+                .with_reasons(["plan_lacks_explicit_target"]);
+        }
+        if plan.action.len() != world.tau_max.len() {
+            return Certificate::new(DecisionStatus::Refuse, "actuator_dimension_mismatch")
+                .with_reasons(["dimension_mismatch"]);
+        }
         for (i, a) in plan.action.iter().enumerate() {
-            let lim = world.tau_max[i.min(world.tau_max.len() - 1)].abs();
+            let lim = world.tau_max[i].abs();
             if a.abs() > lim + 1e-12 {
                 return Certificate::new(
                     DecisionStatus::Refuse,

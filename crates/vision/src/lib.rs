@@ -1,6 +1,6 @@
 //! Pixel see. Lookat/hint is search, never pose. Missing camera / no pixels refuse.
 
-use realityos_kernel::DecisionStatus;
+use realityos_kernel::{DecisionStatus, KernelResult, ObservationEvidence};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -165,6 +165,37 @@ pub fn see_from_pixels(frame: &Frame, camera: Option<&Camera>) -> SeeResult {
     }
 }
 
+pub fn compile_observation(
+    frame: &Frame,
+    camera: &Camera,
+    sensor_id: &str,
+    now_s: f64,
+    ttl_s: f64,
+) -> KernelResult<ObservationEvidence> {
+    if !camera.fx.is_finite() || !camera.fy.is_finite() || camera.fx <= 0.0 || camera.fy <= 0.0 {
+        return Err(realityos_kernel::KernelError::validation(
+            "camera.focal",
+            "non-finite or non-positive",
+        ));
+    }
+    let quality = if centroid_uv(frame, 130).is_some() {
+        0.9
+    } else {
+        0.15
+    };
+    ObservationEvidence::new(
+        sensor_id,
+        format!("cam-{:.3}-{:.3}", camera.fx, camera.fy),
+        now_s,
+        now_s,
+        frame.content_hash(),
+        "vision/optical".to_string(),
+        quality,
+        if quality < 0.2 { 0.9 } else { 0.1 },
+        now_s + ttl_s,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +225,14 @@ mod tests {
         let cam = Camera::default_workcell(16, 16);
         let s = see_from_pixels(&f, Some(&cam));
         assert_eq!(s.status, DecisionStatus::Probe);
+    }
+
+    #[test]
+    fn compile_observation_is_not_a_boolean() {
+        let f = Frame::with_blob(16, 16, 8, 8, 2);
+        let cam = Camera::default_workcell(16, 16);
+        let ev = compile_observation(&f, &cam, "cam0", 1.0, 5.0).unwrap();
+        assert!(!ev.digest().is_empty());
+        assert!(!ev.is_expired(2.0));
     }
 }

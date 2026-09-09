@@ -1,7 +1,7 @@
 //! Grok proposes skill programs. Reality OS + Governor certify and write.
 //! Port of `theworld.integrations.grok_skill_agent` + `llm_admission`.
 
-use realityos_core::{is_forbidden_tool, is_learned_source, Intent, PolicyProposal};
+use realityos_core::{is_forbidden_tool, is_learned_source, Intent, PolicyProposal, SkillIR};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -27,6 +27,18 @@ pub const ALLOWED_VERBS: &[&str] = &[
     "grasp", "pick", "lift", "hold", "place", "slide", "push", "insert", "press", "carry", "walk",
     "stop", "reach",
 ];
+
+pub fn skill_registry() -> Vec<SkillIR> {
+    ALLOWED_VERBS
+        .iter()
+        .map(|verb| {
+            let mut s = SkillIR::hold();
+            s.id = format!("skill.{verb}");
+            s.verb = (*verb).into();
+            s
+        })
+        .collect()
+}
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum AgentError {
@@ -107,7 +119,7 @@ pub fn admit_program(mut raw: Value) -> Result<SkillProgram, AgentError> {
         if is_forbidden_tool(&p.verb) {
             return Err(AgentError::Refused(format!("forbidden_verb:{}", p.verb)));
         }
-        if !ALLOWED_VERBS.contains(&p.verb.as_str()) {
+        if !skill_registry().iter().any(|s| s.verb == p.verb) {
             return Err(AgentError::Refused(format!("verb_not_admitted:{}", p.verb)));
         }
     }

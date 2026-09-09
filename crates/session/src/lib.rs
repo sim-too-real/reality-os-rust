@@ -4,11 +4,13 @@
 //! Governor proves permission. This crate alone binds identity and acknowledges.
 
 pub mod bridge;
+pub mod estimate;
 pub mod mode;
 pub mod packages;
 pub mod session;
 
 pub use bridge::HardwareControlBridge;
+pub use estimate::HoldEstimator;
 pub use mode::{RuntimeMode, SessionStartError};
 pub use packages::{GovernorPackage, PackageReport, RealityOsPackage, SafetyEdge};
 pub use session::{DispatchResult, RuntimeSession, StartArgs};
@@ -57,11 +59,10 @@ mod tests {
             10.0,
         ));
         assert_eq!(d.status, DecisionStatus::Allow);
-        let mut cmd = d.command.unwrap();
-        cmd.release_hash.clear();
+        let cmd = d.command.unwrap();
         let out = sess.bind_and_dispatch(cmd, &ActionParams::empty(), 10.0);
         assert!(out.ok, "{:?}", out.violations);
-        assert_eq!(sess.governor.plant.write_count(), 1);
+        assert_eq!(sess.governor.plant().write_count(), 1);
     }
 
     #[test]
@@ -74,7 +75,7 @@ mod tests {
         let cmd = CertifiedCommand::issue("x", 1, 1.0, 30.0, cert, vec![0.1]).unwrap();
         let out = sess.bind_and_dispatch(cmd, &ActionParams::empty(), 1.0);
         assert!(!out.ok);
-        assert_eq!(sess.governor.plant.write_count(), 0);
+        assert_eq!(sess.governor.plant().write_count(), 0);
     }
 
     #[test]
@@ -117,8 +118,7 @@ mod tests {
             },
             10.0,
         ));
-        let mut cmd = d.command.expect("allow");
-        cmd.release_hash.clear();
+        let cmd = d.command.expect("allow");
         let out = br.dispatch(cmd, 10.0);
         assert!(out.ok, "{:?}", out.violations);
         assert!(!br.events.is_empty());
@@ -129,7 +129,7 @@ mod tests {
         let err = br
             .session
             .governor
-            .plant
+            .plant_mut()
             .act(&[0.3], &ActionParams::empty())
             .unwrap_err();
         match err {

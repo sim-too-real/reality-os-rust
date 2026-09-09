@@ -1,8 +1,8 @@
-//! See-before-act. Gifted xyz without pixels cannot ALLOW when compile is required.
+//! See-before-act. Gifted xyz without observation evidence cannot ALLOW.
 
 use crate::certificate::Certificate;
 use crate::plan::Intent;
-use realityos_kernel::DecisionStatus;
+use realityos_kernel::{DecisionStatus, ObservationEvidence};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObservationGate {
@@ -14,10 +14,10 @@ pub struct ObservationGate {
 
 pub fn evaluate_manip_observation_gate(
     intent: &Intent,
-    pixels_present: bool,
-    compiled_this_decide: bool,
+    observation: Option<&ObservationEvidence>,
     pose_std_m: Option<f64>,
     max_pose_std_m: f64,
+    now_s: f64,
 ) -> ObservationGate {
     if !intent.require_scene {
         return ObservationGate {
@@ -27,28 +27,47 @@ pub fn evaluate_manip_observation_gate(
             reasons: Vec::new(),
         };
     }
-    if !pixels_present {
+    let Some(ev) = observation else {
         return ObservationGate {
             ok: false,
             status: DecisionStatus::Refuse,
-            physical_reason: "pixels_never_entered; gifted pose is not see".into(),
-            reasons: vec!["pixels_never_entered".into(), "gifted_scene_stamp".into()],
+            physical_reason: "observation_evidence_missing; gifted pose is not see".into(),
+            reasons: vec![
+                "observation_evidence_missing".into(),
+                "gifted_scene_stamp".into(),
+            ],
+        };
+    };
+    if ev.is_expired(now_s) {
+        return ObservationGate {
+            ok: false,
+            status: DecisionStatus::Refuse,
+            physical_reason: "observation_expired".into(),
+            reasons: vec!["observation_expired".into()],
         };
     }
-    if !compiled_this_decide {
+    if ev.is_ood(0.8) {
         return ObservationGate {
             ok: false,
             status: DecisionStatus::Probe,
-            physical_reason: "scene not compiled this decide cycle".into(),
-            reasons: vec!["compiled_this_decide_false".into()],
+            physical_reason: "observation_ood".into(),
+            reasons: vec!["observation_ood".into()],
+        };
+    }
+    if ev.quality() < 0.2 {
+        return ObservationGate {
+            ok: false,
+            status: DecisionStatus::Probe,
+            physical_reason: "observation_low_quality".into(),
+            reasons: vec!["observation_low_quality".into()],
         };
     }
     if let Some(std) = pose_std_m {
-        if std > max_pose_std_m {
+        if !std.is_finite() || std > max_pose_std_m {
             return ObservationGate {
                 ok: false,
                 status: DecisionStatus::Probe,
-                physical_reason: format!("pose_std {std} > {max_pose_std_m}"),
+                physical_reason: format!("pose_std {std:?} > {max_pose_std_m}"),
                 reasons: vec!["pose_std_too_wide".into()],
             };
         }
@@ -56,7 +75,7 @@ pub fn evaluate_manip_observation_gate(
     ObservationGate {
         ok: true,
         status: DecisionStatus::Allow,
-        physical_reason: "scene compiled from pixels".into(),
+        physical_reason: "scene compiled from observation evidence".into(),
         reasons: Vec::new(),
     }
 }
@@ -66,5 +85,19 @@ pub fn certificate_from_gate(g: &ObservationGate) -> Option<Certificate> {
         None
     } else {
         Some(Certificate::new(g.status, g.physical_reason.clone()).with_reasons(g.reasons.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plan::Intent;
+
+    #[test]
+    fn boolean_spoof_cannot_satisfy_place() {
+        let intent = Intent::language("place", "place");
+        let g = evaluate_manip_observation_gate(&intent, None, None, 0.05, 1.0);
+        assert!(!g.ok);
+        assert_eq!(g.status, DecisionStatus::Refuse);
     }
 }

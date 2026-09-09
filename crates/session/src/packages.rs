@@ -116,11 +116,8 @@ impl SafetyEdge {
             );
         }
         let req = GovernorGateRequest::new(
-            d.command
-                .as_ref()
-                .map(|c| c.command_id.as_str())
-                .unwrap_or("none"),
-            d.command.as_ref().map(|c| c.sequence).unwrap_or(0),
+            d.command.as_ref().map(|c| c.command_id()).unwrap_or("none"),
+            d.command.as_ref().map(|c| c.sequence_value()).unwrap_or(0),
             d.action.clone(),
             d.status,
             release_hash,

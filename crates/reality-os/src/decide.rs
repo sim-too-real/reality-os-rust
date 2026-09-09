@@ -131,10 +131,10 @@ impl RealityOs {
 
         let mog = evaluate_manip_observation_gate(
             &req.intent,
-            req.world.pixels_present,
-            req.world.scene_compiled,
+            req.world.observation.as_ref(),
             req.world.pose_std_m,
             req.max_pose_std_m,
+            req.now_s,
         );
         if !mog.ok {
             return self.finalize(
@@ -171,8 +171,22 @@ impl RealityOs {
         } else {
             self.registry
                 .plan(kind, &req.intent, &req.world)
-                .unwrap_or_else(|| PhysicalPlan::new(kind, vec![0.0]))
+                .unwrap_or_else(|| PhysicalPlan::new(kind, vec![]))
         };
+
+        if plan.lacks_explicit_target() {
+            return self.finalize(
+                Certificate::new(DecisionStatus::Refuse, "plan_lacks_explicit_target")
+                    .with_reasons(["plan_lacks_explicit_target"]),
+                Some(plan),
+                vec![],
+                0,
+                req.now_s,
+                req.ttl_s,
+                &req.command_id,
+                req.sequence,
+            );
+        }
 
         if !plan.finite() {
             return self.finalize(

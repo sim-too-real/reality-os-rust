@@ -22,6 +22,8 @@ pub enum PlantError {
     FieldbusNotAttached,
     #[error("named hole: {0}")]
     NamedHole(&'static str),
+    #[error("unknown command outcome: write issued without acknowledgement")]
+    UnknownOutcome,
 }
 
 impl PlantError {

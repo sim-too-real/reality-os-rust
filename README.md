@@ -60,7 +60,7 @@ Robot connection (holes named): `docs/ROBOT_CONNECTION.md`. Formulas: `docs/FIRS
 
 | Claim | Status |
 |-------|--------|
-| SIM last-gate uniqueness (software fence) | yes |
+| SIM last-gate uniqueness (software fence) | yes — sealed write token; foreign `Plant` impls and public guard entry compile-fail |
 | ONLINE metal / MEASURED PFL | **no** |
 | ISO 13850 / 10218 / 26262 / SIL | **no** — analogs only |
 | Independent hardware e-stop | **no** |

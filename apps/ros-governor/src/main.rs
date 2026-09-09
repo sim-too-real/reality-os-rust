@@ -228,8 +228,7 @@ fn debug_run() -> Result<()> {
         },
         1.0,
     ));
-    if let Some(mut cmd) = d.command {
-        cmd.release_hash.clear();
+    if let Some(cmd) = d.command {
         let _ = br.dispatch(cmd, 1.0);
     }
     println!("{}", serde_json::to_string_pretty(&br.snapshot())?);

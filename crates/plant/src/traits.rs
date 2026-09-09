@@ -2,8 +2,13 @@ use crate::caps::{ActionParams, PlantCaps, PlantRealized};
 use crate::error::PlantResult;
 use sha2::{Digest, Sha256};
 
+mod sealed {
+    pub trait Sealed {}
+}
+
 /// Plant protocol. ONLINE implementations must refuse `act` outside certified scope.
-pub trait Plant {
+/// Sealed: only this crate may implement `Plant`.
+pub trait Plant: sealed::Sealed {
     fn caps(&self) -> PlantCaps;
     fn is_online(&self) -> bool;
     fn act(&mut self, action: &[f64], params: &ActionParams) -> PlantResult<PlantRealized>;
@@ -16,11 +21,18 @@ pub trait Plant {
             "follow_waypoints_not_supported",
         ))
     }
+    fn probe_identity(&mut self) -> Option<HardwareIdentity> {
+        None
+    }
+    fn write_count(&self) -> u32 {
+        0
+    }
 }
 
 /// Robot-side port. Governor depends on [`Plant`], never on this trait.
 /// A port never certifies or acknowledges a command.
-pub trait HardwareDriverPort {
+/// Sealed: only this crate may implement a driver port.
+pub trait HardwareDriverPort: sealed::Sealed {
     fn probe_identity(&self) -> HardwareIdentity;
     fn read_sensor(&mut self, now_s: f64) -> PlantResult<SensorPacket>;
     fn write_action(&mut self, action: &[f64], params: &ActionParams)
@@ -79,6 +91,8 @@ pub struct SensorPacket {
     pub samples: Vec<(String, f64)>,
     pub frame_id: String,
     pub sequence: u64,
+    pub sensor_id: String,
+    pub calibration_hash: String,
 }
 
 impl SensorPacket {
@@ -89,22 +103,36 @@ impl SensorPacket {
             samples: Vec::new(),
             frame_id: String::new(),
             sequence: 0,
+            sensor_id: String::new(),
+            calibration_hash: String::new(),
         }
     }
 
     pub fn from_samples(samples: Vec<(String, f64)>, timestamp_s: f64) -> Self {
-        let content_hash = hash_sensor_samples(&samples);
+        let content_hash = hash_sensor_packet(&samples, timestamp_s, "", "", 0);
         Self {
             content_hash,
             timestamp_s,
             samples,
             frame_id: String::new(),
             sequence: 0,
+            sensor_id: String::new(),
+            calibration_hash: String::new(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
         self.samples.is_empty()
+    }
+
+    pub fn rehash(&mut self) {
+        self.content_hash = hash_sensor_packet(
+            &self.samples,
+            self.timestamp_s,
+            &self.frame_id,
+            &self.sensor_id,
+            self.sequence,
+        );
     }
 }
 
@@ -115,3 +143,29 @@ pub fn hash_sensor_samples(samples: &[(String, f64)]) -> String {
     let canon = serde_json::to_string(&pairs).unwrap_or_default();
     hex::encode(Sha256::digest(canon.as_bytes()))
 }
+
+/// Bind samples to time, frame, sensor identity, and sequence.
+pub fn hash_sensor_packet(
+    samples: &[(String, f64)],
+    timestamp_s: f64,
+    frame_id: &str,
+    sensor_id: &str,
+    sequence: u64,
+) -> String {
+    let mut pairs = samples.to_vec();
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    let canon = serde_json::json!({
+        "samples": pairs,
+        "timestamp_s": timestamp_s,
+        "frame_id": frame_id,
+        "sensor_id": sensor_id,
+        "sequence": sequence,
+    });
+    hex::encode(Sha256::digest(
+        serde_json::to_string(&canon).unwrap_or_default().as_bytes(),
+    ))
+}
+
+impl sealed::Sealed for crate::sim::SimPlant {}
+impl<P: HardwareDriverPort> sealed::Sealed for crate::backed::HardwareBackedPlant<P> {}
+impl sealed::Sealed for crate::harness::SimulatedHardwarePort {}

@@ -7,7 +7,7 @@ use crate::traits::{HardwareDriverPort, HardwareIdentity, Plant};
 use crate::write_guard::refuse_uncertified_online_write;
 
 pub struct HardwareBackedPlant<P: HardwareDriverPort> {
-    pub port: P,
+    port: P,
     plant_id: String,
     online: bool,
     action_dim: usize,
@@ -31,10 +31,18 @@ impl<P: HardwareDriverPort> HardwareBackedPlant<P> {
         }
     }
 
-    pub fn probe_identity(&mut self) -> HardwareIdentity {
+    fn read_port_identity(&mut self) -> HardwareIdentity {
         let id = self.port.probe_identity();
         self.last_identity = Some(id.clone());
         id
+    }
+
+    pub fn probe_identity(&mut self) -> HardwareIdentity {
+        self.read_port_identity()
+    }
+
+    pub fn is_port_connected(&self) -> bool {
+        self.port.is_connected()
     }
 
     fn effective_metal(&self) -> bool {
@@ -94,5 +102,9 @@ impl<P: HardwareDriverPort> Plant for HardwareBackedPlant<P> {
         self.port.clear_hw_estop(operator_ack)?;
         self.estop = false;
         Ok(())
+    }
+
+    fn probe_identity(&mut self) -> Option<HardwareIdentity> {
+        Some(self.read_port_identity())
     }
 }

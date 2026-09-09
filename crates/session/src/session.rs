@@ -7,7 +7,6 @@ use realityos_kernel::{
 };
 use realityos_plant::{ActionParams, Plant, PlantRealized, SimPlant};
 use serde_json::json;
-use sha2::{Digest, Sha256};
 
 use crate::mode::{RuntimeMode, SessionStartError};
 
@@ -128,21 +127,22 @@ impl<P: Plant> RuntimeSession<P> {
         }
 
         let mut governor = RuntimeGovernor::new(identity, plant);
-        governor.config.require_online_identity = args.mode == RuntimeMode::Online;
-        governor.config.require_sensor_before_write = args.mode != RuntimeMode::Simulation;
-        governor.config.require_monotonic_sequence =
+        governor.config_mut().require_online_identity = args.mode == RuntimeMode::Online;
+        governor.config_mut().require_sensor_before_write = args.mode != RuntimeMode::Simulation;
+        governor.config_mut().require_monotonic_sequence =
             matches!(args.mode, RuntimeMode::Online | RuntimeMode::Hil);
-        governor.config.require_command_signature = args.mode == RuntimeMode::Online;
-        governor.config.require_sensor_packet_hash = args.mode == RuntimeMode::Online;
+        governor.config_mut().require_command_signature = args.mode == RuntimeMode::Online;
+        governor.config_mut().require_sensor_packet_hash = args.mode == RuntimeMode::Online;
         let mut env = DriverEnvelopePack::from_max_action(
-            &governor.plant.caps().max_action,
+            &governor.plant().caps().max_action,
             args.mode == RuntimeMode::Online,
         );
         if env.max_action_abs <= 0.0 {
             env.max_action_abs = args.max_action_abs;
         }
-        governor.envelope = Some(env);
+        governor.set_envelope(env);
         governor.heartbeat(now_s);
+        let _ = governor.watchdog_tick(now_s);
 
         Ok(Self {
             mode: args.mode,
@@ -180,15 +180,27 @@ impl<P: Plant> RuntimeSession<P> {
         if samples.is_empty() {
             return Err("sensor_reading_empty".into());
         }
+        if samples.iter().any(|(_, v)| !v.is_finite()) {
+            return Err("sensor_sample_non_finite".into());
+        }
         if self.mode != RuntimeMode::Simulation && timestamp_s.is_none() {
             return Err("sensor_timestamp_required".into());
         }
         let ts = timestamp_s.unwrap_or(now_s);
-        if timestamp_s.is_some() && (ts - now_s).abs() > self.governor.config.sensor_stale_s {
+        if !ts.is_finite() || !now_s.is_finite() {
+            return Err("sensor_timestamp_non_finite".into());
+        }
+        if timestamp_s.is_some() && (ts - now_s).abs() > self.governor.config().sensor_stale_s {
             return Err("sensor_timestamp_stale_vs_now".into());
         }
-        let canon = serde_json::to_string(samples).unwrap_or_default();
-        let hash = hex::encode(Sha256::digest(canon.as_bytes()));
+        self.last_sequence = self.last_sequence.saturating_add(1);
+        let hash = realityos_plant::hash_sensor_packet(
+            samples,
+            ts,
+            "session/sensor",
+            "session",
+            self.last_sequence as u64,
+        );
         self.governor.mark_sensor(ts, Some(hash.clone()));
         self.last_sensor_hash = Some(hash.clone());
         Ok(hash)
@@ -196,7 +208,7 @@ impl<P: Plant> RuntimeSession<P> {
 
     pub fn bind_and_dispatch(
         &mut self,
-        mut command: CertifiedCommand,
+        command: CertifiedCommand,
         params: &ActionParams,
         now_s: f64,
     ) -> DispatchResult {
@@ -209,34 +221,43 @@ impl<P: Plant> RuntimeSession<P> {
                 )],
             );
         }
-        if let Err(errs) = command.bind_identity(
+        let command = match command.bind_identity(
             self.governor.identity.release_hash.as_str(),
             self.governor.identity.design_str(),
             self.governor.identity.calibration_id_str(),
         ) {
-            return DispatchResult::refused(self.mode, errs);
-        }
-        if self.mode == RuntimeMode::Online {
-            if command.actuator_ids.is_empty() {
+            Ok(c) => c,
+            Err(errs) => return DispatchResult::refused(self.mode, errs),
+        };
+        let command = if self.mode == RuntimeMode::Online {
+            if command.actuator_ids().is_empty() {
                 return DispatchResult::refused(
                     self.mode,
                     vec!["dispatch_requires_actuator_ids".into()],
                 );
             }
             if let Some(h) = &self.last_sensor_hash {
-                if command.sensor_packet_hash.is_empty() {
-                    command.sensor_packet_hash = h.clone();
-                } else if command.sensor_packet_hash != *h {
+                if command.sensor_packet_hash().is_empty() {
+                    command.with_sensor_packet_hash(h.clone())
+                } else if command.sensor_packet_hash() != *h {
                     return DispatchResult::refused(
                         self.mode,
                         vec!["online_refuses_forged_sensor_packet_hash".into()],
                     );
+                } else {
+                    command
                 }
+            } else {
+                command
             }
-        }
-        command.acknowledge();
-        self.acknowledged_ids.insert(command.command_id.clone());
-        self.last_sequence = command.sequence.max(self.last_sequence);
+        } else {
+            command
+        };
+        let command = command.acknowledge();
+        self.acknowledged_ids
+            .insert(command.command_id().to_string());
+        self.last_sequence = command.sequence_value().max(self.last_sequence);
+        let _ = self.governor.watchdog_tick(now_s);
         let trace = self.governor.write_driver(&command, params, now_s);
         DispatchResult {
             ok: trace.ok,

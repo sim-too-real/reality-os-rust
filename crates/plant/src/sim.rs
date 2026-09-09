@@ -4,13 +4,13 @@ use crate::traits::Plant;
 use crate::write_guard::refuse_uncertified_online_write;
 
 /// In-process plant. ONLINE flag enables certified-write uniqueness.
-#[derive(Debug, Clone)]
 pub struct SimPlant {
     caps: PlantCaps,
     online: bool,
     estop: bool,
     last_action: Vec<f64>,
     writes: u32,
+    backend: Option<crate::dynamics::BoxBackend>,
 }
 
 impl SimPlant {
@@ -21,6 +21,7 @@ impl SimPlant {
             estop: false,
             last_action: vec![0.0; action_dim.max(1)],
             writes: 0,
+            backend: None,
         }
     }
 
@@ -39,12 +40,12 @@ impl SimPlant {
         }
     }
 
-    pub fn write_count(&self) -> u32 {
-        self.writes
-    }
-
     pub fn last_action(&self) -> &[f64] {
         &self.last_action
+    }
+
+    pub fn attach_backend(&mut self, backend: crate::dynamics::BoxBackend) {
+        self.backend = Some(backend);
     }
 }
 
@@ -64,10 +65,18 @@ impl Plant for SimPlant {
         }
         self.last_action = action.to_vec();
         self.writes += 1;
+        if let Some(backend) = &mut self.backend {
+            let stepped = backend.step(&self.last_action, &[], action, 0.001);
+            self.last_action = stepped.q;
+        }
         let peak = action.iter().fold(0.0_f64, |a, b| a.max(b.abs()));
         Ok(PlantRealized::sim([
             ("stop_x".into(), peak),
             ("n".into(), action.len() as f64),
+            (
+                "backend".into(),
+                f64::from(u8::from(self.backend.is_some())),
+            ),
         ]))
     }
 
@@ -85,6 +94,10 @@ impl Plant for SimPlant {
         }
         self.estop = false;
         Ok(())
+    }
+
+    fn write_count(&self) -> u32 {
+        self.writes
     }
 
     fn follow_waypoints(&mut self, waypoints: &[Vec<f64>]) -> PlantResult<PlantRealized> {

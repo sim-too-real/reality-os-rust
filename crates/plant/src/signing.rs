@@ -13,15 +13,30 @@ pub const SCHEMA: &str = "realityos.command_signing/1";
 
 pub fn command_payload_for_sign(cmd: &dyn ActuationCommand) -> Value {
     json!({
+        "schema": SCHEMA,
         "command_id": cmd.command_id(),
         "sequence": cmd.sequence(),
-        "issued_at_s": round9(cmd.issued_at_s()),
-        "expires_at_s": round9(cmd.expires_at_s()),
+        "issued_at_s": round9_strict(cmd.issued_at_s()),
+        "expires_at_s": round9_strict(cmd.expires_at_s()),
         "issuer_certificate_status": cmd.issuer_certificate_status(),
+        "live_certificate_status": cmd.certificate_status().as_str(),
         "issuer_physical_reason": cmd.issuer_physical_reason(),
-        "issuer_allowed_action": cmd.issuer_allowed_action().iter().map(|x| round9(*x)).collect::<Vec<_>>(),
+        "issuer_allowed_action": cmd.issuer_allowed_action().iter().map(|x| round9_strict(*x)).collect::<Vec<_>>(),
+        "allowed_action": cmd.allowed_action().iter().map(|x| round9_strict(*x)).collect::<Vec<_>>(),
+        "actuator_ids": cmd.actuator_ids(),
+        "waypoints": cmd.follow_waypoints().unwrap_or(&[]),
+        "release_hash": cmd.release_hash(),
+        "as_built_hash": cmd.as_built_hash(),
+        "calibration_ids": cmd.calibration_ids(),
         "sensor_snapshot_id": cmd.sensor_snapshot_id(),
+        "sensor_packet_hash": cmd.sensor_packet_hash(),
         "belief_snapshot_id": cmd.belief_snapshot_id(),
+        "parent_payload_hash": cmd.parent_payload_hash(),
+        "mode": cmd.mode(),
+        "frame_id": cmd.frame_id(),
+        "units": cmd.units(),
+        "policy_hash": cmd.policy_hash(),
+        "config_hash": cmd.config_hash(),
     })
 }
 
@@ -36,6 +51,7 @@ pub fn sign_payload(key: &[u8], payload_hash: &str) -> String {
     hex::encode(mac.finalize().into_bytes())
 }
 
+/// Component-wise containment. Sign reversal is widening.
 pub fn action_within_issuer_envelope(live: &[f64], issuer: &[f64]) -> bool {
     if issuer.is_empty() {
         return true;
@@ -43,9 +59,12 @@ pub fn action_within_issuer_envelope(live: &[f64], issuer: &[f64]) -> bool {
     if live.len() != issuer.len() {
         return false;
     }
-    live.iter()
-        .zip(issuer.iter())
-        .all(|(v, old)| v.is_finite() && v.abs() <= old.abs() + 1e-12)
+    live.iter().zip(issuer.iter()).all(|(v, old)| {
+        v.is_finite()
+            && old.is_finite()
+            && v.abs() <= old.abs() + 1e-12
+            && (*v == 0.0 || v.signum() == old.signum())
+    })
 }
 
 pub fn signature_violations(
@@ -80,12 +99,36 @@ pub fn signature_violations(
     if !issuer.is_empty() && !action_within_issuer_envelope(cmd.allowed_action(), issuer) {
         v.push("live_action_outside_issuer_envelope".into());
     }
+    if cmd.certificate_status().as_str() != cmd.issuer_certificate_status()
+        && cmd.issuer_certificate_status() != "allow"
+        && cmd.certificate_status().allowed()
+    {
+        v.push("live_certificate_upgraded_past_issuer".into());
+    }
     v
 }
 
-fn round9(x: f64) -> f64 {
+fn round9_strict(x: f64) -> Value {
     if !x.is_finite() {
-        return 0.0;
+        return Value::Null;
     }
-    (x * 1e9).round() / 1e9
+    json!((x * 1e9).round() / 1e9)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sign_reversal_is_widening() {
+        assert!(action_within_issuer_envelope(&[0.1], &[0.5]));
+        assert!(!action_within_issuer_envelope(&[-0.1], &[0.5]));
+        assert!(action_within_issuer_envelope(&[0.0], &[0.5]));
+    }
+
+    #[test]
+    fn non_finite_is_not_mapped_to_zero() {
+        assert!(round9_strict(f64::NAN).is_null());
+        assert!(round9_strict(f64::INFINITY).is_null());
+    }
 }

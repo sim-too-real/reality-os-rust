@@ -15,7 +15,7 @@ impl DomainPlugin for WorkspaceBoundary {
         PhysicalPlan::new(
             "workspace_boundary",
             if world.q.is_empty() {
-                vec![0.0]
+                vec![]
             } else {
                 world.q.clone()
             },

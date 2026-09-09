@@ -1,5 +1,5 @@
 //! ONLINE plants refuse motion outside `execute_certified_command`.
-//! SIM plants stay callable for screens. Never metal.
+//! The write token is crate-private. Sibling crates cannot enter the guard.
 
 use std::cell::Cell;
 
@@ -11,14 +11,14 @@ thread_local! {
 }
 
 #[inline]
-pub fn in_certified_write() -> bool {
+pub(crate) fn in_certified_write() -> bool {
     IN_CERTIFIED_WRITE.with(|c| c.get() > 0)
 }
 
-pub struct CertifiedWriteGuard;
+pub(crate) struct CertifiedWriteGuard;
 
 impl CertifiedWriteGuard {
-    pub fn enter() -> Self {
+    pub(crate) fn enter() -> Self {
         IN_CERTIFIED_WRITE.with(|c| c.set(c.get().saturating_add(1)));
         Self
     }
@@ -30,7 +30,7 @@ impl Drop for CertifiedWriteGuard {
     }
 }
 
-pub fn with_certified_write<T>(f: impl FnOnce() -> T) -> T {
+pub(crate) fn with_certified_write<T>(f: impl FnOnce() -> T) -> T {
     let _g = CertifiedWriteGuard::enter();
     f()
 }
