@@ -193,6 +193,40 @@ fn xl330_pty_pwm_operating_mode_is_forced_to_position() {
 }
 
 #[test]
+fn xl330_pty_raises_wizard_velocity_limit_so_nudge_can_finish() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_SLOW_VEL", "1")]);
+    let root = metal_test_root("pty-slow-vel");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("raise Velocity Limit 1 to profile 20");
+    assert_eq!(driver.applied_velocity_limit(), 20);
+    driver.read_sensor(0.0).expect("sensor");
+    driver
+        .write_action(&[0.05], &ActionParams::empty())
+        .expect("nudge after raising velocity limit");
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_time_based_drive_mode_is_forced_velocity_based() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_TIME_BASED", "1")]);
+    let root = metal_test_root("pty-time-based");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver =
+        Xl330Driver::open(cfg, &root).expect("time-based Drive Mode must not block setup");
+    assert_eq!(driver.applied_drive_mode(), 0);
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold after forcing velocity-based drive");
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_discover_finds_wizard_id_via_broadcast() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ID", "7")]);

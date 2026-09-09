@@ -129,8 +129,11 @@ def init_regs() -> bytearray:
     except ValueError:
         own = 1
     regs[7] = own if own not in (0, 254) else 1
+    regs[10] = 4 if os.environ.get("REALITYOS_METAL_PTY_TIME_BASED") == "1" else 0
     regs[11] = 3
     regs[38:40] = struct.pack("<H", 200)
+    vel = 1 if os.environ.get("REALITYOS_METAL_PTY_SLOW_VEL") == "1" else 445
+    regs[44:48] = struct.pack("<I", vel)
     regs[48:52] = struct.pack("<i", 4095)
     regs[52:56] = struct.pack("<i", 0)
     if os.environ.get("REALITYOS_METAL_PTY_AT_MAX") == "1":

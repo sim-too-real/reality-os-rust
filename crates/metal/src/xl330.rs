@@ -22,11 +22,12 @@ use crate::egress::EgressLog;
 use crate::identity::{is_pty_path, usb_identity_for_tty, MeasuredIdentity};
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
-    instruction_ok, is_xl330_model, le_i32, le_u16, ADDR_CURRENT_LIMIT, ADDR_FIRMWARE_VERSION,
-    ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR, ADDR_MAX_POSITION_LIMIT, ADDR_MIN_POSITION_LIMIT,
-    ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY,
-    ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE, BROADCAST_ID,
-    OPERATING_MODE_POSITION, STATUS_RETURN_ALL,
+    instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE,
+    ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR, ADDR_MAX_POSITION_LIMIT,
+    ADDR_MIN_POSITION_LIMIT, ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE, ADDR_PROFILE_ACCEL,
+    ADDR_PROFILE_VELOCITY, ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE,
+    ADDR_VELOCITY_LIMIT, BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, OPERATING_MODE_POSITION,
+    STATUS_RETURN_ALL,
 };
 
 pub struct Xl330Driver {
@@ -52,6 +53,8 @@ pub struct Xl330Driver {
     last_hw_error: u8,
     min_position: i32,
     max_position: i32,
+    velocity_limit: u32,
+    drive_mode: u8,
 }
 
 impl Xl330Driver {
@@ -98,6 +101,8 @@ impl Xl330Driver {
             last_hw_error: 0,
             min_position: 0,
             max_position: 4095,
+            velocity_limit: 0,
+            drive_mode: 0,
         };
         driver.connect_serial()?;
         driver.refresh_identity();
@@ -172,6 +177,14 @@ impl Xl330Driver {
 
     pub fn last_goal_position(&self) -> Option<i32> {
         self.last_goal
+    }
+
+    pub fn applied_velocity_limit(&self) -> u32 {
+        self.velocity_limit
+    }
+
+    pub fn applied_drive_mode(&self) -> u8 {
+        self.drive_mode
     }
 
     pub fn measured(&self) -> MeasuredIdentity {
@@ -318,6 +331,23 @@ impl Xl330Driver {
                 )));
             }
         }
+        let mut eeprom_changed = false;
+        let drive = self
+            .read_reg(ADDR_DRIVE_MODE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        self.drive_mode = drive.unwrap_or(0);
+        if drive != Some(DRIVE_MODE_VELOCITY_BASED) {
+            self.write_reg(
+                ADDR_DRIVE_MODE,
+                &[DRIVE_MODE_VELOCITY_BASED],
+                "setup_drive_mode_velocity",
+                None,
+                false,
+            )?;
+            self.drive_mode = DRIVE_MODE_VELOCITY_BASED;
+            eeprom_changed = true;
+        }
         let mode = self
             .read_reg(ADDR_OPERATING_MODE, 1)
             .ok()
@@ -330,8 +360,10 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            // EEPROM mode write can drop the next RAM instruction. Re-identify
-            // (and re-force SRL) before profile/torque writes.
+            eeprom_changed = true;
+        }
+        if eeprom_changed {
+            // EEPROM mode/drive writes can drop the next RAM instruction.
             std::thread::sleep(Duration::from_millis(400));
             self.ping_and_identify()
                 .map_err(|e| PlantError::refused(format!("dxl_mode_identify:{e}")))?;
@@ -350,6 +382,23 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
+        }
+        let want_vel = self.cfg.max_profile_velocity;
+        let got_vel = self
+            .read_reg(ADDR_VELOCITY_LIMIT, 4)
+            .ok()
+            .and_then(|b| le_u32(&b))
+            .unwrap_or(0);
+        self.velocity_limit = got_vel;
+        if got_vel < want_vel {
+            self.write_reg(
+                ADDR_VELOCITY_LIMIT,
+                &want_vel.to_le_bytes(),
+                "setup_velocity_limit",
+                None,
+                false,
+            )?;
+            self.velocity_limit = want_vel;
         }
         self.write_reg(
             ADDR_PROFILE_VELOCITY,

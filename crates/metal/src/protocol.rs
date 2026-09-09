@@ -19,10 +19,15 @@ pub const XL330_M077_MODEL: u16 = 1200;
 pub const ADDR_MODEL_NUMBER: u16 = 0;
 pub const ADDR_FIRMWARE_VERSION: u16 = 6;
 pub const ADDR_ID: u16 = 7;
+/// EEPROM. Bit2=1 is time-based profile (Wizard); 0 = velocity-based.
+pub const ADDR_DRIVE_MODE: u16 = 10;
+pub const DRIVE_MODE_VELOCITY_BASED: u8 = 0;
 /// EEPROM. 3 = position control (factory XL330 default).
 pub const ADDR_OPERATING_MODE: u16 = 11;
 pub const OPERATING_MODE_POSITION: u8 = 3;
 pub const ADDR_CURRENT_LIMIT: u16 = 38;
+/// EEPROM. Unit ≈ 0.229 rpm. 0 or 1 makes a 2-tick nudge miss a 120 ms sample.
+pub const ADDR_VELOCITY_LIMIT: u16 = 44;
 /// EEPROM. Factory max 4095 / min 0. Wizard can shrink this window.
 pub const ADDR_MAX_POSITION_LIMIT: u16 = 48;
 pub const ADDR_MIN_POSITION_LIMIT: u16 = 52;
@@ -258,6 +263,15 @@ pub fn find_header(buf: &[u8]) -> Option<usize> {
 
 pub fn le_u16(b: &[u8]) -> Option<u16> {
     Some(u16::from_le_bytes([*b.first()?, *b.get(1)?]))
+}
+
+pub fn le_u32(b: &[u8]) -> Option<u32> {
+    Some(u32::from_le_bytes([
+        *b.first()?,
+        *b.get(1)?,
+        *b.get(2)?,
+        *b.get(3)?,
+    ]))
 }
 
 pub fn le_i32(b: &[u8]) -> Option<i32> {
