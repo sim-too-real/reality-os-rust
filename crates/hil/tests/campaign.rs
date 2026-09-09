@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use realityos_hil::{
-    call, wait_for_ipc, Authority, CaseRecord, HilRequest, HilResponse, ProofReport, JOURNAL,
+    call, call_raw, wait_for_ipc, Authority, CaseRecord, HilRequest, HilResponse, ProofReport,
+    JOURNAL,
 };
 use realityos_vport::{recorded_writes, try_hostile_open};
 use serde_json::json;
@@ -29,9 +30,10 @@ fn spawn_serve(root: &Path, first: bool) -> Child {
     } else {
         cmd.arg("--restart");
     }
+    let err = std::fs::File::create(root.join("authority.err")).expect("authority.err");
     cmd.arg("serve")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(err))
         .spawn()
         .expect("spawn authority")
 }
@@ -63,7 +65,7 @@ fn record(
         semantic_verdict: if resp.stage == "semantic" {
             resp.status.clone()
         } else {
-            "passed_or_skipped".into()
+            format!("{}:{}", resp.stage, resp.status)
         },
         authority_transition: resp.stage.clone(),
         driver_write_count: resp.driver_writes,
@@ -132,21 +134,13 @@ fn hil_adversarial_campaign_zero_unauthorized_writes() {
         ),
         (
             "nan_action",
-            {
-                let mut r = HilRequest::propose("h-nan", "hold", 23.0, 4);
-                r.action = Some(vec![f64::NAN]);
-                r
-            },
-            "action=NaN",
+            HilRequest::propose("h-nan", "hold", 23.0, 4),
+            "action=NaN raw",
         ),
         (
             "inf_action",
-            {
-                let mut r = HilRequest::propose("h-inf", "hold", 24.0, 5);
-                r.action = Some(vec![f64::INFINITY]);
-                r
-            },
-            "action=Inf",
+            HilRequest::propose("h-inf", "hold", 24.0, 5),
+            "action=Inf raw",
         ),
         (
             "missing_evidence",
@@ -188,15 +182,6 @@ fn hil_adversarial_campaign_zero_unauthorized_writes() {
                 r
             },
             "ttl=0.01 write_now=40",
-        ),
-        (
-            "time_rollback",
-            {
-                let mut r = HilRequest::propose("h-rb", "hold", 28.0, 10);
-                r.write_now_s = Some(5.0);
-                r
-            },
-            "write_now < last_now",
         ),
         (
             "sequence_rollback",
@@ -302,7 +287,31 @@ fn hil_adversarial_campaign_zero_unauthorized_writes() {
 
     for (name, req, proposal) in cases {
         let before = recorded_writes(root.join("bus"));
-        let resp = hostile(req);
+        let resp = match name {
+            "nan_action" => call_raw(
+                &root,
+                r#"{"op":"propose","verb":"hold","now_s":23.0,"sequence":4,"command_id":"h-nan","action":[NaN]}"#,
+            )
+            .unwrap_or_else(|e| HilResponse {
+                ok: false,
+                stage: "ipc".into(),
+                status: "error".into(),
+                violations: vec![e.to_string()],
+                ..HilResponse::default()
+            }),
+            "inf_action" => call_raw(
+                &root,
+                r#"{"op":"propose","verb":"hold","now_s":24.0,"sequence":5,"command_id":"h-inf","action":[Infinity]}"#,
+            )
+            .unwrap_or_else(|e| HilResponse {
+                ok: false,
+                stage: "ipc".into(),
+                status: "error".into(),
+                violations: vec![e.to_string()],
+                ..HilResponse::default()
+            }),
+            _ => hostile(req),
+        };
         assert!(
             !resp.ok && recorded_writes(root.join("bus")) == before,
             "{name} must refuse with zero new writes: {resp:?}"
@@ -313,6 +322,19 @@ fn hil_adversarial_campaign_zero_unauthorized_writes() {
             baseline_writes,
             "{name} changed write count"
         );
+        let ping = call(
+            &root,
+            &HilRequest {
+                op: "status".into(),
+                ..HilRequest::propose("ping", "hold", 1.0, 1)
+            },
+        );
+        assert!(
+            ping.is_ok(),
+            "{name} killed authority: {:?} err={}",
+            ping.err(),
+            std::fs::read_to_string(root.join("authority.err")).unwrap_or_default()
+        );
     }
 
     let ff = call(&root, &{
@@ -320,7 +342,10 @@ fn hil_adversarial_campaign_zero_unauthorized_writes() {
         r.write_now_s = Some(1.0e12);
         r
     })
-    .unwrap();
+    .unwrap_or_else(|e| {
+        let err = std::fs::read_to_string(root.join("authority.err")).unwrap_or_default();
+        panic!("far_future ipc failed: {e}; authority.err={err}");
+    });
     report.cases.push(CaseRecord {
         name: "far_future_timestamp".into(),
         proposal: "write_now_s=1e12".into(),
@@ -344,6 +369,22 @@ fn hil_adversarial_campaign_zero_unauthorized_writes() {
         report.valid_commands += 1;
         report.valid_driver_writes = baseline_writes;
     }
+
+    let rb = {
+        let mut r = HilRequest::propose("h-rb", "hold", 28.0, 10);
+        r.write_now_s = Some(5.0);
+        r
+    };
+    let before_rb = recorded_writes(root.join("bus"));
+    let rb_resp = hostile(rb);
+    assert!(!rb_resp.ok && recorded_writes(root.join("bus")) == before_rb);
+    record(
+        &mut report,
+        "time_rollback",
+        "write_now < last_now",
+        &rb_resp,
+        false,
+    );
 
     // Direct device access from untrusted process.
     let open = Command::new(untrusted_bin())

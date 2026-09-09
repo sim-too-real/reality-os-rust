@@ -36,6 +36,8 @@ That choke point is the wedge. See [docs/COMPETITOR_WEDGE.md](docs/COMPETITOR_WE
 | `realityos-core` | `decide` + domain plugins | `plant.act` |
 | `realityos-session` | Session + `HardwareControlBridge` | Invent modules |
 | `realityos-ros2` | Codecs, veto topics, connection map | Veto *logic* |
+| `realityos-vport` | Exclusive virtual serial `HardwareDriverPort` | Plant, metal |
+| `realityos-hil` | Two-process HIL + proof campaign | Kernel APIs |
 | `ros-governor` | CLI (`chain`, `debug`) | Metal / ONLINE motion |
 
 Physics formula domains are **plugins**. EtherCAT/metal stay **named holes**.
@@ -61,6 +63,8 @@ Robot connection (holes named): `docs/ROBOT_CONNECTION.md`. Formulas: `docs/FIRS
 | Claim | Status |
 |-------|--------|
 | SIM last-gate uniqueness (software fence) | yes — sealed write token; foreign `Plant` impls and public guard entry compile-fail |
+| ONLINE capability bound to one runtime instance | yes — `runtime_instance_hash` in the HMAC; cross-instance writes refuse |
+| Process-separated HIL + exclusive virtual endpoint | yes as tested — ordinary same-UID open/flock/write without chmod; not vs root |
 | ONLINE metal / MEASURED PFL | **no** |
 | ISO 13850 / 10218 / 26262 / SIL | **no** — analogs only |
 | Independent hardware e-stop | **no** |

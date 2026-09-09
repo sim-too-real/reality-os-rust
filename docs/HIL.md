@@ -77,3 +77,17 @@ They consume public APIs. `hil-faults` on `realityos-plant` is a test-only
 
 Not justified. Blocker: no independent STO/SS1 / safety PLC, and exclusive
 ownership is not proven against root or same-UID fd escape.
+
+## Measured proof (from `docs/hil_proof.json`)
+
+Headline is only the numbers the campaign wrote:
+
+* 25 hostile cases
+* 0 unauthorized driver writes
+* 1 valid command
+* 1 valid driver write
+* 0 duplicate writes after crash/restart
+* 0 successful direct device opens from the untrusted process
+* 8 journal-continuity failures detected
+
+Re-run: `cargo test -p realityos-hil --test campaign`.

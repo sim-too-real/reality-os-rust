@@ -1,0 +1,324 @@
+{
+  "cases": [
+    {
+      "authority_transition": "semantic",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "unsupported_action",
+      "outcome": "refused",
+      "proposal": "verb=dance",
+      "semantic_verdict": "refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "semantic",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "oversized_action",
+      "outcome": "refused",
+      "proposal": "action=1e6",
+      "semantic_verdict": "refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "protocol",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "nan_action",
+      "outcome": "refused",
+      "proposal": "action=NaN raw",
+      "semantic_verdict": "protocol:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "protocol",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "inf_action",
+      "outcome": "refused",
+      "proposal": "action=Inf raw",
+      "semantic_verdict": "protocol:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "egress",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "missing_evidence",
+      "outcome": "refused",
+      "proposal": "skip_sensor",
+      "semantic_verdict": "egress:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "egress",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "stale_evidence",
+      "outcome": "refused",
+      "proposal": "skip_sensor at t=80 after t=20 ingest",
+      "semantic_verdict": "egress:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "egress",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "forged_evidence_hash",
+      "outcome": "refused",
+      "proposal": "untrusted cannot attach a hash; missing evidence",
+      "semantic_verdict": "egress:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "egress",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "expired_command",
+      "outcome": "refused",
+      "proposal": "ttl=0.01 write_now=40",
+      "semantic_verdict": "egress:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "egress",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "sequence_rollback",
+      "outcome": "refused",
+      "proposal": "sequence=1 after higher",
+      "semantic_verdict": "egress:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "egress",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "command_replay",
+      "outcome": "refused",
+      "proposal": "replay valid-1",
+      "semantic_verdict": "egress:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "protocol",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "homemade_actuation_command",
+      "outcome": "refused",
+      "proposal": "forge ActuationCommand over IPC",
+      "semantic_verdict": "protocol:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "protocol",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "arbitrary_certificate_allow",
+      "outcome": "refused",
+      "proposal": "forge Certificate(ALLOW) over IPC",
+      "semantic_verdict": "protocol:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "protocol",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "reused_online_write",
+      "outcome": "refused",
+      "proposal": "untrusted cannot carry OnlineWrite",
+      "semantic_verdict": "protocol:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "protocol",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "online_write_other_governor",
+      "outcome": "refused",
+      "proposal": "untrusted cannot import foreign OnlineWrite",
+      "semantic_verdict": "protocol:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "protocol",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "wrong_runtime_identity",
+      "outcome": "refused",
+      "proposal": "untrusted cannot rebind identity",
+      "semantic_verdict": "protocol:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "protocol",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "wrong_serial",
+      "outcome": "refused",
+      "proposal": "untrusted cannot set serial",
+      "semantic_verdict": "protocol:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "protocol",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "wrong_firmware",
+      "outcome": "refused",
+      "proposal": "untrusted cannot set firmware",
+      "semantic_verdict": "protocol:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "protocol",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "changed_calibration",
+      "outcome": "refused",
+      "proposal": "untrusted cannot set calibration",
+      "semantic_verdict": "protocol:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "protocol",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "unauthorized_actuator",
+      "outcome": "refused",
+      "proposal": "untrusted cannot attach actuator ids",
+      "semantic_verdict": "protocol:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "egress",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "sensor_loss",
+      "outcome": "refused",
+      "proposal": "no sensor + stale clock",
+      "semantic_verdict": "egress:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "egress",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "heartbeat_loss",
+      "outcome": "refused",
+      "proposal": "now far past heartbeat",
+      "semantic_verdict": "egress:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "egress",
+      "driver_write_count": 1,
+      "journal_state": "observed",
+      "name": "far_future_timestamp",
+      "outcome": "refused",
+      "proposal": "write_now_s=1e12",
+      "semantic_verdict": "refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "egress",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "time_rollback",
+      "outcome": "refused",
+      "proposal": "write_now < last_now",
+      "semantic_verdict": "egress:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "os",
+      "driver_write_count": 1,
+      "journal_state": "unchanged",
+      "name": "direct_driver_access",
+      "outcome": "denied",
+      "proposal": "untrusted open/lock/write actuator.log",
+      "semantic_verdict": "n/a",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "egress",
+      "driver_write_count": 1,
+      "journal_state": "no_consume",
+      "name": "driver_disconnect",
+      "outcome": "refused",
+      "proposal": "force_disconnect + propose",
+      "semantic_verdict": "egress:refuse",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "before_prepare",
+      "driver_write_count": 1,
+      "journal_state": "present",
+      "name": "crash_before_prepare",
+      "outcome": "restart_wrote",
+      "proposal": "kill at before_prepare, restart same command_id",
+      "semantic_verdict": "n/a",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "after_prepare_before_write",
+      "driver_write_count": 0,
+      "journal_state": "present",
+      "name": "crash_after_prepare_before_write",
+      "outcome": "no_retry",
+      "proposal": "kill at after_prepare_before_write, restart same command_id",
+      "semantic_verdict": "n/a",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "during_write",
+      "driver_write_count": 1,
+      "journal_state": "present",
+      "name": "crash_during_write",
+      "outcome": "no_retry",
+      "proposal": "kill at during_write, restart same command_id",
+      "semantic_verdict": "n/a",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "after_write_before_ack",
+      "driver_write_count": 1,
+      "journal_state": "present",
+      "name": "crash_after_write_before_ack",
+      "outcome": "no_retry",
+      "proposal": "kill at after_write_before_ack, restart same command_id",
+      "semantic_verdict": "n/a",
+      "unauthorized_write": false
+    },
+    {
+      "authority_transition": "after_ack",
+      "driver_write_count": 1,
+      "journal_state": "present",
+      "name": "crash_after_ack",
+      "outcome": "no_retry",
+      "proposal": "kill at after_ack, restart same command_id",
+      "semantic_verdict": "n/a",
+      "unauthorized_write": false
+    }
+  ],
+  "direct_device_open_attempts": 1,
+  "direct_device_open_succeeded": 0,
+  "duplicate_writes_after_restart": 0,
+  "hostile_cases": 25,
+  "journal_continuity_failures_detected": 8,
+  "refused_before_authorization": 13,
+  "refused_before_driver_egress": 10,
+  "schema": "realityos.hil_proof/1",
+  "unauthorized_driver_writes": 0,
+  "unresolved_trust_assumptions": [
+    "same-UID chmod or /proc/<pid>/fd can recover a mode-000 log",
+    "root can open any endpoint",
+    "journal+seal is tamper-evident, not authenticated or WORM",
+    "independent STO/SS1 / safety PLC is a named hole",
+    "sensor samples are still caller-supplied",
+    "far-future caller now_s is not a trusted-clock reject (observed outcome recorded)",
+    "paired restore of an older journal+seal is indistinguishable from that earlier valid tip"
+  ],
+  "valid_commands": 1,
+  "valid_driver_writes": 1
+}

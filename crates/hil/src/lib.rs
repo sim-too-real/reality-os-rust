@@ -336,13 +336,38 @@ pub fn serve_forever(root: &Path, first_online: bool, now_s: f64) -> anyhow::Res
     let _ = std::fs::remove_file(&sock);
     let listener = UnixListener::bind(&sock)?;
     for stream in listener.incoming() {
-        let mut stream = stream?;
+        let mut stream = match stream {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
         let mut line = String::new();
-        BufReader::new(&stream).read_line(&mut line)?;
+        if BufReader::new(&stream).read_line(&mut line).is_err() {
+            continue;
+        }
         if line.trim().is_empty() {
             continue;
         }
-        let req: HilRequest = serde_json::from_str(line.trim())?;
+        let req = match serde_json::from_str::<HilRequest>(line.trim()) {
+            Ok(r) => r,
+            Err(e) => {
+                let resp = HilResponse {
+                    ok: false,
+                    stage: "protocol".into(),
+                    status: "refuse".into(),
+                    violations: vec![format!("bad_request:{e}")],
+                    driver_writes: auth.driver_writes(),
+                    metal: false,
+                    ..HilResponse::default()
+                };
+                let _ = writeln!(
+                    stream,
+                    "{}",
+                    serde_json::to_string(&resp).unwrap_or_default()
+                );
+                let _ = stream.flush();
+                continue;
+            }
+        };
         if req.op == "shutdown" {
             let resp = auth.ok_status("shutdown");
             writeln!(stream, "{}", serde_json::to_string(&resp)?)?;
@@ -362,6 +387,15 @@ pub fn call(root: impl AsRef<Path>, req: &HilRequest) -> anyhow::Result<HilRespo
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line)?;
     Ok(serde_json::from_str(line.trim())?)
+}
+
+/// Send a raw JSON line. Used for NaN/Infinity tokens serde cannot emit.
+pub fn call_raw(root: impl AsRef<Path>, line: &str) -> anyhow::Result<HilResponse> {
+    let mut stream = UnixStream::connect(ipc_path(root))?;
+    writeln!(stream, "{line}")?;
+    let mut resp = String::new();
+    BufReader::new(stream).read_line(&mut resp)?;
+    Ok(serde_json::from_str(resp.trim())?)
 }
 
 pub fn wait_for_ipc(root: impl AsRef<Path>, timeout_ms: u64) -> bool {
