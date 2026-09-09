@@ -216,10 +216,6 @@ impl MetalAuthority {
                 ],
             );
         }
-        self.persist_freshness(
-            Some(self.session.governor.last_device_capture_s()),
-            Some(self.session.governor.authority_now_s()),
-        );
         self.next_sequence = self.next_sequence.saturating_add(1);
         let now = self.session.governor.authority_now_s();
         let mut dreq = DecideRequest::new(
@@ -255,6 +251,14 @@ impl MetalAuthority {
         };
         let cid = issued.command_id().to_string();
         let out = self.session.dispatch_issued(issued, &ActionParams::empty());
+        // prepare/consume/emit fsync after the dispatch tick. Refresh now so
+        // the next propose (nudge) does not inherit that gap. A miss here
+        // cannot be caught up.
+        let _ = self.pet_watchdog();
+        self.persist_freshness(
+            Some(self.session.governor.last_device_capture_s()),
+            Some(self.session.governor.authority_now_s()),
+        );
         let mut resp = MetalResponse {
             ok: out.ok,
             executed: out.executed,
