@@ -56,16 +56,18 @@ impl Default for GovernorConfig {
 
 pub struct RuntimeGovernor<P: Plant> {
     pub identity: RuntimeIdentity,
-    pub plant: P,
-    pub ledger: CommandLedger,
-    pub config: GovernorConfig,
-    pub envelope: Option<DriverEnvelopePack>,
-    pub last_heartbeat_s: f64,
-    pub last_sensor_s: f64,
-    pub expected_sensor_packet_hash: Option<String>,
-    pub signing_key: Option<Vec<u8>>,
+    plant: P,
+    ledger: CommandLedger,
+    config: GovernorConfig,
+    envelope: Option<DriverEnvelopePack>,
+    last_heartbeat_s: f64,
+    last_sensor_s: f64,
+    expected_sensor_packet_hash: Option<String>,
+    signing_key: Option<Vec<u8>>,
     latch: EstopLatch,
     traces: Vec<RuntimeTrace>,
+    watchdog_period_s: f64,
+    last_watchdog_s: f64,
 }
 
 impl<P: Plant> RuntimeGovernor<P> {
@@ -82,7 +84,71 @@ impl<P: Plant> RuntimeGovernor<P> {
             signing_key: None,
             latch: EstopLatch::default(),
             traces: Vec::new(),
+            watchdog_period_s: 0.05,
+            last_watchdog_s: 0.0,
         }
+    }
+
+    pub fn plant(&self) -> &P {
+        &self.plant
+    }
+
+    pub fn plant_mut(&mut self) -> &mut P {
+        &mut self.plant
+    }
+
+    pub fn ledger(&self) -> &CommandLedger {
+        &self.ledger
+    }
+
+    pub fn ledger_mut(&mut self) -> &mut CommandLedger {
+        &mut self.ledger
+    }
+
+    pub fn config(&self) -> &GovernorConfig {
+        &self.config
+    }
+
+    pub fn config_mut(&mut self) -> &mut GovernorConfig {
+        &mut self.config
+    }
+
+    pub fn envelope(&self) -> Option<&DriverEnvelopePack> {
+        self.envelope.as_ref()
+    }
+
+    pub fn envelope_mut(&mut self) -> Option<&mut DriverEnvelopePack> {
+        self.envelope.as_mut()
+    }
+
+    pub fn set_envelope(&mut self, env: DriverEnvelopePack) {
+        self.envelope = Some(env);
+    }
+
+    pub fn set_signing_key(&mut self, key: Option<Vec<u8>>) {
+        self.signing_key = key;
+    }
+
+    pub fn last_heartbeat_s(&self) -> f64 {
+        self.last_heartbeat_s
+    }
+
+    pub fn last_sensor_s(&self) -> f64 {
+        self.last_sensor_s
+    }
+
+    /// Software supervisor. Not an independent hardware watchdog.
+    pub fn watchdog_tick(&mut self, now_s: f64) -> RuntimeTrace {
+        if !now_s.is_finite() {
+            return self.engage_estop("watchdog_non_finite_time", 0.0);
+        }
+        if self.last_watchdog_s > 0.0
+            && (now_s - self.last_watchdog_s) > self.watchdog_period_s * 2.0
+        {
+            return self.engage_estop("software_watchdog_miss", now_s);
+        }
+        self.last_watchdog_s = now_s;
+        self.emit(RuntimeTrace::new(true, "watchdog_tick", now_s))
     }
 
     pub fn traces(&self) -> &[RuntimeTrace] {
@@ -275,6 +341,15 @@ impl<P: Plant> RuntimeGovernor<P> {
             &bind,
         );
         let ok = result.ok && result.executed;
+        if result.outcome == realityos_kernel::CommandOutcome::Unknown {
+            self.latch.abort_latched = true;
+            self.latch.reason = Some("unknown_outcome".into());
+            return self.emit(
+                RuntimeTrace::new(false, "driver_write_unknown", now_s)
+                    .with_command(result.command_id)
+                    .with_violations(result.violations),
+            );
+        }
         if !ok
             && result
                 .violations

@@ -1,0 +1,5 @@
+error[E0425]: cannot find function `with_certified_write` in crate `realityos_plant`
+ --> tests/ui/forbid_certified_write.rs:2:30
+  |
+2 |     let _ = realityos_plant::with_certified_write(|| 1);
+  |                              ^^^^^^^^^^^^^^^^^^^^ not found in `realityos_plant`

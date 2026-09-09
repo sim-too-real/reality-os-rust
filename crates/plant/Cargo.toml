@@ -16,5 +16,12 @@ sha2.workspace = true
 hex.workspace = true
 hmac.workspace = true
 
+[features]
+default = []
+mujoco = []
+
+[dev-dependencies]
+trybuild = "1"
+
 [lints]
 workspace = true

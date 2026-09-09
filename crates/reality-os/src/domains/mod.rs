@@ -35,8 +35,7 @@ pub struct WorldView {
     pub q_max: Vec<f64>,
     pub contact_force_n: Option<f64>,
     pub body_region: Option<BodyRegion>,
-    pub pixels_present: bool,
-    pub scene_compiled: bool,
+    pub observation: Option<realityos_kernel::ObservationEvidence>,
     pub pose_std_m: Option<f64>,
     pub mass_kg: Option<f64>,
     pub speed_m_s: Option<f64>,
@@ -104,7 +103,7 @@ impl DomainRegistry {
             "stop" | "halt" | "estop_distance" => "stop_distance",
             "energy" | "ke" => "energy_envelope",
             "motor" | "current" => "motor_torque",
-            _ => "actuator_envelope",
+            _ => return None,
         };
         self.plugins.contains_key(mapped).then_some(mapped)
     }

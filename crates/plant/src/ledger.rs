@@ -112,6 +112,7 @@ impl CommandLedger {
             return self.mark_unreadable("journal_not_a_file");
         }
         if !path.is_file() {
+            self.chain_hash = GENESIS.into();
             return Ok(());
         }
         let file = match fs::File::open(&path) {
@@ -119,7 +120,7 @@ impl CommandLedger {
             Err(e) => return self.mark_unreadable(&format!("journal_unreadable:{e}")),
         };
         let reader = BufReader::new(file);
-        let mut last_chain = GENESIS.to_string();
+        let mut expected_prev = GENESIS.to_string();
         let mut last_seq = 0_i64;
         let mut seen = HashSet::new();
         let mut loaded = Vec::new();
@@ -136,12 +137,26 @@ impl CommandLedger {
                 Ok(v) => v,
                 Err(_) => return self.mark_unreadable("journal_corrupt"),
             };
-            if !rec.is_object() {
+            let Some(obj) = rec.as_object() else {
                 return self.mark_unreadable("journal_corrupt");
+            };
+            let stored_prev = obj.get("prev_hash").and_then(Value::as_str).unwrap_or("");
+            if stored_prev != expected_prev {
+                return self.mark_unreadable("journal_prev_hash_mismatch");
+            }
+            let mut body = obj.clone();
+            body.remove("chain_hash");
+            let raw = canonical_json(&Value::Object(body.clone()));
+            let inner = hex::encode(Sha256::digest(raw.as_bytes()));
+            let recomputed =
+                hex::encode(Sha256::digest(format!("{expected_prev}{inner}").as_bytes()));
+            let stored_chain = obj.get("chain_hash").and_then(Value::as_str).unwrap_or("");
+            if stored_chain != recomputed {
+                return self.mark_unreadable("journal_chain_hash_mismatch");
             }
             loaded.push(rec.clone());
             let kind = rec.get("kind").and_then(Value::as_str).unwrap_or("consume");
-            if kind == "consume" {
+            if matches!(kind, "consume" | "prepare" | "unknown_outcome") {
                 if let Some(cid) = rec.get("command_id").and_then(Value::as_str) {
                     if !cid.is_empty() {
                         seen.insert(cid.to_string());
@@ -153,14 +168,12 @@ impl CommandLedger {
                     }
                 }
             }
-            if let Some(ch) = rec.get("chain_hash").and_then(Value::as_str) {
-                last_chain = ch.to_string();
-            }
+            expected_prev = recomputed;
         }
         self.events = loaded;
         self.seen_ids = seen;
         self.last_sequence = last_seq;
-        self.chain_hash = last_chain;
+        self.chain_hash = expected_prev;
         Ok(())
     }
 
@@ -190,6 +203,8 @@ impl CommandLedger {
                 .open(path)
                 .map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
             writeln!(fh, "{rec}").map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
+            fh.sync_all()
+                .map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
         }
         self.chain_hash = chain;
         self.events.push(rec.clone());
@@ -264,13 +279,31 @@ impl CommandLedger {
         v
     }
 
-    pub fn consume(&mut self, command: &dyn ActuationCommand) -> PlantResult<Value> {
+    pub fn prepare(&mut self, command: &dyn ActuationCommand) -> PlantResult<Value> {
         let cid = command.command_id().to_string();
-        if !cid.is_empty() {
-            self.seen_ids.insert(cid.clone());
+        if cid.is_empty() {
+            return Err(PlantError::refused("missing command_id"));
         }
+        if self.seen_ids.contains(&cid) {
+            return Err(PlantError::refused("replayed command_id"));
+        }
+        self.seen_ids.insert(cid.clone());
         if command.sequence() > self.last_sequence {
             self.last_sequence = command.sequence();
+        }
+        let mut body = Map::new();
+        body.insert("kind".into(), json!("prepare"));
+        body.insert("command_id".into(), json!(cid));
+        body.insert("sequence".into(), json!(command.sequence()));
+        body.insert("release_hash".into(), json!(command.release_hash()));
+        body.insert("payload_hash".into(), json!(command.payload_hash()));
+        self.write_record(body)
+    }
+
+    pub fn ack(&mut self, command: &dyn ActuationCommand) -> PlantResult<Value> {
+        let cid = command.command_id();
+        if !self.seen_ids.contains(cid) {
+            return Err(PlantError::refused("ack_without_prepare"));
         }
         let mut body = Map::new();
         body.insert("kind".into(), json!("consume"));
@@ -279,6 +312,23 @@ impl CommandLedger {
         body.insert("release_hash".into(), json!(command.release_hash()));
         body.insert("payload_hash".into(), json!(command.payload_hash()));
         self.write_record(body)
+    }
+
+    pub fn mark_unknown(&mut self, command: &dyn ActuationCommand) -> PlantResult<Value> {
+        let cid = command.command_id();
+        if !cid.is_empty() {
+            self.seen_ids.insert(cid.to_string());
+        }
+        let mut body = Map::new();
+        body.insert("kind".into(), json!("unknown_outcome"));
+        body.insert("command_id".into(), json!(cid));
+        body.insert("sequence".into(), json!(command.sequence()));
+        self.write_record(body)
+    }
+
+    pub fn consume(&mut self, command: &dyn ActuationCommand) -> PlantResult<Value> {
+        self.prepare(command)?;
+        self.ack(command)
     }
 
     pub fn continuity_state(&self, serial: &str) -> ContinuityState {

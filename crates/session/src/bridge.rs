@@ -32,7 +32,7 @@ impl HardwareControlBridge<HardwareBackedPlant<SimulatedHardwarePort>> {
         args.calibration_id = "HARNESS-CAL-001".into();
         args.design_content_hash = "harness_design_content".into();
         let mut session = RuntimeSession::start(args, plant, now_s)?;
-        let mut ident = session.governor.plant.probe_identity();
+        let mut ident = session.governor.plant_mut().probe_identity();
         ident.metal = false;
         let mut events = EventStore::new();
         let _ = events.append(
@@ -81,7 +81,7 @@ impl<P: Plant> HardwareControlBridge<P> {
     }
 
     pub fn dispatch(&mut self, command: CertifiedCommand, now_s: f64) -> DispatchResult {
-        let corr = CorrelationId::from_command(&command.command_id, command.sequence);
+        let corr = CorrelationId::from_command(command.command_id(), command.sequence_value());
         let out = self
             .session
             .bind_and_dispatch(command, &ActionParams::empty(), now_s);
@@ -107,8 +107,8 @@ impl<P: Plant> HardwareControlBridge<P> {
         snap.release_hash = self.session.governor.identity.release_hash.as_str().into();
         snap.serial = self.session.governor.identity.serial_str().into();
         snap.estop = self.session.governor.estop();
-        snap.last_heartbeat_s = self.session.governor.last_heartbeat_s;
-        snap.last_sensor_s = self.session.governor.last_sensor_s;
+        snap.last_heartbeat_s = self.session.governor.last_heartbeat_s();
+        snap.last_sensor_s = self.session.governor.last_sensor_s();
         snap.last_sensor_hash = self.session.last_sensor_hash().map(str::to_string);
         snap.writes = self
             .events

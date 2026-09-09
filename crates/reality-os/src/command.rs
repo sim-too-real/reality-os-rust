@@ -1,50 +1,63 @@
-use realityos_kernel::{DecisionStatus, KernelError, KernelResult};
+use realityos_kernel::{deadline_from_ttl, DecisionStatus, KernelError, KernelResult, MonoTime};
 use realityos_plant::ActuationCommand;
 use serde::{Deserialize, Serialize};
 
 use crate::certificate::Certificate;
 
 /// The ONE object that may cross from Reality OS into a Governor/driver.
+/// Immutable after construction. Narrowing yields a derived command.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CertifiedCommand {
-    pub command_id: String,
-    pub sequence: i64,
-    pub issued_at_s: f64,
-    pub expires_at_s: f64,
-    pub certificate: Certificate,
-    pub allowed_action: Vec<f64>,
+    command_id: String,
+    sequence: i64,
+    issued_at_s: f64,
+    expires_at_s: f64,
+    certificate: Certificate,
+    allowed_action: Vec<f64>,
     #[serde(default)]
-    pub release_hash: String,
+    release_hash: String,
     #[serde(default)]
-    pub as_built_hash: String,
+    as_built_hash: String,
     #[serde(default)]
-    pub calibration_ids: Vec<String>,
+    calibration_ids: Vec<String>,
     #[serde(default)]
-    pub acknowledged: bool,
+    acknowledged: bool,
     #[serde(default)]
-    pub issuer_allowed_action: Vec<f64>,
+    issuer_allowed_action: Vec<f64>,
     #[serde(default)]
-    pub issuer_certificate_status: String,
+    issuer_certificate_status: String,
     #[serde(default)]
-    pub issuer_physical_reason: String,
+    issuer_physical_reason: String,
     #[serde(default)]
-    pub sensor_snapshot_id: String,
+    sensor_snapshot_id: String,
     #[serde(default)]
-    pub sensor_packet_hash: String,
+    sensor_packet_hash: String,
     #[serde(default)]
-    pub belief_snapshot_id: String,
+    belief_snapshot_id: String,
     #[serde(default)]
-    pub payload_hash: String,
+    payload_hash: String,
     #[serde(default)]
-    pub signature: String,
+    signature: String,
     #[serde(default)]
-    pub signer: String,
+    signer: String,
     #[serde(default)]
-    pub signing_scheme: String,
+    signing_scheme: String,
     #[serde(default)]
-    pub actuator_ids: Vec<String>,
+    actuator_ids: Vec<String>,
     #[serde(default)]
-    pub waypoints: Vec<Vec<f64>>,
+    waypoints: Vec<Vec<f64>>,
+    #[serde(default)]
+    parent_payload_hash: String,
+    #[serde(default)]
+    mode: String,
+    #[serde(default)]
+    frame_id: String,
+    #[serde(default)]
+    units: String,
+    #[serde(default)]
+    policy_hash: String,
+    #[serde(default)]
+    config_hash: String,
 }
 
 impl CertifiedCommand {
@@ -60,9 +73,9 @@ impl CertifiedCommand {
         if command_id.trim().is_empty() {
             return Err(KernelError::validation("command.command_id", "empty"));
         }
-        if !now_s.is_finite() || !ttl_s.is_finite() {
-            return Err(KernelError::validation("command.time", "non-finite"));
-        }
+        let now = MonoTime::from_secs(now_s)
+            .map_err(|_| KernelError::validation("command.time", "non-finite"))?;
+        let expires = deadline_from_ttl(now, ttl_s)?;
         if allowed_action.iter().any(|x| !x.is_finite()) {
             return Err(KernelError::validation(
                 "command.allowed_action",
@@ -74,8 +87,8 @@ impl CertifiedCommand {
         Ok(Self {
             command_id,
             sequence,
-            issued_at_s: now_s,
-            expires_at_s: now_s + ttl_s,
+            issued_at_s: now.secs(),
+            expires_at_s: expires.secs(),
             certificate,
             issuer_allowed_action: allowed_action.clone(),
             allowed_action,
@@ -94,15 +107,75 @@ impl CertifiedCommand {
             signing_scheme: String::new(),
             actuator_ids: Vec::new(),
             waypoints: Vec::new(),
+            parent_payload_hash: String::new(),
+            mode: String::new(),
+            frame_id: String::new(),
+            units: String::new(),
+            policy_hash: String::new(),
+            config_hash: String::new(),
         })
     }
 
+    pub fn command_id(&self) -> &str {
+        &self.command_id
+    }
+    pub fn sequence_value(&self) -> i64 {
+        self.sequence
+    }
+    pub fn certificate(&self) -> &Certificate {
+        &self.certificate
+    }
+    pub fn allowed_action_vec(&self) -> &[f64] {
+        &self.allowed_action
+    }
+    pub fn is_acknowledged(&self) -> bool {
+        self.acknowledged
+    }
+    pub fn actuator_ids(&self) -> &[String] {
+        &self.actuator_ids
+    }
+    pub fn sensor_packet_hash(&self) -> &str {
+        &self.sensor_packet_hash
+    }
+    pub fn release_hash(&self) -> &str {
+        &self.release_hash
+    }
     pub fn is_expired(&self, now_s: f64) -> bool {
-        now_s > self.expires_at_s
+        now_s.is_finite() && now_s > self.expires_at_s
     }
 
-    pub fn sign(&mut self, key: &[u8]) {
-        let hash = realityos_plant::command_payload_hash(self);
+    pub fn with_identity(
+        mut self,
+        release_hash: impl Into<String>,
+        as_built: impl Into<String>,
+        calibration_id: impl Into<String>,
+    ) -> Self {
+        self.release_hash = release_hash.into();
+        self.as_built_hash = as_built.into();
+        let cal = calibration_id.into();
+        if !cal.is_empty() {
+            self.calibration_ids = vec![cal];
+        }
+        self
+    }
+
+    pub fn with_sensor_packet_hash(mut self, hash: impl Into<String>) -> Self {
+        self.sensor_packet_hash = hash.into();
+        self
+    }
+
+    pub fn with_actuator_ids(mut self, ids: Vec<String>) -> Self {
+        self.actuator_ids = ids;
+        self
+    }
+
+    pub fn with_mode(mut self, mode: impl Into<String>) -> Self {
+        self.mode = mode.into();
+        self
+    }
+
+    pub fn sign(mut self, key: &[u8]) -> Self {
+        let hash = realityos_plant::command_payload_hash(&self);
         self.payload_hash = hash.clone();
         self.signature = realityos_plant::sign_payload(key, &hash);
         self.signing_scheme = realityos_plant::SIGNING_SCHEME.into();
@@ -110,19 +183,21 @@ impl CertifiedCommand {
         if self.issuer_allowed_action.is_empty() {
             self.issuer_allowed_action = self.allowed_action.clone();
         }
+        self
     }
 
-    pub fn acknowledge(&mut self) {
+    pub fn acknowledge(mut self) -> Self {
         self.acknowledged = true;
+        self
     }
 
     /// Bind empty identity fields only. Never overwrite a foreign hash.
     pub fn bind_identity(
-        &mut self,
+        mut self,
         release_hash: &str,
         as_built: &str,
         calibration_id: &str,
-    ) -> Result<(), Vec<String>> {
+    ) -> Result<Self, Vec<String>> {
         let mut errs = Vec::new();
         if !self.release_hash.is_empty() && self.release_hash != release_hash {
             errs.push("foreign_release_hash".into());
@@ -149,7 +224,7 @@ impl CertifiedCommand {
         if self.calibration_ids.is_empty() && !calibration_id.is_empty() {
             self.calibration_ids = vec![calibration_id.into()];
         }
-        Ok(())
+        Ok(self)
     }
 }
 
@@ -236,9 +311,28 @@ impl ActuationCommand for CertifiedCommand {
             Some(&self.waypoints)
         }
     }
+    fn parent_payload_hash(&self) -> &str {
+        &self.parent_payload_hash
+    }
+    fn mode(&self) -> &str {
+        &self.mode
+    }
+    fn frame_id(&self) -> &str {
+        &self.frame_id
+    }
+    fn units(&self) -> &str {
+        &self.units
+    }
+    fn policy_hash(&self) -> &str {
+        &self.policy_hash
+    }
+    fn config_hash(&self) -> &str {
+        &self.config_hash
+    }
 }
 
 /// Governor may allow, narrow, or abort — never invent a new plan or upgrade a refuse.
+/// Returns a derived command linked by parent hash. Does not mutate the signed parent.
 pub fn narrow_certified_command(
     command: CertifiedCommand,
     status: DecisionStatus,
@@ -282,11 +376,8 @@ pub fn narrow_certified_command(
                     "must preserve action dimensionality",
                 ));
             }
-            let widened = new_action
-                .iter()
-                .zip(command.allowed_action.iter())
-                .any(|(v, old)| !v.is_finite() || v.abs() > old.abs() + 1e-12);
-            if widened {
+            if !realityos_plant::action_within_issuer_envelope(&new_action, &command.allowed_action)
+            {
                 return Err(KernelError::validation(
                     "narrow.action",
                     "Governor modify may only narrow the certified action envelope",
@@ -297,6 +388,11 @@ pub fn narrow_certified_command(
         _ => unreachable!(),
     };
 
+    let parent = if command.payload_hash.is_empty() {
+        realityos_plant::command_payload_hash(&command)
+    } else {
+        command.payload_hash.clone()
+    };
     let mut next = command;
     if next.issuer_allowed_action.is_empty() {
         next.issuer_allowed_action = next.allowed_action.clone();
@@ -307,10 +403,34 @@ pub fn narrow_certified_command(
     if next.issuer_physical_reason.is_empty() {
         next.issuer_physical_reason = next.certificate.physical_reason.clone();
     }
+    next.parent_payload_hash = parent;
     next.allowed_action = new_action;
     next.certificate.status = status;
     if let Some(r) = reason {
         next.certificate.physical_reason = r;
     }
+    next.payload_hash.clear();
+    next.signature.clear();
     Ok(next)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn issue_rejects_non_positive_ttl() {
+        let cert = Certificate::new(DecisionStatus::Allow, "ok");
+        assert!(CertifiedCommand::issue("c", 1, 1.0, 0.0, cert.clone(), vec![0.1]).is_err());
+        assert!(CertifiedCommand::issue("c", 1, 1.0, f64::NAN, cert, vec![0.1]).is_err());
+    }
+
+    #[test]
+    fn narrow_rejects_sign_reversal() {
+        let cert = Certificate::new(DecisionStatus::Allow, "ok");
+        let cmd = CertifiedCommand::issue("c", 1, 0.0, 10.0, cert, vec![0.5]).unwrap();
+        let err = narrow_certified_command(cmd, DecisionStatus::Modify, Some(vec![-0.1]), None)
+            .unwrap_err();
+        assert!(err.to_string().contains("only narrow"));
+    }
 }

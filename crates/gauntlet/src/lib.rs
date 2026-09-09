@@ -1,7 +1,7 @@
 //! Parameterized safety/control gauntlets. One function = many scenarios.
 
 use realityos_core::{Certificate, CertifiedCommand, DecideRequest, Intent, RealityOs, WorldView};
-use realityos_embodiment::{catalog as robots, Environment, RobotModel};
+use realityos_embodiment::{catalog as robots, EmbodimentGraph, Environment};
 use realityos_governor::SafeState;
 use realityos_kernel::DecisionStatus;
 use realityos_plant::{ActionParams, SimPlant};
@@ -71,7 +71,7 @@ impl Fault {
     }
 }
 
-fn plant_for(robot: &RobotModel) -> SimPlant {
+fn plant_for(robot: &EmbodimentGraph) -> SimPlant {
     let peak = robot.tau_max().into_iter().fold(1.0_f64, f64::max);
     SimPlant::new(&robot.id, robot.dof().max(1), peak)
 }
@@ -85,7 +85,7 @@ fn allow_cmd(
     cal: &str,
     ack: bool,
 ) -> CertifiedCommand {
-    let mut c = CertifiedCommand::issue(
+    let c = CertifiedCommand::issue(
         id,
         seq,
         now,
@@ -93,14 +93,16 @@ fn allow_cmd(
         Certificate::new(DecisionStatus::Allow, "gauntlet"),
         action,
     )
-    .unwrap();
-    c.release_hash = release.into();
-    c.calibration_ids = vec![cal.into()];
-    c.acknowledged = ack;
-    c
+    .unwrap()
+    .with_identity(release, "", cal);
+    if ack {
+        c.acknowledge()
+    } else {
+        c
+    }
 }
 
-fn session(robot: &RobotModel, now: f64) -> RuntimeSession<SimPlant> {
+fn session(robot: &EmbodimentGraph, now: f64) -> RuntimeSession<SimPlant> {
     let plant = plant_for(robot);
     let mut args = StartArgs::simulation(format!("rel-{}", robot.id));
     args.max_action_abs = robot.tau_max().into_iter().fold(1.0, f64::max);
@@ -118,7 +120,7 @@ pub fn governor_matrix() -> Vec<CaseResult> {
             for fault in Fault::ALL {
                 let name = format!("{}|{}|{}", robot.id, env.id, fault.as_str());
                 let mut sess = session(&robot, now);
-                sess.governor.envelope.as_mut().unwrap().max_action_abs =
+                sess.governor.envelope_mut().unwrap().max_action_abs =
                     robot.tau_max().into_iter().fold(1.0, f64::max);
                 let n = robot.dof().max(1);
                 let mut action = vec![0.05; n];
@@ -137,23 +139,64 @@ pub fn governor_matrix() -> Vec<CaseResult> {
                         sess.governor.engage_estop("gauntlet", now);
                     }
                     Fault::StaleSensor => {
-                        sess.governor.config.require_sensor_before_write = true;
-                        sess.governor.config.sensor_stale_s = 0.01;
+                        sess.governor.config_mut().require_sensor_before_write = true;
+                        sess.governor.config_mut().sensor_stale_s = 0.01;
                         sess.governor.mark_sensor(now - 10.0, Some("old".into()));
                     }
                     Fault::Replay => {
                         let _ = sess.bind_and_dispatch(cmd.clone(), &ActionParams::empty(), now);
                     }
-                    Fault::Unacked => cmd.acknowledged = false,
+                    Fault::Unacked => {
+                        cmd = allow_cmd(
+                            "g-1",
+                            1,
+                            now,
+                            action.clone(),
+                            sess.governor.identity.release_hash.as_str(),
+                            sess.governor.identity.calibration_id_str(),
+                            false,
+                        );
+                    }
                     Fault::RefuseCert => {
-                        cmd.certificate.status = DecisionStatus::Refuse;
+                        cmd = CertifiedCommand::issue(
+                            "g-1",
+                            1,
+                            now,
+                            30.0,
+                            Certificate::new(DecisionStatus::Refuse, "gauntlet"),
+                            action.clone(),
+                        )
+                        .unwrap()
+                        .with_identity(
+                            sess.governor.identity.release_hash.as_str(),
+                            "",
+                            sess.governor.identity.calibration_id_str(),
+                        )
+                        .acknowledge();
                     }
                     Fault::Envelope => {
                         action = vec![1e6; n];
-                        cmd.allowed_action = action;
-                        cmd.issuer_allowed_action = cmd.allowed_action.clone();
+                        cmd = allow_cmd(
+                            "g-1",
+                            1,
+                            now,
+                            action.clone(),
+                            sess.governor.identity.release_hash.as_str(),
+                            sess.governor.identity.calibration_id_str(),
+                            true,
+                        );
                     }
-                    Fault::ForeignHash => cmd.release_hash = "foreign-rel".into(),
+                    Fault::ForeignHash => {
+                        cmd = allow_cmd(
+                            "g-1",
+                            1,
+                            now,
+                            action.clone(),
+                            "foreign-rel",
+                            sess.governor.identity.calibration_id_str(),
+                            true,
+                        );
+                    }
                     Fault::Hold => sess.latch_safe_state(SafeState::Hold, "gauntlet"),
                     Fault::GiftedPlace => {
                         // exercised in reality_os_matrix; governor still sees a hold cmd
@@ -164,16 +207,12 @@ pub fn governor_matrix() -> Vec<CaseResult> {
                         let mut ros = RealityOs::new();
                         let d = ros.decide(DecideRequest::new(
                             Intent::language("place", "place"),
-                            WorldView {
-                                pixels_present: false,
-                                ..WorldView::default()
-                            },
+                            WorldView::default(),
                             now,
                         ));
                         !d.allowed
                     }
                     Fault::Unacked => {
-                        cmd.acknowledged = false;
                         let t = sess
                             .governor
                             .write_driver(&cmd, &ActionParams::empty(), now);
@@ -217,8 +256,7 @@ pub fn reality_os_matrix() -> Vec<CaseResult> {
                     q: vec![0.0; robot.dof()],
                     q_min: robot.q_min(),
                     q_max: robot.q_max(),
-                    pixels_present: verb != "place",
-                    scene_compiled: verb != "place",
+                    observation: None,
                     speed_m_s: Some(0.1),
                     decel_m_s2: Some(env.g_m_s2.max(0.1)),
                     max_stop_m: Some(10.0),
@@ -237,7 +275,7 @@ pub fn reality_os_matrix() -> Vec<CaseResult> {
                 }
                 let mut ros = RealityOs::new();
                 let d = ros.decide(DecideRequest::new(Intent::language(verb, verb), world, now));
-                let expect_block = verb == "place";
+                let expect_block = matches!(verb, "place" | "walk");
                 let blocked = !d.allowed;
                 out.push(CaseResult {
                     name: format!("ros|{}|{}|{verb}", robot.id, env.id),

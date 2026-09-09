@@ -1,9 +1,14 @@
 //! Robot-agnostic bodies + environment-agnostic worlds.
-//! Joint limits from robot files. Meshes/metal not imported.
+//! `EmbodimentGraph` is the canonical body. Robot product names are fixture IDs only.
 
+use realityos_kernel::{capabilities_for_kind, Capability};
 use realityos_physics::{in_limits, G0};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+mod world;
+pub use world::{OperatingEnvelope, ScenarioSpec, SurfaceBelief, WorldBelief};
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum EmbodimentError {
@@ -25,14 +30,50 @@ pub struct JointSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RobotModel {
+pub struct LinkSpec {
+    pub name: String,
+    pub parent_joint: Option<String>,
+    pub mass_kg: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrameSpec {
+    pub name: String,
+    pub parent: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CapabilityManifest {
+    pub items: Vec<Capability>,
+}
+
+impl CapabilityManifest {
+    pub fn from_kind(kind: &str) -> Self {
+        Self {
+            items: capabilities_for_kind(kind),
+        }
+    }
+
+    pub fn has(&self, cap: Capability) -> bool {
+        self.items.contains(&cap)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbodimentGraph {
     pub id: String,
     pub kind: String,
     pub source: String,
+    pub source_hash: String,
     pub joints: Vec<JointSpec>,
+    pub links: Vec<LinkSpec>,
+    pub frames: Vec<FrameSpec>,
+    pub capabilities: CapabilityManifest,
+    #[serde(default)]
+    pub diagnostics: Vec<String>,
 }
 
-impl RobotModel {
+impl EmbodimentGraph {
     pub fn dof(&self) -> usize {
         self.joints.len()
     }
@@ -67,56 +108,66 @@ impl RobotModel {
         }
         Ok(())
     }
+
+    pub fn requires(&self, cap: Capability) -> bool {
+        self.capabilities.has(cap)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Environment {
     pub id: String,
     pub g_m_s2: f64,
-    pub mu: f64,
+    pub mu: Option<f64>,
     pub air_density_kg_m3: f64,
     pub note: String,
+    pub mu_assumed: bool,
 }
 
 impl Environment {
-    pub fn earth() -> Self {
+    fn with_assumed_mu(id: &str, g: f64, mu: f64, rho: f64, note: &str) -> Self {
         Self {
-            id: "earth_indoor".into(),
-            g_m_s2: G0,
-            mu: 0.6,
-            air_density_kg_m3: 1.225,
-            note: "standard g, dry indoor friction screen".into(),
+            id: id.into(),
+            g_m_s2: g,
+            mu: Some(mu),
+            air_density_kg_m3: rho,
+            note: format!("{note} [assumed mu={mu}, not an authority default]"),
+            mu_assumed: true,
         }
+    }
+
+    pub fn earth() -> Self {
+        Self::with_assumed_mu(
+            "earth_indoor",
+            G0,
+            0.6,
+            1.225,
+            "standard g, dry indoor friction screen",
+        )
     }
 
     pub fn moon() -> Self {
-        Self {
-            id: "moon".into(),
-            g_m_s2: 1.62,
-            mu: 0.4,
-            air_density_kg_m3: 0.0,
-            note: "lunar g; vacuum density; SIM screen".into(),
-        }
+        Self::with_assumed_mu(
+            "moon",
+            1.62,
+            0.4,
+            0.0,
+            "lunar g; vacuum density; SIM screen",
+        )
     }
 
     pub fn ice() -> Self {
-        Self {
-            id: "ice".into(),
-            g_m_s2: G0,
-            mu: 0.05,
-            air_density_kg_m3: 1.225,
-            note: "low Coulomb μ screen".into(),
-        }
+        Self::with_assumed_mu("ice", G0, 0.05, 1.225, "low Coulomb μ screen")
     }
 
     pub fn high_g() -> Self {
-        Self {
-            id: "high_g".into(),
-            g_m_s2: 20.0,
-            mu: 0.6,
-            air_density_kg_m3: 1.225,
-            note: "elevated g screen (not a planet claim)".into(),
-        }
+        Self::with_assumed_mu(
+            "high_g",
+            20.0,
+            0.6,
+            1.225,
+            "elevated g screen (not a planet claim)",
+        )
     }
 
     pub fn catalog() -> Vec<Self> {
@@ -124,11 +175,65 @@ impl Environment {
     }
 }
 
-pub fn parse_robot(json: &str) -> Result<RobotModel, EmbodimentError> {
-    serde_json::from_str(json).map_err(|e| EmbodimentError::Parse(e.to_string()))
+fn graph_from_model_json(raw: &str) -> Result<EmbodimentGraph, EmbodimentError> {
+    #[derive(Deserialize)]
+    struct Wire {
+        id: String,
+        kind: String,
+        source: String,
+        joints: Vec<JointSpec>,
+    }
+    let w: Wire = serde_json::from_str(raw).map_err(|e| EmbodimentError::Parse(e.to_string()))?;
+    if w.joints.is_empty() {
+        return Err(EmbodimentError::Parse("no joints".into()));
+    }
+    for j in &w.joints {
+        if !j.q_min.is_finite() || !j.q_max.is_finite() || j.q_min > j.q_max {
+            return Err(EmbodimentError::Parse(format!("invalid limits {}", j.name)));
+        }
+    }
+    let source_hash = hex::encode(Sha256::digest(raw.as_bytes()));
+    let mut links = Vec::new();
+    let mut frames = vec![FrameSpec {
+        name: "world".into(),
+        parent: String::new(),
+    }];
+    let mut parent = "world".to_string();
+    for j in &w.joints {
+        let link = format!("link_{}", j.name);
+        links.push(LinkSpec {
+            name: link.clone(),
+            parent_joint: Some(j.name.clone()),
+            mass_kg: None,
+        });
+        frames.push(FrameSpec {
+            name: j.name.clone(),
+            parent: parent.clone(),
+        });
+        parent = link;
+    }
+    let mut diagnostics = Vec::new();
+    if links.iter().any(|l| l.mass_kg.is_none()) {
+        diagnostics.push("inertia_unspecified".into());
+    }
+    Ok(EmbodimentGraph {
+        capabilities: CapabilityManifest::from_kind(&w.kind),
+        id: w.id,
+        kind: w.kind,
+        source: w.source,
+        source_hash,
+        joints: w.joints,
+        links,
+        frames,
+        diagnostics,
+    })
 }
 
-pub fn load_embedded(id: &str) -> Result<RobotModel, EmbodimentError> {
+pub fn parse_robot(json: &str) -> Result<EmbodimentGraph, EmbodimentError> {
+    graph_from_model_json(json)
+}
+
+pub fn load_embedded(id: &str) -> Result<EmbodimentGraph, EmbodimentError> {
     let raw = match id {
         "uniaxial" => include_str!("../../../robots/uniaxial.json"),
         "arm6" => include_str!("../../../robots/arm6.json"),
@@ -136,10 +241,10 @@ pub fn load_embedded(id: &str) -> Result<RobotModel, EmbodimentError> {
         "unitree_h1" => include_str!("../../../robots/unitree_h1.json"),
         other => return Err(EmbodimentError::UnknownRobot(other.into())),
     };
-    parse_robot(raw)
+    graph_from_model_json(raw)
 }
 
-pub fn catalog() -> Vec<RobotModel> {
+pub fn catalog() -> Vec<EmbodimentGraph> {
     ["uniaxial", "arm6", "wheeled", "unitree_h1"]
         .iter()
         .map(|id| load_embedded(id).expect("embedded robot json"))
@@ -155,10 +260,22 @@ mod tests {
         let r = load_embedded("unitree_h1").unwrap();
         assert_eq!(r.dof(), 19);
         assert!(r.joints.iter().any(|j| j.name == "left_knee"));
+        assert!(r.requires(Capability::FloatingBase));
+        assert!(!r.id.is_empty());
     }
 
     #[test]
-    fn environments_change_g() {
+    fn capability_queries_do_not_branch_on_fixture_id() {
+        let h1 = load_embedded("unitree_h1").unwrap();
+        let arm = load_embedded("arm6").unwrap();
+        assert!(h1.requires(Capability::FloatingBase));
+        assert!(arm.requires(Capability::SerialArm));
+        assert!(!arm.requires(Capability::FloatingBase));
+    }
+
+    #[test]
+    fn environments_change_g_and_mark_assumed_mu() {
         assert!(Environment::moon().g_m_s2 < Environment::earth().g_m_s2);
+        assert!(Environment::earth().mu_assumed);
     }
 }
