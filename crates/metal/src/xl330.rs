@@ -24,10 +24,10 @@ use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
     instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE,
     ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR, ADDR_MAX_POSITION_LIMIT,
-    ADDR_MIN_POSITION_LIMIT, ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE, ADDR_PROFILE_ACCEL,
-    ADDR_PROFILE_VELOCITY, ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE,
-    ADDR_VELOCITY_LIMIT, BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, OPERATING_MODE_POSITION,
-    STATUS_RETURN_ALL,
+    ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER,
+    ADDR_OPERATING_MODE, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY,
+    ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE, ADDR_VELOCITY_LIMIT,
+    BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, OPERATING_MODE_POSITION, STATUS_RETURN_ALL,
 };
 
 pub struct Xl330Driver {
@@ -59,6 +59,14 @@ pub struct Xl330Driver {
 
 impl Xl330Driver {
     pub fn open(cfg: MetalConfig, root: impl AsRef<Path>) -> io::Result<Self> {
+        Self::open_inner(cfg, root, true)
+    }
+
+    fn open_inner(
+        cfg: MetalConfig,
+        root: impl AsRef<Path>,
+        apply_limits: bool,
+    ) -> io::Result<Self> {
         let bus = root.as_ref().join(BUS_DIR);
         std::fs::create_dir_all(&bus)?;
         let _ = std::fs::set_permissions(&bus, std::fs::Permissions::from_mode(0o700));
@@ -106,7 +114,7 @@ impl Xl330Driver {
         };
         driver.connect_serial()?;
         driver.refresh_identity();
-        if driver.connected {
+        if driver.connected && apply_limits {
             driver
                 .apply_bench_limits()
                 .map_err(|e| io::Error::other(e.to_string()))?;
@@ -144,7 +152,7 @@ impl Xl330Driver {
                 let mut attempt = cfg.clone();
                 attempt.baud = baud;
                 attempt.servo_id = id;
-                match Self::open(attempt.clone(), root.as_ref()) {
+                match Self::open_inner(attempt.clone(), root.as_ref(), false) {
                     Ok(driver) => return Ok((driver, attempt)),
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Err(e),
                     Err(e) => {
@@ -160,7 +168,7 @@ impl Xl330Driver {
         // attempt after the scan has opened the tty — discover does not
         // retry a pair, so a single cold first ping would skip the real bus.
         let configured = cfg.clone();
-        match Self::open(configured.clone(), root.as_ref()) {
+        match Self::open_inner(configured.clone(), root.as_ref(), false) {
             Ok(driver) => Ok((driver, configured)),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(e),
             Err(e) => Err(last_err.unwrap_or(e)),
@@ -185,6 +193,10 @@ impl Xl330Driver {
 
     pub fn applied_drive_mode(&self) -> u8 {
         self.drive_mode
+    }
+
+    pub fn torque_is_enabled(&self) -> bool {
+        self.torque_enabled
     }
 
     pub fn measured(&self) -> MeasuredIdentity {
@@ -416,6 +428,29 @@ impl Xl330Driver {
         )?;
         // EEPROM writes can NAK the next instruction if we immediately continue.
         std::thread::sleep(Duration::from_millis(50));
+        let max_v = self
+            .read_reg(ADDR_MAX_VOLTAGE_LIMIT, 2)
+            .ok()
+            .and_then(|b| le_u16(&b))
+            .unwrap_or(70);
+        let min_v = self
+            .read_reg(ADDR_MIN_VOLTAGE_LIMIT, 2)
+            .ok()
+            .and_then(|b| le_u16(&b))
+            .unwrap_or(35);
+        let vin = self
+            .read_reg(ADDR_PRESENT_VOLTAGE, 2)
+            .ok()
+            .and_then(|b| le_u16(&b))
+            .unwrap_or(0);
+        if vin != 0 {
+            self.persist_vin(vin);
+            if vin < min_v || vin > max_v {
+                return Err(PlantError::refused(format!(
+                    "dxl_vin_outside_wizard_limits:vin_0.1v={vin}:min={min_v}:max={max_v}"
+                )));
+            }
+        }
         // Torque-on here (watchdog not running yet) so the first certified
         // write is a single goal_position xfer, not torque_on + goal.
         self.write_reg(ADDR_TORQUE_ENABLE, &[1], "setup_torque_on", None, false)?;
@@ -854,7 +889,7 @@ fn sniff_servo_id(device: &Path, baud: u32) -> Option<u8> {
     }
     let mut port = serialport::new(device.to_string_lossy(), baud)
         .timeout(Duration::from_millis(150))
-        .exclusive(!is_pty_path(device))
+        .exclusive(false)
         .open()
         .ok()?;
     std::thread::sleep(Duration::from_millis(100));

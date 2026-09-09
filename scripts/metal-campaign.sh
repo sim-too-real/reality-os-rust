@@ -49,8 +49,9 @@ if [[ "$DEVICE_REAL" == /dev/pts/* ]]; then
   export REALITYOS_METAL_CUTOFF_TESTED=0
   export REALITYOS_METAL_ALLOW_PTY=1
 fi
-# probe/setup enables torque; hold/nudge write goal_position. Do not touch
-# the servo until the operator has opened VIN and seen lost holding torque.
+# probe identifies (SRL poke only; no EEPROM, no torque). serve enables
+# torque; hold/nudge write goal_position. Do not touch the servo until
+# the operator has opened VIN and seen lost holding torque.
 if [[ "$PTY_SEQUENCE_ACTIVE" != "1" && "$CUTOFF_TESTED" != "1" ]]; then
   echo "error: refuse to torque or command the XL330 before the independent VIN cutoff is operator-tested." >&2
   echo "error: open the VIN disconnect, confirm lost holding torque (USB/data may stay enumerated), then REALITYOS_METAL_CUTOFF_TESTED=1." >&2

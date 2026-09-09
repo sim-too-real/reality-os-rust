@@ -227,6 +227,23 @@ fn xl330_pty_time_based_drive_mode_is_forced_velocity_based() {
 }
 
 #[test]
+fn xl330_pty_refuses_torque_when_vin_below_wizard_min() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_HIGH_MINVIN", "1")]);
+    let root = metal_test_root("pty-minvin");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("5.0 V must not torque under min 6.0 V"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_vin_outside_wizard_limits"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_discover_finds_wizard_id_via_broadcast() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ID", "7")]);
@@ -237,6 +254,10 @@ fn xl330_pty_discover_finds_wizard_id_via_broadcast() {
         Xl330Driver::open_discovering(cfg, &root).expect("broadcast PING must find Wizard ID 7");
     assert_eq!(bound.servo_id, 7);
     assert_eq!(driver.measured().actuator_id, "xl330:7");
+    assert!(
+        !driver.torque_is_enabled(),
+        "probe/discover must not torque-on"
+    );
     driver.close();
     let _ = std::fs::remove_dir_all(&root);
 }

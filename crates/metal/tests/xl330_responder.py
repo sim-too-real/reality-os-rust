@@ -131,6 +131,8 @@ def init_regs() -> bytearray:
     regs[7] = own if own not in (0, 254) else 1
     regs[10] = 4 if os.environ.get("REALITYOS_METAL_PTY_TIME_BASED") == "1" else 0
     regs[11] = 3
+    regs[32:34] = struct.pack("<H", 70)
+    regs[34:36] = struct.pack("<H", 60 if os.environ.get("REALITYOS_METAL_PTY_HIGH_MINVIN") == "1" else 35)
     regs[38:40] = struct.pack("<H", 200)
     vel = 1 if os.environ.get("REALITYOS_METAL_PTY_SLOW_VEL") == "1" else 445
     regs[44:48] = struct.pack("<I", vel)

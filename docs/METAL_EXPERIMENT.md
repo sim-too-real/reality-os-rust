@@ -102,5 +102,7 @@ First-contact script invariants (found on the PTY sequence, would fail the first
 * `valid_nudge` must change device present, not only increment the egress write count. Propose persists the pre-write present; the campaign re-samples after a short settle.
 * Wizard baud 3 Mbps / 4 Mbps and a non-1/2 servo ID would miss the candidate list. Probe broadcast-PINGs at each baud (PING still answers at SRL 0) and includes those bauds.
 * Wizard EEPROM Velocity Limit `0`/`1` caps motion so a 2-tick nudge is still sitting at the old present after 120 ms. Setup raises that limit to at least `max_profile_velocity` (does not raise a higher factory cap). Time-based Drive Mode is forced to velocity-based so profile velocity stays in rpm, not milliseconds.
+* `probe` / `open_discovering` identify only. They must not write EEPROM or enable torque. `serve` / `open` apply bench limits and torque-on. A standalone probe used to blip torque before Drop.
+* Setup refuses torque-on when Present Input Voltage is outside Wizard min/max voltage EEPROM (`dxl_vin_outside_wizard_limits`). It does not widen those limits. Broadcast sniff does not take `TIOCEXCL` so probe cannot steal exclusive from the next serve open.
 
 This Cloud Agent VM has **no** USB/serial actuator and **no** self-hosted worker. Attach a Cursor self-hosted worker (`cursor worker start`) on the bench host that can see `/dev/ttyUSB*` / `/dev/ttyACM*`. Until that happens, the experiment is blocked. That is not a software-architecture remaining task.

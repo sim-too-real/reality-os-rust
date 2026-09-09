@@ -25,6 +25,9 @@ pub const DRIVE_MODE_VELOCITY_BASED: u8 = 0;
 /// EEPROM. 3 = position control (factory XL330 default).
 pub const ADDR_OPERATING_MODE: u16 = 11;
 pub const OPERATING_MODE_POSITION: u8 = 3;
+/// EEPROM. Unit 0.1 V. Factory XL330 max 70 / min 35.
+pub const ADDR_MAX_VOLTAGE_LIMIT: u16 = 32;
+pub const ADDR_MIN_VOLTAGE_LIMIT: u16 = 34;
 pub const ADDR_CURRENT_LIMIT: u16 = 38;
 /// EEPROM. Unit ≈ 0.229 rpm. 0 or 1 makes a 2-tick nudge miss a 120 ms sample.
 pub const ADDR_VELOCITY_LIMIT: u16 = 44;
