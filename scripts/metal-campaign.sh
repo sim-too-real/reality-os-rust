@@ -426,8 +426,10 @@ EOF
     chmod 0600 "$real" 2>/dev/null || true
   fi
   # Linux asserts DTR on first open. Cheap FTDI/CP2102 wire DTR to RESET.
-  # Clear HUPCL so close does not drop DTR and every crash-replay reopen
-  # does not reboot the XL330 (U2D2 has no DTR-RESET).
+  # Pre-open -hupcl is not enough: the next serialport open restores
+  # kernel-default HUPCL. The driver clears it again on the live fd.
+  # Campaign still clears here so a leftover holder close is less likely
+  # to DTR-RESET before serve (U2D2 has no DTR-RESET).
   if [[ -e "$real" ]]; then
     /bin/stty -F "$real" -hupcl >/dev/null 2>&1 || true
   fi

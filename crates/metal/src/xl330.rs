@@ -1325,9 +1325,13 @@ impl Drop for Xl330Driver {
 }
 
 /// Cheap FTDI/CP2102 boards wire DTR to servo RESET. Linux asserts DTR on
-/// the first open. Clearing HUPCL before exclusive open so close does not
-/// drop DTR; later probe/serve/crash-replay opens then do not reboot.
-/// U2D2 does not need DTR. Do not toggle DTR/RTS from userspace.
+/// the first open. HUPCL must be cleared on the *live* fd after
+/// `serialport` open: a fresh USB-serial open restores kernel-default
+/// HUPCL (`cfmakeraw` does not touch it). Pre-open `stty -hupcl` is
+/// lost when the last closer drops the tty. With HUPCL set, probe close
+/// / `crash_if` / Drop lowers DTR and cheap FTDI/CP2102 reboot the
+/// XL330 before the next serve. U2D2 does not need DTR. Do not toggle
+/// DTR/RTS from userspace.
 fn clear_hupcl(device: &Path) {
     if is_pty_path(device) {
         return;
@@ -1372,6 +1376,9 @@ fn open_xl330_serial_with(
         .exclusive(exclusive)
         .open()
         .map_err(io::Error::other)?;
+    // Must run after open: serialport tcsetattr keeps kernel-default HUPCL
+    // on a new USB-serial session. Clear it while this fd is held.
+    clear_hupcl(device);
     // U2D2/FTDI often drops the first packet if we ping immediately after
     // open. Discover tries each baud/id pair once; a cold miss on the real
     // pair never comes back.
