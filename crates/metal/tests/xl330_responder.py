@@ -196,6 +196,7 @@ def status_wanted(srl: int, inst: int) -> bool:
 
 
 _motion_block_reads = 0
+_corrupt_next_crc = False
 
 
 def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
@@ -228,6 +229,17 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
                 chunk[0:2] = struct.pack("<H", 1200)
             if len(chunk) >= 7:
                 chunk[6] = 99
+        # After the first live motion sample, corrupt identity CRC so a
+        # glitch cannot latch bus_lost. Identify (addr 0 before any motion
+        # read) still answers with a good CRC.
+        if (
+            os.environ.get("REALITYOS_METAL_PTY_NO_IDENTITY") == "1"
+            and addr == 0
+            and ln >= 8
+            and _motion_block_reads >= 1
+        ):
+            global _corrupt_next_crc
+            _corrupt_next_crc = True
         # First motion-block / Moving read after a goal step reports Moving=1,
         # then clears so the campaign wait-for-Moving=0 path is exercised.
         if addr <= 122 < addr + ln and regs[122] == 1:
@@ -340,10 +352,14 @@ def main() -> None:
         # Half-duplex adapters often echo a request-shaped frame before status.
         echo = HEADER + bytes([own, 0x07, 0x00, INST_PING, 0x00, 0x00])
         if status_wanted(srl, inst):
-            os.write(
-                master,
-                echo + encode_status(own, payload, error=alert | inst_err),
-            )
+            pkt = echo + encode_status(own, payload, error=alert | inst_err)
+            global _corrupt_next_crc
+            if _corrupt_next_crc:
+                _corrupt_next_crc = False
+                pkt = bytearray(pkt)
+                pkt[-1] ^= 0xFF
+                pkt = bytes(pkt)
+            os.write(master, pkt)
         else:
             os.write(master, echo)
 

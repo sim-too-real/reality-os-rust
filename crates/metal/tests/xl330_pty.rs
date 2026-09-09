@@ -1043,6 +1043,50 @@ fn xl330_pty_eeprom_identity_change_refuses_write() {
 }
 
 #[test]
+fn xl330_pty_identity_read_failure_keeps_motion() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_NO_IDENTITY", "1")]);
+    let root = metal_test_root("pty-id-crc");
+    let mut cfg = MetalConfig::example(&tty);
+    cfg.campaign_hooks = false;
+    {
+        let mut driver = Xl330Driver::open(cfg.clone(), &root).expect("identify");
+        let measured = driver.measured();
+        assert_eq!(measured.firmware_id, "xl330-m288:1190:46");
+        cfg.expected_serial = measured.serial;
+        cfg.expected_firmware = measured.firmware_id;
+        driver
+            .read_sensor(0.0)
+            .expect("identity CRC after a good motion sample must not drop the sensor");
+        assert!(
+            driver.probe_identity().connected,
+            "identity CRC must not latch bus_lost after a good motion sample"
+        );
+        assert_eq!(
+            driver.measured().firmware_id,
+            "xl330-m288:1190:46",
+            "CRC miss must keep the identify-time firmware"
+        );
+    }
+    cfg.save(root.join(CONFIG_FILE)).unwrap();
+    let mut auth = MetalAuthority::start(&root, true).expect("start_online");
+    let hold = auth.handle(MetalRequest::propose("pty-id-crc-hold", "hold"));
+    assert!(
+        hold.ok,
+        "hold after identity CRC must still write: {hold:?}"
+    );
+    assert!(
+        !hold
+            .violations
+            .iter()
+            .any(|v| v.contains("software_watchdog_miss") || v.contains("bus_lost")),
+        "identity CRC must not be bus-lost or watchdog: {hold:?}"
+    );
+    assert_eq!(auth.physical_writes(), 1);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_disconnect_overlay_kills_session_via_verify() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder();

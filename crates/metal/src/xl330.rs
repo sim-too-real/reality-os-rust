@@ -23,9 +23,9 @@ use crate::egress::EgressLog;
 use crate::identity::{is_pty_path, usb_identity_for_tty, MeasuredIdentity};
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
-    instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, unique_status_ids, ADDR_BUS_WATCHDOG,
-    ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION,
-    ADDR_HARDWARE_ERROR, ADDR_HOMING_OFFSET, ADDR_ID, ADDR_MAX_POSITION_LIMIT,
+    instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, unique_status_ids, ProtocolError,
+    ADDR_BUS_WATCHDOG, ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE, ADDR_FIRMWARE_VERSION,
+    ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR, ADDR_HOMING_OFFSET, ADDR_ID, ADDR_MAX_POSITION_LIMIT,
     ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER,
     ADDR_MOVING, ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION,
     ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_PWM_LIMIT,
@@ -322,6 +322,7 @@ impl Xl330Driver {
             .map_err(io::Error::other)?;
         port.write_all(&frame).map_err(io::Error::other)?;
         port.flush().map_err(io::Error::other)?;
+        half_duplex_turnaround(&self.cfg.device);
         // Factory SRL=2 replies; Wizard SRL=0 does not. Consume an optional
         // status so a late USB packet is not decoded as the model READ.
         // 25 ms > default FTDI latency_timer (16 ms).
@@ -779,26 +780,31 @@ impl Xl330Driver {
     }
 
     /// Model (0) + firmware (6) + ID (7). Not a motion-block field.
-    /// A swapped XL330 on the same adapter must not keep the latched identity.
-    fn confirm_eeprom_identity(&mut self) -> PlantResult<()> {
-        let b = self.read_reg(ADDR_MODEL_NUMBER, 8)?;
+    /// I/O failure must not turn a CRC glitch into `bus_lost` after a good
+    /// motion sample. A real swap updates latched model/fw so verify fails.
+    fn confirm_eeprom_identity(&mut self) {
+        let was_connected = self.connected;
+        let Ok(b) = self.read_reg(ADDR_MODEL_NUMBER, 8) else {
+            self.connected = was_connected;
+            return;
+        };
         if b.len() < 8 {
-            return Err(PlantError::refused("dxl_short_identity_block"));
+            return;
         }
         let model = le_u16(&b[0..2]).unwrap_or(0);
         let fw = b[(ADDR_FIRMWARE_VERSION - ADDR_MODEL_NUMBER) as usize];
         let id = b[(ADDR_ID - ADDR_MODEL_NUMBER) as usize];
         if id != self.cfg.servo_id {
-            return Err(PlantError::refused(format!(
-                "dxl_identity_changed:id={id}:expected={}",
-                self.cfg.servo_id
-            )));
+            // EEPROM ID no longer matches the bound bus ID. Blank firmware so
+            // write-time verify fail-closes without failing this sensor.
+            self.model = 0;
+            self.firmware = 0;
+            return;
         }
         if model != self.model || fw != self.firmware {
             self.model = model;
             self.firmware = fw;
         }
-        Ok(())
     }
 
     fn campaign_disconnected(&self) -> bool {
@@ -846,6 +852,7 @@ impl Xl330Driver {
             .map_err(io::Error::other)?;
         port.write_all(request).map_err(io::Error::other)?;
         port.flush().map_err(io::Error::other)?;
+        half_duplex_turnaround(&self.cfg.device);
         if !expect_status {
             return Err(io::Error::other("metal_no_status_expected"));
         }
@@ -883,8 +890,15 @@ impl Xl330Driver {
                 Err(e) => return Err(e),
             }
             if find_header(&acc).is_some() && acc.len() >= 11 {
-                if let Ok(st) = decode_status_scan(&acc) {
-                    return Ok(st);
+                match decode_status_scan(&acc) {
+                    Ok(st) => return Ok(st),
+                    Err(ProtocolError::Truncated) | Err(ProtocolError::TooShort) => {}
+                    Err(ProtocolError::BadCrc) => {
+                        // Complete status with a bad CRC. Waiting out the
+                        // 40 ms live deadline would miss the watchdog.
+                        return Err(io::Error::other("dxl_bad_crc"));
+                    }
+                    Err(_) => {}
                 }
             }
         }
@@ -1051,13 +1065,15 @@ impl HardwareDriverPort for Xl330Driver {
         if self.campaign_fail_sensor() {
             return Err(PlantError::refused("metal_sensor_missing"));
         }
+        let t0 = std::time::Instant::now();
         let (pos, vel, cur, volt, tick) = self.read_motion_block()?;
         // Motion block has no model/fw. Re-read EEPROM so a physical swap on
         // this UART updates last_identity before write-time verify. Overlay
-        // hot_swap still wins in refresh_identity. One 8-byte READ; live I/O
-        // is one attempt / 40 ms.
-        if self.live_io {
-            self.confirm_eeprom_identity()?;
+        // hot_swap still wins in refresh_identity. Skip when the motion read
+        // already used most of the 40 ms live budget — a CRC miss on this
+        // extra READ must not fail a good present sample (`bus_lost`).
+        if self.live_io && t0.elapsed() < Duration::from_millis(15) {
+            self.confirm_eeprom_identity();
         }
         let err = self.last_hw_error;
         self.persist_vin(volt);
@@ -1179,9 +1195,21 @@ fn clear_hupcl(device: &Path) {
         .status();
 }
 
+/// Cheap TTL/RS485 adapters need DE/RE after host TX. U2D2 does this
+/// internally. PTY has no half-duplex. 500 µs stays inside the 40 ms live
+/// deadline and avoids reading while the line is still driven.
+fn half_duplex_turnaround(device: &Path) {
+    if is_pty_path(device) {
+        return;
+    }
+    std::thread::sleep(Duration::from_micros(500));
+}
+
 fn open_settle(device: &Path) {
-    // Robotis reboot / DTR-reset is ~300 ms. PTY has no DTR; keep tests fast.
-    let ms = if is_pty_path(device) { 100 } else { 300 };
+    // Cheap FTDI/CP2102 DTR-RESET plus low VIN can exceed 300 ms. Robotis
+    // documents ~100–300 ms; 500 ms covers the first-open reboot window.
+    // PTY has no DTR; keep tests fast.
+    let ms = if is_pty_path(device) { 100 } else { 500 };
     std::thread::sleep(Duration::from_millis(ms));
 }
 
@@ -1241,6 +1269,7 @@ fn sniff_servo_ids(device: &Path, baud: u32) -> io::Result<Vec<u8>> {
     {
         return Ok(Vec::new());
     }
+    half_duplex_turnaround(device);
     let mut acc = Vec::new();
     let mut tmp = [0u8; 64];
     let end = std::time::Instant::now() + Duration::from_millis(150);
@@ -1276,10 +1305,10 @@ fn primary_if_secondary_pair(device: &Path, baud: u32, ids: &[u8]) -> Option<u8>
     }
     let mut port = open_xl330_serial_with(device, baud, false).ok()?;
     for &id in ids {
-        poke_srl_all(&mut *port, id);
+        poke_srl_all(&mut *port, device, id);
     }
-    let via_a = read_id_register(&mut *port, ids[0])?;
-    let via_b = read_id_register(&mut *port, ids[1])?;
+    let via_a = read_id_register(&mut *port, device, ids[0])?;
+    let via_b = read_id_register(&mut *port, device, ids[1])?;
     if via_a == via_b && via_a != BROADCAST_ID {
         Some(via_a)
     } else {
@@ -1287,11 +1316,12 @@ fn primary_if_secondary_pair(device: &Path, baud: u32, ids: &[u8]) -> Option<u8>
     }
 }
 
-fn poke_srl_all(port: &mut dyn SerialPort, id: u8) {
+fn poke_srl_all(port: &mut dyn SerialPort, device: &Path, id: u8) {
     let frame = encode_write(id, ADDR_STATUS_RETURN_LEVEL, &[STATUS_RETURN_ALL]);
     let _ = port.clear(serialport::ClearBuffer::Input);
     let _ = port.write_all(&frame);
     let _ = port.flush();
+    half_duplex_turnaround(device);
     let saved = port.timeout();
     let _ = port.set_timeout(Duration::from_millis(25));
     let mut tmp = [0u8; 64];
@@ -1304,11 +1334,12 @@ fn poke_srl_all(port: &mut dyn SerialPort, id: u8) {
     let _ = port.set_timeout(saved);
 }
 
-fn read_id_register(port: &mut dyn SerialPort, id: u8) -> Option<u8> {
+fn read_id_register(port: &mut dyn SerialPort, device: &Path, id: u8) -> Option<u8> {
     let frame = encode_read(id, ADDR_ID, 1);
     let _ = port.clear(serialport::ClearBuffer::Input);
     port.write_all(&frame).ok()?;
     port.flush().ok()?;
+    half_duplex_turnaround(device);
     let saved = port.timeout();
     let _ = port.set_timeout(Duration::from_millis(40));
     let mut acc = Vec::new();
