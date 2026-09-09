@@ -51,7 +51,7 @@ mod tests {
         AuthorityClock, CalibrationId, DesignContentHash, FakeClock, FirmwareId, ReleaseHash,
         SerialOrAsBuilt,
     };
-    use realityos_plant::{HardwareIdentity, Plant, SimPlant};
+    use realityos_plant::{HardwareIdentity, Plant, SensorPacket, SimPlant};
 
     fn sim_gov() -> RuntimeGovernor<SimPlant> {
         let id = RuntimeIdentity::sim("rel-sim-1").unwrap();
@@ -200,7 +200,7 @@ mod tests {
             test_clock(10.0),
         )
         .unwrap();
-        g.record_sensor(&[("q0".into(), 0.0)], 10.0, 1, "frame", "s")
+        g.ingest_sensor_packet(SensorPacket::from_samples(vec![("q0".into(), 0.0)], 10.0))
             .unwrap();
         let mut ros = RealityOs::new();
         let d = ros.decide(DecideRequest::new(
@@ -257,7 +257,7 @@ mod tests {
             test_clock(10.0),
         )
         .unwrap();
-        g.record_sensor(&[("q0".into(), 0.0)], 10.0, 1, "frame", "s")
+        g.ingest_sensor_packet(SensorPacket::from_samples(vec![("q0".into(), 0.0)], 10.0))
             .unwrap();
         g
     }
@@ -569,7 +569,7 @@ mod tests {
             test_clock(10.0),
         )
         .unwrap();
-        g.record_sensor(&[("q0".into(), 0.0)], 10.0, 1, "frame", "s")
+        g.ingest_sensor_packet(SensorPacket::from_samples(vec![("q0".into(), 0.0)], 10.0))
             .unwrap();
         let write = g.authorize_issued(decide_hold(1, 10.0)).unwrap();
         assert!(g.write_online(&write, &ActionParams::empty(), 10.0).ok);
@@ -586,7 +586,7 @@ mod tests {
         assert!(g.hardware_session_dead());
         assert_eq!(g.plant().write_count(), 1);
         assert_eq!(g.safe_state(), SafeState::Fault);
-        let rec = g.clear_estop_requires_recovery(true, 10.2);
+        let rec = g.clear_estop_requires_recovery_now(true);
         assert!(!rec.ok);
         assert!(g.hardware_session_dead());
         assert!(g.authorize_issued(decide_hold(3, 10.3)).is_err());
@@ -609,7 +609,7 @@ mod tests {
             test_clock(10.0),
         )
         .unwrap();
-        g.record_sensor(&[("q0".into(), 0.0)], 10.0, 1, "frame", "s")
+        g.ingest_sensor_packet(SensorPacket::from_samples(vec![("q0".into(), 0.0)], 10.0))
             .unwrap();
         handle.lock().unwrap().connected = false;
         let write = g.authorize_issued(decide_hold(1, 10.0)).unwrap();
@@ -639,7 +639,7 @@ mod tests {
             clock.clone(),
         )
         .unwrap();
-        g.record_sensor(&[("q0".into(), 0.0)], 999.0, 1, "frame", "s")
+        g.ingest_sensor_packet(SensorPacket::from_samples(vec![("q0".into(), 0.0)], 999.0))
             .unwrap();
         assert!((g.last_sensor_s() - 10.0).abs() < 1e-9);
         assert!((g.last_device_capture_s() - 999.0).abs() < 1e-9);

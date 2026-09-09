@@ -23,6 +23,9 @@ These settings live in GitHub **Settings → Branches → Branch protection rule
 (or Rulesets). They are **P0/P1 operational** work. This repository does not
 pretend that committing a YAML file is branch protection.
 
+**Status:** this token cannot confirm whether `main` is protected (API 403).
+If `main` is still unprotected, that is an operational gap, not a code gap.
+
 ## What the workflow is
 
 The authority workflow must remain exactly those three commands. Adding

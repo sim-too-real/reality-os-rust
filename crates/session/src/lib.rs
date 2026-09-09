@@ -51,7 +51,7 @@ mod tests {
         args.calibration_id = "cal-1".into();
         args.design_content_hash = "des1".into();
         args.require_verified_release = Some(false);
-        match RuntimeSession::<SimPlant, OnlineLocked>::start_online(args, plant, 1.0) {
+        match RuntimeSession::<SimPlant, OnlineLocked>::start_online(args, plant) {
             Err(err) => assert!(err.0.contains("online_refuses_safety_rail_opt_out")),
             Ok(_) => panic!("expected online_refuses_safety_rail_opt_out"),
         }
@@ -70,7 +70,7 @@ mod tests {
         args.signing_key = Some(b"k".to_vec());
         args.actuator_ids = vec!["a0".into()];
         args.first_online = true;
-        let err = RuntimeSession::<SimPlant, OnlineLocked>::start_online(args, plant, 1.0)
+        let err = RuntimeSession::<SimPlant, OnlineLocked>::start_online(args, plant)
             .err()
             .unwrap();
         assert!(err.0.contains("online_requires_durable_journal"));
@@ -199,11 +199,17 @@ mod tests {
         args.first_online = true;
         args.actuator_ids = vec!["joint-0".into()];
         bind_online_plant(&mut plant, &args);
-        let mut sess =
-            RuntimeSession::<SimPlant, OnlineLocked>::start_online(args.clone(), plant, 10.0)
-                .unwrap();
-        sess.ingest_sensor(&[("q0".into(), 0.0)], Some(10.0), 10.0)
-            .unwrap();
+        let mut sess = RuntimeSession::<SimPlant, OnlineLocked>::start_online_with_clock(
+            args.clone(),
+            plant,
+            realityos_kernel::FakeClock::arc(10.0),
+        )
+        .unwrap();
+        sess.ingest_sensor_packet(realityos_plant::SensorPacket::from_samples(
+            vec![("q0".into(), 0.0)],
+            10.0,
+        ))
+        .unwrap();
         let mut ros = RealityOs::new();
         let d = ros.decide(realityos_core::DecideRequest::new(
             Intent::language("hold", "hold"),
@@ -214,7 +220,7 @@ mod tests {
             10.0,
         ));
         let cmd = d.command.unwrap();
-        let out = sess.dispatch_issued(cmd.clone(), &ActionParams::empty(), 10.0);
+        let out = sess.dispatch_issued(cmd.clone(), &ActionParams::empty());
         assert!(out.ok, "{:?}", out.violations);
         assert_eq!(sess.governor.plant().write_count(), 1);
         drop(sess);
@@ -222,12 +228,19 @@ mod tests {
         let mut plant2 = SimPlant::new("p", 1, 10.0);
         args.first_online = false;
         bind_online_plant(&mut plant2, &args);
-        let mut sess2 =
-            RuntimeSession::<SimPlant, OnlineLocked>::start_online(args, plant2, 11.0).unwrap();
+        let mut sess2 = RuntimeSession::<SimPlant, OnlineLocked>::start_online_with_clock(
+            args,
+            plant2,
+            realityos_kernel::FakeClock::arc(11.0),
+        )
+        .unwrap();
         sess2
-            .ingest_sensor(&[("q0".into(), 0.0)], Some(11.0), 11.0)
+            .ingest_sensor_packet(realityos_plant::SensorPacket::from_samples(
+                vec![("q0".into(), 0.0)],
+                11.0,
+            ))
             .unwrap();
-        let out2 = sess2.dispatch_issued(cmd, &ActionParams::empty(), 11.0);
+        let out2 = sess2.dispatch_issued(cmd, &ActionParams::empty());
         assert!(!out2.ok);
         assert!(
             out2.violations
@@ -262,12 +275,19 @@ mod tests {
         args.first_online = true;
         args.actuator_ids = vec!["joint-0".into()];
         bind_online_plant(&mut plant, &args);
-        let mut sess =
-            RuntimeSession::<SimPlant, OnlineLocked>::start_online(args, plant, 10.0).unwrap();
+        let mut sess = RuntimeSession::<SimPlant, OnlineLocked>::start_online_with_clock(
+            args,
+            plant,
+            realityos_kernel::FakeClock::arc(10.0),
+        )
+        .unwrap();
         sess.latch_safe_state(realityos_governor::SafeState::Hold, "test");
         sess.latch_safe_state(realityos_governor::SafeState::Running, "forged");
-        sess.ingest_sensor(&[("q0".into(), 0.0)], Some(10.0), 10.0)
-            .unwrap();
+        sess.ingest_sensor_packet(realityos_plant::SensorPacket::from_samples(
+            vec![("q0".into(), 0.0)],
+            10.0,
+        ))
+        .unwrap();
         let mut ros = RealityOs::new();
         let d = ros.decide(realityos_core::DecideRequest::new(
             Intent::language("hold", "hold"),
@@ -277,7 +297,7 @@ mod tests {
             },
             10.0,
         ));
-        let out = sess.dispatch_issued(d.command.unwrap(), &ActionParams::empty(), 10.0);
+        let out = sess.dispatch_issued(d.command.unwrap(), &ActionParams::empty());
         assert!(!out.ok);
         assert!(
             out.violations.iter().any(|v| v.contains("safe_state")),
@@ -338,9 +358,46 @@ mod tests {
             evidence_status: "TEST_ATTACHED".into(),
             actuator_ids: vec![],
         });
-        let err = RuntimeSession::<SimPlant, OnlineLocked>::start_online(args, plant, 10.0)
+        let err = RuntimeSession::<SimPlant, OnlineLocked>::start_online(args, plant)
             .err()
             .unwrap();
         assert!(err.0.contains("hardware_serial_mismatch"), "{}", err.0);
+    }
+
+    #[test]
+    fn start_online_uses_os_monotonic_clock() {
+        let dir = std::env::temp_dir().join(format!(
+            "realityos-online-osclk-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let mut plant = SimPlant::new("p", 1, 10.0);
+        let mut args = StartArgs::simulation("rel-online-osclk");
+        args.release_class = "MFG_CANDIDATE".into();
+        args.serial_or_as_built = "SN-1".into();
+        args.firmware_id = "FW-1".into();
+        args.calibration_id = "cal-1".into();
+        args.design_content_hash = "des1".into();
+        args.journal_path = Some(dir.join("driver.jsonl"));
+        args.signing_key = Some(b"online-session-key".to_vec());
+        args.first_online = true;
+        args.actuator_ids = vec!["joint-0".into()];
+        bind_online_plant(&mut plant, &args);
+        let sess = RuntimeSession::<SimPlant, OnlineLocked>::start_online(args, plant).unwrap();
+        let a = sess.governor.authority_now_s();
+        std::thread::sleep(std::time::Duration::from_millis(8));
+        let b = sess.governor.authority_now_s();
+        assert!(a.is_finite() && b.is_finite());
+        assert!(
+            b + 1e-12 >= a,
+            "OsMonotonicClock must be non-decreasing: {a} -> {b}"
+        );
+        assert!(
+            b > a,
+            "start_online must not freeze on a FakeClock: {a} -> {b}"
+        );
     }
 }

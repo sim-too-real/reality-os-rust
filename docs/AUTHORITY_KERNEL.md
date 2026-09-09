@@ -142,15 +142,17 @@ Public on `RuntimeGovernor<P, OnlineLocked>` (authority-relevant):
   (probes `Plant::probe_identity`, exact-match vs expected, then hashes)
 - `authorize_issued(IssuedCommand) -> Result<OnlineWrite, _>`
   (instance digest from `ValidatedRuntimeIdentity` only)
-- `write_online(&OnlineWrite, …)` / `write_online_now` (clock)
+- `write_online_now` (authority clock). Caller-time `write_online` is crate-private.
+- `heartbeat_now` / `watchdog_tick_now` / `engage_estop_now` /
+  `clear_estop_requires_recovery_now` / `latch_abort_now`
 - `latch_safe_state` — tighten only
-- Observation / recovery: `plant`, `ledger`, `config`, `identity`, `heartbeat`,
-  `record_sensor` / `ingest_sensor_packet` / `acquire_sensor`, `watchdog_tick`,
-  `engage_estop`, `clear_estop_requires_recovery`,
-  `apply_journal_continuity`, traces, `safe_state`
+- Observation / recovery: `plant`, `ledger`, `config`, `identity`,
+  `ingest_sensor_packet` / `acquire_sensor`, traces, `safe_state`
 
-Not public on ONLINE: `write_driver`, `signing_key`, `config_mut`, `plant_mut`,
-`envelope_mut`, `ledger_mut`, `set_signing_key`, `set_envelope`, `mark_sensor`.
+Not public on ONLINE: `write_driver`, caller-time `heartbeat` / `watchdog_tick` /
+`record_sensor` / `engage_estop` / `write_online`, `signing_key`, `config_mut`,
+`plant_mut`, `envelope_mut`, `ledger_mut`, `set_signing_key`, `set_envelope`,
+`mark_sensor`. Those remain on unlocked / test / HIL rails.
 
 `ActuationCommand` stays unsealed as a dependency-inversion shape.
 ONLINE execution consumes `OnlineWrite` (authority), not the trait (shape).
@@ -366,9 +368,12 @@ they share a release, design, or signing key.
   write-time / freshness anchor. Production uses `OsMonotonicClock` (OS
   monotonic, not Unix wall time). Tests/HIL inject `FakeClock`.
 * `unix_now_s` is audit / CLI wall time only.
+* `RuntimeSession::start_online(args, plant)` uses `OsMonotonicClock`. Tests
+  inject time only via `start_online_with_clock`.
 * Production IPC (`ProductionProposal`) may carry verb, action, command_id,
   proposer, optional intent metadata. It cannot set `now_s`, `write_now_s`, or
-  safety TTL. Those exist only on `HilFaultInjectionRequest`.
+  safety TTL. Those exist only on `HilFaultInjectionRequest` (HIL serve, not
+  `--production`).
 * Sensor trust model:
   * `device_capture_time` (`SensorPacket.timestamp_s`) — informative / validated
     when synchronized later. Not a freshness anchor.

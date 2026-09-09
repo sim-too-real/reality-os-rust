@@ -5,7 +5,7 @@ fn assert_write_online_is_not_actuation_command(
     g: &mut RuntimeGovernor<SimPlant, OnlineLocked>,
     cmd: &dyn ActuationCommand,
 ) {
-    let _ = g.write_online(cmd, &ActionParams::empty(), 1.0);
+    let _ = g.write_online_now(cmd, &ActionParams::empty());
 }
 
 fn main() {}

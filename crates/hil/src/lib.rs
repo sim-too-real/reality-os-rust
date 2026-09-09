@@ -4,6 +4,7 @@
 mod proof;
 
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,8 +27,31 @@ pub use proof::{
 
 pub const IPC_SOCK: &str = "ipc.sock";
 pub const JOURNAL: &str = "driver.jsonl";
+pub const SIGNING_KEY_FILE: &str = "signing.key";
+/// Same-UID HIL fallback only. Deployment loads [`SIGNING_KEY_FILE`].
 pub const SIGNING_KEY: &[u8] = b"hil-authority-signing-key";
 pub const AUTHORITY_MAX_TTL_S: f64 = 30.0;
+/// Explicit socket mode. Do not inherit host umask.
+pub const IPC_SOCKET_MODE: u32 = 0o660;
+
+/// Filesystem key storage is not a hardware root of trust.
+pub fn load_authority_signing_key(
+    root: impl AsRef<Path>,
+    require_file: bool,
+) -> anyhow::Result<Vec<u8>> {
+    let path = root.as_ref().join(SIGNING_KEY_FILE);
+    match std::fs::read(&path) {
+        Ok(bytes) if !bytes.is_empty() => Ok(bytes),
+        Ok(_) => anyhow::bail!("signing_key_empty"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if require_file {
+                anyhow::bail!("signing_key_file_required:{}", path.display());
+            }
+            Ok(SIGNING_KEY.to_vec())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
 
 /// Data an untrusted proposer may legitimately own.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -196,11 +220,30 @@ impl Authority {
         Self::start_with_identity(root, first_online, now_s, hil_identity())
     }
 
+    /// Deployment start: signing material must come from an authority-owned file.
+    pub fn start_deploy(
+        root: impl AsRef<Path>,
+        first_online: bool,
+        now_s: f64,
+    ) -> anyhow::Result<Self> {
+        Self::start_with_identity_key(root, first_online, now_s, hil_identity(), true)
+    }
+
     pub fn start_with_identity(
         root: impl AsRef<Path>,
         first_online: bool,
         now_s: f64,
         identity: RuntimeIdentity,
+    ) -> anyhow::Result<Self> {
+        Self::start_with_identity_key(root, first_online, now_s, identity, false)
+    }
+
+    fn start_with_identity_key(
+        root: impl AsRef<Path>,
+        first_online: bool,
+        now_s: f64,
+        identity: RuntimeIdentity,
+        require_key_file: bool,
     ) -> anyhow::Result<Self> {
         let root = root.as_ref().to_path_buf();
         std::fs::create_dir_all(&root)?;
@@ -208,11 +251,12 @@ impl Authority {
         let port = VirtualSerialPort::open(root.join("bus"), "SN-HIL-1")?;
         let plant = HardwareBackedPlant::new(port, "hil", 1, 5.0);
         let journal = root.join(JOURNAL);
+        let key = load_authority_signing_key(&root, require_key_file)?;
         let governor = RuntimeGovernor::new_online(
             identity,
             plant,
             journal,
-            SIGNING_KEY.to_vec(),
+            key,
             first_online,
             vec!["joint-0".into()],
             clock.clone(),
@@ -232,12 +276,27 @@ impl Authority {
         recorded_writes(self.root.join("bus"))
     }
 
+    pub fn handle_production(&mut self, req: HilRequest) -> HilResponse {
+        match req.op.as_str() {
+            "propose" | "sensor" | "heartbeat" | "status" => self.handle(req),
+            other => HilResponse {
+                ok: false,
+                executed: false,
+                stage: "protocol".into(),
+                status: "refuse".into(),
+                violations: vec![format!("production_ipc_refuses:{other}")],
+                driver_writes: self.driver_writes(),
+                command_id: String::new(),
+                metal: false,
+            },
+        }
+    }
+
     pub fn handle(&mut self, req: HilRequest) -> HilResponse {
         match req.op.as_str() {
             "sensor" => self.ingest_production(),
             "heartbeat" => {
-                let now = self.clock.monotonic_now().secs();
-                let _ = self.governor.heartbeat(now);
+                let _ = self.governor.heartbeat_now();
                 self.ok_status("observe")
             }
             "propose" => self.propose_production(req.production()),
@@ -287,7 +346,7 @@ impl Authority {
 
     fn propose_production(&mut self, proposal: ProductionProposal) -> HilResponse {
         let now = self.clock.monotonic_now().secs();
-        let _ = self.governor.heartbeat(now);
+        let _ = self.governor.heartbeat_now();
         if let Err(e) = self.governor.acquire_sensor() {
             return HilResponse {
                 ok: false,
@@ -315,7 +374,7 @@ impl Authority {
         }
         let now = self.clock.monotonic_now().secs();
         if !fault.skip_heartbeat {
-            let _ = self.governor.heartbeat(now);
+            let _ = self.governor.heartbeat_now();
         }
         if fault.drop_sensor {
             self.governor.hil_drop_sensor_evidence();
@@ -399,9 +458,12 @@ impl Authority {
                 };
             }
         };
+        if (write_at - self.clock.monotonic_now().secs()).abs() > 1e-12 {
+            self.clock.set(write_at);
+        }
         let trace = self
             .governor
-            .write_online(&write, &ActionParams::empty(), write_at);
+            .write_online_now(&write, &ActionParams::empty());
         let writes = self.driver_writes();
         HilResponse {
             ok: trace.ok,
@@ -440,11 +502,37 @@ pub fn ipc_path(root: impl AsRef<Path>) -> PathBuf {
     root.as_ref().join(IPC_SOCK)
 }
 
+#[derive(Debug, Clone)]
+pub struct ServeOpts {
+    pub first_online: bool,
+    pub now_s: f64,
+    pub production_ipc: bool,
+}
+
+impl ServeOpts {
+    pub fn hil(first_online: bool, now_s: f64) -> Self {
+        Self {
+            first_online,
+            now_s,
+            production_ipc: false,
+        }
+    }
+}
+
 pub fn serve_forever(root: &Path, first_online: bool, now_s: f64) -> anyhow::Result<()> {
-    let mut auth = Authority::start(root, first_online, now_s)?;
+    serve_with_opts(root, ServeOpts::hil(first_online, now_s))
+}
+
+pub fn serve_with_opts(root: &Path, opts: ServeOpts) -> anyhow::Result<()> {
+    let mut auth = if opts.production_ipc {
+        Authority::start_deploy(root, opts.first_online, opts.now_s)?
+    } else {
+        Authority::start(root, opts.first_online, opts.now_s)?
+    };
     let sock = ipc_path(root);
     let _ = std::fs::remove_file(&sock);
     let listener = UnixListener::bind(&sock)?;
+    std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(IPC_SOCKET_MODE))?;
     for stream in listener.incoming() {
         let mut stream = match stream {
             Ok(s) => s,
@@ -479,12 +567,33 @@ pub fn serve_forever(root: &Path, first_online: bool, now_s: f64) -> anyhow::Res
             }
         };
         if req.op == "shutdown" {
+            if opts.production_ipc {
+                let resp = HilResponse {
+                    ok: false,
+                    stage: "protocol".into(),
+                    status: "refuse".into(),
+                    violations: vec!["production_ipc_refuses:shutdown".into()],
+                    driver_writes: auth.driver_writes(),
+                    metal: false,
+                    ..HilResponse::default()
+                };
+                let _ = writeln!(
+                    stream,
+                    "{}",
+                    serde_json::to_string(&resp).unwrap_or_default()
+                );
+                continue;
+            }
             let resp = auth.ok_status("shutdown");
             writeln!(stream, "{}", serde_json::to_string(&resp)?)?;
             stream.flush()?;
             break;
         }
-        let resp = auth.handle(req);
+        let resp = if opts.production_ipc {
+            auth.handle_production(req)
+        } else {
+            auth.handle(req)
+        };
         writeln!(stream, "{}", serde_json::to_string(&resp)?)?;
         stream.flush()?;
     }

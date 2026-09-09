@@ -15,6 +15,10 @@ path = "src/bin/hil-authority.rs"
 name = "hil-untrusted"
 path = "src/bin/hil-untrusted.rs"
 
+[[bin]]
+name = "hil-os-users"
+path = "src/bin/hil-os-users.rs"
+
 [dependencies]
 realityos-kernel.workspace = true
 realityos-plant = { workspace = true, features = ["hil-faults"] }

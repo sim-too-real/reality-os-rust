@@ -57,8 +57,10 @@ Never promote one level into another.
 | ONLINE `OnlineWrite` is instance-bound (serial/firmware/cal/actuators in digest) | Rust type/API + same-process | ACTIVE | `ValidatedRuntimeIdentity::instance_hash`; governor cross-instance tests |
 | ONLINE start requires exact expected vs `probe_identity` match | Same-process | ACTIVE | `ValidatedRuntimeIdentity::bind`; mismatch / placeholder / disconnected / missing tests |
 | Physical identity change after ONLINE FAULT/ABORTs the instance | Same-process | ACTIVE | `verify_live_hardware`; hot-swap / reconnect tests; zero further writes |
-| Production proposal cannot set `now_s` / `write_now_s` / safety TTL | Same-process (HIL IPC) | ACTIVE | `ProductionProposal` vs `HilFaultInjectionRequest` |
-| ONLINE sensor freshness uses authority receive time, not proposer timestamps | Same-process | ACTIVE | `record_sensor` / `ingest_sensor_packet` on `OnlineLocked` |
+| Production proposal cannot set `now_s` / `write_now_s` / safety TTL | Same-process (HIL IPC) | ACTIVE | `ProductionProposal` vs `HilFaultInjectionRequest`; `--production` refuses `hil_fault` |
+| Ordinary ONLINE APIs cannot take caller safety time | Rust type/API | ACTIVE | `start_online(args, plant)`; `*_now()`; compile-fail |
+| ONLINE sensor freshness uses authority receive time, not proposer timestamps | Same-process | ACTIVE | `ingest_sensor_packet` / `acquire_sensor` on `OnlineLocked` |
+| Two-UID autonomy cannot open device / key / journal | Process-isolation (distinct UIDs) | ACTIVE | `scripts/hil-os-users-test.sh`; CI `os-users` |
 | `instance_hash` encoding is length-prefixed (`realityos.runtime_instance/2`) | Rust type/API | ACTIVE | `canonical_instance_bytes`; delimiter collision tests |
 | HIL proof aggregates are recomputed from case write deltas | Same-process | ACTIVE | `ProofReport::from_measured_cases`; `verify_proof_consistency` |
 | Untrusted HIL process cannot submit authority objects | Process-isolation (HIL IPC) | ACTIVE | `crates/hil` protocol refuse; campaign |

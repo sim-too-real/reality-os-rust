@@ -1,0 +1,55 @@
+error[E0599]: the method `heartbeat` exists for mutable reference `&mut RuntimeGovernor<SimPlant, OnlineLocked>`, but its trait bounds were not satisfied
+ --> tests/ui/online_no_caller_time.rs:5:15
+  |
+5 |     let _ = g.heartbeat(1.0);
+  |               ^^^^^^^^^
+  |
+ ::: src/rail.rs
+  |
+  | pub struct OnlineLocked;
+  | ----------------------- doesn't satisfy `OnlineLocked: UnlockedRail`
+  |
+  = note: the following trait bounds were not satisfied:
+          `OnlineLocked: UnlockedRail`
+
+error[E0599]: the method `watchdog_tick` exists for mutable reference `&mut RuntimeGovernor<SimPlant, OnlineLocked>`, but its trait bounds were not satisfied
+ --> tests/ui/online_no_caller_time.rs:6:15
+  |
+6 |     let _ = g.watchdog_tick(1.0);
+  |               ^^^^^^^^^^^^^
+  |
+ ::: src/rail.rs
+  |
+  | pub struct OnlineLocked;
+  | ----------------------- doesn't satisfy `OnlineLocked: UnlockedRail`
+  |
+  = note: the following trait bounds were not satisfied:
+          `OnlineLocked: UnlockedRail`
+
+error[E0599]: the method `engage_estop` exists for mutable reference `&mut RuntimeGovernor<SimPlant, OnlineLocked>`, but its trait bounds were not satisfied
+ --> tests/ui/online_no_caller_time.rs:7:15
+  |
+7 |     let _ = g.engage_estop("x", 1.0);
+  |               ^^^^^^^^^^^^
+  |
+ ::: src/rail.rs
+  |
+  | pub struct OnlineLocked;
+  | ----------------------- doesn't satisfy `OnlineLocked: UnlockedRail`
+  |
+  = note: the following trait bounds were not satisfied:
+          `OnlineLocked: UnlockedRail`
+
+error[E0599]: the method `clear_estop_requires_recovery` exists for mutable reference `&mut RuntimeGovernor<SimPlant, OnlineLocked>`, but its trait bounds were not satisfied
+ --> tests/ui/online_no_caller_time.rs:8:15
+  |
+8 |     let _ = g.clear_estop_requires_recovery(true, 1.0);
+  |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+ ::: src/rail.rs
+  |
+  | pub struct OnlineLocked;
+  | ----------------------- doesn't satisfy `OnlineLocked: UnlockedRail`
+  |
+  = note: the following trait bounds were not satisfied:
+          `OnlineLocked: UnlockedRail`

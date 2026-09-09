@@ -1,0 +1,16 @@
+name: os-users
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  two-uid:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: build HIL binaries
+        run: cargo build -p realityos-hil --bins
+      - name: two-user HIL deployment
+        run: sudo -E env "PATH=$PATH" REALITYOS_HIL_BIN="$PWD/target/debug" REALITYOS_OS_USERS_PROOF="$PWD/docs/hil_os_users_proof.json" scripts/hil-os-users-ci.sh
