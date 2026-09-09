@@ -1,0 +1,33 @@
+[package]
+name = "realityos-metal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "First low-energy metal smoke: one XL330 HardwareDriverPort + ONLINE composition. Not a kernel layer."
+readme = false
+
+[[bin]]
+name = "realityos-metal-smoke"
+path = "src/bin/realityos-metal-smoke.rs"
+
+[[bin]]
+name = "realityos-metal-propose"
+path = "src/bin/realityos-metal-propose.rs"
+
+[dependencies]
+realityos-kernel.workspace = true
+realityos-plant = { workspace = true, features = ["hil-faults"] }
+realityos-governor.workspace = true
+realityos-core.workspace = true
+realityos-session.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+fs2.workspace = true
+sha2.workspace = true
+hex.workspace = true
+serialport.workspace = true
+
+[lints]
+workspace = true

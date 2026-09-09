@@ -52,7 +52,7 @@ Sensors travel the other way:
 | Event store / debug correlation | Present |
 | EtherCAT / CANopen / CiA 402 | **Named hole** |
 | Independent hardware e-stop channel | **Named hole** (software latch only) |
-| MEASURED dyno / ONLINE metal | **Named hole** |
+| MEASURED dyno / ONLINE metal | **Named hole** until `docs/metal_proof.json` is measured on an XL330 (`crates/metal`, `docs/METAL_EXPERIMENT.md`) |
 
 ## What a vendor port must do
 

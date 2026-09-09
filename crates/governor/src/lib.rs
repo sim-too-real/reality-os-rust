@@ -48,8 +48,8 @@ mod tests {
     use std::sync::Arc;
 
     use realityos_kernel::{
-        AuthorityClock, CalibrationId, DesignContentHash, FakeClock, FirmwareId, ReleaseHash,
-        SerialOrAsBuilt,
+        AuthorityClock, CalibrationId, DesignContentHash, FakeClock, FirmwareId, OsMonotonicClock,
+        ReleaseHash, SerialOrAsBuilt,
     };
     use realityos_plant::{HardwareIdentity, Plant, SensorPacket, SimPlant};
 
@@ -137,6 +137,28 @@ mod tests {
         assert!(c.require_online_identity);
         assert!(c.require_sensor_before_write);
         assert!(g.plant().production_locked());
+    }
+
+    #[test]
+    fn new_online_os_clock_immediate_watchdog_does_not_miss() {
+        let id = online_identity();
+        let plant = online_plant(&id);
+        let journal = temp_journal("os-wd");
+        let mut g = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            id,
+            plant,
+            journal,
+            b"test-signing-key-32bytes-minimum".to_vec(),
+            true,
+            vec!["a0".into()],
+            Arc::new(OsMonotonicClock::new()),
+        )
+        .expect("online");
+        let t = g.watchdog_tick_now();
+        assert!(
+            t.ok && !g.estop(),
+            "start heartbeat persist must not consume the 100ms watchdog budget: {t:?}"
+        );
     }
 
     fn online_identity() -> RuntimeIdentity {
