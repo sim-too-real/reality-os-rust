@@ -13,6 +13,12 @@ DEVICE="${REALITYOS_METAL_DEVICE:-}"
 OUT="${REALITYOS_METAL_PROOF:-docs/metal_proof.json}"
 CUTOFF_TESTED="${REALITYOS_METAL_CUTOFF_TESTED:-0}"
 
+# Authority UID cannot write the repo `docs/` tree. Resolve the install path
+# now; the reporter writes into $ROOT, then root copies here.
+if [[ "$OUT" != /* ]]; then
+  OUT="$(pwd)/$OUT"
+fi
+
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "error: run as root to switch UIDs; root is not the tested actor" >&2
   exit 2
@@ -119,6 +125,11 @@ start_auth() {
   fi
   chmod 0660 "$ROOT/ipc.sock"
   chgrp "$IPC_GROUP" "$ROOT/ipc.sock"
+  # udev may reset the tty to 0660 dialout after open. Re-apply exclusive mode.
+  if [[ -e "$DEVICE" ]]; then
+    chown "$AUTHORITY_USER:$AUTHORITY_USER" "$DEVICE" 2>/dev/null || true
+    chmod 0600 "$DEVICE" 2>/dev/null || true
+  fi
 }
 
 stop_auth() {
@@ -212,9 +223,16 @@ PY
   rm -f "$respfile"
 }
 
-CASES_JSON="[]"
+CASES_FILE="$ROOT/os_metal_cases.json"
+printf '%s\n' '[]' > "$CASES_FILE"
+chmod 0644 "$CASES_FILE"
 add_case() {
-  CASES_JSON="$(python3 -c 'import json,sys; a=json.loads(sys.argv[1]); a.append(json.loads(sys.argv[2])); print(json.dumps(a))' "$CASES_JSON" "$1")"
+  python3 -c 'import json,sys
+path, raw = sys.argv[1], sys.argv[2]
+a = json.load(open(path))
+a.append(json.loads(raw))
+open(path, "w").write(json.dumps(a))
+' "$CASES_FILE" "$1"
 }
 
 add_case "$(measure valid_hold 'verb=hold' NONE true "$PROP" --root "$ROOT" --id metal-hold --verb hold propose)"
@@ -396,11 +414,11 @@ meta = {
   "freshness_threshold_s": fresh.get("freshness_threshold_s"),
 }
 open("$ROOT/proof_meta.json","w").write(json.dumps(meta, indent=2))
-open("$ROOT/os_metal_cases.json","w").write('''$CASES_JSON''')
 print("meta-written")
 PY
 
-as_authority "$SMOKE" --root "$ROOT" --cases "$ROOT/os_metal_cases.json" --out "$OUT" report
+as_authority "$SMOKE" --root "$ROOT" --cases "$CASES_FILE" --out "$ROOT/metal_proof.json" report
+install -D -m 0644 "$ROOT/metal_proof.json" "$OUT"
 python3 - <<PY
 import json
 r = json.load(open("$OUT"))

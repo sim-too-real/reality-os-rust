@@ -52,7 +52,7 @@ Model and firmware are latched at identify time. Later sensor packets do not rew
 
 `realityos-metal-smoke serve` calls `RuntimeSession::start_online` → `OsMonotonicClock`. It does not use the HIL `Authority` object or `FakeClock`.
 
-Users: `realityos-authority` owns the tty, key, journal, and process. `realityos-autonomy` may use only the Unix socket. The metal root is `0751` so autonomy can traverse to `ipc.sock` (`0660` / `realityos-ipc`); `bus/` stays `0700`. A `0750` root would make IPC and `direct_device_open_attempts` fail closed without measuring the attacks.
+Users: `realityos-authority` owns the tty, key, journal, and process. `realityos-autonomy` may use only the Unix socket. The metal root is `0751` so autonomy can traverse to `ipc.sock` (`0660` / `realityos-ipc`); `bus/` stays `0700`. A `0750` root would make IPC and `direct_device_open_attempts` fail closed without measuring the attacks. After each `serve` bind the campaign re-applies `0600` on the tty because udev may restore `0660 dialout`.
 
 ## Sensor freshness
 
@@ -64,7 +64,7 @@ Users: `realityos-authority` owns the tty, key, journal, and process. `realityos
 
 ## Proof
 
-`docs/metal_proof.json` schema `docs/metal_proof.json` schema `realityos.metal_proof/1` is written only from measured cases on a real device. The reporter refuses to emit a success artifact when `hardware_present` is false. It does not overwrite `docs/hil_proof.json`. The PTY Protocol 2.0 stand-in in `crates/metal/tests/` is a driver regression test, not physical evidence. The PTY Protocol 2.0 stand-in in `crates/metal/tests/` is a driver regression test, not physical evidence.
+`docs/metal_proof.json` schema `realityos.metal_proof/1` is written only from measured cases on a real device. The campaign reporter writes the artifact into the metal root (authority-owned), then root installs it into `docs/`. The authority UID does not need write access to the repository. The reporter refuses to emit a success artifact when `hardware_present` is false. It does not overwrite `docs/hil_proof.json`. The PTY Protocol 2.0 stand-in in `crates/metal/tests/` is a driver regression test, not physical evidence. `scripts/metal-os-boundary.sh` measures the two-UID filesystem/device-open boundary only; it is not physical evidence and must not write `metal_proof.json`.
 
 ## How to run (bench host)
 
@@ -79,5 +79,7 @@ sudo -E env REALITYOS_METAL_DEVICE=/dev/ttyUSB0 \
 ```
 
 `REALITYOS_METAL_BAUD` and `REALITYOS_METAL_SERVO_ID` are optional. Probe tries the configured pair first, then common XL330 baud/id pairs, and writes the working pair into `metal.json`. Each campaign wipes `REALITYOS_METAL_ROOT` so `--first-online` is not refused by a leftover journal.
+
+`scripts/metal-os-boundary.sh` (CI `os-users`) proves the 0751 / device-open counting path with a dummy 0600 file. It is **not** a substitute for the XL330 campaign.
 
 This Cloud Agent VM has **no** USB/serial actuator and **no** self-hosted worker. Attach a Cursor self-hosted worker (`cursor worker start`) on the bench host that can see `/dev/ttyUSB*` / `/dev/ttyACM*`. Until that happens, the experiment is blocked. That is not a software-architecture remaining task.

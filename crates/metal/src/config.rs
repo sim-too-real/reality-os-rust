@@ -232,6 +232,25 @@ mod tests {
     }
 
     #[test]
+    fn resolve_probe_device_reads_metal_json_when_env_unset() {
+        if std::env::var("REALITYOS_METAL_DEVICE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .is_some()
+        {
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("realityos-metal-probe-cfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = MetalConfig::example("/dev/ttyUSB9");
+        cfg.save(dir.join(CONFIG_FILE)).unwrap();
+        assert_eq!(resolve_probe_device(&dir), PathBuf::from("/dev/ttyUSB9"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn candidate_ids_skip_broadcast_and_zero() {
         let ids = candidate_servo_ids(7, Some(0));
         assert_eq!(ids[0], 7);
