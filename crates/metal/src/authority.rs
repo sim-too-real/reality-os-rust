@@ -92,7 +92,18 @@ impl MetalAuthority {
     }
 
     pub fn handle(&mut self, req: MetalRequest) -> MetalResponse {
-        self.pet_supervisor();
+        // Watchdog only: a heartbeat emit is another journal+seal fsync pair.
+        // Heartbeat stale is 2 s; idle serve already heartbeats ~every 800 ms.
+        if !self.pet_watchdog() {
+            return self.refuse(
+                "egress",
+                "refuse",
+                vec![
+                    "estop_engaged".into(),
+                    "abort_latched:software_watchdog_miss".into(),
+                ],
+            );
+        }
         if req.injects_sensor_evidence() {
             return self.refuse(
                 "protocol",
@@ -128,10 +139,8 @@ impl MetalAuthority {
     }
 
     fn ingest_sensor(&mut self) -> MetalResponse {
-        self.pet_supervisor();
         match self.session.acquire_sensor() {
             Ok(_) => {
-                self.pet_supervisor();
                 let mut r = self.ok("sensor");
                 r.authority_receive_s = Some(self.session.governor.authority_now_s());
                 r.device_capture_s = Some(self.session.governor.last_device_capture_s());
@@ -143,6 +152,7 @@ impl MetalAuthority {
     }
 
     fn recover(&mut self) -> MetalResponse {
+        self.pet_heartbeat();
         let t = self
             .session
             .governor
@@ -190,11 +200,13 @@ impl MetalAuthority {
     }
 
     fn propose(&mut self, req: MetalRequest) -> MetalResponse {
-        let _ = self.session.governor.heartbeat_now();
+        // handle() already ticked the watchdog. Extra heartbeat/watchdog emits
+        // here are 4–8 fsyncs and can miss the 100 ms window before the serial
+        // write. dispatch_issued ticks again immediately before write_online.
         if let Err(e) = self.session.acquire_sensor() {
             return self.refuse("authorize", "refuse", vec![e]);
         }
-        if !self.pet_supervisor() {
+        if self.session.governor.estop() {
             return self.refuse(
                 "egress",
                 "refuse",
@@ -310,14 +322,8 @@ impl MetalAuthority {
         }
     }
 
-    /// ONLINE software watchdog is 50 ms (miss at 100 ms). Idle IPC must pet it.
-    /// Returns false if the tick latched ESTOP (a gap >100 ms cannot be caught up).
-    fn pet_supervisor(&mut self) -> bool {
-        let t = self.session.governor.watchdog_tick_now();
-        let _ = self.session.governor.heartbeat_now();
-        t.ok && !self.session.governor.estop()
-    }
-
+    /// ONLINE software watchdog is 50 ms (miss at 100 ms). One journal+seal
+    /// fsync pair. A gap >100 ms cannot be caught up.
     fn pet_watchdog(&mut self) -> bool {
         let t = self.session.governor.watchdog_tick_now();
         t.ok && !self.session.governor.estop()
@@ -332,15 +338,26 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
     use std::io::{BufRead, BufReader, ErrorKind};
     use std::time::Duration;
 
-    let mut auth = MetalAuthority::start(root, first_online)?;
-    // new_online already ticked the watchdog; pet before bind so socket setup
-    // cannot create a 100 ms miss before the idle loop.
-    auth.pet_supervisor();
+    let mut auth = match MetalAuthority::start(root, first_online) {
+        Ok(a) => a,
+        Err(e) => {
+            let _ = std::fs::write(root.join("serve.err"), format!("{e:#}\n"));
+            return Err(e);
+        }
+    };
+    // new_online already ticked; one watchdog pet covers bind without a
+    // heartbeat fsync. Schedule the next idle pet from *before* emit so a
+    // slow journal fsync cannot push the following gap past 100 ms.
+    if !auth.pet_watchdog() {
+        let msg = "software_watchdog_miss_before_bind";
+        let _ = std::fs::write(root.join("serve.err"), format!("{msg}\n"));
+        anyhow::bail!("{msg}");
+    }
     let listener = crate::ipc::bind_socket(root)?;
     listener.set_nonblocking(true)?;
-    // Each watchdog/heartbeat emit fsyncs journal+seal. 10 ms pets were ~400
-    // fsyncs/s and can miss the 100 ms watchdog on a bench disk.
-    let mut next_watchdog = std::time::Instant::now();
+    // Each watchdog/heartbeat emit fsyncs journal+seal. 10 ms pets of both
+    // were ~400 fsyncs/s and can miss the 100 ms watchdog on a bench disk.
+    let mut next_watchdog = std::time::Instant::now() + Duration::from_millis(40);
     let mut next_heartbeat = std::time::Instant::now() + Duration::from_millis(800);
     loop {
         if root.join("stop_serve").exists() {
@@ -348,12 +365,12 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
         }
         let now = std::time::Instant::now();
         if now >= next_watchdog {
+            next_watchdog = now + Duration::from_millis(40);
             let _ = auth.pet_watchdog();
-            next_watchdog = std::time::Instant::now() + Duration::from_millis(40);
         }
         if now >= next_heartbeat {
+            next_heartbeat = now + Duration::from_millis(800);
             auth.pet_heartbeat();
-            next_heartbeat = std::time::Instant::now() + Duration::from_millis(800);
         }
         let mut stream = match listener.accept() {
             Ok((s, _)) => s,

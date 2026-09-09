@@ -1,8 +1,9 @@
 //! PTY Protocol 2.0 stand-in. Proves driver identity latch + echo scan.
 //! Not a metal proof. Does not write docs/metal_proof.json.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use realityos_metal::authority::MetalAuthority;
@@ -12,6 +13,28 @@ use realityos_metal::identity::is_pty_path;
 use realityos_metal::ipc::MetalRequest;
 use realityos_metal::xl330::Xl330Driver;
 use realityos_plant::{ActionParams, HardwareDriverPort};
+
+/// Parallel start_online + journal fsyncs starve the 100 ms watchdog on GHA.
+fn pty_serial() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn journal_lines(root: &Path) -> usize {
+    std::fs::read_to_string(root.join("driver.jsonl"))
+        .map(|s| s.lines().filter(|l| !l.is_empty()).count())
+        .unwrap_or(0)
+}
+
+fn watchdog_events(root: &Path) -> usize {
+    std::fs::read_to_string(root.join("driver.jsonl"))
+        .map(|s| {
+            s.lines()
+                .filter(|l| l.contains("\"watchdog_tick\""))
+                .count()
+        })
+        .unwrap_or(0)
+}
 
 struct ChildGuard(std::process::Child);
 
@@ -55,6 +78,7 @@ fn spawn_responder() -> (ChildGuard, String) {
 
 #[test]
 fn xl330_pty_firmware_survives_sensor_and_echoed_status() {
+    let _serial = pty_serial();
     let (_guard, tty) = spawn_responder();
     let root =
         std::env::temp_dir().join(format!("realityos-metal-pty-driver-{}", std::process::id()));
@@ -84,6 +108,7 @@ fn xl330_pty_firmware_survives_sensor_and_echoed_status() {
 
 #[test]
 fn xl330_pty_start_online_hold_is_not_a_metal_proof() {
+    let _serial = pty_serial();
     let (_guard, tty) = spawn_responder();
     assert!(is_pty_path(std::path::Path::new(&tty)));
     let root =
@@ -107,10 +132,22 @@ fn xl330_pty_start_online_hold_is_not_a_metal_proof() {
     }
     cfg.save(root.join(CONFIG_FILE)).unwrap();
     let mut auth = MetalAuthority::start(&root, true).expect("start_online on PTY stand-in");
+    let journal_before = journal_lines(&root);
+    let watchdog_before = watchdog_events(&root);
     let resp = auth.handle(MetalRequest::propose("pty-hold", "hold"));
     assert!(resp.ok, "hold refused: {resp:?}");
     assert!(!resp.metal, "PTY stand-in must not claim metal: {resp:?}");
     assert_eq!(auth.physical_writes(), 1);
+    let added = journal_lines(&root).saturating_sub(journal_before);
+    let wd_added = watchdog_events(&root).saturating_sub(watchdog_before);
+    assert!(
+        added <= 8,
+        "first hold must not flood journal+seal fsyncs: added={added}"
+    );
+    assert!(
+        wd_added <= 2,
+        "propose path should tick watchdog at handle + dispatch only, got {wd_added}"
+    );
     assert_eq!(resp.clock, "OsMonotonicClock");
     let repo_proof = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/metal_proof.json");
     assert!(
@@ -122,6 +159,7 @@ fn xl330_pty_start_online_hold_is_not_a_metal_proof() {
 
 #[test]
 fn xl330_pty_serve_hold_survives_idle_watchdog() {
+    let _serial = pty_serial();
     let (_guard, tty) = spawn_responder();
     let root =
         std::env::temp_dir().join(format!("realityos-metal-pty-idle-{}", std::process::id()));
@@ -140,8 +178,9 @@ fn xl330_pty_serve_hold_survives_idle_watchdog() {
         let _ = realityos_metal::serve_forever(&serve_root, true);
     });
     assert!(
-        realityos_metal::ipc::wait_for_ipc(&root, 5_000),
-        "serve did not bind ipc.sock"
+        realityos_metal::ipc::wait_for_ipc(&root, 15_000),
+        "serve did not bind ipc.sock: {}",
+        std::fs::read_to_string(root.join("serve.err")).unwrap_or_default()
     );
     std::thread::sleep(Duration::from_millis(250));
     let resp = realityos_metal::ipc::call(&root, &MetalRequest::propose("pty-idle-hold", "hold"))
