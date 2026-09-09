@@ -187,7 +187,8 @@ fn xl330_pty_serve_hold_survives_idle_watchdog() {
         .expect("ipc hold after idle");
     assert!(
         resp.ok,
-        "first hold after idle watchdog gap must succeed: {resp:?}"
+        "first hold after idle watchdog gap must succeed: {resp:?} serve.err={}",
+        std::fs::read_to_string(root.join("serve.err")).unwrap_or_default()
     );
     assert!(!resp.metal);
     let _ = std::fs::write(root.join("stop_serve"), b"1");

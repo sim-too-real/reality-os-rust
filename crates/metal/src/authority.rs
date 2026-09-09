@@ -370,7 +370,9 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
         let now = std::time::Instant::now();
         if now >= next_watchdog {
             next_watchdog = now + Duration::from_millis(40);
-            let _ = auth.pet_watchdog();
+            if !auth.pet_watchdog() {
+                let _ = std::fs::write(root.join("serve.err"), "software_watchdog_miss_idle\n");
+            }
         }
         if now >= next_heartbeat {
             next_heartbeat = now + Duration::from_millis(800);

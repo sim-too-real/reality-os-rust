@@ -16,5 +16,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # Metal ONLINE software watchdog misses if a journal+seal fsync exceeds
+      # 100 ms. Running those tests inside the workspace smash races HIL ledger
+      # I/O (push `authority` flake on 491462d). Isolated, single-threaded.
+      - name: test-metal
+        run: cargo test -p realityos-metal --all-targets -- --test-threads=1
       - name: test
-        run: cargo test --workspace --all-targets
+        run: cargo test --workspace --all-targets --exclude realityos-metal
