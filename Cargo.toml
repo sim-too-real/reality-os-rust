@@ -14,6 +14,8 @@ members = [
     "crates/rate",
     "crates/agent",
     "crates/gauntlet",
+    "crates/vport",
+    "crates/hil",
     "apps/ros-governor",
 ]
 default-members = [
@@ -30,6 +32,8 @@ default-members = [
     "crates/rate",
     "crates/agent",
     "crates/gauntlet",
+    "crates/vport",
+    "crates/hil",
     "apps/ros-governor",
 ]
 
@@ -56,8 +60,11 @@ realityos-vision = { path = "crates/vision" }
 realityos-rate = { path = "crates/rate" }
 realityos-agent = { path = "crates/agent" }
 realityos-gauntlet = { path = "crates/gauntlet" }
+realityos-vport = { path = "crates/vport" }
+realityos-hil = { path = "crates/hil" }
 
 serde = { version = "1", features = ["derive"] }
+fs2 = "0.4"
 serde_json = "1"
 thiserror = "2"
 sha2 = "0.10"

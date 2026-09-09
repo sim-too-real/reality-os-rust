@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::caps::{check_hard_action_bounds, ActionParams};
 use crate::command::{ActuationCommand, ExecuteBind};
 use crate::error::PlantError;
+use crate::hil_faults;
 use crate::ledger::CommandLedger;
 use crate::signing::{signature_violations, signing_key_hash};
 use crate::traits::Plant;
@@ -118,9 +119,11 @@ pub fn execute_certified_command(
     if !violations.is_empty() {
         return ExecuteResult::refused(cid, violations);
     }
+    hil_faults::crash_if("before_prepare");
     if let Err(e) = ledger.prepare(command) {
         return ExecuteResult::refused(cid, vec![e.to_string()]);
     }
+    hil_faults::crash_if("after_prepare_before_write");
 
     let write = with_certified_write(|| {
         if let Some(wps) = command.follow_waypoints() {
@@ -130,20 +133,26 @@ pub fn execute_certified_command(
         }
     });
     match write {
-        Ok(realized) => match ledger.ack(command) {
-            Ok(_) => ExecuteResult {
-                ok: true,
-                executed: true,
-                outcome: CommandOutcome::Executed,
-                violations: Vec::new(),
-                command_id: cid.into(),
-                realized: Some(realized),
-            },
-            Err(e) => {
-                let _ = ledger.mark_unknown(command);
-                ExecuteResult::unknown(cid, vec![e.to_string()])
+        Ok(realized) => {
+            hil_faults::crash_if("after_write_before_ack");
+            match ledger.ack(command) {
+                Ok(_) => {
+                    hil_faults::crash_if("after_ack");
+                    ExecuteResult {
+                        ok: true,
+                        executed: true,
+                        outcome: CommandOutcome::Executed,
+                        violations: Vec::new(),
+                        command_id: cid.into(),
+                        realized: Some(realized),
+                    }
+                }
+                Err(e) => {
+                    let _ = ledger.mark_unknown(command);
+                    ExecuteResult::unknown(cid, vec![e.to_string()])
+                }
             }
-        },
+        }
         Err(PlantError::EstopEngaged) => {
             let _ = ledger.mark_unknown(command);
             ExecuteResult::unknown(cid, vec!["estop_engaged".into()])

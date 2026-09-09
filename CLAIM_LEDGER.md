@@ -54,5 +54,8 @@ Never promote one level into another.
 | Process isolation of the authority kernel | Process-isolation | **NOT_CLAIMED** | deployment topology |
 | Hardware root of trust / authenticated journal | Machine-wide | **NOT_CLAIMED** | HMAC is a process shared secret |
 | Independent safety / STO / SS1 / PL / SIL | Physical safety | **NOT_CLAIMED** | named hole |
+| ONLINE `OnlineWrite` is instance-bound (serial/firmware/cal/actuators in digest) | Rust type/API + same-process | ACTIVE | `RuntimeIdentity::instance_hash`; governor cross-instance tests |
+| Untrusted HIL process cannot submit authority objects | Process-isolation (HIL IPC) | ACTIVE | `crates/hil` protocol refuse; campaign |
+| Exclusive virtual endpoint: second process cannot `flock`/`open` log without chmod | Process-isolation (same-UID, no chmod) | ACTIVE | `try_hostile_open`; `docs/HIL.md` |
 | Fieldbus / metal robot | Physical safety | **NAMED_HOLE** | `FieldbusLink::named_hole`; `docs/ROBOT_CONNECTION.md` |
 | ONLINE metal / MEASURED / ISO PL/SIL | Physical safety | **NOT_EVIDENCE** | type system + this ledger |

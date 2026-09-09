@@ -47,6 +47,11 @@ pub trait ActuationCommand {
     fn config_hash(&self) -> &str {
         ""
     }
+    /// Digest of the runtime/plant instance this command was sealed for.
+    /// Empty on SIM fixtures. ONLINE requires a match at `write_online`.
+    fn runtime_instance_hash(&self) -> &str {
+        ""
+    }
 }
 
 #[derive(Debug, Clone)]

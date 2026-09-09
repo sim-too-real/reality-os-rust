@@ -35,6 +35,8 @@ const LATCHING_PREFIXES: &[&str] = &[
     "missing_allowed_action",
     "non_numeric_allowed_action",
     "non_finite_allowed_action",
+    "runtime_instance_mismatch",
+    "actuator_scope_not_authorized",
 ];
 
 #[derive(Debug, Clone)]
@@ -399,6 +401,23 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
         if !cal.is_empty() && !command.calibration_ids().iter().any(|c| c == cal) {
             pre.push("calibration_id_not_on_command".into());
         }
+        if R::ONLINE_LOCKED {
+            let expect = self.identity.instance_hash(&self.authorized_actuator_ids);
+            if command.runtime_instance_hash().is_empty() {
+                pre.push("command_missing_runtime_instance_hash".into());
+            } else if command.runtime_instance_hash() != expect {
+                pre.push("runtime_instance_mismatch".into());
+            }
+            if command.actuator_ids().is_empty() {
+                pre.push("online_requires_actuator_ids".into());
+            } else if !command
+                .actuator_ids()
+                .iter()
+                .all(|id| self.authorized_actuator_ids.iter().any(|a| a == id))
+            {
+                pre.push("actuator_scope_not_authorized".into());
+            }
+        }
         if let Some(env) = &self.envelope {
             if env.require_for_write && !env.is_complete() {
                 pre.push("envelope_pack_incomplete".into());
@@ -653,12 +672,14 @@ impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
         if self.authorized_actuator_ids.is_empty() {
             return Err(vec!["online_requires_actuator_ids".into()]);
         }
+        let instance = self.identity.instance_hash(&self.authorized_actuator_ids);
         let cmd = issued.bind_online(
             self.identity.release_hash.as_str(),
             self.identity.design_str(),
             self.identity.calibration_id_str(),
             hash,
             self.authorized_actuator_ids.clone(),
+            &instance,
         )?;
         Ok(OnlineWrite {
             command: cmd.seal_online(key)?,

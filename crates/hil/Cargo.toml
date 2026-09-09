@@ -1,0 +1,29 @@
+[package]
+name = "realityos-hil"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "HIL/deployment harness: untrusted process vs authority process. Not a kernel layer."
+readme = false
+
+[[bin]]
+name = "hil-authority"
+path = "src/bin/hil-authority.rs"
+
+[[bin]]
+name = "hil-untrusted"
+path = "src/bin/hil-untrusted.rs"
+
+[dependencies]
+realityos-kernel.workspace = true
+realityos-plant = { workspace = true, features = ["hil-faults"] }
+realityos-governor.workspace = true
+realityos-core.workspace = true
+realityos-vport.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+
+[lints]
+workspace = true

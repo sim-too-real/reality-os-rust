@@ -215,4 +215,186 @@ mod tests {
         g.latch_safe_state(SafeState::Fault);
         assert_eq!(g.safe_state(), SafeState::Fault);
     }
+
+    fn online_gov(
+        tag: &str,
+        id: RuntimeIdentity,
+        key: &[u8],
+        actuators: Vec<String>,
+    ) -> RuntimeGovernor<SimPlant, OnlineLocked> {
+        let mut plant = SimPlant::new("p", 1, 1.0);
+        plant.go_online();
+        let mut g = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            id,
+            plant,
+            temp_journal(tag),
+            key.to_vec(),
+            true,
+            actuators,
+            10.0,
+        )
+        .unwrap();
+        g.record_sensor(&[("q0".into(), 0.0)], 10.0, 1, "frame", "s")
+            .unwrap();
+        g
+    }
+
+    fn decide_hold(seq: i64, now_s: f64) -> realityos_core::IssuedCommand {
+        use realityos_core::{DecideRequest, Intent, RealityOs, WorldView};
+        let mut ros = RealityOs::new();
+        let mut req = DecideRequest::new(
+            Intent::language("hold", "hold"),
+            WorldView {
+                tau_max: vec![5.0],
+                ..WorldView::default()
+            },
+            now_s,
+        );
+        req.sequence = seq;
+        req.command_id = format!("cmd-inst-{seq}-{now_s}");
+        ros.decide(req).command.expect("allow")
+    }
+
+    fn mutate_serial(mut id: RuntimeIdentity, serial: &str) -> RuntimeIdentity {
+        id.serial_or_as_built = Some(SerialOrAsBuilt::new(serial).unwrap());
+        id
+    }
+
+    fn mutate_fw(mut id: RuntimeIdentity, fw: &str) -> RuntimeIdentity {
+        id.firmware_id = Some(FirmwareId::new(fw).unwrap());
+        id
+    }
+
+    fn mutate_cal(mut id: RuntimeIdentity, cal: &str) -> RuntimeIdentity {
+        id.calibration_id = Some(CalibrationId::new(cal).unwrap());
+        id
+    }
+
+    #[test]
+    fn online_write_refuses_same_design_different_serial() {
+        use realityos_plant::ActionParams;
+        let key = b"shared-key-across-instances";
+        let mut a = online_gov("ser-a", online_identity(), key, vec!["joint-0".into()]);
+        let mut b = online_gov(
+            "ser-b",
+            mutate_serial(online_identity(), "SN-2"),
+            key,
+            vec!["joint-0".into()],
+        );
+        let write = a.authorize_issued(decide_hold(1, 10.0)).unwrap();
+        assert!(a.write_online(&write, &ActionParams::empty(), 10.0).ok);
+        let t = b.write_online(&write, &ActionParams::empty(), 10.0);
+        assert!(!t.ok, "{:?}", t.violations);
+        assert!(
+            t.violations
+                .iter()
+                .any(|v| v.contains("runtime_instance_mismatch")),
+            "{:?}",
+            t.violations
+        );
+        assert_eq!(b.plant().write_count(), 0);
+    }
+
+    #[test]
+    fn online_write_refuses_same_serial_different_firmware() {
+        use realityos_plant::ActionParams;
+        let key = b"shared-key-across-instances";
+        let a = online_gov("fw-a", online_identity(), key, vec!["joint-0".into()]);
+        let mut b = online_gov(
+            "fw-b",
+            mutate_fw(online_identity(), "FW-2"),
+            key,
+            vec!["joint-0".into()],
+        );
+        let write = a.authorize_issued(decide_hold(2, 11.0)).unwrap();
+        let t = b.write_online(&write, &ActionParams::empty(), 11.0);
+        assert!(!t.ok);
+        assert!(t
+            .violations
+            .iter()
+            .any(|v| v.contains("runtime_instance_mismatch")));
+        assert_eq!(b.plant().write_count(), 0);
+    }
+
+    #[test]
+    fn online_write_refuses_changed_calibration() {
+        use realityos_plant::ActionParams;
+        let key = b"shared-key-across-instances";
+        let a = online_gov("cal-a", online_identity(), key, vec!["joint-0".into()]);
+        let mut b = online_gov(
+            "cal-b",
+            mutate_cal(online_identity(), "cal-2"),
+            key,
+            vec!["joint-0".into()],
+        );
+        let write = a.authorize_issued(decide_hold(3, 12.0)).unwrap();
+        let t = b.write_online(&write, &ActionParams::empty(), 12.0);
+        assert!(!t.ok);
+        assert!(t
+            .violations
+            .iter()
+            .any(|v| v.contains("runtime_instance_mismatch")));
+        assert_eq!(b.plant().write_count(), 0);
+    }
+
+    #[test]
+    fn online_write_refuses_changed_actuator_set() {
+        use realityos_plant::ActionParams;
+        let key = b"shared-key-across-instances";
+        let a = online_gov("act-a", online_identity(), key, vec!["joint-0".into()]);
+        let mut b = online_gov(
+            "act-b",
+            online_identity(),
+            key,
+            vec!["joint-0".into(), "joint-1".into()],
+        );
+        let write = a.authorize_issued(decide_hold(4, 13.0)).unwrap();
+        let t = b.write_online(&write, &ActionParams::empty(), 13.0);
+        assert!(!t.ok);
+        assert!(t
+            .violations
+            .iter()
+            .any(|v| v.contains("runtime_instance_mismatch")
+                || v.contains("actuator_scope_not_authorized")));
+        assert_eq!(b.plant().write_count(), 0);
+    }
+
+    #[test]
+    fn online_write_refuses_reused_key_on_foreign_instance() {
+        use realityos_plant::ActionParams;
+        let key = b"accidentally-reused-signing-key";
+        let a = online_gov("key-a", online_identity(), key, vec!["joint-0".into()]);
+        let mut b = online_gov(
+            "key-b",
+            mutate_serial(online_identity(), "SN-OTHER"),
+            key,
+            vec!["joint-0".into()],
+        );
+        let write = a.authorize_issued(decide_hold(5, 14.0)).unwrap();
+        let t = b.write_online(&write, &ActionParams::empty(), 14.0);
+        assert!(!t.ok);
+        assert_eq!(b.plant().write_count(), 0);
+    }
+
+    #[test]
+    fn online_write_from_governor_a_refused_by_governor_b() {
+        use realityos_plant::ActionParams;
+        let a = online_gov(
+            "ab-a",
+            online_identity(),
+            b"key-a-unique",
+            vec!["joint-0".into()],
+        );
+        let mut b = online_gov(
+            "ab-b",
+            mutate_serial(online_identity(), "SN-B"),
+            b"key-b-unique",
+            vec!["joint-0".into()],
+        );
+        let write = a.authorize_issued(decide_hold(6, 15.0)).unwrap();
+        let t = b.write_online(&write, &ActionParams::empty(), 15.0);
+        assert!(!t.ok);
+        assert_eq!(b.plant().write_count(), 0);
+        assert_eq!(a.plant().write_count(), 0);
+    }
 }
