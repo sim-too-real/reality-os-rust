@@ -39,6 +39,11 @@ pub const ADDR_TORQUE_ENABLE: u16 = 64;
 pub const ADDR_STATUS_RETURN_LEVEL: u16 = 68;
 pub const STATUS_RETURN_ALL: u8 = 2;
 pub const ADDR_HARDWARE_ERROR: u16 = 70;
+/// RAM. Factory 400. Wizard 0 means the servo never tracks a goal.
+pub const ADDR_POSITION_P_GAIN: u16 = 84;
+pub const FACTORY_POSITION_P_GAIN: u16 = 400;
+/// Below this, a 2-tick nudge will not settle in the campaign sample window.
+pub const MIN_POSITION_P_GAIN: u16 = 80;
 pub const ADDR_PROFILE_ACCEL: u16 = 108;
 pub const ADDR_PROFILE_VELOCITY: u16 = 112;
 pub const ADDR_GOAL_POSITION: u16 = 116;

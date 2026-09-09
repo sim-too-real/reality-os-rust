@@ -210,6 +210,30 @@ fn xl330_pty_raises_wizard_velocity_limit_so_nudge_can_finish() {
 }
 
 #[test]
+fn xl330_pty_raises_wizard_zero_p_gain_so_nudge_can_track() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_P", "1")]);
+    let root = metal_test_root("pty-zero-p");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("raise Position P Gain 0 to factory 400");
+    assert_eq!(driver.applied_position_p_gain(), 400);
+    driver.read_sensor(0.0).expect("sensor");
+    let before = driver.last_present_position();
+    driver
+        .write_action(&[0.05], &ActionParams::empty())
+        .expect("nudge after restoring P gain");
+    driver.read_sensor(0.1).expect("sensor");
+    let after = driver.last_present_position();
+    assert_ne!(
+        after, before,
+        "Wizard P=0 must not leave present stuck after setup"
+    );
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_time_based_drive_mode_is_forced_velocity_based() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_TIME_BASED", "1")]);

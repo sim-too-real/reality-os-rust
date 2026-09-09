@@ -142,6 +142,8 @@ def init_regs() -> bytearray:
         regs[48:52] = struct.pack("<i", 2048)
     if os.environ.get("REALITYOS_METAL_PTY_PWM") == "1":
         regs[11] = 16
+    p_gain = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_P") == "1" else 400
+    regs[84:86] = struct.pack("<H", p_gain)
     regs[68] = 0 if os.environ.get("REALITYOS_METAL_PTY_SRL0") == "1" else 2
     regs[120:122] = struct.pack("<H", 1234)
     regs[126:128] = struct.pack("<h", 0)
@@ -179,7 +181,9 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
                 return b"", 0x08  # Protocol 2.0 data range
         regs[addr : addr + len(data)] = data
         if addr == 116 and len(data) >= 4:
-            regs[132:136] = data[:4]
+            p_gain = struct.unpack_from("<H", regs, 84)[0]
+            if p_gain > 0:
+                regs[132:136] = data[:4]
         return b"", 0
     if inst == INST_REBOOT:
         regs[70] = 0

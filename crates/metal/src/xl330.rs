@@ -26,9 +26,10 @@ use crate::protocol::{
     instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE,
     ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR, ADDR_MAX_POSITION_LIMIT,
     ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER,
-    ADDR_OPERATING_MODE, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY,
-    ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE, ADDR_VELOCITY_LIMIT,
-    BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, OPERATING_MODE_POSITION, STATUS_RETURN_ALL,
+    ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL,
+    ADDR_PROFILE_VELOCITY, ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE,
+    ADDR_VELOCITY_LIMIT, BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_POSITION_P_GAIN,
+    MIN_POSITION_P_GAIN, OPERATING_MODE_POSITION, STATUS_RETURN_ALL,
 };
 
 pub struct Xl330Driver {
@@ -56,6 +57,7 @@ pub struct Xl330Driver {
     max_position: i32,
     velocity_limit: u32,
     drive_mode: u8,
+    position_p_gain: u16,
 }
 
 impl Xl330Driver {
@@ -112,6 +114,7 @@ impl Xl330Driver {
             max_position: 4095,
             velocity_limit: 0,
             drive_mode: 0,
+            position_p_gain: 0,
         };
         driver.connect_serial()?;
         driver.refresh_identity();
@@ -194,6 +197,10 @@ impl Xl330Driver {
 
     pub fn applied_drive_mode(&self) -> u8 {
         self.drive_mode
+    }
+
+    pub fn applied_position_p_gain(&self) -> u16 {
+        self.position_p_gain
     }
 
     pub fn torque_is_enabled(&self) -> bool {
@@ -416,6 +423,22 @@ impl Xl330Driver {
             None,
             false,
         )?;
+        let got_p = self
+            .read_reg(ADDR_POSITION_P_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b))
+            .unwrap_or(0);
+        self.position_p_gain = got_p;
+        if got_p < MIN_POSITION_P_GAIN {
+            self.write_reg(
+                ADDR_POSITION_P_GAIN,
+                &FACTORY_POSITION_P_GAIN.to_le_bytes(),
+                "setup_position_p_gain",
+                None,
+                false,
+            )?;
+            self.position_p_gain = FACTORY_POSITION_P_GAIN;
+        }
         // EEPROM writes can NAK the next instruction if we immediately continue.
         std::thread::sleep(Duration::from_millis(50));
         let max_v = self

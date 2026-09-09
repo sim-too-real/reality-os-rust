@@ -107,5 +107,6 @@ First-contact script invariants (found on the PTY sequence, would fail the first
 * CI `os-users` runs `scripts/metal-pty-sequence.sh` so campaign-script first-contact bugs (empty `METAL_CMD_ID`, crash-replay hang, replay latch, identify-only probe, PTY `fuser` exclusive) fail before the XL330 bench. That job is not physical evidence. The sequence must skip exclusive-tty fail on `/dev/pts/*`; the responder holding the master is not ModemManager.
 * Wizard baud index 0 is 9 600. Probe tries it last so a factory 57 600 bus does not wait on a slow miss.
 * Linux asserts DTR on the first USB-serial open. Cheap FTDI/CP2102 boards wire that to servo RESET. The driver and campaign clear HUPCL before exclusive open so close/crash-replay does not reboot; real UART waits 300 ms after open. U2D2 has no DTR-RESET. Do not toggle DTR/RTS from userspace.
+* Wizard Position P Gain `0` never tracks a goal. Setup raises it to factory **400** when it is below 80. It does not lower a higher Wizard P.
 
 This Cloud Agent VM has **no** USB/serial actuator and **no** self-hosted worker. Attach a Cursor self-hosted worker (`cursor worker start`) on the bench host that can see `/dev/ttyUSB*` / `/dev/ttyACM*`. Until that happens, the experiment is blocked. That is not a software-architecture remaining task.
