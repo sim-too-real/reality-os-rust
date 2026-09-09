@@ -5,10 +5,13 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Factory XL330 is 57 600. Wizard also allows 9 600 and 1–4 Mbps.
-pub const CANDIDATE_BAUDS: &[u32] = &[
-    57_600, 115_200, 1_000_000, 2_000_000, 3_000_000, 4_000_000, 9_600,
-];
+/// Factory XL330 is 57 600. Automatic scan also tries 115 200, 1–2 Mbps, and
+/// Wizard 9 600 last. 3 Mbps / 4 Mbps are U2D2/Wizard rates only — a
+/// CH340/CP2102 (max ~2 Mbps) can wedge after those opens, so a cold miss
+/// at 57 600 never recovers on the configured retry.
+pub const CANDIDATE_BAUDS: &[u32] = &[57_600, 115_200, 1_000_000, 2_000_000, 9_600];
+/// Only added when configured or `REALITYOS_METAL_BAUD` is already 3 or 4 Mbps.
+pub const HIGH_WIZARD_BAUDS: &[u32] = &[3_000_000, 4_000_000];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetalConfig {
@@ -204,14 +207,24 @@ pub const IPC_SOCKET_MODE: u32 = 0o660;
 
 pub fn candidate_bauds(configured: u32, extra: Option<u32>) -> Vec<u32> {
     let mut out = Vec::new();
-    for b in std::iter::once(configured)
-        .chain(extra)
-        .chain(CANDIDATE_BAUDS.iter().copied())
-    {
+    let push = |out: &mut Vec<u32>, b: u32| {
         if b > 0 && !out.contains(&b) {
             out.push(b);
         }
+    };
+    push(&mut out, configured);
+    if let Some(b) = extra {
+        push(&mut out, b);
     }
+    for b in CANDIDATE_BAUDS.iter().copied().filter(|b| *b != 9_600) {
+        push(&mut out, b);
+    }
+    if out.iter().any(|b| HIGH_WIZARD_BAUDS.contains(b)) {
+        for b in HIGH_WIZARD_BAUDS {
+            push(&mut out, *b);
+        }
+    }
+    push(&mut out, 9_600);
     out
 }
 
@@ -237,10 +250,25 @@ mod tests {
         assert!(b.contains(&57_600));
         assert!(b.contains(&115_200));
         assert!(b.contains(&2_000_000));
-        assert!(b.contains(&3_000_000));
-        assert!(b.contains(&4_000_000));
+        assert!(
+            !b.contains(&3_000_000),
+            "3 Mbps is a U2D2 hint, not an automatic CH340 scan"
+        );
+        assert!(!b.contains(&4_000_000));
         assert!(b.contains(&9_600));
         assert_eq!(*b.last().unwrap(), 9_600);
+    }
+
+    #[test]
+    fn high_wizard_bauds_join_scan_only_when_hinted() {
+        let hi = candidate_bauds(57_600, Some(4_000_000));
+        assert_eq!(hi[0], 57_600);
+        assert!(hi.contains(&3_000_000));
+        assert!(hi.contains(&4_000_000));
+        let four = hi.iter().position(|&x| x == 4_000_000).unwrap();
+        let slow = hi.iter().position(|&x| x == 9_600).unwrap();
+        assert!(four < slow, "4 Mbps must be tried before Wizard 9600");
+        assert_eq!(*hi.last().unwrap(), 9_600);
     }
 
     #[test]
