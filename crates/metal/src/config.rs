@@ -181,6 +181,8 @@ pub const LOCK_FILE: &str = "actuator.lock";
 pub const PRESENT_FILE: &str = "present";
 pub const GOAL_FILE: &str = "goal";
 pub const VIN_FILE: &str = "vin";
+/// XL330 Moving (addr 122). Campaign waits for 0 before sampling present.
+pub const MOVING_FILE: &str = "moving";
 pub const FRESHNESS_FILE: &str = "sensor_freshness.json";
 pub const IPC_SOCKET_MODE: u32 = 0o660;
 

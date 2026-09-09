@@ -16,8 +16,8 @@ use realityos_plant::{
 use serialport::SerialPort;
 
 use crate::config::{
-    candidate_bauds, candidate_servo_ids, MetalConfig, BUS_DIR, GOAL_FILE, LOCK_FILE, PRESENT_FILE,
-    VIN_FILE,
+    candidate_bauds, candidate_servo_ids, MetalConfig, BUS_DIR, GOAL_FILE, LOCK_FILE, MOVING_FILE,
+    PRESENT_FILE, VIN_FILE,
 };
 use crate::egress::EgressLog;
 use crate::identity::{is_pty_path, usb_identity_for_tty, MeasuredIdentity};
@@ -27,13 +27,13 @@ use crate::protocol::{
     ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION,
     ADDR_HARDWARE_ERROR, ADDR_HOMING_OFFSET, ADDR_ID, ADDR_MAX_POSITION_LIMIT,
     ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER,
-    ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION, ADDR_PRESENT_VOLTAGE,
-    ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_PWM_LIMIT, ADDR_REALTIME_TICK,
-    ADDR_SECONDARY_ID, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN,
-    ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN, BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED,
-    FACTORY_POSITION_P_GAIN, FACTORY_PWM_LIMIT, FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN,
-    MIN_POSITION_P_GAIN, MIN_PWM_LIMIT, MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN,
-    OPERATING_MODE_POSITION, SECONDARY_ID_DISABLED, STATUS_RETURN_ALL,
+    ADDR_MOVING, ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION,
+    ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_PWM_LIMIT,
+    ADDR_REALTIME_TICK, ADDR_SECONDARY_ID, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE,
+    ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN, BROADCAST_ID,
+    DRIVE_MODE_VELOCITY_BASED, FACTORY_POSITION_P_GAIN, FACTORY_PWM_LIMIT, FACTORY_VELOCITY_I_GAIN,
+    FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN, MIN_PWM_LIMIT, MIN_VELOCITY_I_GAIN,
+    MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION, SECONDARY_ID_DISABLED, STATUS_RETURN_ALL,
 };
 
 pub struct Xl330Driver {
@@ -951,6 +951,7 @@ impl Xl330Driver {
             return Err(PlantError::refused("dxl_short_motion_block"));
         }
         let tick = le_u16(&b[0..2]).unwrap_or(0);
+        let moving = b[(ADDR_MOVING - ADDR_REALTIME_TICK) as usize];
         let cur = i16::from_le_bytes([b[6], b[7]]);
         let vel = le_i32(&b[8..12]).unwrap_or(0);
         let pos =
@@ -958,6 +959,7 @@ impl Xl330Driver {
         let volt = le_u16(&b[24..26]).unwrap_or(0);
         self.last_present = pos;
         self.persist_positions();
+        let _ = std::fs::write(self.bus.join(MOVING_FILE), moving.to_string());
         Ok((pos, vel, cur, volt, tick))
     }
 

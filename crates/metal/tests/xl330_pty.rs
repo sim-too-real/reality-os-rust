@@ -111,6 +111,12 @@ fn xl330_pty_firmware_survives_sensor_and_echoed_status() {
     driver
         .read_sensor(0.0)
         .expect("sensor over echoed PTY status");
+    let moving = std::fs::read_to_string(root.join("bus").join("moving")).unwrap_or_default();
+    assert_eq!(
+        moving.trim(),
+        "0",
+        "sensor must persist XL330 Moving (addr 122) for campaign settle"
+    );
     let after = driver.measured();
     assert_eq!(
         after.firmware_id, "xl330-m288:1190:46",
@@ -120,6 +126,23 @@ fn xl330_pty_firmware_survives_sensor_and_echoed_status() {
         .write_action(&[0.0], &ActionParams::empty())
         .expect("hold write");
     assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("nudge write");
+    driver.read_sensor(0.0).expect("sensor after nudge");
+    let moving = std::fs::read_to_string(root.join("bus").join("moving")).unwrap_or_default();
+    assert_eq!(
+        moving.trim(),
+        "1",
+        "first motion-block after a goal step must report Moving"
+    );
+    driver.read_sensor(0.0).expect("sensor after moving");
+    let moving = std::fs::read_to_string(root.join("bus").join("moving")).unwrap_or_default();
+    assert_eq!(
+        moving.trim(),
+        "0",
+        "next motion-block must clear Moving so campaign settle can finish"
+    );
     driver.close();
     let _ = std::fs::remove_dir_all(&root);
 }

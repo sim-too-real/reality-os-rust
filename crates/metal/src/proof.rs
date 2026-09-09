@@ -104,6 +104,14 @@ pub fn aggregates_from_cases(cases: &[CaseRecord]) -> ProofAggregates {
     a
 }
 
+/// Experiment acceptance for a no-load XL330 hold, in position ticks.
+///
+/// XL330 resolution is 4096 ticks/rev (0.088°). Robotis does not specify
+/// zero-count hold. Under factory Position P Gain 400 a parked horn still
+/// hunts a few counts. 4 ticks ≈ 0.35°, well below the certified 32-tick
+/// (~2.8°) nudge. Not a datasheet accuracy spec and not certified.
+pub const HOLD_STILL_MAX_ABS_TICKS: i64 = 4;
+
 /// Device present delta from campaign `observed_motion`.
 /// Prefers `delta=N`; otherwise `present A->B`.
 pub fn present_position_delta(motion: Option<&str>) -> Option<i64> {
@@ -119,6 +127,16 @@ pub fn present_position_delta(motion: Option<&str>) -> Option<i64> {
     let pair = rest.split_whitespace().next()?;
     let (a, b) = pair.split_once("->")?;
     Some(b.parse::<i64>().ok()? - a.parse::<i64>().ok()?)
+}
+
+/// Hold stayed inside the no-load hunt band. Missing present is not a hold.
+pub fn hold_still(motion: Option<&str>) -> bool {
+    present_position_delta(motion).is_some_and(|d| d.abs() <= HOLD_STILL_MAX_ABS_TICKS)
+}
+
+/// Nudge moved farther than no-load hunt. A 1-count flicker is not item 8.
+pub fn nudge_moved(motion: Option<&str>) -> bool {
+    present_position_delta(motion).is_some_and(|d| d.abs() > HOLD_STILL_MAX_ABS_TICKS)
 }
 
 fn identity_looks_like_pty_stand_in(id: &serde_json::Value) -> bool {
@@ -183,13 +201,13 @@ impl MetalProof {
             c.name == "valid_hold"
                 && c.expected_authorization
                 && c.write_delta > 0
-                && present_position_delta(c.observed_motion.as_deref()) == Some(0)
+                && hold_still(c.observed_motion.as_deref())
         });
         let has_nudge = cases.iter().any(|c| {
             c.name == "valid_nudge"
                 && c.expected_authorization
                 && c.write_delta > 0
-                && present_position_delta(c.observed_motion.as_deref()).is_some_and(|d| d != 0)
+                && nudge_moved(c.observed_motion.as_deref())
         });
         let freshness_measured =
             meta.device_capture_s.is_some() && meta.authority_receive_s.is_some();
@@ -362,6 +380,7 @@ pub fn default_unresolved() -> Vec<String> {
         "USB-serial adapter serial is not a factory actuator serial; the servo EEPROM has none"
             .into(),
         "Realtime Tick is a wrapping 1 ms device counter, not a synchronized clock".into(),
+        "hold-still acceptance is |present delta| <= 4 ticks (~0.35°); XL330 quantization is 0.088°/tick and no-load P-gain hunt is not specified as 0. Not certified positioning accuracy".into(),
         "no STO/SS1/PLC/SIL/ISO is provided or claimed".into(),
     ]
 }
@@ -465,7 +484,7 @@ mod tests {
                 2,
                 true,
                 true,
-                Some("present 2048->2050".into()),
+                Some("present 2048->2080 goal=2080 delta=32".into()),
                 "consumed",
             ),
             CaseRecord::measure(
@@ -567,6 +586,12 @@ mod tests {
 
     #[test]
     fn measured_success_requires_hold_still_and_nudge_present_delta() {
+        assert!(hold_still(Some("present 2048->2048 goal=2048 delta=0")));
+        assert!(hold_still(Some("present 2048->2050 goal=2048 delta=2")));
+        assert!(!hold_still(Some("present 2048->2080 goal=2080 delta=32")));
+        assert!(nudge_moved(Some("present 2048->2080 goal=2080 delta=32")));
+        assert!(!nudge_moved(Some("present 2048->2050 goal=2080 delta=2")));
+
         let mut stuck = ok_cases();
         stuck[1].observed_motion = Some("present 2048->2048 goal=2080 delta=0".into());
         let incomplete =
@@ -575,13 +600,28 @@ mod tests {
             incomplete.experiment_status, "measured_incomplete_or_failed",
             "a goal write without present motion is not a nudge"
         );
+        let mut hunt_only = ok_cases();
+        hunt_only[1].observed_motion = Some("present 2048->2050 goal=2080 delta=2".into());
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), hunt_only, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status, "measured_incomplete_or_failed",
+            "a 2-tick flicker is no-load hunt, not the certified 32-tick nudge"
+        );
         let mut yanked = ok_cases();
         yanked[0].observed_motion = Some("present 2048->2080 goal=2080 delta=32".into());
         let incomplete =
             MetalProof::from_measured(ok_meta(true), yanked, default_unresolved()).unwrap();
         assert_eq!(
             incomplete.experiment_status, "measured_incomplete_or_failed",
-            "a hold that moved is not a zero-motion baseline"
+            "a hold that traveled the nudge step is not a zero-motion baseline"
+        );
+        let mut hunt_hold = ok_cases();
+        hunt_hold[0].observed_motion = Some("present 2048->2050 goal=2048 delta=2".into());
+        let ok = MetalProof::from_measured(ok_meta(true), hunt_hold, default_unresolved()).unwrap();
+        assert_eq!(
+            ok.experiment_status, "measured_success",
+            "no-load encoder hunt inside {HOLD_STILL_MAX_ABS_TICKS} ticks is still a hold"
         );
     }
 

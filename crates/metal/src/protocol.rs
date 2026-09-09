@@ -39,7 +39,7 @@ pub const FACTORY_PWM_LIMIT: u16 = 885;
 /// Below this, a 32-tick no-load step will not move present.
 pub const MIN_PWM_LIMIT: u16 = 80;
 pub const ADDR_CURRENT_LIMIT: u16 = 38;
-/// EEPROM. Unit ≈ 0.229 rpm. 0 or 1 makes a 32-tick nudge miss a 300 ms sample.
+/// EEPROM. Unit ≈ 0.229 rpm. 0 or 1 makes a 32-tick nudge still Moving=0 at the old present.
 pub const ADDR_VELOCITY_LIMIT: u16 = 44;
 /// EEPROM. Factory max 4095 / min 0. Wizard can shrink this window.
 pub const ADDR_MAX_POSITION_LIMIT: u16 = 48;
@@ -60,7 +60,7 @@ pub const MIN_VELOCITY_P_GAIN: u16 = 20;
 /// RAM. Factory 400. Wizard 0 means the servo never tracks a goal.
 pub const ADDR_POSITION_P_GAIN: u16 = 84;
 pub const FACTORY_POSITION_P_GAIN: u16 = 400;
-/// Below this, a 32-tick nudge will not settle in the campaign sample window.
+/// Below this, a 32-tick nudge will not finish before the campaign Moving wait.
 pub const MIN_POSITION_P_GAIN: u16 = 80;
 /// RAM. Unit 20 ms. 0 = off; 0xFF (-1) = tripped (goal registers read-only).
 pub const ADDR_BUS_WATCHDOG: u16 = 98;
@@ -72,6 +72,8 @@ pub const ADDR_PRESENT_VELOCITY: u16 = 128;
 pub const ADDR_PRESENT_POSITION: u16 = 132;
 pub const ADDR_PRESENT_VOLTAGE: u16 = 144;
 pub const ADDR_REALTIME_TICK: u16 = 120;
+/// RAM. 1 while the profile is traveling; 0 when Goal ≈ Present.
+pub const ADDR_MOVING: u16 = 122;
 
 const CRC_TABLE: [u16; 256] = [
     0x0000, 0x8005, 0x800F, 0x000A, 0x801B, 0x001E, 0x0014, 0x8011, 0x8033, 0x0036, 0x003C, 0x8039,

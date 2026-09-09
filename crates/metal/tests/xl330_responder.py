@@ -198,7 +198,7 @@ def status_wanted(srl: int, inst: int) -> bool:
 def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
     if inst == INST_PING:
         return b"", 0
-    if inst == INST_READ and len(params) >= 4:
+        if inst == INST_READ and len(params) >= 4:
         addr, ln = struct.unpack_from("<HH", params)
         if os.environ.get("REALITYOS_METAL_PTY_NO_PRESENT") == "1" and addr == 132:
             return b"", 0x80  # refuse present so setup cannot invent goal=0
@@ -210,7 +210,12 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             and regs[64] == 1
         ):
             return b"", 0x80  # torque is on; do not skip the post-enable check
-        return bytes(regs[addr : addr + ln]), 0
+        chunk = bytes(regs[addr : addr + ln])
+        # First motion-block / Moving read after a goal step reports Moving=1,
+        # then clears so the campaign wait-for-Moving=0 path is exercised.
+        if addr <= 122 < addr + ln and regs[122] == 1:
+            regs[122] = 0
+        return chunk, 0
     if inst == INST_WRITE and len(params) >= 2:
         addr = struct.unpack_from("<H", params)[0]
         data = params[2:]
@@ -255,7 +260,11 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             pwm_limit = struct.unpack_from("<H", regs, 36)[0]
             vel_p = struct.unpack_from("<H", regs, 78)[0]
             if p_gain > 0 and pwm_limit > 0 and vel_p > 0:
+                old_present = struct.unpack_from("<i", regs, 132)[0]
+                new_goal = struct.unpack_from("<i", data)[0]
                 regs[132:136] = data[:4]
+                if new_goal != old_present:
+                    regs[122] = 1
         return b"", 0
     if inst == INST_REBOOT:
         regs[70] = 0

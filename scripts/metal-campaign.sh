@@ -433,6 +433,27 @@ writes() { cat "$ROOT/bus/writes" 2>/dev/null || echo 0; }
 acks() { cat "$ROOT/bus/acks" 2>/dev/null || echo 0; }
 present() { cat "$ROOT/bus/present" 2>/dev/null || echo ""; }
 goalpos() { cat "$ROOT/bus/goal" 2>/dev/null || echo ""; }
+moving() { cat "$ROOT/bus/moving" 2>/dev/null || echo ""; }
+
+# Wait until XL330 Moving (addr 122) is 0, then re-acquire present.
+# Profile velocity 20 + accel 10 is ~230 ms for a 32-tick step; a fixed
+# 300 ms sample can catch the horn still traveling or still hunting.
+# Missing bus/moving (older serve) settles after the first sensor.
+settle_after_write() {
+  local i mv
+  for i in $(seq 1 30); do
+    as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1 || true
+    mv="$(moving)"
+    if [[ "$mv" == "0" || -z "$mv" ]]; then
+      sleep 0.05
+      as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1 || true
+      return 0
+    fi
+    sleep 0.05
+  done
+  echo "warning: XL330 Moving stayed set for 1.5s; sampling present anyway" >&2
+  as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1 || true
+}
 
 # $! after `sudo -u ... serve &` is the sudo wrapper. /proc/<sudo>/fd is not
 # the authority tty; measure proc-fd against the smoke child.
@@ -613,12 +634,11 @@ measure() {
     echo '{"ok":false,"executed":false,"stage":"ipc","status":"error"}' >"$respfile"
   fi
   # bus/present is the pre-write sample. After an authorized goal write,
-  # settle and re-acquire so observed_motion is device present, not the
-  # cached tick. action=0.2 uses the full 32-tick cap; profile 20 + accel 10
-  # finishes that step in well under 300 ms (plastic-gear backlash can hide 8).
+  # wait for Moving=0 and re-acquire so observed_motion is device present,
+  # not the cached tick. action=0.2 uses the full 32-tick cap; plastic-gear
+  # backlash can hide an 8-tick step. Hold-still allows |delta|<=4 hunt.
   if [[ "$expected" == "true" ]] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("ok") else 1)' "$respfile"; then
-    sleep 0.30
-    as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1 || true
+    settle_after_write
   fi
   after="$(writes)"
   ack_after="$(acks)"
@@ -979,9 +999,18 @@ def present_delta(name):
     if not m or m.group(1) == "None":
         return None
     return int(m.group(1))
-assert present_delta("valid_hold") in (0, None), r
-assert present_delta("valid_nudge") not in (0, None), (
-    "valid_nudge must move present, not only write a goal against a stale cache",
+# Same band as crates/metal/src/proof.rs HOLD_STILL_MAX_ABS_TICKS.
+HOLD_STILL_MAX_ABS_TICKS = 4
+hd = present_delta("valid_hold")
+nd = present_delta("valid_nudge")
+assert hd is not None and abs(hd) <= HOLD_STILL_MAX_ABS_TICKS, (
+    "valid_hold must keep present inside the no-load hunt band",
+    hd,
+    r,
+)
+assert nd is not None and abs(nd) > HOLD_STILL_MAX_ABS_TICKS, (
+    "valid_nudge must move present farther than no-load hunt, not only write a goal",
+    nd,
     r,
 )
 pty_sequence = """$PTY_SEQUENCE_ACTIVE""" == "1"
