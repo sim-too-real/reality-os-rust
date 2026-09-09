@@ -171,6 +171,12 @@ EOF
     chown "$AUTHORITY_USER:$AUTHORITY_USER" "$real" 2>/dev/null || true
     chmod 0600 "$real" 2>/dev/null || true
   fi
+  # Linux asserts DTR on first open. Cheap FTDI/CP2102 wire DTR to RESET.
+  # Clear HUPCL so close does not drop DTR and every crash-replay reopen
+  # does not reboot the XL330 (U2D2 has no DTR-RESET).
+  if [[ -e "$real" ]]; then
+    /bin/stty -F "$real" -hupcl >/dev/null 2>&1 || true
+  fi
   set_usb_serial_latency "$dev"
 }
 

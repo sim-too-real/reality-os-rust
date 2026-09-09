@@ -5,6 +5,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use fs2::FileExt;
@@ -223,18 +224,7 @@ impl Xl330Driver {
         // PTY stand-in: TIOCEXCL survives process::exit (crash_if) and the
         // next serve gets EBUSY. Sidecar flock still serializes. Real tty
         // keeps exclusive (TIOCEXCL+flock).
-        let port = serialport::new(self.cfg.device.to_string_lossy(), self.cfg.baud)
-            .timeout(Duration::from_millis(150))
-            .exclusive(!is_pty_path(&self.cfg.device))
-            .open()
-            .map_err(io::Error::other)?;
-        // Do not toggle DTR/RTS. Cheap FTDI/CP2102 boards wire DTR to servo
-        // RESET; a rising edge here reboots the XL330 and the next ping
-        // (and every crash-replay reopen) misses. U2D2 does not need DTR.
-        // U2D2/FTDI often drops the first packet if we ping immediately
-        // after open. Discover tries each baud/id pair once; a cold miss
-        // on the real pair never comes back.
-        std::thread::sleep(Duration::from_millis(100));
+        let port = open_xl330_serial(&self.cfg.device, self.cfg.baud)?;
         self.port = Some(port);
         match self.ping_and_identify() {
             Ok(()) => {
@@ -869,6 +859,49 @@ impl Drop for Xl330Driver {
     }
 }
 
+/// Cheap FTDI/CP2102 boards wire DTR to servo RESET. Linux asserts DTR on
+/// the first open. Clearing HUPCL before exclusive open so close does not
+/// drop DTR; later probe/serve/crash-replay opens then do not reboot.
+/// U2D2 does not need DTR. Do not toggle DTR/RTS from userspace.
+fn clear_hupcl(device: &Path) {
+    if is_pty_path(device) {
+        return;
+    }
+    let _ = Command::new("/bin/stty")
+        .args(["-F", &device.to_string_lossy(), "-hupcl"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn open_settle(device: &Path) {
+    // Robotis reboot / DTR-reset is ~300 ms. PTY has no DTR; keep tests fast.
+    let ms = if is_pty_path(device) { 100 } else { 300 };
+    std::thread::sleep(Duration::from_millis(ms));
+}
+
+fn open_xl330_serial(device: &Path, baud: u32) -> io::Result<Box<dyn SerialPort>> {
+    open_xl330_serial_with(device, baud, !is_pty_path(device))
+}
+
+fn open_xl330_serial_with(
+    device: &Path,
+    baud: u32,
+    exclusive: bool,
+) -> io::Result<Box<dyn SerialPort>> {
+    clear_hupcl(device);
+    let port = serialport::new(device.to_string_lossy(), baud)
+        .timeout(Duration::from_millis(150))
+        .exclusive(exclusive)
+        .open()
+        .map_err(io::Error::other)?;
+    // U2D2/FTDI often drops the first packet if we ping immediately after
+    // open. Discover tries each baud/id pair once; a cold miss on the real
+    // pair never comes back.
+    open_settle(device);
+    Ok(port)
+}
+
 fn prefer_servo_id(ids: &[u8], found: Option<u8>) -> Vec<u8> {
     let mut out = Vec::new();
     if let Some(id) = found {
@@ -889,12 +922,9 @@ fn sniff_servo_id(device: &Path, baud: u32) -> Option<u8> {
     if !device.exists() {
         return None;
     }
-    let mut port = serialport::new(device.to_string_lossy(), baud)
-        .timeout(Duration::from_millis(150))
-        .exclusive(false)
-        .open()
-        .ok()?;
-    std::thread::sleep(Duration::from_millis(100));
+    // Broadcast sniff must not take TIOCEXCL; probe would steal exclusive
+    // from the next serve open.
+    let mut port = open_xl330_serial_with(device, baud, false).ok()?;
     let frame = encode_ping(BROADCAST_ID);
     port.clear(serialport::ClearBuffer::Input).ok()?;
     port.write_all(&frame).ok()?;
