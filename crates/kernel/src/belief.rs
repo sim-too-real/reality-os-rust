@@ -91,6 +91,9 @@ impl BeliefState {
 pub trait Estimator {
     fn ingest(&mut self, stamp_s: f64, samples: &[(String, f64)]) -> KernelResult<()>;
     fn belief(&self) -> Option<&BeliefState>;
+    fn fuse_observation(&mut self, _stamp_s: f64, _digest: &str, _quality: f64) -> KernelResult<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

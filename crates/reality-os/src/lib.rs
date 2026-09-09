@@ -25,7 +25,7 @@ pub use bounded_trust::{certify_dispose_step, BoundedTrustEnvelope, DisposeStatu
 pub use certificate::Certificate;
 pub use command::{narrow_certified_command, CertifiedCommand};
 pub use control::{
-    runtime_assurance, AssuranceAction, ComponentClamp, ControlProposal, Controller,
+    runtime_assurance, AssuranceAction, ComponentClamp, ControlProposal, Controller, GravityCompWbc,
 };
 pub use decide::{DecideRequest, KernelDecision, RealityOs};
 pub use domains::{DomainPlugin, DomainRegistry, WorldView};

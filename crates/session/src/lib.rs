@@ -10,7 +10,7 @@ pub mod packages;
 pub mod session;
 
 pub use bridge::HardwareControlBridge;
-pub use estimate::HoldEstimator;
+pub use estimate::{FuseEstimator, HoldEstimator};
 pub use mode::{RuntimeMode, SessionStartError};
 pub use packages::{GovernorPackage, PackageReport, RealityOsPackage, SafetyEdge};
 pub use session::{DispatchResult, RuntimeSession, StartArgs};
@@ -258,6 +258,89 @@ mod tests {
             .ingest_sensor(&[("j".into(), 0.2)], Some(3.0), 5.0)
             .unwrap_err();
         assert!(err.contains("rollback"));
+    }
+
+    #[test]
+    fn session_fuse_estimator_degrades_without_observation() {
+        let plant = SimPlant::new("p", 1, 10.0);
+        let mut sess =
+            RuntimeSession::start(StartArgs::simulation("rel-fuse-1"), plant, 1.0).unwrap();
+        sess.ingest_sensor(&[("q0".into(), 0.1)], Some(1.0), 1.0)
+            .unwrap();
+        assert_eq!(
+            sess.belief().unwrap().health(),
+            realityos_kernel::SensorHealth::Degraded
+        );
+        sess.ingest_observation(
+            realityos_kernel::ObservationEvidence::new(
+                "cam0",
+                "cal0",
+                1.0,
+                1.0,
+                "digest-ok",
+                "vision/optical",
+                0.9,
+                0.1,
+                2.0,
+            )
+            .unwrap(),
+            1.0,
+        )
+        .unwrap();
+        assert_eq!(
+            sess.belief().unwrap().health(),
+            realityos_kernel::SensorHealth::Ok
+        );
+    }
+
+    #[test]
+    fn hil_software_sto_blocks_dispatch_until_enable() {
+        let plant = SimPlant::new("p", 1, 10.0);
+        let mut args = StartArgs::simulation("rel-sto-1");
+        args.mode = RuntimeMode::Hil;
+        let mut sess = RuntimeSession::start(args, plant, 1.0).unwrap();
+        sess.governor.mark_sensor(1.0, None);
+        let cert = Certificate::new(DecisionStatus::Allow, "ok");
+        let cmd = CertifiedCommand::issue("sto1", 1, 1.0, 30.0, cert, vec![0.1]).unwrap();
+        let out = sess.bind_and_dispatch(cmd.clone(), &ActionParams::empty(), 1.0);
+        assert!(!out.ok);
+        assert!(out.violations.iter().any(|v| v.contains("software_sto")));
+        let mut frame = realityos_plant::SafetyFrame::request(
+            1,
+            10.0,
+            realityos_plant::SafeTransition::EnableRequest,
+        )
+        .unwrap();
+        frame.ack = true;
+        assert_eq!(
+            sess.ingest_safety(&frame, 1.0),
+            realityos_plant::IslandVerdict::Ack
+        );
+        assert!(sess.island().enabled());
+        assert!(!sess.island().metal());
+        let out2 = sess.bind_and_dispatch(cmd, &ActionParams::empty(), 1.0);
+        assert!(out2.ok, "{:?}", out2.violations);
+    }
+
+    #[test]
+    fn fieldbus_enable_requires_software_island() {
+        let mut br = HardwareControlBridge::sim_harness("rel-bus-island", 1.0).unwrap();
+        assert!(br.request_fieldbus_enable().is_err());
+        assert!(!br.fieldbus.attached);
+        let mut frame = realityos_plant::SafetyFrame::request(
+            1,
+            10.0,
+            realityos_plant::SafeTransition::EnableRequest,
+        )
+        .unwrap();
+        frame.ack = true;
+        assert_eq!(
+            br.session.ingest_safety(&frame, 1.0),
+            realityos_plant::IslandVerdict::Ack
+        );
+        assert!(br.request_fieldbus_enable().is_err());
+        assert!(!br.fieldbus.attached);
+        assert!(!br.fieldbus.metal);
     }
 
     #[test]

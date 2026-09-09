@@ -133,6 +133,54 @@ pub fn run_dispose_ticks(
         .collect()
 }
 
+/// One dispose step that **measures** wall time. Still `metal=false`.
+/// Does not prove 1 kHz on this host; it records the actual work.
+pub fn dispose_step_measured(
+    i: u32,
+    hz: f64,
+    u_nom: &[f64],
+    dq: &[f64],
+    envelope: &BoundedTrustEnvelope,
+    hold: bool,
+    sensor_this_tick: bool,
+    mailbox_overload: bool,
+) -> TickRecord {
+    let started = std::time::Instant::now();
+    let st = certify_tick_with_bus(
+        u_nom,
+        dq,
+        envelope,
+        hold,
+        sensor_this_tick,
+        mailbox_overload,
+    );
+    let work_us = started.elapsed().as_secs_f64() * 1.0e6;
+    let budget = budget_us(st.mode).min(BUDGET_TICK_US);
+    TickRecord {
+        i,
+        t_s: f64::from(i) * period_s(hz).unwrap_or(0.001),
+        hz,
+        mode: st.mode.as_str().into(),
+        deadline_miss: work_us > budget,
+        work_us,
+        budget_us: budget,
+        metal: false,
+    }
+}
+
+pub fn run_dispose_ticks_measured(
+    n: u32,
+    hz: f64,
+    u_nom: &[f64],
+    dq: &[f64],
+    envelope: &BoundedTrustEnvelope,
+    hold: bool,
+) -> Vec<TickRecord> {
+    (0..n)
+        .map(|i| dispose_step_measured(i, hz, u_nom, dq, envelope, hold, true, false))
+        .collect()
+}
+
 /// Compact debug line for a tick. SIM work_us, not a wall clock.
 pub fn debug_tick(t: &TickRecord) -> String {
     format!(
@@ -201,5 +249,19 @@ mod tests {
         assert_eq!(st2.mode, ExecutionMode::TrustedFastpath);
         let over = certify_tick_with_bus(&[0.2], &[0.0], &env, false, true, true);
         assert_eq!(over.mode, ExecutionMode::PassiveFallback);
+    }
+
+    #[test]
+    fn measured_dispose_records_real_work_and_denies_metal() {
+        let env = BoundedTrustEnvelope {
+            tau_max: vec![1.0],
+            dq_max: vec![10.0],
+            is_valid: true,
+        };
+        let ticks = run_dispose_ticks_measured(4, 1000.0, &[0.1], &[0.0], &env, false);
+        assert_eq!(ticks.len(), 4);
+        assert!(ticks.iter().all(|t| !t.metal));
+        assert!(ticks.iter().all(|t| t.work_us >= 0.0));
+        assert!(ticks.iter().all(|t| t.hz == 1000.0));
     }
 }

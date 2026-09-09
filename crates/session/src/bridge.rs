@@ -80,6 +80,14 @@ impl<P: Plant> HardwareControlBridge<P> {
         Ok(hash)
     }
 
+    /// Software island must be enabled. Still cannot attach without a vendor port.
+    pub fn request_fieldbus_enable(
+        &mut self,
+    ) -> realityos_plant::PlantResult<realityos_plant::LinkState> {
+        self.fieldbus
+            .request_enable(self.session.island().enabled())
+    }
+
     pub fn dispatch(&mut self, command: CertifiedCommand, now_s: f64) -> DispatchResult {
         let corr = CorrelationId::from_command(command.command_id(), command.sequence_value());
         let out = self

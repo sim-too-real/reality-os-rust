@@ -5,12 +5,16 @@ use realityos_governor::{
     DriverEnvelopePack, RuntimeGovernor, RuntimeIdentity, RuntimeTrace, SafeState,
 };
 use realityos_kernel::{
-    CalibrationId, DesignContentHash, FirmwareId, ReleaseHash, SerialOrAsBuilt,
+    BeliefState, CalibrationId, DesignContentHash, Estimator, FirmwareId, ObservationEvidence,
+    ReleaseHash, SerialOrAsBuilt,
 };
-use realityos_plant::{ActionParams, Plant, PlantRealized, SimPlant};
+use realityos_plant::{
+    ActionParams, IslandVerdict, Plant, PlantRealized, SafetyFrame, SafetyIsland, SimPlant,
+};
 use realityos_rate::{BoundedMailbox, OverloadDisposition, TelemetryFrame};
 use serde_json::json;
 
+use crate::estimate::FuseEstimator;
 use crate::mode::{RuntimeMode, SessionStartError};
 
 #[derive(Debug, Clone)]
@@ -59,6 +63,8 @@ pub struct RuntimeSession<P: Plant> {
     last_sensor_hash: Option<String>,
     last_sensor_ts: Option<f64>,
     outbound: BoundedMailbox<TelemetryFrame>,
+    island: SafetyIsland,
+    estimator: FuseEstimator,
 }
 
 impl RuntimeSession<SimPlant> {
@@ -182,6 +188,8 @@ impl<P: Plant> RuntimeSession<P> {
             last_sensor_hash: None,
             last_sensor_ts: None,
             outbound: BoundedMailbox::new(32),
+            island: SafetyIsland::new(),
+            estimator: FuseEstimator::new(),
         })
     }
 
@@ -200,6 +208,28 @@ impl<P: Plant> RuntimeSession<P> {
 
     pub fn last_sensor_hash(&self) -> Option<&str> {
         self.last_sensor_hash.as_deref()
+    }
+
+    pub fn island(&self) -> &SafetyIsland {
+        &self.island
+    }
+
+    pub fn ingest_safety(&mut self, frame: &SafetyFrame, now_s: f64) -> IslandVerdict {
+        self.island.ingest(frame, now_s)
+    }
+
+    pub fn belief(&self) -> Option<&BeliefState> {
+        self.estimator.belief()
+    }
+
+    pub fn ingest_observation(
+        &mut self,
+        ev: ObservationEvidence,
+        now_s: f64,
+    ) -> Result<(), String> {
+        self.estimator
+            .ingest_observation(ev, now_s)
+            .map_err(|e| e.to_string())
     }
 
     pub fn ingest_sensor(
@@ -240,6 +270,9 @@ impl<P: Plant> RuntimeSession<P> {
         self.governor.mark_sensor(ts, Some(hash.clone()));
         self.last_sensor_hash = Some(hash.clone());
         self.last_sensor_ts = Some(ts);
+        self.estimator
+            .ingest(ts, samples)
+            .map_err(|e| e.to_string())?;
         Ok(hash)
     }
 
@@ -267,6 +300,12 @@ impl<P: Plant> RuntimeSession<P> {
                     "dispatch_safe_state_latched:{}",
                     self.safe_state.as_str()
                 )],
+            );
+        }
+        if self.mode != RuntimeMode::Simulation && !self.island.enabled() {
+            return DispatchResult::refused(
+                self.mode,
+                vec!["software_sto_asserted".into()],
             );
         }
         let command = match command.bind_identity(

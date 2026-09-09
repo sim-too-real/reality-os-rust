@@ -1,5 +1,10 @@
 //! Pixel see. Lookat/hint is search, never pose. Missing camera / no pixels refuse.
 
+mod depth;
+pub use depth::{
+    integrate_depth, unproject_depth, DepthFrame, OccupancyGrid, Pose2, VisualOdometry,
+};
+
 use realityos_kernel::{DecisionStatus, KernelResult, ObservationEvidence};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

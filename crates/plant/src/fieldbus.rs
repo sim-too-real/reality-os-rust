@@ -32,12 +32,23 @@ pub enum LinkState {
     Refused,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldbusPhase {
+    Detached,
+    Probing,
+    EnableRequested,
+    NamedHole,
+    Fault,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldbusLink {
     pub kind: FieldbusKind,
     pub attached: bool,
     pub note: String,
     pub metal: bool,
+    pub phase: FieldbusPhase,
 }
 
 impl FieldbusLink {
@@ -48,15 +59,40 @@ impl FieldbusLink {
             attached: false,
             note: "EtherCAT/CANopen/USB drive I/O is a named hole — implement HardwareDriverPort; do not invent metal".into(),
             metal: false,
+            phase: FieldbusPhase::NamedHole,
         }
     }
 
     pub fn state(&self) -> LinkState {
         if self.attached {
             LinkState::Present
+        } else if self.phase == FieldbusPhase::Fault {
+            LinkState::Refused
         } else {
             LinkState::NamedHole
         }
+    }
+
+    pub fn probe(&mut self, kind: FieldbusKind) -> LinkState {
+        self.kind = kind;
+        self.phase = FieldbusPhase::Probing;
+        self.attached = false;
+        self.metal = false;
+        self.note = format!("{} probed; no vendor adapter — named hole", kind.as_str());
+        self.phase = FieldbusPhase::NamedHole;
+        LinkState::NamedHole
+    }
+
+    /// Software enable request. Still cannot attach without a vendor port + island.
+    pub fn request_enable(&mut self, island_enabled: bool) -> PlantResult<LinkState> {
+        if !island_enabled {
+            self.phase = FieldbusPhase::Fault;
+            return Err(PlantError::refused("fieldbus_enable_requires_software_island"));
+        }
+        self.phase = FieldbusPhase::EnableRequested;
+        self.attached = false;
+        self.metal = false;
+        Err(PlantError::FieldbusNotAttached)
     }
 
     pub fn transmit(&self, _frame: &[u8]) -> PlantResult<()> {
@@ -64,5 +100,24 @@ impl FieldbusLink {
             return Err(PlantError::FieldbusNotAttached);
         }
         Err(PlantError::NamedHole("fieldbus_tx_not_implemented"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probe_and_enable_cannot_attach() {
+        let mut bus = FieldbusLink::named_hole();
+        assert_eq!(bus.probe(FieldbusKind::EtherCat), LinkState::NamedHole);
+        assert!(!bus.attached);
+        assert!(!bus.metal);
+        assert!(bus.request_enable(false).is_err());
+        assert_eq!(bus.state(), LinkState::Refused);
+        let mut bus = FieldbusLink::named_hole();
+        assert!(bus.request_enable(true).is_err());
+        assert!(!bus.attached);
+        assert!(bus.transmit(&[1, 2]).is_err());
     }
 }

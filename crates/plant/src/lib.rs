@@ -26,10 +26,10 @@ pub use dynamics::{AnalyticIntegrator, DynamicsBackend, DynamicsState, MujocoBac
 pub use egress::{CommandEgress, RecordingCommandEgress, RefuseCommandEgress};
 pub use error::{PlantError, PlantResult};
 pub use execute::{execute_certified_command, ExecuteResult};
-pub use fieldbus::{FieldbusKind, FieldbusLink, LinkState};
+pub use fieldbus::{FieldbusKind, FieldbusLink, FieldbusPhase, LinkState};
 pub use harness::SimulatedHardwarePort;
 pub use ledger::{CommandLedger, ContinuityState};
-pub use safety_protocol::{SafeTransition, SafetyFrame};
+pub use safety_protocol::{IslandVerdict, SafeTransition, SafetyFrame, SafetyIsland};
 pub use signing::{
     action_within_issuer_envelope, command_payload_hash, sign_payload, signature_violations,
     SIGNING_SCHEME,
