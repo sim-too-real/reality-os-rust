@@ -190,7 +190,7 @@ impl Xl330Driver {
         // PTY stand-in: TIOCEXCL survives process::exit (crash_if) and the
         // next serve gets EBUSY. Sidecar flock still serializes. Real tty
         // keeps exclusive (TIOCEXCL+flock).
-        let mut port = serialport::new(self.cfg.device.to_string_lossy(), self.cfg.baud)
+        let port = serialport::new(self.cfg.device.to_string_lossy(), self.cfg.baud)
             .timeout(Duration::from_millis(150))
             .exclusive(!is_pty_path(&self.cfg.device))
             .open()
