@@ -53,10 +53,32 @@ if [[ -z "$ROOT" || "$ROOT" == "/" || "$ROOT" == "/tmp" || "$ROOT" == "/var" ]];
   echo "error: refusing to wipe unexpected REALITYOS_METAL_ROOT=$ROOT" >&2
   exit 2
 fi
+# FTDI/U2D2 defaults latency_timer to 16 ms. Two waits miss the 40 ms live
+# I/O deadline and latch the software watchdog on the first real USB-UART.
+set_usb_serial_latency() {
+  local dev="$1"
+  local real name timer
+  real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
+  name="$(basename "$real")"
+  case "$name" in
+    ttyUSB*|ttyACM*) ;;
+    *) return 0 ;;
+  esac
+  for timer in \
+    "/sys/bus/usb-serial/devices/${name}/latency_timer" \
+    "/sys/class/tty/${name}/device/latency_timer"; do
+    if [[ -e "$timer" ]] && echo 1 >"$timer" 2>/dev/null; then
+      echo "metal-campaign: set $timer=1 (USB-UART default 16 ms can miss the 40 ms live deadline)"
+      return 0
+    fi
+  done
+}
+
 # Stale journal+seal makes --first-online refuse. Kill leftover serve first so
 # it cannot rewrite the journal after the wipe.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
+set_usb_serial_latency "$DEVICE"
 
 metal_fstype() {
   local target="$1"
@@ -200,6 +222,7 @@ start_auth() {
   if [[ -e "$DEVICE" ]]; then
     chown "$AUTHORITY_USER:$AUTHORITY_USER" "$DEVICE" 2>/dev/null || true
     chmod 0600 "$DEVICE" 2>/dev/null || true
+    set_usb_serial_latency "$DEVICE"
   fi
 }
 
