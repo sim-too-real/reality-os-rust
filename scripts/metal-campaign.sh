@@ -112,16 +112,22 @@ disable_usb_autosuspend() {
   done
 }
 
-# Walk sysfs from the tty to the USB device and read one attribute.
+# Walk sysfs from the tty to the USB device (first idVendor) and read
+# one attribute from that node only. A CH340/CP2102 with an empty serial
+# must not inherit a parent hub serial — ATTRS{serial}==<hub> would match
+# every tty on the hub after udev rename.
 usb_sysfs_value() {
   local dev="$1" key="$2"
   local name node
   name="$(basename "$(readlink -f "$dev" 2>/dev/null || echo "$dev")")"
   node="$(readlink -f "/sys/class/tty/${name}/device" 2>/dev/null || true)"
   while [[ -n "$node" && "$node" != / && "$node" != /sys ]]; do
-    if [[ -f "$node/$key" ]]; then
-      tr -d '\n' <"$node/$key"
-      return 0
+    if [[ -f "$node/idVendor" ]]; then
+      if [[ -f "$node/$key" ]]; then
+        tr -d '\n' <"$node/$key"
+        return 0
+      fi
+      return 1
     fi
     node="$(dirname "$node")"
   done

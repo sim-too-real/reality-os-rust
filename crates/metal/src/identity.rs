@@ -160,35 +160,35 @@ pub fn usb_identity_for_tty(tty: &Path) -> (Option<String>, Option<String>) {
     let Some(name) = tty_sysfs_name(tty) else {
         return (None, None);
     };
-    let class = Path::new("/sys/class/tty").join(name);
-    let mut serial = None;
-    let mut fallback = None;
-    let mut cur = class.join("device");
+    usb_identity_from_sysfs_node(&Path::new("/sys/class/tty").join(name).join("device"))
+}
+
+/// Stop at the first node with idVendor+idProduct (the USB device).
+/// A CH340/CP2102 with an empty serial must not inherit a parent hub serial:
+/// `ATTRS{serial}==<hub>` would udev-match every tty on that hub, and
+/// `find_tty_for_expected_serial` could rebind the wrong node after rename.
+pub(crate) fn usb_identity_from_sysfs_node(start: &Path) -> (Option<String>, Option<String>) {
+    let mut cur = start.to_path_buf();
     for _ in 0..8 {
-        if serial.is_none() {
-            if let Ok(s) = std::fs::read_to_string(cur.join("serial")) {
-                let s = s.trim().to_string();
-                if !s.is_empty() {
-                    serial = Some(s);
-                }
-            }
-        }
-        if fallback.is_none() {
-            let vid = std::fs::read_to_string(cur.join("idVendor"))
+        let vid = std::fs::read_to_string(cur.join("idVendor"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let pid = std::fs::read_to_string(cur.join("idProduct"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        if let (Some(v), Some(p)) = (vid, pid) {
+            let serial = std::fs::read_to_string(cur.join("serial"))
                 .ok()
-                .map(|s| s.trim().to_string());
-            let pid = std::fs::read_to_string(cur.join("idProduct"))
-                .ok()
-                .map(|s| s.trim().to_string());
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
             let devpath = std::fs::read_to_string(cur.join("devpath"))
                 .ok()
-                .map(|s| s.trim().to_string());
-            if let (Some(v), Some(p)) = (vid, pid) {
-                fallback = Some(format!(
-                    "usb:{v}:{p}:{}",
-                    devpath.unwrap_or_else(|| "nodevpath".into())
-                ));
-            }
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "nodevpath".into());
+            return (serial, Some(format!("usb:{v}:{p}:{devpath}")));
         }
         match std::fs::canonicalize(&cur) {
             Ok(p) => {
@@ -198,13 +198,19 @@ pub fn usb_identity_for_tty(tty: &Path) -> (Option<String>, Option<String>) {
                     break;
                 }
             }
-            Err(_) => break,
+            Err(_) => {
+                if let Some(parent) = cur.parent() {
+                    cur = parent.to_path_buf();
+                } else {
+                    break;
+                }
+            }
         }
         if cur == Path::new("/") {
             break;
         }
     }
-    (serial, fallback)
+    (None, None)
 }
 
 /// USB-UART nodes that may replace a vanished `ttyUSB*` after udev rename.
@@ -381,5 +387,60 @@ mod tests {
     fn find_tty_for_expected_serial_none_on_empty_or_unknown() {
         assert!(find_tty_for_expected_serial("", 1).is_none());
         assert!(find_tty_for_expected_serial("no-such-adapter:id1", 1).is_none());
+    }
+
+    fn write_attr(dir: &Path, name: &str, value: &str) {
+        std::fs::create_dir_all(dir).expect("sysfs dir");
+        std::fs::write(dir.join(name), value).expect("sysfs attr");
+    }
+
+    #[test]
+    fn usb_identity_stops_at_uart_device_not_parent_hub_serial() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "realityos-metal-usb-id-{}-{stamp}",
+            std::process::id()
+        ));
+        let hub = root.join("hub");
+        let uart = hub.join("1-1.3");
+        let iface = uart.join("1-1.3:1.0");
+        write_attr(&hub, "idVendor", "1d6b\n");
+        write_attr(&hub, "idProduct", "0002\n");
+        write_attr(&hub, "serial", "HUBSERIAL\n");
+        write_attr(&uart, "idVendor", "1a86\n");
+        write_attr(&uart, "idProduct", "7523\n");
+        write_attr(&uart, "devpath", "1.3\n");
+        write_attr(&uart, "busnum", "1\n");
+        std::fs::create_dir_all(&iface).expect("iface");
+        let (serial, fallback) = usb_identity_from_sysfs_node(&iface);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(serial, None, "CH340 must not inherit hub serial");
+        assert_eq!(fallback.as_deref(), Some("usb:1a86:7523:1.3"));
+    }
+
+    #[test]
+    fn usb_identity_uses_serial_on_the_uart_device() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "realityos-metal-usb-id-ftdi-{}-{stamp}",
+            std::process::id()
+        ));
+        let uart = root.join("1-1.2");
+        let iface = uart.join("1-1.2:1.0");
+        write_attr(&uart, "idVendor", "0403\n");
+        write_attr(&uart, "idProduct", "6001\n");
+        write_attr(&uart, "devpath", "1.2\n");
+        write_attr(&uart, "serial", "FT123456\n");
+        std::fs::create_dir_all(&iface).expect("iface");
+        let (serial, fallback) = usb_identity_from_sysfs_node(&iface);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(serial.as_deref(), Some("FT123456"));
+        assert_eq!(fallback.as_deref(), Some("usb:0403:6001:1.2"));
     }
 }
