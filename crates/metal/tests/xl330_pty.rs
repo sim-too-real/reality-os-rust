@@ -466,6 +466,23 @@ fn xl330_pty_refuses_torque_when_vin_below_wizard_min() {
 }
 
 #[test]
+fn xl330_pty_refuses_torque_when_vin_cannot_be_read() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_NO_VIN", "1")]);
+    let root = metal_test_root("pty-no-vin");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("VIN 0 must not skip the supply check and torque-on"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_vin_unreadable_before_torque"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_discover_collapses_wizard_secondary_id_to_one_servo() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_SECONDARY", "1")]);

@@ -177,7 +177,7 @@ def init_regs() -> bytearray:
     if os.environ.get("REALITYOS_METAL_PTY_HOMING") == "1":
         regs[20:24] = struct.pack("<i", 10000)
         regs[132:136] = struct.pack("<i", 12048)
-    regs[144:146] = struct.pack("<H", 50)
+    regs[144:146] = struct.pack("<H", 0 if os.environ.get("REALITYOS_METAL_PTY_NO_VIN") == "1" else 50)
     return regs
 
 

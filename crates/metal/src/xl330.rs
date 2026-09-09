@@ -566,14 +566,13 @@ impl Xl330Driver {
             .read_reg(ADDR_PRESENT_VOLTAGE, 2)
             .ok()
             .and_then(|b| le_u16(&b))
-            .unwrap_or(0);
-        if vin != 0 {
-            self.persist_vin(vin);
-            if vin < min_v || vin > max_v {
-                return Err(PlantError::refused(format!(
-                    "dxl_vin_outside_wizard_limits:vin_0.1v={vin}:min={min_v}:max={max_v}"
-                )));
-            }
+            .filter(|v| *v != 0)
+            .ok_or_else(|| PlantError::refused("dxl_vin_unreadable_before_torque"))?;
+        self.persist_vin(vin);
+        if vin < min_v || vin > max_v {
+            return Err(PlantError::refused(format!(
+                "dxl_vin_outside_wizard_limits:vin_0.1v={vin}:min={min_v}:max={max_v}"
+            )));
         }
         // Wizard Bus Watchdog (20 ms units). Non-zero trips after a quiet
         // gap and latches 0xFF; Goal Position then NAKs with data-range.
