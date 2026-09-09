@@ -729,7 +729,8 @@ if [[ "${REALITYOS_METAL_CUTOFF_LIVE:-0}" == "1" ]]; then
   add_case "$(MEASURE_REQUIRE='dxl_io|driver not connected|online_hardware_disconnected|metal_live_io_deadline' MEASURE_FORBID=software_watchdog_miss measure vin_cutoff_live 'propose after VIN open' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-cutoff "$PROP" --root "$ROOT" propose-id)"
 fi
 
-COMMIT="$(git -C "$(dirname "$SCRIPT_DIR")" rev-parse HEAD 2>/dev/null || echo unknown)"
+REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+COMMIT="$(git -C "$REPO" -c safe.directory="$REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
 DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 MEASURED="$(cat "$ROOT/measured.json" 2>/dev/null || echo '{}')"
 FRESH="$(cat "$ROOT/bus/sensor_freshness.json" 2>/dev/null || echo '{}')"
