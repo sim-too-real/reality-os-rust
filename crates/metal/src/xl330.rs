@@ -195,7 +195,9 @@ impl Xl330Driver {
             .exclusive(!is_pty_path(&self.cfg.device))
             .open()
             .map_err(io::Error::other)?;
-        port.write_data_terminal_ready(true).ok();
+        // Do not toggle DTR/RTS. Cheap FTDI/CP2102 boards wire DTR to servo
+        // RESET; a rising edge here reboots the XL330 and the next ping
+        // (and every crash-replay reopen) misses. U2D2 does not need DTR.
         // U2D2/FTDI often drops the first packet if we ping immediately
         // after open. Discover tries each baud/id pair once; a cold miss
         // on the real pair never comes back.
