@@ -240,6 +240,7 @@ start_auth 1
 if [[ -e "$DEVICE" ]]; then
   chown "$AUTHORITY_USER:$AUTHORITY_USER" "$DEVICE" 2>/dev/null || true
   chmod 0600 "$DEVICE" 2>/dev/null || true
+  set_usb_serial_latency "$DEVICE"
 fi
 
 PROBE="$(as_autonomy env METAL_AUTHORITY_PID="${SMOKE_PID:-$AUTH_PID}" "$PROP" --root "$ROOT" --authority-pid "${SMOKE_PID:-$AUTH_PID}" os-probe)"

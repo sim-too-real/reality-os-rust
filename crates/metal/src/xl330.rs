@@ -133,7 +133,12 @@ impl Xl330Driver {
                 match Self::open(attempt.clone(), root.as_ref()) {
                     Ok(driver) => return Ok((driver, attempt)),
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Err(e),
-                    Err(e) => last_err = Some(e),
+                    Err(e) => {
+                        last_err = Some(e);
+                        // U2D2/FTDI often NAKs the next open if we reopen at a
+                        // new baud immediately after a failed ping.
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
                 }
             }
         }
