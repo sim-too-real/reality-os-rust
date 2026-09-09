@@ -193,6 +193,82 @@ impl MetalProof {
             cases,
         })
     }
+
+    /// Sixteen-point report derived from this measured proof. Not a certification.
+    pub fn sixteen_point_report(&self) -> String {
+        let hold = self.cases.iter().find(|c| c.name == "valid_hold");
+        let nudge = self.cases.iter().find(|c| c.name == "valid_nudge");
+        let crash_retry = self.duplicate_writes_after_restart;
+        let id = &self.real_device_identity;
+        let verdict = if self.experiment_status == "measured_success" {
+            "measured_success (every listed criterion is true on this run)"
+        } else {
+            "not success: measured_incomplete_or_failed (do not claim the experiment succeeded)"
+        };
+        format!(
+            "# Metal experiment 16-point report\n\
+             \n\
+             Derived from `{schema}` at {date}. Not ISO/PL/SIL/STO/SS1. Not root protection.\n\
+             \n\
+             1. **Actuator.** {hw} via {ctrl}. Limits and mechanical constraints are in `docs/METAL_EXPERIMENT.md`.\n\
+             2. **Independent VIN cutoff.** {cutoff}. Tested this run: {cutoff_tested}. Not labeled STO/SS1/PL/SIL.\n\
+             3. **HardwareDriverPort.** used_hardware_driver_port={port}. One XL330 port: open, sidecar+tty exclusive, probe_identity, sensor, certified write, ack, disconnect, close, torque-off stop.\n\
+             4. **Measured identity.** {id}\n\
+             5. **Composition.** used_os_monotonic_clock={clock}. `realityos-metal-smoke serve` uses `RuntimeSession<..., OnlineLocked>::start_online` and `OsMonotonicClock`, not HIL `Authority` / `FakeClock`.\n\
+             6. **Two-UID attacks.** authority={auth} autonomy={auto}. direct_device_open_attempts={att} successes={succ} (must be attempts>0 and successes==0).\n\
+             7. **Zero-motion baseline.** valid_hold writes {hold_before}→{hold_after} delta={hold_delta} ack={hold_ack} motion={hold_motion}\n\
+             8. **Bounded one-axis motion.** valid_nudge writes {nudge_before}→{nudge_after} delta={nudge_delta} ack={nudge_ack} motion={nudge_motion}\n\
+             9. **Hostile campaign.** hostile_cases={hostile} unauthorized_physical_device_writes={unauth} (required 0).\n\
+             10. **Crash/restart.** duplicate_writes_after_restart={crash} (required 0; no automatic retry of commands that may have reached hardware).\n\
+             11. **Disconnect / identity fail-closed.** identity_mismatch_refusals={idm} disconnect_refusals={disc}\n\
+             12. **Sensor freshness.** source={src}; device_capture_s={cap:?}; authority_receive_s={recv:?}; freshness_threshold_s={thr:?}. Capture is device Realtime Tick; freshness anchor is authority monotonic receive time.\n\
+             13. **Proof artifact.** schema={schema} hardware_present={hp} commit={sha}. Separate from HIL proofs. Aggregates are from case deltas, not hardcoded zeros.\n\
+             14. **All success criteria.** experiment_status={status}\n\
+             15. **Unresolved (explicit non-claims).** {assumptions}\n\
+             16. **Verdict.** {verdict}\n",
+            schema = self.schema,
+            date = self.test_date,
+            hw = self.hardware_model,
+            ctrl = self.controller_model,
+            cutoff = self.cutoff_mechanism,
+            cutoff_tested = self.cutoff_tested,
+            port = self.used_hardware_driver_port,
+            id = id,
+            clock = self.used_os_monotonic_clock,
+            auth = self.authority_uid,
+            auto = self.autonomy_uid,
+            att = self.direct_device_open_attempts,
+            succ = self.direct_device_open_successes,
+            hold_before = hold.map(|c| c.writes_before).unwrap_or(0),
+            hold_after = hold.map(|c| c.writes_after).unwrap_or(0),
+            hold_delta = hold.map(|c| c.write_delta).unwrap_or(0),
+            hold_ack = hold.map(|c| c.device_acknowledgement).unwrap_or(false),
+            hold_motion = hold
+                .and_then(|c| c.observed_motion.clone())
+                .unwrap_or_else(|| "missing_valid_hold_case".into()),
+            nudge_before = nudge.map(|c| c.writes_before).unwrap_or(0),
+            nudge_after = nudge.map(|c| c.writes_after).unwrap_or(0),
+            nudge_delta = nudge.map(|c| c.write_delta).unwrap_or(0),
+            nudge_ack = nudge.map(|c| c.device_acknowledgement).unwrap_or(false),
+            nudge_motion = nudge
+                .and_then(|c| c.observed_motion.clone())
+                .unwrap_or_else(|| "missing_valid_nudge_case".into()),
+            hostile = self.hostile_cases,
+            unauth = self.unauthorized_physical_device_writes,
+            crash = crash_retry,
+            idm = self.identity_mismatch_refusals,
+            disc = self.disconnect_refusals,
+            src = self.sensor_source,
+            cap = self.device_capture_s,
+            recv = self.authority_receive_s,
+            thr = self.freshness_threshold_s,
+            hp = self.hardware_present,
+            sha = self.software_commit_sha,
+            status = self.experiment_status,
+            assumptions = self.unresolved_assumptions.join("; "),
+            verdict = verdict,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -312,5 +388,105 @@ mod tests {
             freshness_threshold_s: None,
         };
         assert!(MetalProof::from_measured(meta, vec![], vec![]).is_err());
+    }
+
+    fn ok_cases() -> Vec<CaseRecord> {
+        vec![
+            CaseRecord::measure(
+                "valid_hold",
+                "hold",
+                "write:allow",
+                BlockingLayer::None,
+                0,
+                1,
+                true,
+                true,
+                Some("present 2048->2048".into()),
+                "consumed",
+            ),
+            CaseRecord::measure(
+                "valid_nudge",
+                "drive",
+                "write:allow",
+                BlockingLayer::None,
+                1,
+                2,
+                true,
+                true,
+                Some("present 2048->2050".into()),
+                "consumed",
+            ),
+            CaseRecord::measure(
+                "firmware_mismatch",
+                "hot_swap",
+                "authorize:refuse",
+                BlockingLayer::AuthorizationBlocked,
+                2,
+                2,
+                false,
+                false,
+                None,
+                "no_consume",
+            ),
+            CaseRecord::measure(
+                "device_disconnect",
+                "unplug",
+                "authorize:refuse",
+                BlockingLayer::AuthorizationBlocked,
+                2,
+                2,
+                false,
+                false,
+                None,
+                "no_consume",
+            ),
+        ]
+    }
+
+    fn ok_meta(cutoff: bool) -> ProofMeta {
+        ProofMeta {
+            hardware_model: "XL330-M288-T".into(),
+            controller_model: "usb-uart".into(),
+            real_device_identity: serde_json::json!({"serial":"FT1:id1"}),
+            software_commit_sha: "abc".into(),
+            authority_uid: "realityos-authority".into(),
+            autonomy_uid: "realityos-autonomy".into(),
+            test_date: "t".into(),
+            hardware_present: true,
+            used_os_monotonic_clock: true,
+            used_hardware_driver_port: true,
+            cutoff_mechanism: "bench VIN switch".into(),
+            cutoff_tested: cutoff,
+            direct_device_open_attempts: 1,
+            direct_device_open_successes: 0,
+            duplicate_writes_after_restart: 0,
+            sensor_source: "xl330 tick".into(),
+            device_capture_s: Some(1.2),
+            authority_receive_s: Some(0.1),
+            freshness_threshold_s: Some(2.0),
+        }
+    }
+
+    #[test]
+    fn sixteen_point_report_is_derived_and_does_not_invent_success() {
+        let ok =
+            MetalProof::from_measured(ok_meta(true), ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(ok.experiment_status, "measured_success");
+        let text = ok.sixteen_point_report();
+        for n in 1..=16 {
+            assert!(text.contains(&format!("{n}.")), "missing point {n}: {text}");
+        }
+        assert!(text.contains("FT1:id1"));
+        assert!(text.contains("direct_device_open_attempts=1"));
+        assert!(text.contains("measured_success"));
+        let incomplete =
+            MetalProof::from_measured(ok_meta(false), ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+        let t = incomplete.sixteen_point_report();
+        assert!(t.contains("not success"));
+        assert!(!t.contains("every listed criterion is true on this run"));
     }
 }

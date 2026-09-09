@@ -152,6 +152,8 @@ fn main() -> anyhow::Result<()> {
                         std::fs::create_dir_all(dir)?;
                     }
                     std::fs::write(&out, serde_json::to_string_pretty(&p)?)?;
+                    let report_path = out.with_file_name("METAL_PROOF_REPORT.md");
+                    std::fs::write(&report_path, p.sixteen_point_report())?;
                     println!("{}", serde_json::to_string_pretty(&p)?);
                 }
                 Err(e) => {

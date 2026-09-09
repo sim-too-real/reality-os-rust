@@ -444,10 +444,9 @@ print("meta-written")
 PY
 
 as_authority "$SMOKE" --root "$ROOT" --cases "$CASES_FILE" --out "$ROOT/metal_proof.json" report
-install -D -m 0644 "$ROOT/metal_proof.json" "$OUT"
 python3 - <<PY
-import json
-r = json.load(open("$OUT"))
+import json, sys
+r = json.load(open("$ROOT/metal_proof.json"))
 assert r["schema"] == "realityos.metal_proof/1"
 assert r["hardware_present"] is True
 assert r["unauthorized_physical_device_writes"] == 0, r
@@ -455,8 +454,18 @@ assert r["valid_physical_device_writes"] >= 2, r
 assert r["direct_device_open_attempts"] > 0, r
 assert r["direct_device_open_successes"] == 0, r
 assert r["duplicate_writes_after_restart"] == 0, r
+assert r["cutoff_tested"] is True, r
+assert r["experiment_status"] == "measured_success", r
 print("metal-proof-ok status=%s writes=%s" % (r["experiment_status"], r["valid_physical_device_writes"]))
 PY
+# Install into the repo only after every success criterion is true.
+install -D -m 0644 "$ROOT/metal_proof.json" "$OUT"
+REPORT_SRC="$ROOT/METAL_PROOF_REPORT.md"
+REPORT_DST="$(dirname "$OUT")/METAL_PROOF_REPORT.md"
+if [[ -f "$REPORT_SRC" ]]; then
+  install -D -m 0644 "$REPORT_SRC" "$REPORT_DST"
+fi
 
 echo "metal campaign finished"
 echo "proof: $OUT"
+echo "report: $REPORT_DST"
