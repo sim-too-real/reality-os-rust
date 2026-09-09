@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: build HIL and metal binaries
-        run: cargo build -p realityos-hil --bins -p realityos-metal --bins
+        run: cargo build -p realityos-hil -p realityos-metal --bins
       - name: two-user HIL deployment
         run: sudo -E env "PATH=$PATH" REALITYOS_HIL_BIN="$PWD/target/debug" REALITYOS_OS_USERS_PROOF="$PWD/docs/hil_os_users_proof.json" scripts/hil-os-users-ci.sh
       - name: two-user metal OS boundary (not physical evidence)
