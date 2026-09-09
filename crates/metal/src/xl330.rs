@@ -24,8 +24,8 @@ use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
     instruction_ok, is_xl330_model, le_i32, le_u16, ADDR_CURRENT_LIMIT, ADDR_FIRMWARE_VERSION,
     ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR, ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE,
-    ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_REALTIME_TICK, ADDR_TORQUE_ENABLE,
-    OPERATING_MODE_POSITION,
+    ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL,
+    ADDR_TORQUE_ENABLE, OPERATING_MODE_POSITION, STATUS_RETURN_ALL,
 };
 
 pub struct Xl330Driver {
@@ -217,6 +217,10 @@ impl Xl330Driver {
 
     fn ping_and_identify(&mut self) -> io::Result<()> {
         let _ = self.xfer(&encode_ping(self.cfg.servo_id), true)?;
+        // Wizard can set Status Return Level to 0 (PING only). Then READ and
+        // WRITE have no status and identify/setup fail. Poke 2 without
+        // requiring an ack — there may be no status packet to read.
+        self.force_status_return_all()?;
         let model_pkt = self.xfer(&encode_read(self.cfg.servo_id, ADDR_MODEL_NUMBER, 2), true)?;
         let model = le_u16(&model_pkt.params).unwrap_or(0);
         let fw_pkt = self.xfer(
@@ -231,6 +235,51 @@ impl Xl330Driver {
                 "metal_refuses_non_xl330_model:{model}"
             )));
         }
+        Ok(())
+    }
+
+    fn force_status_return_all(&mut self) -> io::Result<()> {
+        let frame = encode_write(
+            self.cfg.servo_id,
+            ADDR_STATUS_RETURN_LEVEL,
+            &[STATUS_RETURN_ALL],
+        );
+        let port = self
+            .port
+            .as_mut()
+            .ok_or_else(|| io::Error::other("metal_serial_closed"))?;
+        let saved = port.timeout();
+        port.clear(serialport::ClearBuffer::Input)
+            .map_err(io::Error::other)?;
+        port.write_all(&frame).map_err(io::Error::other)?;
+        port.flush().map_err(io::Error::other)?;
+        // Factory SRL=2 replies; Wizard SRL=0 does not. Consume an optional
+        // status so a late USB packet is not decoded as the model READ.
+        // 25 ms > default FTDI latency_timer (16 ms).
+        port.set_timeout(Duration::from_millis(25))
+            .map_err(io::Error::other)?;
+        let mut acc = Vec::new();
+        let mut tmp = [0u8; 64];
+        let end = std::time::Instant::now() + Duration::from_millis(25);
+        while std::time::Instant::now() < end {
+            match port.read(&mut tmp) {
+                Ok(0) => {}
+                Ok(n) => {
+                    acc.extend_from_slice(&tmp[..n]);
+                    if decode_status_scan(&acc).is_ok() {
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::TimedOut => break,
+                Err(e) => {
+                    let _ = port.set_timeout(saved);
+                    return Err(e);
+                }
+            }
+        }
+        port.clear(serialport::ClearBuffer::Input)
+            .map_err(io::Error::other)?;
+        port.set_timeout(saved).map_err(io::Error::other)?;
         Ok(())
     }
 

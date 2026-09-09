@@ -22,6 +22,9 @@ pub const ADDR_OPERATING_MODE: u16 = 11;
 pub const OPERATING_MODE_POSITION: u8 = 3;
 pub const ADDR_CURRENT_LIMIT: u16 = 38;
 pub const ADDR_TORQUE_ENABLE: u16 = 64;
+/// RAM. 0 = no status except PING (Wizard); 2 = all instructions (factory).
+pub const ADDR_STATUS_RETURN_LEVEL: u16 = 68;
+pub const STATUS_RETURN_ALL: u8 = 2;
 pub const ADDR_HARDWARE_ERROR: u16 = 70;
 pub const ADDR_PROFILE_ACCEL: u16 = 108;
 pub const ADDR_PROFILE_VELOCITY: u16 = 112;

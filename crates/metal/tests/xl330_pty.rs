@@ -143,6 +143,23 @@ fn xl330_pty_alert_bit_is_not_instruction_failure() {
 }
 
 #[test]
+fn xl330_pty_status_return_level_zero_can_still_identify() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_SRL0", "1")]);
+    let root = metal_test_root("pty-srl0");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("Wizard Status Return Level 0 must not block identify (poke 2, then READ)");
+    assert_eq!(driver.measured().model, 1190);
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold after SRL poke");
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_start_online_hold_is_not_a_metal_proof() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder();

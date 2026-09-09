@@ -125,12 +125,24 @@ def init_regs() -> bytearray:
     regs[7] = 1
     regs[11] = 3
     regs[38:40] = struct.pack("<H", 200)
+    regs[68] = 0 if os.environ.get("REALITYOS_METAL_PTY_SRL0") == "1" else 2
     regs[120:122] = struct.pack("<H", 1234)
     regs[126:128] = struct.pack("<h", 0)
     regs[128:132] = struct.pack("<i", 0)
     regs[132:136] = struct.pack("<i", 2048)
     regs[144:146] = struct.pack("<H", 50)
     return regs
+
+
+def status_wanted(srl: int, inst: int) -> bool:
+    # Protocol 2.0 Status Return Level: 0=PING only, 1=PING+READ, 2=all.
+    if inst == INST_PING:
+        return True
+    if srl >= 2:
+        return True
+    if srl == 1 and inst == INST_READ:
+        return True
+    return False
 
 
 def handle(regs: bytearray, inst: int, params: bytes) -> bytes:
@@ -148,6 +160,7 @@ def handle(regs: bytearray, inst: int, params: bytes) -> bytes:
         return b""
     if inst == INST_REBOOT:
         regs[70] = 0
+        regs[68] = 2  # RAM reset; factory Status Return Level
         return b""
     return b""
 
@@ -174,10 +187,14 @@ def main() -> None:
         servo_id, inst, params, _consumed = parsed
         del buf[:]
         alert = STATUS_ALERT if os.environ.get("REALITYOS_METAL_PTY_ALERT") == "1" else 0
-        status = encode_status(servo_id, handle(regs, inst, params), error=alert)
+        srl = regs[68]
+        payload = handle(regs, inst, params)
         # Half-duplex adapters often echo a request-shaped frame before status.
         echo = HEADER + bytes([servo_id, 0x07, 0x00, INST_PING, 0x00, 0x00])
-        os.write(master, echo + status)
+        if status_wanted(srl, inst):
+            os.write(master, echo + encode_status(servo_id, payload, error=alert))
+        else:
+            os.write(master, echo)
 
 
 if __name__ == "__main__":
