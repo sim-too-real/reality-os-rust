@@ -253,12 +253,9 @@ pub fn find_tty_for_expected_serial(expected_serial: &str, servo_id: u8) -> Opti
     if want.is_empty() {
         return None;
     }
-    for p in iter_usb_uart_candidates() {
-        if adapter_serial_for_tty(&p, servo_id) == want {
-            return Some(p);
-        }
-    }
-    None
+    iter_usb_uart_candidates()
+        .into_iter()
+        .find(|p| adapter_serial_for_tty(p, servo_id) == want)
 }
 
 /// Prefer an existing env/config path, then the path still in metal.json, then
