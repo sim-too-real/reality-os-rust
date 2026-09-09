@@ -634,6 +634,23 @@ as_authority() {
 as_authority "$SMOKE" --root "$ROOT" --device "$DEVICE" init
 as_authority "$SMOKE" --root "$ROOT" --device "$DEVICE" probe
 as_authority "$SMOKE" --root "$ROOT" bind-measured
+# Probe wrote the working baud/id. The docs example
+# REALITYOS_METAL_BAUD=1000000 is a probe hint; a factory XL330 is
+# 57 600. Serve must not reopen at the hint (campaign used to pass
+# the env through and apply_process_env clobbered metal.json).
+if [[ -f "$ROOT/metal.json" ]]; then
+  eval "$(python3 - "$ROOT/metal.json" <<'PY'
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+baud = cfg.get("baud")
+sid = cfg.get("servo_id")
+if isinstance(baud, int) and baud > 0:
+    print("export REALITYOS_METAL_BAUD=%d" % baud)
+if isinstance(sid, int) and sid != 254:
+    print("export REALITYOS_METAL_SERVO_ID=%d" % sid)
+PY
+)"
+fi
 
 writes() { cat "$ROOT/bus/writes" 2>/dev/null || echo 0; }
 acks() { cat "$ROOT/bus/acks" 2>/dev/null || echo 0; }

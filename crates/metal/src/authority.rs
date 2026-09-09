@@ -36,7 +36,8 @@ impl MetalAuthority {
             anyhow::bail!("metal_expected_identity_missing:run_probe_then_bind_measured");
         }
         let json_device = cfg.device.clone();
-        cfg.apply_process_env();
+        // Device only: baud/id in metal.json are the pair probe measured.
+        cfg.apply_device_env();
         let live = crate::identity::pick_live_device(
             cfg.device.clone(),
             json_device.clone(),

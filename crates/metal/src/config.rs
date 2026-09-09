@@ -92,25 +92,41 @@ impl MetalConfig {
         }
     }
 
+    /// Init/probe: device path plus optional baud/id hints.
     pub fn apply_process_env(&mut self) {
-        if let Ok(d) = std::env::var("REALITYOS_METAL_DEVICE") {
-            if !d.trim().is_empty() {
-                self.device = PathBuf::from(d);
-            }
+        self.apply_device_env();
+        self.apply_bus_hint_env();
+    }
+
+    /// udev rematch after bind. Must not clobber the discovered baud/id:
+    /// the docs example `REALITYOS_METAL_BAUD=1000000` is a probe hint;
+    /// a factory XL330 is 57 600, and serve used to reopen at 1 Mbps.
+    pub fn apply_device_env(&mut self) {
+        self.apply_device_path(std::env::var("REALITYOS_METAL_DEVICE").ok().as_deref());
+    }
+
+    pub fn apply_device_path(&mut self, device: Option<&str>) {
+        if let Some(d) = device.map(str::trim).filter(|s| !s.is_empty()) {
+            self.device = PathBuf::from(d);
         }
-        if let Ok(b) = std::env::var("REALITYOS_METAL_BAUD") {
-            if let Ok(n) = b.parse::<u32>() {
-                if n > 0 {
-                    self.baud = n;
-                }
-            }
+    }
+
+    pub fn apply_bus_hint_env(&mut self) {
+        let baud = std::env::var("REALITYOS_METAL_BAUD")
+            .ok()
+            .and_then(|s| s.parse().ok());
+        let id = std::env::var("REALITYOS_METAL_SERVO_ID")
+            .ok()
+            .and_then(|s| s.parse().ok());
+        self.apply_bus_hints(baud, id);
+    }
+
+    pub fn apply_bus_hints(&mut self, baud: Option<u32>, servo_id: Option<u8>) {
+        if let Some(n) = baud.filter(|n| *n > 0) {
+            self.baud = n;
         }
-        if let Ok(id) = std::env::var("REALITYOS_METAL_SERVO_ID") {
-            if let Ok(n) = id.parse::<u8>() {
-                if n != 254 {
-                    self.servo_id = n;
-                }
-            }
+        if let Some(n) = servo_id.filter(|n| *n != 254) {
+            self.servo_id = n;
         }
     }
 
@@ -266,5 +282,28 @@ mod tests {
         assert!(ids.contains(&0), "Protocol 2.0 ID 0 is a valid Wizard ID");
         assert!(!ids.contains(&254));
         assert!(ids.contains(&1));
+    }
+
+    #[test]
+    fn device_remap_does_not_clobber_discovered_baud_or_id() {
+        let mut cfg = MetalConfig::example("/dev/ttyUSB0");
+        cfg.baud = 115_200;
+        cfg.servo_id = 2;
+        cfg.apply_device_path(Some("/dev/ttyUSB1"));
+        cfg.apply_bus_hints(None, None);
+        assert_eq!(cfg.device, PathBuf::from("/dev/ttyUSB1"));
+        assert_eq!(cfg.baud, 115_200, "serve must keep the pair probe wrote");
+        assert_eq!(cfg.servo_id, 2);
+    }
+
+    #[test]
+    fn bus_hints_are_probe_only_and_ignore_broadcast() {
+        let mut cfg = MetalConfig::example("/dev/ttyUSB0");
+        cfg.apply_bus_hints(Some(1_000_000), Some(0));
+        assert_eq!(cfg.baud, 1_000_000);
+        assert_eq!(cfg.servo_id, 0);
+        cfg.apply_bus_hints(Some(0), Some(254));
+        assert_eq!(cfg.baud, 1_000_000);
+        assert_eq!(cfg.servo_id, 0);
     }
 }
