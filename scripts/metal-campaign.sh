@@ -49,7 +49,49 @@ fi
 # it cannot rewrite the journal after the wipe.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
+
+metal_fstype() {
+  local target="$1"
+  if command -v findmnt >/dev/null 2>&1; then
+    findmnt -n -o FSTYPE --target "$target" 2>/dev/null || true
+  elif [[ -e "$target" ]]; then
+    df -T "$target" 2>/dev/null | awk 'NR==2 { print $2 }'
+  fi
+}
+
+metal_is_mountpoint() {
+  local target="$1"
+  if command -v findmnt >/dev/null 2>&1; then
+    findmnt --mountpoint "$target" >/dev/null 2>&1
+  else
+    mountpoint -q "$target" 2>/dev/null
+  fi
+}
+
+# Each watchdog/heartbeat emit fsyncs journal+seal. A disk fsync >100 ms
+# latches the software watchdog and cannot be caught up. That is a
+# deployment constraint, not a kernel redesign.
+if metal_is_mountpoint "$ROOT"; then
+  umount "$ROOT" || {
+    echo "error: could not umount leftover mount $ROOT" >&2
+    exit 2
+  }
+fi
 rm -rf "$ROOT"
+install -d -m 0755 "$ROOT"
+FSTYPE="$(metal_fstype "$ROOT")"
+if [[ "$FSTYPE" == "tmpfs" ]]; then
+  echo "metal-campaign: $ROOT is on tmpfs"
+elif [[ "${REALITYOS_METAL_ALLOW_SLOW_DISK:-0}" == "1" ]]; then
+  echo "warning: $ROOT fstype=${FSTYPE:-unknown} is not tmpfs; REALITYOS_METAL_ALLOW_SLOW_DISK=1; a journal fsync >100 ms latches the software watchdog" >&2
+elif mount -t tmpfs -o size=32M,mode=0755 realityos-metal "$ROOT"; then
+  echo "metal-campaign: mounted tmpfs on $ROOT (watchdog journal+seal fsync must stay under 100 ms)"
+else
+  echo "error: $ROOT is not tmpfs (fstype=${FSTYPE:-unknown}) and tmpfs mount failed." >&2
+  echo "error: each watchdog emit fsyncs journal+seal; a disk fsync >100 ms cannot be caught up." >&2
+  echo "error: put REALITYOS_METAL_ROOT on tmpfs (/dev/shm/...) or: mount -t tmpfs tmpfs $ROOT" >&2
+  exit 2
+fi
 
 STAGE="${REALITYOS_METAL_STAGE:-/tmp/realityos-metal-bin}"
 rm -rf "$STAGE"
