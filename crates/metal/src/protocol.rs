@@ -218,6 +218,30 @@ pub fn decode_status_scan(buf: &[u8]) -> Result<StatusPacket, ProtocolError> {
     Err(last_err)
 }
 
+/// Unique servo IDs from every status frame in `buf`. Broadcast sniff uses
+/// this so a second XL330 on the drop is not commanded by accident.
+pub fn unique_status_ids(buf: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut search = 0;
+    while search < buf.len() {
+        let Some(rel) = find_header(&buf[search..]) else {
+            break;
+        };
+        let start = search + rel;
+        match decode_status(&buf[start..]) {
+            Ok(st) => {
+                if st.id != 0 && st.id != BROADCAST_ID && !out.contains(&st.id) {
+                    out.push(st.id);
+                }
+                search = start + 4;
+            }
+            Err(ProtocolError::Truncated) | Err(ProtocolError::TooShort) => break,
+            Err(_) => search = start + 1,
+        }
+    }
+    out
+}
+
 /// Stuff after CRC (Robotis): insert 0xFD after 0xFF 0xFF 0xFD except in the header.
 fn stuff(unstuffed: &[u8]) -> Vec<u8> {
     if unstuffed.len() < 4 {
@@ -348,6 +372,15 @@ mod tests {
         assert!(is_xl330_model(XL330_M288_MODEL));
         assert!(is_xl330_model(XL330_M077_MODEL));
         assert!(!is_xl330_model(1030));
+    }
+
+    #[test]
+    fn unique_status_ids_collects_two_servos() {
+        let a = encode_packet(1, INST_STATUS, &[0]);
+        let b = encode_packet(7, INST_STATUS, &[0]);
+        let mut both = a;
+        both.extend_from_slice(&b);
+        assert_eq!(unique_status_ids(&both), vec![1, 7]);
     }
 
     #[test]

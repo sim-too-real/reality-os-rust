@@ -23,9 +23,9 @@ use crate::egress::EgressLog;
 use crate::identity::{is_pty_path, usb_identity_for_tty, MeasuredIdentity};
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
-    instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, ADDR_BUS_WATCHDOG, ADDR_CURRENT_LIMIT,
-    ADDR_DRIVE_MODE, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR,
-    ADDR_MAX_POSITION_LIMIT, ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT,
+    instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, unique_status_ids, ADDR_BUS_WATCHDOG,
+    ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION,
+    ADDR_HARDWARE_ERROR, ADDR_MAX_POSITION_LIMIT, ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT,
     ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN,
     ADDR_PRESENT_POSITION, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY,
     ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE, ADDR_VELOCITY_LIMIT,
@@ -154,7 +154,8 @@ impl Xl330Driver {
         for baud in bauds {
             // Wizard may leave a non-1/2 ID. Broadcast PING still answers at
             // SRL=0 and the status carries the servo's own ID.
-            let try_ids = prefer_servo_id(&ids, sniff_servo_id(&cfg.device, baud));
+            let sniffed = sniff_servo_ids(&cfg.device, baud)?;
+            let try_ids = prefer_servo_id(&ids, sniffed.first().copied());
             for id in try_ids {
                 let mut attempt = cfg.clone();
                 attempt.baud = baud;
@@ -993,34 +994,44 @@ fn prefer_servo_id(ids: &[u8], found: Option<u8>) -> Vec<u8> {
 }
 
 /// Broadcast PING. Status ID is the servo's own ID even when Status Return Level is 0.
-fn sniff_servo_id(device: &Path, baud: u32) -> Option<u8> {
+/// Waits the full window so a second servo on the drop is visible.
+fn sniff_servo_ids(device: &Path, baud: u32) -> io::Result<Vec<u8>> {
     if !device.exists() {
-        return None;
+        return Ok(Vec::new());
     }
     // Broadcast sniff must not take TIOCEXCL; probe would steal exclusive
     // from the next serve open.
-    let mut port = open_xl330_serial_with(device, baud, false).ok()?;
+    let mut port = match open_xl330_serial_with(device, baud, false) {
+        Ok(p) => p,
+        Err(_) => return Ok(Vec::new()),
+    };
     let frame = encode_ping(BROADCAST_ID);
-    port.clear(serialport::ClearBuffer::Input).ok()?;
-    port.write_all(&frame).ok()?;
-    port.flush().ok()?;
+    if port.clear(serialport::ClearBuffer::Input).is_err()
+        || port.write_all(&frame).is_err()
+        || port.flush().is_err()
+    {
+        return Ok(Vec::new());
+    }
     let mut acc = Vec::new();
     let mut tmp = [0u8; 64];
     let end = std::time::Instant::now() + Duration::from_millis(150);
     while std::time::Instant::now() < end {
         match port.read(&mut tmp) {
             Ok(0) => {}
-            Ok(n) => {
-                acc.extend_from_slice(&tmp[..n]);
-                if let Ok(st) = decode_status_scan(&acc) {
-                    if st.id != 0 && st.id != BROADCAST_ID {
-                        return Some(st.id);
-                    }
-                }
-            }
+            Ok(n) => acc.extend_from_slice(&tmp[..n]),
             Err(e) if e.kind() == io::ErrorKind::TimedOut => break,
-            Err(_) => return None,
+            Err(_) => return Ok(Vec::new()),
         }
     }
-    None
+    let ids = unique_status_ids(&acc);
+    if ids.len() > 1 {
+        return Err(io::Error::other(format!(
+            "dxl_multiple_servos_on_bus:{}",
+            ids.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        )));
+    }
+    Ok(ids)
 }

@@ -339,6 +339,23 @@ fn xl330_pty_refuses_torque_when_vin_below_wizard_min() {
 }
 
 #[test]
+fn xl330_pty_discover_refuses_two_servo_ids_on_the_bus() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_MULTI", "1")]);
+    let root = metal_test_root("pty-multi");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open_discovering(cfg, &root) {
+        Ok(_) => panic!("two status IDs must not pick a servo at random"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_multiple_servos_on_bus"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_discover_finds_wizard_id_via_broadcast() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ID", "7")]);

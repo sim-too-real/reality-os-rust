@@ -239,6 +239,17 @@ def main() -> None:
         own = regs[7] or 1
         if req_id not in (254, own):
             continue
+        if (
+            os.environ.get("REALITYOS_METAL_PTY_MULTI") == "1"
+            and req_id == 254
+            and inst == INST_PING
+        ):
+            echo = HEADER + bytes([own, 0x07, 0x00, INST_PING, 0x00, 0x00])
+            os.write(
+                master,
+                echo + encode_status(1, b"") + encode_status(7, b""),
+            )
+            continue
         alert = STATUS_ALERT if os.environ.get("REALITYOS_METAL_PTY_ALERT") == "1" else 0
         srl = regs[68]
         payload, inst_err = handle(regs, inst, params)

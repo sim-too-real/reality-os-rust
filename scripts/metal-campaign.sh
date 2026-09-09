@@ -69,8 +69,8 @@ set_usb_serial_latency() {
   local real name timer
   real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
   name="$(basename "$real")"
-  case "$name" in
-    ttyUSB*|ttyACM*) ;;
+    case "$name" in
+    ttyUSB*|ttyACM*|ttyCH341*) ;;
     *) return 0 ;;
   esac
   for timer in \
@@ -146,7 +146,7 @@ prepare_usb_serial_host() {
     fi
   fi
   case "$name" in
-    ttyUSB*|ttyACM*) ;;
+    ttyUSB*|ttyACM*|ttyCH341*) ;;
     *)
       set_usb_serial_latency "$dev"
       return 0
