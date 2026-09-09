@@ -112,11 +112,97 @@ disable_usb_autosuspend() {
   done
 }
 
+# Walk sysfs from the tty to the USB device and read one attribute.
+usb_sysfs_value() {
+  local dev="$1" key="$2"
+  local name node
+  name="$(basename "$(readlink -f "$dev" 2>/dev/null || echo "$dev")")"
+  node="$(readlink -f "/sys/class/tty/${name}/device" 2>/dev/null || true)"
+  while [[ -n "$node" && "$node" != / && "$node" != /sys ]]; do
+    if [[ -f "$node/$key" ]]; then
+      tr -d '\n' <"$node/$key"
+      return 0
+    fi
+    node="$(dirname "$node")"
+  done
+  return 1
+}
+
+# udev change / MM stop can re-enumerate FTDI as ttyUSB1. A KERNEL==ttyUSB0
+# rule and a stale DEVICE then miss the servo. Prefer /dev/serial/by-id,
+# else the tty whose USB serial still matches.
+find_tty_by_usb_serial() {
+  local want="$1"
+  local p real got
+  [[ -n "$want" ]] || return 1
+  if [[ -d /dev/serial/by-id ]]; then
+    for p in /dev/serial/by-id/*; do
+      [[ -e "$p" ]] || continue
+      real="$(readlink -f "$p" 2>/dev/null || true)"
+      [[ -n "$real" ]] || continue
+      got="$(usb_sysfs_value "$real" serial || true)"
+      if [[ "$got" == "$want" ]]; then
+        echo "$p"
+        return 0
+      fi
+    done
+  fi
+  for p in /dev/ttyUSB* /dev/ttyACM* /dev/ttyCH341*; do
+    [[ -e "$p" ]] || continue
+    got="$(usb_sysfs_value "$p" serial || true)"
+    if [[ "$got" == "$want" ]]; then
+      echo "$p"
+      return 0
+    fi
+  done
+  return 1
+}
+
+stabilize_metal_device() {
+  local dev="$1"
+  local real name p
+  real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
+  name="$(basename "$real")"
+  case "$name" in
+    ttyUSB*|ttyACM*|ttyCH341*) ;;
+    *)
+      echo "$dev"
+      return 0
+      ;;
+  esac
+  if [[ ! -e "$real" ]]; then
+    if [[ -n "${METAL_USB_SERIAL:-}" ]]; then
+      p="$(find_tty_by_usb_serial "$METAL_USB_SERIAL" || true)"
+      if [[ -n "$p" ]]; then
+        echo "metal-campaign: $real vanished after udev; continuing on $p" >&2
+        echo "$p"
+        return 0
+      fi
+    fi
+    echo "$dev"
+    return 0
+  fi
+  if [[ -d /dev/serial/by-id ]]; then
+    for p in /dev/serial/by-id/*; do
+      [[ -e "$p" ]] || continue
+      if [[ "$(readlink -f "$p" 2>/dev/null || true)" == "$real" ]]; then
+        if [[ "$p" != "$dev" ]]; then
+          echo "metal-campaign: using stable $p (udev can rename $name)" >&2
+        fi
+        echo "$p"
+        return 0
+      fi
+    done
+  fi
+  echo "$real"
+}
+
 # ModemManager/brltty grab ttyUSB on typical Ubuntu benches. Between probe
 # close and serve open nobody holds TIOCEXCL.
 UDEV_RULE=""
 STOPPED_BRLTTY=0
 STOPPED_MM=0
+METAL_USB_SERIAL=""
 
 wait_tty_free() {
   local real="$1"
@@ -181,12 +267,25 @@ prepare_usb_serial_host() {
       return 0
       ;;
   esac
+  if [[ -z "${METAL_USB_SERIAL:-}" ]]; then
+    METAL_USB_SERIAL="$(usb_sysfs_value "$real" serial || true)"
+  fi
   if [[ -d /run/udev/rules.d ]]; then
-    rules="/run/udev/rules.d/99-realityos-metal-${name}.rules"
+    if [[ -n "$METAL_USB_SERIAL" ]]; then
+      rules="/run/udev/rules.d/99-realityos-metal-usb.rules"
+    else
+      rules="/run/udev/rules.d/99-realityos-metal-${name}.rules"
+    fi
     if [[ ! -f "$rules" ]]; then
-      cat >"$rules" <<EOF
+      if [[ -n "$METAL_USB_SERIAL" ]]; then
+        cat >"$rules" <<EOF
+ACTION=="add|change", SUBSYSTEM=="tty", ATTRS{serial}=="${METAL_USB_SERIAL}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_BRLTTY}="0", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
+EOF
+      else
+        cat >"$rules" <<EOF
 ACTION=="add|change", KERNEL=="${name}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_BRLTTY}="0", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
 EOF
+      fi
       UDEV_RULE="$rules"
       udevadm control --reload 2>/dev/null || true
       udevadm trigger --action=change --sysname-match="$name" 2>/dev/null || true
@@ -196,6 +295,9 @@ EOF
       UDEV_RULE="$rules"
     fi
   fi
+  DEVICE="$(stabilize_metal_device "$dev")"
+  export REALITYOS_METAL_DEVICE="$DEVICE"
+  real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
   if [[ -e "$real" ]]; then
     chown "$AUTHORITY_USER:$AUTHORITY_USER" "$real" 2>/dev/null || true
     chmod 0600 "$real" 2>/dev/null || true
@@ -206,8 +308,8 @@ EOF
   if [[ -e "$real" ]]; then
     /bin/stty -F "$real" -hupcl >/dev/null 2>&1 || true
   fi
-  set_usb_serial_latency "$dev"
-  disable_usb_autosuspend "$dev"
+  set_usb_serial_latency "$DEVICE"
+  disable_usb_autosuspend "$DEVICE"
 }
 
 cleanup_usb_serial_host() {
