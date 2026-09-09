@@ -37,6 +37,40 @@ pub struct ActionParams {
     pub values: Vec<(String, f64)>,
 }
 
+/// Final hard bounds immediately before driver egress. Never widens.
+pub fn check_hard_action_bounds(action: &[f64], caps: &PlantCaps) -> crate::error::PlantResult<()> {
+    use crate::error::PlantError;
+    if action.is_empty() {
+        return Err(PlantError::refused("egress_missing_action"));
+    }
+    if action.iter().any(|x| !x.is_finite()) {
+        return Err(PlantError::refused("egress_non_finite_action"));
+    }
+    if caps.action_dim > 0 && action.len() != caps.action_dim {
+        return Err(PlantError::refused(format!(
+            "egress_action_dim_mismatch:{}!={}",
+            action.len(),
+            caps.action_dim
+        )));
+    }
+    if caps.max_action.is_empty() {
+        return Err(PlantError::refused("egress_max_action_missing"));
+    }
+    for (i, a) in action.iter().enumerate() {
+        let lim = caps.max_action[i.min(caps.max_action.len() - 1)];
+        if !lim.is_finite() || lim <= 0.0 {
+            return Err(PlantError::refused("egress_max_action_invalid"));
+        }
+        if a.abs() > lim + 1e-12 {
+            return Err(PlantError::refused(format!(
+                "egress_action_exceeds_hard_bound_{i}:{}>{lim}",
+                a.abs()
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl ActionParams {
     pub fn empty() -> Self {
         Self { values: Vec::new() }

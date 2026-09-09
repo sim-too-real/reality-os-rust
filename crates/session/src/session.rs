@@ -1,6 +1,9 @@
-use realityos_core::CertifiedCommand;
+use std::path::PathBuf;
+
+use realityos_core::{lifecycle, CertifiedCommand};
 use realityos_governor::{
-    DriverEnvelopePack, RuntimeGovernor, RuntimeIdentity, RuntimeTrace, SafeState,
+    DriverEnvelopePack, Hil, OnlineLocked, Rail, RuntimeGovernor, RuntimeIdentity, RuntimeTrace,
+    SafeState, Simulation,
 };
 use realityos_kernel::{
     CalibrationId, DesignContentHash, FirmwareId, ReleaseHash, SerialOrAsBuilt,
@@ -23,6 +26,10 @@ pub struct StartArgs {
     pub require_command_signature: Option<bool>,
     pub require_driver_envelope: Option<bool>,
     pub max_action_abs: f64,
+    pub journal_path: Option<PathBuf>,
+    pub signing_key: Option<Vec<u8>>,
+    pub first_online: bool,
+    pub actuator_ids: Vec<String>,
 }
 
 impl StartArgs {
@@ -39,20 +46,25 @@ impl StartArgs {
             require_command_signature: None,
             require_driver_envelope: None,
             max_action_abs: 10.0,
+            journal_path: None,
+            signing_key: None,
+            first_online: false,
+            actuator_ids: Vec::new(),
         }
     }
 }
 
-pub struct RuntimeSession<P: Plant> {
+pub struct RuntimeSession<P: Plant, R: Rail = Simulation> {
     pub mode: RuntimeMode,
-    pub governor: RuntimeGovernor<P>,
+    pub governor: RuntimeGovernor<P, R>,
     last_sequence: i64,
     acknowledged_ids: std::collections::HashSet<String>,
     safe_state: SafeState,
     last_sensor_hash: Option<String>,
+    authorized_actuator_ids: Vec<String>,
 }
 
-impl RuntimeSession<SimPlant> {
+impl RuntimeSession<SimPlant, Simulation> {
     pub fn start_sim(
         args: StartArgs,
         plant: SimPlant,
@@ -62,107 +74,165 @@ impl RuntimeSession<SimPlant> {
     }
 }
 
-impl<P: Plant> RuntimeSession<P> {
+impl<P: Plant> RuntimeSession<P, Simulation> {
     pub fn start(args: StartArgs, plant: P, now_s: f64) -> Result<Self, SessionStartError> {
         if args.mode == RuntimeMode::Online {
-            let mut opted = Vec::new();
-            if args.require_verified_release == Some(false) {
-                opted.push("verified_release");
-            }
-            if args.require_command_signature == Some(false) {
-                opted.push("command_signature");
-            }
-            if args.require_driver_envelope == Some(false) {
-                opted.push("driver_envelope");
-            }
-            if !opted.is_empty() {
-                return Err(SessionStartError(format!(
-                    "online_refuses_safety_rail_opt_out:{}",
-                    opted.join(",")
-                )));
-            }
-            if args.release_class != "MFG_CANDIDATE" {
-                return Err(SessionStartError(format!(
-                    "online_requires_MFG_CANDIDATE_got:{}",
-                    args.release_class
-                )));
-            }
-            if args.serial_or_as_built.is_empty() || args.serial_or_as_built.starts_with("SIM_") {
-                return Err(SessionStartError(
-                    "online_requires_real_serial_or_as_built".into(),
-                ));
-            }
-            if args.firmware_id.is_empty() || args.firmware_id.starts_with("SIM_") {
-                return Err(SessionStartError("online_requires_real_firmware_id".into()));
-            }
-            if args.calibration_id.is_empty() || args.calibration_id == "SIM_CAL" {
-                return Err(SessionStartError(
-                    "online_requires_real_calibration_id".into(),
-                ));
-            }
-            if !plant.is_online() {
-                return Err(SessionStartError("online_rejects_dry_run_plant".into()));
-            }
-        }
-
-        let identity = RuntimeIdentity {
-            release_hash: ReleaseHash::new(&args.release_hash)
-                .map_err(|e| SessionStartError(e.to_string()))?,
-            design_content_hash: if args.design_content_hash.is_empty() {
-                None
-            } else {
-                Some(
-                    DesignContentHash::new(&args.design_content_hash)
-                        .map_err(|e| SessionStartError(e.to_string()))?,
-                )
-            },
-            serial_or_as_built: SerialOrAsBuilt::new(&args.serial_or_as_built).ok(),
-            firmware_id: FirmwareId::new(&args.firmware_id).ok(),
-            calibration_id: CalibrationId::new(&args.calibration_id).ok(),
-        };
-        if args.mode == RuntimeMode::Online && !identity.complete_online() {
             return Err(SessionStartError(
-                "incomplete_online_runtime_identity".into(),
+                "online_requires_start_online_typestate".into(),
             ));
         }
+        if args.mode == RuntimeMode::Hil {
+            return Err(SessionStartError("hil_requires_start_hil_typestate".into()));
+        }
+        if args.require_verified_release == Some(false)
+            || args.require_command_signature == Some(false)
+            || args.require_driver_envelope == Some(false)
+        {
+            // SIM may opt out; recorded only.
+        }
 
+        let identity = identity_from_args(&args)?;
         let mut governor = RuntimeGovernor::new(identity, plant);
-        governor.config_mut().require_online_identity = args.mode == RuntimeMode::Online;
-        governor.config_mut().require_sensor_before_write = args.mode != RuntimeMode::Simulation;
-        governor.config_mut().require_monotonic_sequence =
-            matches!(args.mode, RuntimeMode::Online | RuntimeMode::Hil);
-        governor.config_mut().require_command_signature = args.mode == RuntimeMode::Online;
-        governor.config_mut().require_sensor_packet_hash = args.mode == RuntimeMode::Online;
-        let mut env = DriverEnvelopePack::from_max_action(
-            &governor.plant().caps().max_action,
-            args.mode == RuntimeMode::Online,
-        );
+        governor.config_mut().require_online_identity = false;
+        governor.config_mut().require_sensor_before_write = false;
+        governor.config_mut().require_monotonic_sequence = false;
+        governor.config_mut().require_command_signature = false;
+        governor.config_mut().require_sensor_packet_hash = false;
+        let mut env =
+            DriverEnvelopePack::from_max_action(&governor.plant().caps().max_action, false);
         if env.max_action_abs <= 0.0 {
             env.max_action_abs = args.max_action_abs;
         }
         governor.set_envelope(env);
         governor.heartbeat(now_s);
         let _ = governor.watchdog_tick(now_s);
-
         Ok(Self {
-            mode: args.mode,
+            mode: RuntimeMode::Simulation,
             governor,
             last_sequence: 0,
             acknowledged_ids: std::collections::HashSet::new(),
             safe_state: SafeState::Running,
             last_sensor_hash: None,
+            authorized_actuator_ids: args.actuator_ids,
         })
     }
+}
 
-    pub fn start_online(args: StartArgs, plant: P, now_s: f64) -> Result<Self, SessionStartError> {
-        let mut args = args;
-        args.mode = RuntimeMode::Online;
-        args.require_verified_release = Some(true);
-        args.require_command_signature = Some(true);
-        args.require_driver_envelope = Some(true);
-        Self::start(args, plant, now_s)
+impl<P: Plant> RuntimeSession<P, Hil> {
+    pub fn start_hil(args: StartArgs, plant: P, now_s: f64) -> Result<Self, SessionStartError> {
+        let identity = identity_from_args(&args)?;
+        let mut governor = RuntimeGovernor::new_hil(identity, plant);
+        let mut env =
+            DriverEnvelopePack::from_max_action(&governor.plant().caps().max_action, true);
+        if env.max_action_abs <= 0.0 {
+            env.max_action_abs = args.max_action_abs;
+        }
+        governor.set_envelope(env);
+        governor.heartbeat(now_s);
+        let _ = governor.watchdog_tick(now_s);
+        Ok(Self {
+            mode: RuntimeMode::Hil,
+            governor,
+            last_sequence: 0,
+            acknowledged_ids: std::collections::HashSet::new(),
+            safe_state: SafeState::Running,
+            last_sensor_hash: None,
+            authorized_actuator_ids: args.actuator_ids,
+        })
     }
+}
 
+impl<P: Plant> RuntimeSession<P, OnlineLocked> {
+    pub fn start_online(args: StartArgs, plant: P, now_s: f64) -> Result<Self, SessionStartError> {
+        let mut opted = Vec::new();
+        if args.require_verified_release == Some(false) {
+            opted.push("verified_release");
+        }
+        if args.require_command_signature == Some(false) {
+            opted.push("command_signature");
+        }
+        if args.require_driver_envelope == Some(false) {
+            opted.push("driver_envelope");
+        }
+        if !opted.is_empty() {
+            return Err(SessionStartError(format!(
+                "online_refuses_safety_rail_opt_out:{}",
+                opted.join(",")
+            )));
+        }
+        if args.release_class != "MFG_CANDIDATE" {
+            return Err(SessionStartError(format!(
+                "online_requires_MFG_CANDIDATE_got:{}",
+                args.release_class
+            )));
+        }
+        if args.serial_or_as_built.is_empty() || args.serial_or_as_built.starts_with("SIM_") {
+            return Err(SessionStartError(
+                "online_requires_real_serial_or_as_built".into(),
+            ));
+        }
+        if args.firmware_id.is_empty() || args.firmware_id.starts_with("SIM_") {
+            return Err(SessionStartError("online_requires_real_firmware_id".into()));
+        }
+        if args.calibration_id.is_empty() || args.calibration_id == "SIM_CAL" {
+            return Err(SessionStartError(
+                "online_requires_real_calibration_id".into(),
+            ));
+        }
+        if !plant.is_online() {
+            return Err(SessionStartError("online_rejects_dry_run_plant".into()));
+        }
+        let journal = args
+            .journal_path
+            .clone()
+            .ok_or_else(|| SessionStartError("online_requires_durable_journal".into()))?;
+        let key = args
+            .signing_key
+            .clone()
+            .ok_or_else(|| SessionStartError("online_requires_signing_key".into()))?;
+        if args.actuator_ids.is_empty() {
+            return Err(SessionStartError("online_requires_actuator_ids".into()));
+        }
+        let identity = identity_from_args(&args)?;
+        if !identity.complete_online() {
+            return Err(SessionStartError(
+                "incomplete_online_runtime_identity".into(),
+            ));
+        }
+        let governor =
+            RuntimeGovernor::new_online(identity, plant, journal, key, args.first_online, now_s)
+                .map_err(|e| SessionStartError(e.0))?;
+        Ok(Self {
+            mode: RuntimeMode::Online,
+            governor,
+            last_sequence: 0,
+            acknowledged_ids: std::collections::HashSet::new(),
+            safe_state: SafeState::Running,
+            last_sensor_hash: None,
+            authorized_actuator_ids: args.actuator_ids,
+        })
+    }
+}
+
+fn identity_from_args(args: &StartArgs) -> Result<RuntimeIdentity, SessionStartError> {
+    Ok(RuntimeIdentity {
+        release_hash: ReleaseHash::new(&args.release_hash)
+            .map_err(|e| SessionStartError(e.to_string()))?,
+        design_content_hash: if args.design_content_hash.is_empty() {
+            None
+        } else {
+            Some(
+                DesignContentHash::new(&args.design_content_hash)
+                    .map_err(|e| SessionStartError(e.to_string()))?,
+            )
+        },
+        serial_or_as_built: SerialOrAsBuilt::new(&args.serial_or_as_built).ok(),
+        firmware_id: FirmwareId::new(&args.firmware_id).ok(),
+        calibration_id: CalibrationId::new(&args.calibration_id).ok(),
+    })
+}
+
+impl<P: Plant, R: Rail> RuntimeSession<P, R> {
     pub fn latch_safe_state(&mut self, state: SafeState, _reason: &str) {
         self.safe_state = state;
     }
@@ -194,14 +264,13 @@ impl<P: Plant> RuntimeSession<P> {
             return Err("sensor_timestamp_stale_vs_now".into());
         }
         self.last_sequence = self.last_sequence.saturating_add(1);
-        let hash = realityos_plant::hash_sensor_packet(
+        let hash = self.governor.record_sensor(
             samples,
             ts,
+            self.last_sequence as u64,
             "session/sensor",
             "session",
-            self.last_sequence as u64,
-        );
-        self.governor.mark_sensor(ts, Some(hash.clone()));
+        )?;
         self.last_sensor_hash = Some(hash.clone());
         Ok(hash)
     }
@@ -221,39 +290,58 @@ impl<P: Plant> RuntimeSession<P> {
                 )],
             );
         }
-        let command = match command.bind_identity(
-            self.governor.identity.release_hash.as_str(),
-            self.governor.identity.design_str(),
-            self.governor.identity.calibration_id_str(),
+        let bound = match lifecycle::CertifiedIntent::from_issued(command).bind_identity(
+            self.governor.identity().release_hash.as_str(),
+            self.governor.identity().design_str(),
+            self.governor.identity().calibration_id_str(),
         ) {
             Ok(c) => c,
             Err(errs) => return DispatchResult::refused(self.mode, errs),
         };
-        let command = if self.mode == RuntimeMode::Online {
-            if command.actuator_ids().is_empty() {
+
+        let command = if R::ONLINE_LOCKED {
+            let mut cmd = bound.0;
+            if cmd.actuator_ids().is_empty() {
+                cmd = cmd.with_actuator_ids(self.authorized_actuator_ids.clone());
+            } else if !cmd
+                .actuator_ids()
+                .iter()
+                .all(|id| self.authorized_actuator_ids.iter().any(|a| a == id))
+            {
+                return DispatchResult::refused(self.mode, vec!["foreign_actuator_ids".into()]);
+            }
+            let Some(h) = &self.last_sensor_hash else {
                 return DispatchResult::refused(
                     self.mode,
-                    vec!["dispatch_requires_actuator_ids".into()],
+                    vec!["online_requires_sensor_hash".into()],
                 );
-            }
+            };
+            let evidence = match cmd.bind_evidence(h) {
+                Ok(c) => c,
+                Err(errs) => return DispatchResult::refused(self.mode, errs),
+            };
+            let Some(key) = self.governor.signing_key() else {
+                return DispatchResult::refused(
+                    self.mode,
+                    vec!["online_signing_key_missing".into()],
+                );
+            };
+            let signed = lifecycle::EvidenceBound(evidence).sign(key);
+            signed.acknowledge().into_command()
+        } else {
+            let mut cmd = bound.0;
             if let Some(h) = &self.last_sensor_hash {
-                if command.sensor_packet_hash().is_empty() {
-                    command.with_sensor_packet_hash(h.clone())
-                } else if command.sensor_packet_hash() != *h {
+                if cmd.sensor_packet_hash().is_empty() {
+                    cmd = cmd.with_sensor_packet_hash(h.clone());
+                } else if cmd.sensor_packet_hash() != *h {
                     return DispatchResult::refused(
                         self.mode,
                         vec!["online_refuses_forged_sensor_packet_hash".into()],
                     );
-                } else {
-                    command
                 }
-            } else {
-                command
             }
-        } else {
-            command
+            cmd.acknowledge()
         };
-        let command = command.acknowledge();
         self.acknowledged_ids
             .insert(command.command_id().to_string());
         self.last_sequence = command.sequence_value().max(self.last_sequence);

@@ -1,0 +1,13 @@
+error[E0599]: the method `ledger_mut` exists for mutable reference `&mut RuntimeGovernor<SimPlant, OnlineLocked>`, but its trait bounds were not satisfied
+ --> tests/ui/online_no_ledger_mut.rs:5:15
+  |
+5 |     let _ = g.ledger_mut();
+  |               ^^^^^^^^^^
+  |
+ ::: src/rail.rs
+  |
+  | pub struct OnlineLocked;
+  | ----------------------- doesn't satisfy `OnlineLocked: UnlockedRail`
+  |
+  = note: the following trait bounds were not satisfied:
+          `OnlineLocked: UnlockedRail`

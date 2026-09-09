@@ -10,8 +10,8 @@ Layered so a crate can change internals without breaking the write uniqueness in
                                   │
                     ┌─────────────▼───────────────┐
                     │  realityos-session          │
-                    │  bind_and_dispatch          │
-                    │  sealed packages            │
+                    │  typestate bind/sign/ack    │
+                    │  ONLINE = OnlineLocked      │
                     └──────┬──────────────┬───────┘
            CertifiedCommand│              │ identity ack
               ┌────────────▼──┐    ┌──────▼──────────┐
@@ -34,7 +34,7 @@ Layered so a crate can change internals without breaking the write uniqueness in
 - **O** — new machine classes register `DomainPlugin`; they do not edit `decide()`.
 - **L** — any `Plant` (SIM stub, later hardware port) is substitutable; ONLINE still requires certified scope.
 - **I** — `ActuationCommand` is the driver-boundary trait. Governor does not import `CertifiedCommand`.
-- **D** — `HardwareDriverPort` is for robots. Governor depends on `Plant`, never on a vendor SDK.
+- **D** — `HardwareDriverPort` is vendor-implementable transport. Governor depends on sealed `Plant`. See `docs/AUTHORITY_KERNEL.md`.
 
 ## Control loop (ported)
 

@@ -2,15 +2,24 @@
 //!
 //! Does not replace RealityOS.decide. Does not invent. Both must cross here
 //! to touch a plant.
+//!
+//! `OnlineLocked` exposes observe/operate methods but not policy-weakening
+//! mutation: no `config_mut`, `envelope_mut`, `plant_mut`, `ledger_mut`,
+//! or signing-key replacement.
+
+use std::marker::PhantomData;
+use std::path::Path;
 
 use realityos_plant::{
-    execute_certified_command, ActionParams, ActuationCommand, CommandLedger, ExecuteBind, Plant,
+    execute_certified_command, hash_sensor_packet, ActionParams, ActuationCommand, CommandLedger,
+    ExecuteBind, Plant,
 };
 use serde_json::{json, Map, Value};
 
 use crate::envelope::DriverEnvelopePack;
 use crate::identity::RuntimeIdentity;
 use crate::latch::EstopLatch;
+use crate::rail::{OnlineLocked, Rail, Simulation, UnlockedRail};
 use crate::trace::RuntimeTrace;
 
 const LATCHING_PREFIXES: &[&str] = &[
@@ -54,79 +63,122 @@ impl Default for GovernorConfig {
     }
 }
 
-pub struct RuntimeGovernor<P: Plant> {
-    pub identity: RuntimeIdentity,
+impl GovernorConfig {
+    pub fn online_locked() -> Self {
+        Self {
+            heartbeat_period_s: 1.0,
+            sensor_stale_s: 2.0,
+            require_sensor_before_write: true,
+            require_online_identity: true,
+            require_command_signature: true,
+            require_monotonic_sequence: true,
+            require_sensor_packet_hash: true,
+            repeated_refuse_n: 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnlineInitError(pub String);
+
+impl std::fmt::Display for OnlineInitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for OnlineInitError {}
+
+pub struct RuntimeGovernor<P: Plant, R: Rail = Simulation> {
+    identity: RuntimeIdentity,
     plant: P,
     ledger: CommandLedger,
     config: GovernorConfig,
     envelope: Option<DriverEnvelopePack>,
     last_heartbeat_s: f64,
     last_sensor_s: f64,
+    last_now_s: f64,
     expected_sensor_packet_hash: Option<String>,
     signing_key: Option<Vec<u8>>,
     latch: EstopLatch,
     traces: Vec<RuntimeTrace>,
     watchdog_period_s: f64,
     last_watchdog_s: f64,
+    _rail: PhantomData<R>,
 }
 
-impl<P: Plant> RuntimeGovernor<P> {
+impl<P: Plant> RuntimeGovernor<P, Simulation> {
     pub fn new(identity: RuntimeIdentity, plant: P) -> Self {
+        Self::assemble(
+            identity,
+            plant,
+            CommandLedger::new(),
+            GovernorConfig::default(),
+            None,
+        )
+    }
+}
+
+impl<P: Plant> RuntimeGovernor<P, crate::rail::Hil> {
+    pub fn new_hil(identity: RuntimeIdentity, plant: P) -> Self {
+        let cfg = GovernorConfig {
+            require_monotonic_sequence: true,
+            require_sensor_before_write: true,
+            ..GovernorConfig::default()
+        };
+        Self::assemble(identity, plant, CommandLedger::new(), cfg, None)
+    }
+}
+
+impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
+    fn assemble(
+        identity: RuntimeIdentity,
+        plant: P,
+        ledger: CommandLedger,
+        config: GovernorConfig,
+        signing_key: Option<Vec<u8>>,
+    ) -> Self {
         Self {
             identity,
             plant,
-            ledger: CommandLedger::new(),
-            config: GovernorConfig::default(),
+            ledger,
+            config,
             envelope: None,
             last_heartbeat_s: 0.0,
             last_sensor_s: 0.0,
+            last_now_s: 0.0,
             expected_sensor_packet_hash: None,
-            signing_key: None,
+            signing_key,
             latch: EstopLatch::default(),
             traces: Vec::new(),
             watchdog_period_s: 0.05,
             last_watchdog_s: 0.0,
+            _rail: PhantomData,
         }
+    }
+
+    pub fn identity(&self) -> &RuntimeIdentity {
+        &self.identity
     }
 
     pub fn plant(&self) -> &P {
         &self.plant
     }
 
-    pub fn plant_mut(&mut self) -> &mut P {
-        &mut self.plant
-    }
-
     pub fn ledger(&self) -> &CommandLedger {
         &self.ledger
-    }
-
-    pub fn ledger_mut(&mut self) -> &mut CommandLedger {
-        &mut self.ledger
     }
 
     pub fn config(&self) -> &GovernorConfig {
         &self.config
     }
 
-    pub fn config_mut(&mut self) -> &mut GovernorConfig {
-        &mut self.config
-    }
-
     pub fn envelope(&self) -> Option<&DriverEnvelopePack> {
         self.envelope.as_ref()
     }
 
-    pub fn envelope_mut(&mut self) -> Option<&mut DriverEnvelopePack> {
-        self.envelope.as_mut()
-    }
-
-    pub fn set_envelope(&mut self, env: DriverEnvelopePack) {
-        self.envelope = Some(env);
-    }
-
-    pub fn set_signing_key(&mut self, key: Option<Vec<u8>>) {
-        self.signing_key = key;
+    pub fn signing_key(&self) -> Option<&[u8]> {
+        self.signing_key.as_deref()
     }
 
     pub fn last_heartbeat_s(&self) -> f64 {
@@ -135,6 +187,18 @@ impl<P: Plant> RuntimeGovernor<P> {
 
     pub fn last_sensor_s(&self) -> f64 {
         self.last_sensor_s
+    }
+
+    pub fn traces(&self) -> &[RuntimeTrace] {
+        &self.traces
+    }
+
+    pub fn estop(&self) -> bool {
+        self.latch.engaged
+    }
+
+    pub fn abort_latched(&self) -> bool {
+        self.latch.abort_latched
     }
 
     /// Software supervisor. Not an independent hardware watchdog.
@@ -149,18 +213,6 @@ impl<P: Plant> RuntimeGovernor<P> {
         }
         self.last_watchdog_s = now_s;
         self.emit(RuntimeTrace::new(true, "watchdog_tick", now_s))
-    }
-
-    pub fn traces(&self) -> &[RuntimeTrace] {
-        &self.traces
-    }
-
-    pub fn estop(&self) -> bool {
-        self.latch.engaged
-    }
-
-    pub fn abort_latched(&self) -> bool {
-        self.latch.abort_latched
     }
 
     fn emit(&mut self, t: RuntimeTrace) -> RuntimeTrace {
@@ -190,11 +242,27 @@ impl<P: Plant> RuntimeGovernor<P> {
         self.emit(RuntimeTrace::new(true, "heartbeat", now_s))
     }
 
-    pub fn mark_sensor(&mut self, now_s: f64, content_hash: Option<String>) {
-        self.last_sensor_s = now_s;
-        if let Some(h) = content_hash {
-            self.expected_sensor_packet_hash = Some(h);
+    pub fn record_sensor(
+        &mut self,
+        samples: &[(String, f64)],
+        timestamp_s: f64,
+        sequence: u64,
+        frame_id: &str,
+        sensor_id: &str,
+    ) -> Result<String, String> {
+        if samples.is_empty() {
+            return Err("sensor_reading_empty".into());
         }
+        if samples.iter().any(|(_, v)| !v.is_finite()) {
+            return Err("sensor_sample_non_finite".into());
+        }
+        if !timestamp_s.is_finite() {
+            return Err("sensor_timestamp_non_finite".into());
+        }
+        let hash = hash_sensor_packet(samples, timestamp_s, frame_id, sensor_id, sequence);
+        self.last_sensor_s = timestamp_s;
+        self.expected_sensor_packet_hash = Some(hash.clone());
+        Ok(hash)
     }
 
     pub fn engage_estop(&mut self, reason: impl Into<String>, now_s: f64) -> RuntimeTrace {
@@ -265,6 +333,9 @@ impl<P: Plant> RuntimeGovernor<P> {
         if self.last_sensor_s > 0.0 && (now_s - self.last_sensor_s) > self.config.sensor_stale_s {
             errs.push("sensor_stale".into());
         }
+        if R::ONLINE_LOCKED && self.last_now_s > 0.0 && now_s < self.last_now_s - 1e-12 {
+            errs.push("time_rollback".into());
+        }
         errs
     }
 
@@ -303,7 +374,7 @@ impl<P: Plant> RuntimeGovernor<P> {
         if !pre.is_empty() {
             if pre
                 .iter()
-                .any(|e| e.contains("release_hash") || e.contains("estop"))
+                .any(|e| e.contains("release_hash") || e.contains("estop") || e == "time_rollback")
             {
                 self.latch.abort_latched = true;
                 self.latch.reason = Some(pre[0].clone());
@@ -331,6 +402,7 @@ impl<P: Plant> RuntimeGovernor<P> {
             require_monotonic_sequence: self.config.require_monotonic_sequence,
             require_signature: self.config.require_command_signature,
             signing_key: self.signing_key.as_deref(),
+            force_online_rails: R::ONLINE_LOCKED,
         };
         let result = execute_certified_command(
             &mut self.plant,
@@ -340,6 +412,7 @@ impl<P: Plant> RuntimeGovernor<P> {
             now_s,
             &bind,
         );
+        self.last_now_s = now_s;
         let ok = result.ok && result.executed;
         if result.outcome == realityos_kernel::CommandOutcome::Unknown {
             self.latch.abort_latched = true;
@@ -436,5 +509,85 @@ impl<P: Plant> RuntimeGovernor<P> {
             "abort_latched": self.latch.abort_latched,
             "metal": false,
         })
+    }
+}
+
+impl<P: Plant, R: UnlockedRail> RuntimeGovernor<P, R> {
+    pub fn plant_mut(&mut self) -> &mut P {
+        &mut self.plant
+    }
+
+    pub fn ledger_mut(&mut self) -> &mut CommandLedger {
+        &mut self.ledger
+    }
+
+    pub fn config_mut(&mut self) -> &mut GovernorConfig {
+        &mut self.config
+    }
+
+    pub fn envelope_mut(&mut self) -> Option<&mut DriverEnvelopePack> {
+        self.envelope.as_mut()
+    }
+
+    pub fn set_envelope(&mut self, env: DriverEnvelopePack) {
+        self.envelope = Some(env);
+    }
+
+    pub fn set_signing_key(&mut self, key: Option<Vec<u8>>) {
+        self.signing_key = key;
+    }
+
+    pub fn mark_sensor(&mut self, now_s: f64, content_hash: Option<String>) {
+        self.last_sensor_s = now_s;
+        if let Some(h) = content_hash {
+            self.expected_sensor_packet_hash = Some(h);
+        }
+    }
+}
+
+impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
+    pub fn new_online(
+        identity: RuntimeIdentity,
+        mut plant: P,
+        journal_path: impl AsRef<Path>,
+        signing_key: Vec<u8>,
+        first_online: bool,
+        now_s: f64,
+    ) -> Result<Self, OnlineInitError> {
+        if signing_key.is_empty() {
+            return Err(OnlineInitError("online_requires_signing_key".into()));
+        }
+        if !identity.complete_online() {
+            return Err(OnlineInitError("incomplete_online_runtime_identity".into()));
+        }
+        plant.lock_production(&signing_key);
+        let ledger = CommandLedger::with_online_journal(journal_path, first_online)
+            .map_err(|e| OnlineInitError(e.to_string()))?;
+        let mut env = DriverEnvelopePack::from_max_action(&plant.caps().max_action, true);
+        if env.max_action_abs <= 0.0 {
+            env.max_action_abs = 1.0;
+        }
+        let mut g = Self::assemble(
+            identity,
+            plant,
+            ledger,
+            GovernorConfig::online_locked(),
+            Some(signing_key),
+        );
+        g.envelope = Some(env);
+        g.heartbeat(now_s);
+        let _ = g.watchdog_tick(now_s);
+        let cont = g.apply_journal_continuity(false, now_s);
+        if cont.get("start_refused").and_then(Value::as_bool) == Some(true) {
+            return Err(OnlineInitError(
+                cont.get("violations")
+                    .and_then(Value::as_array)
+                    .and_then(|a| a.first())
+                    .and_then(Value::as_str)
+                    .unwrap_or("journal_continuity_refused")
+                    .into(),
+            ));
+        }
+        Ok(g)
     }
 }

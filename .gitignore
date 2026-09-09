@@ -11,3 +11,4 @@ scratchpad/
 *.log
 graphify-out/
 crates/plant/wip/
+crates/governor/wip/

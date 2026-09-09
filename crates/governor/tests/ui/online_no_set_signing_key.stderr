@@ -1,0 +1,13 @@
+error[E0599]: the method `set_signing_key` exists for mutable reference `&mut RuntimeGovernor<SimPlant, OnlineLocked>`, but its trait bounds were not satisfied
+ --> tests/ui/online_no_set_signing_key.rs:5:7
+  |
+5 |     g.set_signing_key(None);
+  |       ^^^^^^^^^^^^^^^
+  |
+ ::: src/rail.rs
+  |
+  | pub struct OnlineLocked;
+  | ----------------------- doesn't satisfy `OnlineLocked: UnlockedRail`
+  |
+  = note: the following trait bounds were not satisfied:
+          `OnlineLocked: UnlockedRail`

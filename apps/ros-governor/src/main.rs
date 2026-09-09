@@ -114,11 +114,14 @@ fn decide(verb: &str, tau_max: f64, action: Option<f64>, source: Option<&str>) -
         1.0,
     );
     if let Some(a) = action {
-        req.proposal = Some(realityos_core::PolicyProposal {
-            action: vec![a],
-            source: source.unwrap_or("operator").into(),
-            policy_id: "cli".into(),
-        });
+        let note = source.unwrap_or("operator");
+        let mut p = if realityos_core::is_learned_source(note) {
+            realityos_core::PolicyProposal::learned(vec![a], note)
+        } else {
+            realityos_core::PolicyProposal::operator(vec![a], note)
+        };
+        p.policy_id = "cli".into();
+        req.proposal = Some(p);
     }
     let d = ros.decide(req);
     println!("status: {}", d.status);

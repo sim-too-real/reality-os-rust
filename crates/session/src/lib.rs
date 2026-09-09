@@ -21,6 +21,7 @@ pub const SCHEMA: &str = "realityos.session/1";
 mod tests {
     use super::*;
     use realityos_core::{Certificate, CertifiedCommand, Intent, RealityOs, WorldView};
+    use realityos_governor::OnlineLocked;
     use realityos_kernel::DecisionStatus;
     use realityos_plant::{ActionParams, Plant, SimPlant};
 
@@ -36,10 +37,29 @@ mod tests {
         args.calibration_id = "cal-1".into();
         args.design_content_hash = "des1".into();
         args.require_verified_release = Some(false);
-        match RuntimeSession::start(args, plant, 1.0) {
+        match RuntimeSession::<SimPlant, OnlineLocked>::start_online(args, plant, 1.0) {
             Err(err) => assert!(err.0.contains("online_refuses_safety_rail_opt_out")),
             Ok(_) => panic!("expected online_refuses_safety_rail_opt_out"),
         }
+    }
+
+    #[test]
+    fn start_online_requires_journal() {
+        let mut plant = SimPlant::new("p", 1, 1.0);
+        plant.go_online();
+        let mut args = StartArgs::simulation("rel1");
+        args.release_class = "MFG_CANDIDATE".into();
+        args.serial_or_as_built = "SN-1".into();
+        args.firmware_id = "FW-1".into();
+        args.calibration_id = "cal-1".into();
+        args.design_content_hash = "des1".into();
+        args.signing_key = Some(b"k".to_vec());
+        args.actuator_ids = vec!["a0".into()];
+        args.first_online = true;
+        let err = RuntimeSession::<SimPlant, OnlineLocked>::start_online(args, plant, 1.0)
+            .err()
+            .unwrap();
+        assert!(err.0.contains("online_requires_durable_journal"));
     }
 
     #[test]
@@ -140,6 +160,69 @@ mod tests {
         }
         assert!(!br.snapshot().metal);
         assert!(!br.fieldbus.attached);
+    }
+
+    #[test]
+    fn online_dispatch_signs_after_bind_and_survives_restart() {
+        let dir = std::env::temp_dir().join(format!(
+            "realityos-online-sess-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let journal = dir.join("driver.jsonl");
+        let mut plant = SimPlant::new("p", 1, 10.0);
+        plant.go_online();
+        let mut args = StartArgs::simulation("rel-online-1");
+        args.release_class = "MFG_CANDIDATE".into();
+        args.serial_or_as_built = "SN-1".into();
+        args.firmware_id = "FW-1".into();
+        args.calibration_id = "cal-1".into();
+        args.design_content_hash = "des1".into();
+        args.journal_path = Some(journal.clone());
+        args.signing_key = Some(b"online-session-key".to_vec());
+        args.first_online = true;
+        args.actuator_ids = vec!["joint-0".into()];
+        let mut sess =
+            RuntimeSession::<SimPlant, OnlineLocked>::start_online(args.clone(), plant, 10.0)
+                .unwrap();
+        sess.ingest_sensor(&[("q0".into(), 0.0)], Some(10.0), 10.0)
+            .unwrap();
+        let mut ros = RealityOs::new();
+        let d = ros.decide(realityos_core::DecideRequest::new(
+            Intent::language("hold", "hold"),
+            WorldView {
+                tau_max: vec![5.0],
+                ..WorldView::default()
+            },
+            10.0,
+        ));
+        let cmd = d.command.unwrap();
+        let out = sess.bind_and_dispatch(cmd.clone(), &ActionParams::empty(), 10.0);
+        assert!(out.ok, "{:?}", out.violations);
+        assert_eq!(sess.governor.plant().write_count(), 1);
+        drop(sess);
+
+        let mut plant2 = SimPlant::new("p", 1, 10.0);
+        plant2.go_online();
+        args.first_online = false;
+        let mut sess2 =
+            RuntimeSession::<SimPlant, OnlineLocked>::start_online(args, plant2, 11.0).unwrap();
+        sess2
+            .ingest_sensor(&[("q0".into(), 0.0)], Some(11.0), 11.0)
+            .unwrap();
+        let out2 = sess2.bind_and_dispatch(cmd, &ActionParams::empty(), 11.0);
+        assert!(!out2.ok);
+        assert!(
+            out2.violations
+                .iter()
+                .any(|v| v.contains("replayed") || v.contains("sequence")),
+            "{:?}",
+            out2.violations
+        );
+        assert_eq!(sess2.governor.plant().write_count(), 0);
     }
 
     #[test]

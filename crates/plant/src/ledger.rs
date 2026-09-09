@@ -11,9 +11,20 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::command::ActuationCommand;
+use crate::consume::ConsumePhase;
 use crate::error::{PlantError, PlantResult};
 
 const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+const SEAL_SCHEMA: &str = "realityos.ledger_seal/1";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AuthoritySeal {
+    schema: String,
+    chain_hash: String,
+    last_sequence: i64,
+    event_count: usize,
+    seen_count: usize,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LedgerEvent {
@@ -51,6 +62,8 @@ pub struct CommandLedger {
     events: Vec<Value>,
     chain_hash: String,
     unreadable: bool,
+    seal_path: Option<PathBuf>,
+    persist_seal: bool,
 }
 
 impl Default for CommandLedger {
@@ -69,6 +82,8 @@ impl CommandLedger {
             events: Vec::new(),
             chain_hash: GENESIS.into(),
             unreadable: false,
+            seal_path: None,
+            persist_seal: false,
         }
     }
 
@@ -78,6 +93,121 @@ impl CommandLedger {
         ledger.fail_closed = fail_closed;
         ledger.load_journal()?;
         Ok(ledger)
+    }
+
+    /// ONLINE journal. Hash-chain is tamper-*evident*, not authenticated.
+    /// Same-filesystem deletion of both journal and seal looks like first boot;
+    /// `first_online=false` refuses that case.
+    pub fn with_online_journal(path: impl AsRef<Path>, first_online: bool) -> PlantResult<Self> {
+        let path = path.as_ref().to_path_buf();
+        let seal_path = seal_path_for(&path);
+        let journal_exists = path.is_file();
+        let seal_exists = seal_path.is_file();
+        if first_online {
+            if journal_exists || seal_exists {
+                return Err(PlantError::refused(
+                    "first_online_but_journal_or_seal_exists",
+                ));
+            }
+        } else if !journal_exists && !seal_exists {
+            return Err(PlantError::JournalMissing);
+        }
+        if seal_exists && !journal_exists {
+            return Err(PlantError::JournalDeleted);
+        }
+        if journal_exists && !seal_exists {
+            return Err(PlantError::JournalSealMissing);
+        }
+        let mut ledger = Self::new();
+        ledger.journal_path = Some(path);
+        ledger.seal_path = Some(seal_path);
+        ledger.fail_closed = true;
+        ledger.persist_seal = true;
+        ledger.load_journal()?;
+        if ledger.unreadable {
+            return Err(PlantError::JournalUnreadable("journal_unreadable".into()));
+        }
+        if seal_exists {
+            ledger.check_seal()?;
+        }
+        ledger.persist_seal()?;
+        Ok(ledger)
+    }
+
+    pub fn command_phase(&self, command_id: &str) -> ConsumePhase {
+        let mut phase = ConsumePhase::Unseen;
+        for ev in &self.events {
+            let cid = ev.get("command_id").and_then(Value::as_str).unwrap_or("");
+            if cid != command_id {
+                continue;
+            }
+            match ev.get("kind").and_then(Value::as_str).unwrap_or("") {
+                "prepare" => phase = ConsumePhase::Prepared,
+                "consume" => phase = ConsumePhase::Consumed,
+                "unknown_outcome" => phase = ConsumePhase::Unknown,
+                _ => {}
+            }
+        }
+        phase
+    }
+
+    fn check_seal(&self) -> PlantResult<()> {
+        let Some(path) = &self.seal_path else {
+            return Ok(());
+        };
+        let raw = fs::read_to_string(path)
+            .map_err(|e| PlantError::JournalUnreadable(format!("seal_unreadable:{e}")))?;
+        let seal: AuthoritySeal = serde_json::from_str(&raw)
+            .map_err(|_| PlantError::JournalUnreadable("seal_corrupt".into()))?;
+        if seal.schema != SEAL_SCHEMA {
+            return Err(PlantError::JournalUnreadable("seal_schema".into()));
+        }
+        if self.events.len() < seal.event_count {
+            return Err(PlantError::JournalRollback);
+        }
+        if seal.event_count == 0 {
+            return Ok(());
+        }
+        let prefix = &self.events[seal.event_count - 1];
+        let prefix_hash = prefix
+            .get("chain_hash")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if prefix_hash != seal.chain_hash {
+            return Err(PlantError::JournalReplaced);
+        }
+        Ok(())
+    }
+
+    fn persist_seal(&self) -> PlantResult<()> {
+        if !self.persist_seal {
+            return Ok(());
+        }
+        let Some(path) = &self.seal_path else {
+            return Ok(());
+        };
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
+        }
+        let seal = AuthoritySeal {
+            schema: SEAL_SCHEMA.into(),
+            chain_hash: self.chain_hash.clone(),
+            last_sequence: self.last_sequence,
+            event_count: self.events.len(),
+            seen_count: self.seen_ids.len(),
+        };
+        let raw = serde_json::to_string(&seal)
+            .map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
+        let tmp = path.with_extension("seal.tmp");
+        fs::write(&tmp, raw).map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
+        let fh = OpenOptions::new()
+            .write(true)
+            .open(&tmp)
+            .map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
+        fh.sync_all()
+            .map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
+        fs::rename(&tmp, path).map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
+        Ok(())
     }
 
     pub fn is_unreadable(&self) -> bool {
@@ -181,8 +311,9 @@ impl CommandLedger {
         if self.unreadable && self.fail_closed {
             return Err(PlantError::JournalUnreadable("journal_unreadable".into()));
         }
-        body.entry("t_s")
-            .or_insert(json!(realityos_kernel::unix_now_s()));
+        // Integer millis — f64 unix seconds do not JSON-round-trip, which
+        // breaks the hash chain under fail_closed ONLINE journals.
+        body.entry("t_ms").or_insert(json!(unix_now_ms()));
         body.insert("prev_hash".into(), json!(self.chain_hash.clone()));
         let rec_for_hash = Value::Object(body.clone());
         let raw = canonical_json(&rec_for_hash);
@@ -208,6 +339,7 @@ impl CommandLedger {
         }
         self.chain_hash = chain;
         self.events.push(rec.clone());
+        self.persist_seal()?;
         Ok(rec)
     }
 
@@ -408,6 +540,19 @@ impl CommandLedger {
     }
 }
 
+fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn seal_path_for(journal: &Path) -> PathBuf {
+    let mut name = journal.as_os_str().to_os_string();
+    name.push(".authority-seal");
+    PathBuf::from(name)
+}
+
 fn canonical_json(v: &Value) -> String {
     serde_json::to_string(v).unwrap_or_else(|_| "{}".into())
 }
@@ -520,5 +665,100 @@ mod tests {
         l.append_event("governor_event", body).unwrap();
         assert!(l.seen_ids.is_empty());
         assert_eq!(l.events_of("governor_event").len(), 1);
+    }
+
+    fn dummy(id: &str, seq: i64) -> Dummy {
+        Dummy {
+            id: id.into(),
+            seq,
+            exp: 1e12,
+            rh: "r".into(),
+            cals: vec!["cal".into()],
+            sph: String::new(),
+        }
+    }
+
+    #[test]
+    fn online_journal_missing_without_first_boot_refuses() {
+        let dir =
+            std::env::temp_dir().join(format!("realityos-ledger-missing-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("driver.jsonl");
+        let err = CommandLedger::with_online_journal(&path, false).unwrap_err();
+        assert_eq!(err, PlantError::JournalMissing);
+    }
+
+    #[test]
+    fn online_journal_deletion_and_rollback_fail_closed() {
+        let dir = std::env::temp_dir().join(format!(
+            "realityos-ledger-seal-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("driver.jsonl");
+        let mut l = CommandLedger::with_online_journal(&path, true).unwrap();
+        l.consume(&dummy("c1", 1)).unwrap();
+        drop(l);
+
+        let seal = {
+            let mut n = path.clone().into_os_string();
+            n.push(".authority-seal");
+            std::path::PathBuf::from(n)
+        };
+        assert!(seal.is_file());
+        std::fs::remove_file(&path).unwrap();
+        let err = CommandLedger::with_online_journal(&path, false).unwrap_err();
+        assert_eq!(err, PlantError::JournalDeleted);
+
+        let dir2 = std::env::temp_dir().join(format!(
+            "realityos-ledger-rollback-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&dir2);
+        let path2 = dir2.join("driver.jsonl");
+        let mut l = CommandLedger::with_online_journal(&path2, true).unwrap();
+        l.consume(&dummy("a", 1)).unwrap();
+        l.consume(&dummy("b", 2)).unwrap();
+        let full = std::fs::read_to_string(&path2).unwrap();
+        drop(l);
+        let first_line = full.lines().next().unwrap();
+        std::fs::write(&path2, format!("{first_line}\n")).unwrap();
+        let err = CommandLedger::with_online_journal(&path2, false).unwrap_err();
+        assert_eq!(err, PlantError::JournalRollback);
+    }
+
+    #[test]
+    fn online_journal_reloads_after_writes() {
+        let dir = std::env::temp_dir().join(format!(
+            "realityos-ledger-reload-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("driver.jsonl");
+        let mut l = CommandLedger::with_online_journal(&path, true).unwrap();
+        l.consume(&dummy("r1", 1)).unwrap();
+        drop(l);
+        let l2 = CommandLedger::with_online_journal(&path, false).unwrap();
+        assert_eq!(l2.command_phase("r1"), ConsumePhase::Consumed);
+        assert!(!l2.command_phase("r1").may_attempt_write());
+    }
+
+    #[test]
+    fn prepare_is_not_retryable() {
+        let mut l = CommandLedger::new();
+        let cmd = dummy("p1", 3);
+        l.prepare(&cmd).unwrap();
+        assert_eq!(l.command_phase("p1"), ConsumePhase::Prepared);
+        assert!(!l.command_phase("p1").may_attempt_write());
+        assert!(l.prepare(&cmd).is_err());
     }
 }

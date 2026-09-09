@@ -85,7 +85,7 @@ fn allow_cmd(
     cal: &str,
     ack: bool,
 ) -> CertifiedCommand {
-    let c = CertifiedCommand::issue(
+    let c = realityos_core::fixture::issue(
         id,
         seq,
         now,
@@ -129,8 +129,8 @@ pub fn governor_matrix() -> Vec<CaseResult> {
                     1,
                     now,
                     action.clone(),
-                    sess.governor.identity.release_hash.as_str(),
-                    sess.governor.identity.calibration_id_str(),
+                    sess.governor.identity().release_hash.as_str(),
+                    sess.governor.identity().calibration_id_str(),
                     true,
                 );
                 match fault {
@@ -152,13 +152,13 @@ pub fn governor_matrix() -> Vec<CaseResult> {
                             1,
                             now,
                             action.clone(),
-                            sess.governor.identity.release_hash.as_str(),
-                            sess.governor.identity.calibration_id_str(),
+                            sess.governor.identity().release_hash.as_str(),
+                            sess.governor.identity().calibration_id_str(),
                             false,
                         );
                     }
                     Fault::RefuseCert => {
-                        cmd = CertifiedCommand::issue(
+                        cmd = realityos_core::fixture::issue(
                             "g-1",
                             1,
                             now,
@@ -168,9 +168,9 @@ pub fn governor_matrix() -> Vec<CaseResult> {
                         )
                         .unwrap()
                         .with_identity(
-                            sess.governor.identity.release_hash.as_str(),
+                            sess.governor.identity().release_hash.as_str(),
                             "",
-                            sess.governor.identity.calibration_id_str(),
+                            sess.governor.identity().calibration_id_str(),
                         )
                         .acknowledge();
                     }
@@ -181,8 +181,8 @@ pub fn governor_matrix() -> Vec<CaseResult> {
                             1,
                             now,
                             action.clone(),
-                            sess.governor.identity.release_hash.as_str(),
-                            sess.governor.identity.calibration_id_str(),
+                            sess.governor.identity().release_hash.as_str(),
+                            sess.governor.identity().calibration_id_str(),
                             true,
                         );
                     }
@@ -193,7 +193,7 @@ pub fn governor_matrix() -> Vec<CaseResult> {
                             now,
                             action.clone(),
                             "foreign-rel",
-                            sess.governor.identity.calibration_id_str(),
+                            sess.governor.identity().calibration_id_str(),
                             true,
                         );
                     }

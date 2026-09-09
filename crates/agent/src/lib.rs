@@ -153,11 +153,9 @@ pub fn offline_propose(prompt: &str) -> SkillProgram {
 }
 
 pub fn proposal_from_program(prog: &SkillProgram, action: Vec<f64>) -> PolicyProposal {
-    PolicyProposal {
-        action,
-        source: "grok_offline".into(),
-        policy_id: prog.program_name.clone(),
-    }
+    let mut p = PolicyProposal::learned(action, "grok_offline");
+    p.policy_id = prog.program_name.clone();
+    p
 }
 
 /// Live Grok chat. Never used on the 1 kHz path. Feature `live-grok`.
