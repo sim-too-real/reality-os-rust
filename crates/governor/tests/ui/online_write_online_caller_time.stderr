@@ -1,0 +1,15 @@
+error[E0624]: method `write_online` is private
+ --> tests/ui/online_write_online_caller_time.rs:8:15
+  |
+8 |       let _ = g.write_online(write, &ActionParams::empty(), 1.0);
+  |                 ^^^^^^^^^^^^ private method
+  |
+ ::: src/governor.rs
+  |
+  | /     pub(crate) fn write_online(
+  | |         &mut self,
+  | |         write: &OnlineWrite,
+  | |         params: &ActionParams,
+  | |         now_s: f64,
+  | |     ) -> RuntimeTrace {
+  | |_____________________- private method defined here

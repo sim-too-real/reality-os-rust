@@ -276,18 +276,22 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
         self.latch.abort_latched
     }
 
-    /// Software supervisor. Not an independent hardware watchdog.
-    pub fn watchdog_tick(&mut self, now_s: f64) -> RuntimeTrace {
+    fn watchdog_tick_at(&mut self, now_s: f64) -> RuntimeTrace {
         if !now_s.is_finite() {
-            return self.engage_estop("watchdog_non_finite_time", 0.0);
+            return self.engage_estop_at("watchdog_non_finite_time", 0.0);
         }
         if self.last_watchdog_s > 0.0
             && (now_s - self.last_watchdog_s) > self.watchdog_period_s * 2.0
         {
-            return self.engage_estop("software_watchdog_miss", now_s);
+            return self.engage_estop_at("software_watchdog_miss", now_s);
         }
         self.last_watchdog_s = now_s;
         self.emit(RuntimeTrace::new(true, "watchdog_tick", now_s))
+    }
+
+    /// Software supervisor using the authority clock. Not an independent hardware watchdog.
+    pub fn watchdog_tick_now(&mut self) -> RuntimeTrace {
+        self.watchdog_tick_at(self.clock.monotonic_now().secs())
     }
 
     fn emit(&mut self, t: RuntimeTrace) -> RuntimeTrace {
@@ -312,12 +316,16 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
         t
     }
 
-    pub fn heartbeat(&mut self, now_s: f64) -> RuntimeTrace {
+    fn heartbeat_at(&mut self, now_s: f64) -> RuntimeTrace {
         self.last_heartbeat_s = now_s;
         self.emit(RuntimeTrace::new(true, "heartbeat", now_s))
     }
 
-    pub fn record_sensor(
+    pub fn heartbeat_now(&mut self) -> RuntimeTrace {
+        self.heartbeat_at(self.clock.monotonic_now().secs())
+    }
+
+    fn record_sensor_at(
         &mut self,
         samples: &[(String, f64)],
         timestamp_s: f64,
@@ -393,18 +401,18 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
         }
     }
 
-    pub fn engage_estop(&mut self, reason: impl Into<String>, now_s: f64) -> RuntimeTrace {
+    fn engage_estop_at(&mut self, reason: impl Into<String>, now_s: f64) -> RuntimeTrace {
         let reason = reason.into();
         self.latch.engage(&reason);
         self.plant.engage_estop(&reason);
         self.emit(RuntimeTrace::new(false, "estop", now_s).with_violations(vec![reason]))
     }
 
-    pub fn clear_estop_requires_recovery(
-        &mut self,
-        operator_ack: bool,
-        now_s: f64,
-    ) -> RuntimeTrace {
+    pub fn engage_estop_now(&mut self, reason: impl Into<String>) -> RuntimeTrace {
+        self.engage_estop_at(reason, self.clock.monotonic_now().secs())
+    }
+
+    fn clear_estop_requires_recovery_at(&mut self, operator_ack: bool, now_s: f64) -> RuntimeTrace {
         let mut errs = Vec::new();
         if R::ONLINE_LOCKED && self.hardware_session_dead {
             return self.emit(
@@ -432,10 +440,18 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
         self.emit(RuntimeTrace::new(true, "recovery_cleared", now_s))
     }
 
-    pub fn latch_abort(&mut self, reason: impl Into<String>, now_s: f64) -> RuntimeTrace {
+    pub fn clear_estop_requires_recovery_now(&mut self, operator_ack: bool) -> RuntimeTrace {
+        self.clear_estop_requires_recovery_at(operator_ack, self.clock.monotonic_now().secs())
+    }
+
+    fn latch_abort_at(&mut self, reason: impl Into<String>, now_s: f64) -> RuntimeTrace {
         let reason = reason.into();
         self.latch.latch_abort(&reason);
         self.emit(RuntimeTrace::new(false, "abort_latched", now_s).with_violations(vec![reason]))
+    }
+
+    pub fn latch_abort_now(&mut self, reason: impl Into<String>) -> RuntimeTrace {
+        self.latch_abort_at(reason, self.clock.monotonic_now().secs())
     }
 
     pub fn pre_actuation_check(&self, now_s: f64) -> Vec<String> {
@@ -725,6 +741,41 @@ impl<P: Plant, R: UnlockedRail> RuntimeGovernor<P, R> {
         self.signing_key = key;
     }
 
+    pub fn heartbeat(&mut self, now_s: f64) -> RuntimeTrace {
+        self.heartbeat_at(now_s)
+    }
+
+    pub fn watchdog_tick(&mut self, now_s: f64) -> RuntimeTrace {
+        self.watchdog_tick_at(now_s)
+    }
+
+    pub fn engage_estop(&mut self, reason: impl Into<String>, now_s: f64) -> RuntimeTrace {
+        self.engage_estop_at(reason, now_s)
+    }
+
+    pub fn clear_estop_requires_recovery(
+        &mut self,
+        operator_ack: bool,
+        now_s: f64,
+    ) -> RuntimeTrace {
+        self.clear_estop_requires_recovery_at(operator_ack, now_s)
+    }
+
+    pub fn latch_abort(&mut self, reason: impl Into<String>, now_s: f64) -> RuntimeTrace {
+        self.latch_abort_at(reason, now_s)
+    }
+
+    pub fn record_sensor(
+        &mut self,
+        samples: &[(String, f64)],
+        timestamp_s: f64,
+        sequence: u64,
+        frame_id: &str,
+        sensor_id: &str,
+    ) -> Result<String, String> {
+        self.record_sensor_at(samples, timestamp_s, sequence, frame_id, sensor_id)
+    }
+
     pub fn mark_sensor(&mut self, now_s: f64, content_hash: Option<String>) {
         self.last_sensor_s = now_s;
         if let Some(h) = content_hash {
@@ -786,8 +837,8 @@ impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
         g.authorized_actuator_ids = actuator_ids;
         g.envelope = Some(env);
         let now_s = g.clock.monotonic_now().secs();
-        g.heartbeat(now_s);
-        let _ = g.watchdog_tick(now_s);
+        g.heartbeat_at(now_s);
+        let _ = g.watchdog_tick_at(now_s);
         let cont = g.apply_journal_continuity(false, now_s);
         if cont.get("start_refused").and_then(Value::as_bool) == Some(true) {
             return Err(OnlineInitError(
@@ -834,7 +885,9 @@ impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
         })
     }
 
-    pub fn write_online(
+    /// Test/HIL fault injection: caller time. Ordinary ONLINE code must use
+    /// [`Self::write_online_now`].
+    pub(crate) fn write_online(
         &mut self,
         write: &OnlineWrite,
         params: &ActionParams,

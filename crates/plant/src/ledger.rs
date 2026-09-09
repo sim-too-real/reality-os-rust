@@ -2,9 +2,12 @@
 //! Decision attestation is a *second* chain — do not collapse them.
 
 use std::collections::HashSet;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, OpenOptions, Permissions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -16,6 +19,17 @@ use crate::error::{PlantError, PlantResult};
 
 const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 const SEAL_SCHEMA: &str = "realityos.ledger_seal/1";
+
+fn restrict_owner_rw(path: &Path) {
+    #[cfg(unix)]
+    {
+        let _ = fs::set_permissions(path, Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AuthoritySeal {
@@ -207,6 +221,7 @@ impl CommandLedger {
         fh.sync_all()
             .map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
         fs::rename(&tmp, path).map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
+        restrict_owner_rw(path);
         Ok(())
     }
 
@@ -336,6 +351,7 @@ impl CommandLedger {
             writeln!(fh, "{rec}").map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
             fh.sync_all()
                 .map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
+            restrict_owner_rw(path);
         }
         self.chain_hash = chain;
         self.events.push(rec.clone());

@@ -46,8 +46,22 @@ On the HIL host:
 * A same-UID process that `chmod`s the log, or writes `/proc/<pid>/fd/N`,
   can recover the inode.
 * This is not udev, systemd, or a dedicated service user. Those remain
-  operational deployment choices on a real machine. `scripts/hil-deploy-users.sh`
-  is the documented two-user harness.
+  operational deployment choices on a real machine.
+
+## Two-UID deployment (measurable)
+
+`scripts/hil-os-users-ci.sh` creates `realityos-authority`, `realityos-autonomy`,
+and group `realityos-ipc`, then `scripts/hil-os-users-test.sh` runs attacks
+**as the autonomy UID**.
+
+* Socket: authority process binds, then sets mode `0660` explicitly (not umask).
+  Group is `realityos-ipc`. Autonomy may connect; it cannot open `bus/`.
+* `signing.key` is authority `0600`. Filesystem storage is **not** a TPM/HSM.
+  `--production` serve refuses to start without that file and ignores
+  `hil_fault` / disconnect / shutdown over IPC.
+* Cargo unit tests do **not** prove this. CI job `os-users` does.
+
+Root prepares the users, then is outside the threat model.
 
 ## Journal attacks (authority process down)
 
@@ -88,11 +102,9 @@ disconnects:
 Reconnect to a different device under the previously authorized instance is
 refused. Root is outside this threat model.
 
-## OS users (deployment / HIL, not default CI)
+## OS users
 
-See `scripts/hil-deploy-users.sh`. Authority user owns the socket, signing
-key, journal, and actuator endpoint. Autonomy user may connect to proposal
-IPC only. GitHub Actions does not prove this. Do not treat a unit test as
+See **Two-UID deployment** above. Do not treat a cargo unit test as
 multi-user success.
 
 ## Physical testing

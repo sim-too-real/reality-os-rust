@@ -625,7 +625,8 @@
     "paired restore of an older journal+seal is indistinguishable from that earlier valid tip",
     "independent STO/SS1 / safety PLC is a named hole; this is semantic execution authority only",
     "HIL sensor samples may be synthetic; production freshness uses authority_receive_monotonic",
-    "multi-user OS identities are a deployment/HIL requirement, not a unit-test guarantee"
+    "filesystem signing.key is not a hardware root of trust / TPM / HSM",
+    "multi-user OS identities are proven only by scripts/hil-os-users-test.sh, not cargo unit tests"
   ],
   "valid_commands": 2,
   "valid_driver_writes": 2

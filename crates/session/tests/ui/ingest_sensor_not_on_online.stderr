@@ -1,0 +1,13 @@
+error[E0599]: the method `ingest_sensor` exists for mutable reference `&mut RuntimeSession<SimPlant, OnlineLocked>`, but its trait bounds were not satisfied
+ --> tests/ui/ingest_sensor_not_on_online.rs:6:18
+  |
+6 |     let _ = sess.ingest_sensor(&[("q0".into(), 0.0)], Some(99.0), 1.0);
+  |                  ^^^^^^^^^^^^^
+  |
+ ::: $WORKSPACE/crates/governor/src/rail.rs
+  |
+  | pub struct OnlineLocked;
+  | ----------------------- doesn't satisfy `OnlineLocked: UnlockedRail`
+  |
+  = note: the following trait bounds were not satisfied:
+          `OnlineLocked: UnlockedRail`

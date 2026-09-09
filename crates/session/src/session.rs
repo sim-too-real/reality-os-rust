@@ -6,7 +6,7 @@ use realityos_governor::{
     DriverEnvelopePack, Hil, OnlineLocked, Rail, RuntimeGovernor, RuntimeIdentity, RuntimeTrace,
     SafeState, Simulation, UnlockedRail,
 };
-use realityos_kernel::{AuthorityClock, FakeClock};
+use realityos_kernel::{AuthorityClock, OsMonotonicClock};
 use realityos_kernel::{
     CalibrationId, DesignContentHash, FirmwareId, ReleaseHash, SerialOrAsBuilt,
 };
@@ -142,8 +142,10 @@ impl<P: Plant> RuntimeSession<P, Hil> {
 }
 
 impl<P: Plant> RuntimeSession<P, OnlineLocked> {
-    pub fn start_online(args: StartArgs, plant: P, now_s: f64) -> Result<Self, SessionStartError> {
-        Self::start_online_with_clock(args, plant, FakeClock::arc(now_s))
+    /// Production ONLINE start. Uses OS monotonic time. Tests/HIL inject a clock
+    /// via [`Self::start_online_with_clock`].
+    pub fn start_online(args: StartArgs, plant: P) -> Result<Self, SessionStartError> {
+        Self::start_online_with_clock(args, plant, Arc::new(OsMonotonicClock::new()))
     }
 
     pub fn start_online_with_clock(
@@ -306,7 +308,6 @@ impl<P: Plant> RuntimeSession<P, OnlineLocked> {
         &mut self,
         command: IssuedCommand,
         params: &ActionParams,
-        now_s: f64,
     ) -> DispatchResult {
         if self.safe_state.blocks_actuation() {
             return DispatchResult::refused(
@@ -323,8 +324,8 @@ impl<P: Plant> RuntimeSession<P, OnlineLocked> {
         };
         self.acknowledged_ids.insert(write.command_id().to_string());
         self.last_sequence = write.as_command().sequence_value().max(self.last_sequence);
-        let _ = self.governor.watchdog_tick(now_s);
-        let trace = self.governor.write_online(&write, params, now_s);
+        let _ = self.governor.watchdog_tick_now();
+        let trace = self.governor.write_online_now(&write, params);
         DispatchResult {
             ok: trace.ok,
             executed: trace.ok,
@@ -334,6 +335,21 @@ impl<P: Plant> RuntimeSession<P, OnlineLocked> {
             realized: None,
             metal: false,
         }
+    }
+
+    pub fn acquire_sensor(&mut self) -> Result<String, String> {
+        let hash = self.governor.acquire_sensor()?;
+        self.last_sensor_hash = Some(hash.clone());
+        Ok(hash)
+    }
+
+    pub fn ingest_sensor_packet(
+        &mut self,
+        packet: realityos_plant::SensorPacket,
+    ) -> Result<String, String> {
+        let hash = self.governor.ingest_sensor_packet(packet)?;
+        self.last_sensor_hash = Some(hash.clone());
+        Ok(hash)
     }
 }
 
@@ -351,6 +367,15 @@ impl<P: Plant, R: Rail> RuntimeSession<P, R> {
         self.last_sensor_hash.as_deref()
     }
 
+    pub fn refuse_bare_action(&self, _action: &[f64]) -> DispatchResult {
+        DispatchResult::refused(
+            self.mode,
+            vec!["bind_and_dispatch_requires_CertifiedCommand".into()],
+        )
+    }
+}
+
+impl<P: Plant, R: UnlockedRail> RuntimeSession<P, R> {
     pub fn ingest_sensor(
         &mut self,
         samples: &[(String, f64)],
@@ -387,13 +412,6 @@ impl<P: Plant, R: Rail> RuntimeSession<P, R> {
         )?;
         self.last_sensor_hash = Some(hash.clone());
         Ok(hash)
-    }
-
-    pub fn refuse_bare_action(&self, _action: &[f64]) -> DispatchResult {
-        DispatchResult::refused(
-            self.mode,
-            vec!["bind_and_dispatch_requires_CertifiedCommand".into()],
-        )
     }
 }
 
