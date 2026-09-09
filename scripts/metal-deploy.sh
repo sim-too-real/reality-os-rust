@@ -18,8 +18,18 @@ if ! getent group "$IPC_GROUP" >/dev/null 2>&1; then
   echo "error: group $IPC_GROUP missing" >&2
   exit 2
 fi
+if ! id -nG "$AUTHORITY_USER" | tr ' ' '\n' | grep -qx "$IPC_GROUP"; then
+  echo "error: $AUTHORITY_USER is not in $IPC_GROUP" >&2
+  exit 2
+fi
+if ! id -nG "$AUTONOMY_USER" | tr ' ' '\n' | grep -qx "$IPC_GROUP"; then
+  echo "error: $AUTONOMY_USER is not in $IPC_GROUP" >&2
+  exit 2
+fi
 
-install -d -m 0750 -o "$AUTHORITY_USER" -g "$AUTHORITY_USER" "$ROOT"
+# 0751: autonomy can traverse to ipc.sock (0660 / ipc group). Not 0750 —
+# that blocks the socket and makes os-probe record zero device-open attempts.
+install -d -m 0751 -o "$AUTHORITY_USER" -g "$AUTHORITY_USER" "$ROOT"
 install -d -m 0700 -o "$AUTHORITY_USER" -g "$AUTHORITY_USER" "$ROOT/bus"
 
 if [[ ! -f "$ROOT/signing.key" ]]; then

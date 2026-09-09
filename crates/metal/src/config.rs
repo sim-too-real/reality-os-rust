@@ -153,6 +153,19 @@ impl MetalConfig {
     }
 }
 
+/// Device path for autonomy os-probe. Env wins so a 0700 `metal.json` still records attempts.
+pub fn resolve_probe_device(root: impl AsRef<Path>) -> PathBuf {
+    if let Ok(d) = std::env::var("REALITYOS_METAL_DEVICE") {
+        if !d.trim().is_empty() {
+            return PathBuf::from(d);
+        }
+    }
+    MetalConfig::load(root.as_ref().join(CONFIG_FILE))
+        .ok()
+        .map(|c| c.device)
+        .unwrap_or_default()
+}
+
 pub const CONFIG_FILE: &str = "metal.json";
 pub const MEASURED_FILE: &str = "measured.json";
 pub const SIGNING_KEY_FILE: &str = "signing.key";
@@ -203,6 +216,19 @@ mod tests {
         assert_eq!(b.iter().filter(|x| **x == 1_000_000).count(), 1);
         assert!(b.contains(&57_600));
         assert!(b.contains(&115_200));
+    }
+
+    #[test]
+    fn resolve_probe_device_empty_without_config() {
+        if std::env::var("REALITYOS_METAL_DEVICE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .is_some()
+        {
+            return;
+        }
+        let p = resolve_probe_device("/tmp/realityos-metal-no-such-root");
+        assert!(p.as_os_str().is_empty());
     }
 
     #[test]

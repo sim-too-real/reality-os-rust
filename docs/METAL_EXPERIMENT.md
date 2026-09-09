@@ -52,7 +52,7 @@ Model and firmware are latched at identify time. Later sensor packets do not rew
 
 `realityos-metal-smoke serve` calls `RuntimeSession::start_online` → `OsMonotonicClock`. It does not use the HIL `Authority` object or `FakeClock`.
 
-Users: `realityos-authority` owns the tty, key, journal, and process. `realityos-autonomy` may use only the Unix socket.
+Users: `realityos-authority` owns the tty, key, journal, and process. `realityos-autonomy` may use only the Unix socket. The metal root is `0751` so autonomy can traverse to `ipc.sock` (`0660` / `realityos-ipc`); `bus/` stays `0700`. A `0750` root would make IPC and `direct_device_open_attempts` fail closed without measuring the attacks.
 
 ## Sensor freshness
 

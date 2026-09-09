@@ -61,7 +61,13 @@ export REALITYOS_METAL_ROOT="$ROOT"
 export REALITYOS_METAL_DEVICE="$DEVICE"
 "$SCRIPT_DIR/metal-deploy.sh"
 
-as_autonomy() { sudo -u "$AUTONOMY_USER" -- "$@"; }
+as_autonomy() {
+  sudo -u "$AUTONOMY_USER" -- env \
+    REALITYOS_METAL_DEVICE="${REALITYOS_METAL_DEVICE:-}" \
+    METAL_AUTHORITY_PID="${METAL_AUTHORITY_PID:-}" \
+    METAL_CMD_ID="${METAL_CMD_ID:-}" \
+    "$@"
+}
 as_authority() {
   sudo -u "$AUTHORITY_USER" -- env \
     REALITYOS_METAL_DEVICE="${REALITYOS_METAL_DEVICE:-}" \

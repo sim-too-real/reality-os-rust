@@ -2,7 +2,7 @@ use std::env;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
-use realityos_metal::config::{JOURNAL, SIGNING_KEY_FILE};
+use realityos_metal::config::{resolve_probe_device, JOURNAL, SIGNING_KEY_FILE};
 use realityos_metal::ipc::{call, call_raw, MetalRequest};
 
 fn main() -> anyhow::Result<()> {
@@ -123,10 +123,7 @@ fn os_probe(root: &std::path::Path) -> anyhow::Result<serde_json::Value> {
     let uid = rust_uid();
     let euid = rust_euid();
     let ran_as_root = euid == 0;
-    let device = realityos_metal::config::MetalConfig::load(root.join("metal.json"))
-        .ok()
-        .map(|c| c.device)
-        .unwrap_or_default();
+    let device = resolve_probe_device(root);
 
     let mut device_open_attempts: u64 = 0;
     let mut device_open_successes: u64 = 0;
