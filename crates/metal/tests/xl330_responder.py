@@ -198,7 +198,7 @@ def status_wanted(srl: int, inst: int) -> bool:
 def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
     if inst == INST_PING:
         return b"", 0
-        if inst == INST_READ and len(params) >= 4:
+    if inst == INST_READ and len(params) >= 4:
         addr, ln = struct.unpack_from("<HH", params)
         if os.environ.get("REALITYOS_METAL_PTY_NO_PRESENT") == "1" and addr == 132:
             return b"", 0x80  # refuse present so setup cannot invent goal=0
