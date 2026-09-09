@@ -118,14 +118,19 @@ impl MeasuredIdentity {
     }
 
     pub fn hardware_identity(&self, cfg: &MetalConfig) -> HardwareIdentity {
+        let pty = is_pty_path(&cfg.device);
         HardwareIdentity {
             serial: self.serial.clone(),
             firmware_id: self.firmware_id.clone(),
             calibration_id: cfg.calibration_id.clone(),
             design_content_hash: cfg.design_content_hash(),
             connected: self.connected,
-            metal: true,
-            evidence_status: "MEASURED_XL330_PROTOCOL2".into(),
+            metal: !pty,
+            evidence_status: if pty {
+                "PTY_STAND_IN_NOT_METAL".into()
+            } else {
+                "MEASURED_XL330_PROTOCOL2".into()
+            },
             actuator_ids: vec![self.actuator_id.clone()],
         }
     }

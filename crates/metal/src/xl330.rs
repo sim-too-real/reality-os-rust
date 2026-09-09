@@ -164,7 +164,7 @@ impl Xl330Driver {
         }
         let _ = std::fs::set_permissions(&self.cfg.device, std::fs::Permissions::from_mode(0o600));
         let mut port = serialport::new(self.cfg.device.to_string_lossy(), self.cfg.baud)
-            .timeout(Duration::from_millis(80))
+            .timeout(Duration::from_millis(150))
             .open()
             .map_err(io::Error::other)?;
         port.write_data_terminal_ready(true).ok();
@@ -244,6 +244,8 @@ impl Xl330Driver {
             None,
             false,
         )?;
+        // EEPROM writes can NAK the next instruction if we immediately continue.
+        std::thread::sleep(Duration::from_millis(50));
         Ok(())
     }
 
@@ -558,6 +560,7 @@ impl HardwareDriverPort for Xl330Driver {
             false,
         )?;
         self.write_reg(ADDR_TORQUE_ENABLE, &[1], "torque_on", None, false)?;
+        std::thread::sleep(Duration::from_millis(10));
         self.write_reg(
             ADDR_GOAL_POSITION,
             &goal.to_le_bytes(),
@@ -574,7 +577,7 @@ impl HardwareDriverPort for Xl330Driver {
                 ("q0".into(), f64::from(present)),
                 ("goal".into(), f64::from(goal)),
             ],
-            metal: true,
+            metal: !crate::identity::is_pty_path(&self.cfg.device),
         })
     }
 

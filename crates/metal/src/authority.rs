@@ -247,7 +247,7 @@ impl MetalAuthority {
             physical_writes: self.physical_writes(),
             device_acks: self.device_acks(),
             command_id: cid,
-            metal: true,
+            metal: !crate::identity::is_pty_path(&self.cfg.device),
             clock: "OsMonotonicClock".into(),
             present_position: self.positions().0,
             goal_position: self.positions().1,
@@ -277,7 +277,7 @@ impl MetalAuthority {
             violations,
             physical_writes: self.physical_writes(),
             device_acks: self.device_acks(),
-            metal: true,
+            metal: !crate::identity::is_pty_path(&self.cfg.device),
             clock: "OsMonotonicClock".into(),
             ..MetalResponse::default()
         }
@@ -291,7 +291,7 @@ impl MetalAuthority {
             status: "ok".into(),
             physical_writes: self.physical_writes(),
             device_acks: self.device_acks(),
-            metal: true,
+            metal: !crate::identity::is_pty_path(&self.cfg.device),
             clock: "OsMonotonicClock".into(),
             ..MetalResponse::default()
         }
@@ -327,7 +327,7 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
                         violations: vec![format!("bad_request:{e}")],
                         physical_writes: auth.physical_writes(),
                         device_acks: auth.device_acks(),
-                        metal: true,
+                        metal: !crate::identity::is_pty_path(&auth.cfg.device),
                         clock: "OsMonotonicClock".into(),
                         ..MetalResponse::default()
                     },

@@ -203,6 +203,7 @@ assert p["modify_journal"] is False, p
 assert p["take_actuator_lock"] is False, p
 assert h.get("ok") is True, h
 assert h.get("clock") == "OsMonotonicClock", h
+assert h.get("metal") is False, h
 print("metal-os-ipc-ok")
 PY
 

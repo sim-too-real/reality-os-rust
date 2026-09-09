@@ -99,6 +99,9 @@ fn xl330_pty_start_online_hold_is_not_a_metal_proof() {
             "PTY must use measured tty+rdev, got {}",
             measured.serial
         );
+        let id = measured.hardware_identity(&cfg);
+        assert!(!id.metal);
+        assert_eq!(id.evidence_status, "PTY_STAND_IN_NOT_METAL");
         cfg.expected_serial = measured.serial;
         cfg.expected_firmware = measured.firmware_id;
     }
@@ -106,6 +109,7 @@ fn xl330_pty_start_online_hold_is_not_a_metal_proof() {
     let mut auth = MetalAuthority::start(&root, true).expect("start_online on PTY stand-in");
     let resp = auth.handle(MetalRequest::propose("pty-hold", "hold"));
     assert!(resp.ok, "hold refused: {resp:?}");
+    assert!(!resp.metal, "PTY stand-in must not claim metal: {resp:?}");
     assert_eq!(auth.physical_writes(), 1);
     assert_eq!(resp.clock, "OsMonotonicClock");
     let repo_proof = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/metal_proof.json");

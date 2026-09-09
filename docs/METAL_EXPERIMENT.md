@@ -64,7 +64,7 @@ Users: `realityos-authority` owns the tty, key, journal, and process. `realityos
 
 ## Proof
 
-`docs/metal_proof.json` schema `realityos.metal_proof/1` is written only from measured cases on a real device. The campaign reporter writes the artifact into the metal root (authority-owned), then root installs it into `docs/`. The authority UID does not need write access to the repository. The reporter refuses to emit a success artifact when `hardware_present` is false. It does not overwrite `docs/hil_proof.json`. The PTY Protocol 2.0 stand-in in `crates/metal/tests/` is a driver regression test, not physical evidence. `scripts/metal-os-boundary.sh` measures the two-UID filesystem/device-open boundary only; it is not physical evidence and must not write `metal_proof.json`.
+`docs/metal_proof.json` schema `realityos.metal_proof/1` is written only from measured cases on a real device. The campaign reporter writes the artifact into the metal root (authority-owned), then root installs it into `docs/`. The authority UID does not need write access to the repository. The reporter refuses to emit a success artifact when `hardware_present` is false. It does not overwrite `docs/hil_proof.json`. The PTY Protocol 2.0 stand-in in `crates/metal/tests/` is a driver regression test, not physical evidence. Its `HardwareIdentity.metal` is false and `evidence_status` is `PTY_STAND_IN_NOT_METAL`. `scripts/metal-os-boundary.sh` measures the two-UID filesystem/device-open boundary only; it is not physical evidence and must not write `metal_proof.json`.
 
 ## How to run (bench host)
 
