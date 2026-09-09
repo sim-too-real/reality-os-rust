@@ -3,6 +3,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -1328,16 +1329,27 @@ impl Drop for Xl330Driver {
 /// the first open. HUPCL must be cleared on the *live* fd after
 /// `serialport` open: a fresh USB-serial open restores kernel-default
 /// HUPCL (`cfmakeraw` does not touch it). Pre-open `stty -hupcl` is
-/// lost when the last closer drops the tty. With HUPCL set, probe close
-/// / `crash_if` / Drop lowers DTR and cheap FTDI/CP2102 reboot the
-/// XL330 before the next serve. U2D2 does not need DTR. Do not toggle
-/// DTR/RTS from userspace.
+/// lost when the last closer drops the tty. `stty -F /dev/ttyUSB*` after
+/// exclusive open fails with EBUSY (TIOCEXCL); use `/proc/self/fd/N` so
+/// we dup the held fd instead of opening the node again. With HUPCL set,
+/// probe close / `crash_if` / Drop lowers DTR and cheap FTDI/CP2102
+/// reboot the XL330 before the next serve. U2D2 does not need DTR. Do
+/// not toggle DTR/RTS from userspace.
 fn clear_hupcl(device: &Path) {
     if is_pty_path(device) {
         return;
     }
     let _ = Command::new("/bin/stty")
         .args(["-F", &device.to_string_lossy(), "-hupcl"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn clear_hupcl_on_fd(fd: std::os::fd::RawFd) {
+    let path = format!("/proc/self/fd/{fd}");
+    let _ = Command::new("/bin/stty")
+        .args(["-F", &path, "-hupcl"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
@@ -1374,16 +1386,17 @@ fn open_xl330_serial_with(
     let port = serialport::new(device.to_string_lossy(), baud)
         .timeout(Duration::from_millis(150))
         .exclusive(exclusive)
-        .open()
+        .open_native()
         .map_err(io::Error::other)?;
-    // Must run after open: serialport tcsetattr keeps kernel-default HUPCL
-    // on a new USB-serial session. Clear it while this fd is held.
-    clear_hupcl(device);
+    // TIOCEXCL makes `stty -F <device>` EBUSY. Dup the held fd instead.
+    if !is_pty_path(device) {
+        clear_hupcl_on_fd(port.as_raw_fd());
+    }
     // U2D2/FTDI often drops the first packet if we ping immediately after
     // open. Discover tries each baud/id pair once; a cold miss on the real
     // pair never comes back.
     open_settle(device);
-    Ok(port)
+    Ok(Box::new(port))
 }
 
 fn prefer_servo_id(ids: &[u8], found: Option<u8>) -> Vec<u8> {
@@ -1511,4 +1524,36 @@ fn read_id_register(port: &mut dyn SerialPort, device: &Path, id: u8) -> Option<
     }
     let _ = port.set_timeout(saved);
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serialport::TTYPort;
+    use std::os::fd::AsRawFd;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn hupcl_clear_via_proc_fd_reaches_the_live_tty() {
+        let (master, _slave) = TTYPort::pair().expect("pty pair");
+        let fd = master.as_raw_fd();
+        let path = format!("/proc/self/fd/{fd}");
+        let status = Command::new("/bin/stty")
+            .args(["-F", &path, "hupcl"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("stty hupcl");
+        assert!(status.success(), "stty hupcl on live pty fd");
+        clear_hupcl_on_fd(fd);
+        let out = Command::new("/bin/stty")
+            .args(["-F", &path, "-a"])
+            .output()
+            .expect("stty -a");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            text.contains("-hupcl"),
+            "live-fd HUPCL clear must stick: {text}"
+        );
+    }
 }
