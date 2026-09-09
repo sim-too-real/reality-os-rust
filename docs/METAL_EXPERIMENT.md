@@ -64,7 +64,7 @@ Identity/disconnect ESTOP is not a software-watchdog miss. `serve` pets the watc
 * Freshness: authority monotonic receive time stamped by `ingest_sensor_packet`.
 * Threshold: `freshness_threshold_s` in `metal.json` (default 2 s), recorded into the proof from `bus/sensor_freshness.json`.
 * Autonomy cannot ingest or refresh evidence (`sensor_samples` is refused).
-* Observed motion is measured from `bus/present` / `bus/goal` (device registers), not inferred from IPC status.
+* Observed motion is measured from `bus/present` / `bus/goal` (device registers), not inferred from IPC status. `bus/present` is the last acquired sample (pre-write during propose). After an authorized hold/nudge the campaign settles (~120 ms) and re-acquires so `valid_nudge` records a present change; a goal write against a stale cache is not motion.
 
 ## Proof
 
@@ -99,5 +99,6 @@ First-contact script invariants (found on the PTY sequence, would fail the first
 * Wizard Status Return Level `0` answers PING only. Identify READs then miss. After the first PING, setup writes `2` and consumes an optional status (factory `2` replies; Wizard `0` does not) so a late USB packet is not decoded as the model number.
 * Wizard min/max position limits NAK a goal outside that window. Setup reads the EEPROM window and clamps (steps inward at a stop). It does not widen limits against a fixture.
 * Wizard PWM/velocity/current mode is EEPROM. After forcing position mode (3), setup waits and re-identifies before RAM profile/torque writes.
+* `valid_nudge` must change device present, not only increment the egress write count. Propose persists the pre-write present; the campaign re-samples after a short settle.
 
 This Cloud Agent VM has **no** USB/serial actuator and **no** self-hosted worker. Attach a Cursor self-hosted worker (`cursor worker start`) on the bench host that can see `/dev/ttyUSB*` / `/dev/ttyACM*`. Until that happens, the experiment is blocked. That is not a software-architecture remaining task.

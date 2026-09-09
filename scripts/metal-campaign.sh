@@ -444,6 +444,13 @@ assert p["proc_fd_device"] is False
 print("uid-probes-ok")
 PY
 
+# Sample once so valid_hold has a before-present (zero-motion baseline).
+if ! as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null; then
+  echo "error: pre-hold sensor sample failed; session is not live" >&2
+  cat "$ROOT/serve.err" >&2 || true
+  exit 1
+fi
+
 measure() {
   local name="$1"
   local proposal="$2"
@@ -459,6 +466,13 @@ measure() {
     :
   else
     echo '{"ok":false,"executed":false,"stage":"ipc","status":"error"}' >"$respfile"
+  fi
+  # bus/present is the pre-write sample. After an authorized goal write,
+  # settle and re-acquire so observed_motion is device present, not the
+  # cached tick. Profile velocity 20 moves 2 ticks in well under 100 ms.
+  if [[ "$expected" == "true" ]] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("ok") else 1)' "$respfile"; then
+    sleep 0.12
+    as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1 || true
   fi
   after="$(writes)"
   ack_after="$(acks)"
@@ -812,6 +826,18 @@ assert r["used_os_monotonic_clock"] is True, r
 assert r["used_hardware_driver_port"] is True, r
 assert any(c.get("name") == "valid_hold" and int(c.get("write_delta") or 0) > 0 for c in r.get("cases") or []), r
 assert any(c.get("name") == "valid_nudge" and int(c.get("write_delta") or 0) > 0 for c in r.get("cases") or []), r
+def present_delta(name):
+    c = next((x for x in (r.get("cases") or []) if x.get("name") == name), None)
+    import re
+    m = re.search(r"delta=([-\d]+|None)", (c or {}).get("observed_motion") or "")
+    if not m or m.group(1) == "None":
+        return None
+    return int(m.group(1))
+assert present_delta("valid_hold") in (0, None), r
+assert present_delta("valid_nudge") not in (0, None), (
+    "valid_nudge must move present, not only write a goal against a stale cache",
+    r,
+)
 pty_sequence = """$PTY_SEQUENCE_ACTIVE""" == "1"
 if pty_sequence:
     assert r["cutoff_tested"] is False, r
