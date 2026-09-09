@@ -4,7 +4,7 @@
 use crate::caps::{check_hard_action_bounds, ActionParams, PlantCaps, PlantRealized};
 use crate::error::{PlantError, PlantResult};
 use crate::signing::signing_key_hash;
-use crate::traits::{HardwareDriverPort, HardwareIdentity, Plant};
+use crate::traits::{HardwareDriverPort, HardwareIdentity, Plant, SensorPacket};
 use crate::write_guard::refuse_uncertified_online_write;
 
 pub struct HardwareBackedPlant<P: HardwareDriverPort> {
@@ -50,6 +50,10 @@ impl<P: HardwareDriverPort> HardwareBackedPlant<P> {
 
     pub fn is_port_connected(&self) -> bool {
         self.port.is_connected()
+    }
+
+    pub fn read_sensor(&mut self, authority_now_s: f64) -> PlantResult<SensorPacket> {
+        self.port.read_sensor(authority_now_s)
     }
 
     fn effective_metal(&self) -> bool {
@@ -115,6 +119,10 @@ impl<P: HardwareDriverPort> Plant for HardwareBackedPlant<P> {
 
     fn probe_identity(&mut self) -> Option<HardwareIdentity> {
         Some(self.read_port_identity())
+    }
+
+    fn read_driver_sensor(&mut self, authority_now_s: f64) -> Option<PlantResult<SensorPacket>> {
+        Some(self.port.read_sensor(authority_now_s))
     }
 
     fn lock_production(&mut self, signing_key: &[u8]) {

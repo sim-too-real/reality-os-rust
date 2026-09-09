@@ -138,12 +138,15 @@ restore it (`skip_deserializing`).
 
 Public on `RuntimeGovernor<P, OnlineLocked>` (authority-relevant):
 
-- `new_online(..., signing_key, first_online, actuator_ids, now_s)`
+- `new_online(..., signing_key, first_online, actuator_ids, clock)`
+  (probes `Plant::probe_identity`, exact-match vs expected, then hashes)
 - `authorize_issued(IssuedCommand) -> Result<OnlineWrite, _>`
-- `write_online(&OnlineWrite, …)`
+  (instance digest from `ValidatedRuntimeIdentity` only)
+- `write_online(&OnlineWrite, …)` / `write_online_now` (clock)
 - `latch_safe_state` — tighten only
 - Observation / recovery: `plant`, `ledger`, `config`, `identity`, `heartbeat`,
-  `record_sensor`, `watchdog_tick`, `engage_estop`, `clear_estop_requires_recovery`,
+  `record_sensor` / `ingest_sensor_packet` / `acquire_sensor`, `watchdog_tick`,
+  `engage_estop`, `clear_estop_requires_recovery`,
   `apply_journal_continuity`, traces, `safe_state`
 
 Not public on ONLINE: `write_driver`, `signing_key`, `config_mut`, `plant_mut`,
@@ -194,15 +197,14 @@ This pass justifies, at **Rust type/API** and **same-process** level only:
 
 Not provided by this patch (and not claimed):
 
-- Exclusive bus ownership
-- Process isolation
-- Hardware root of trust
-- Authenticated journal storage
-- Independent safety / STO / SS1 / PL / SIL
+- Exclusive bus ownership (machine-wide)
+- Process isolation against root or same-UID `chmod` / `/proc/<pid>/fd`
+- Hardware root of trust / TPM / HSM
+- Authenticated journal storage, anti-rollback secure storage, or WORM
+- Independent safety / STO / SS1 / PL / SIL / ISO 10218
 - Metal / MEASURED validation
-- Trusted time
-- Perception authenticity (`record_sensor` hashes caller samples)
-- Branch-protection / merge policy (a workflow file is not GitHub rules)
+- Perception authenticity (HIL samples may be synthetic; receive time is authority-owned)
+- Branch-protection / merge policy (see `docs/BRANCH_PROTECTION.md`)
 
 ## 11. CI / repository integrity
 
@@ -221,9 +223,11 @@ code.
 
 ## 12. Another Rust architecture pass?
 
-**No.** The software authority boundary is ready for HIL and deployment-topology
-work (OS bus exclusivity, independent safety channel, seal media the autonomy
-process cannot rewrite). Do not add another capability layer.
+**No.** Do not propose another speculative Rust hardening pass.
+
+The next milestone is one real low-energy actuator + real `HardwareDriverPort`
++ separate autonomy/authority OS identities + exclusive device ownership +
+independent physical power cutoff + the same adversarial campaign.
 
 The software is **not** enough to put energy on a robot.
 
@@ -299,7 +303,8 @@ are outside this freeze.
 * certified-write scope (`execute_certified_command`, `with_certified_write`)
 * consume ledger (`CommandLedger::with_online_journal`, prepare/ack/unknown)
 * signing payload (`command_payload_for_sign` / `realityos.command_signing/1`)
-* runtime identity (`RuntimeIdentity`, `instance_hash`, `realityos.runtime_instance/1`)
+* runtime identity (`RuntimeIdentity` as expected, `ValidatedRuntimeIdentity` after
+  probe match, `instance_hash`, `realityos.runtime_instance/2` length-prefixed)
 
 ## 18. Identity-binding audit (from signed bytes)
 
@@ -314,16 +319,66 @@ Traced values, not field names:
 | calibration | yes | `calibration_ids` + digest |
 | authorized actuators | yes | `actuator_ids` + digest |
 
-`instance_hash` = SHA-256 of a canonical NUL-delimited record:
+ONLINE startup path:
+
+```text
+StartArgs / ExpectedRuntimeIdentity
+        │
+        ▼
+RuntimeGovernor::new_online
+        │
+        ▼
+Plant::probe_identity  (HardwareBackedPlant → HardwareDriverPort)
+        │
+        ▼
+exact match (design, serial, firmware, calibration, connected,
+             non-placeholder, actuator topology if reported)
+        │
+        ▼
+ValidatedRuntimeIdentity
+        │
+        ▼
+instance_hash (length-prefixed realityos.runtime_instance/2)
+        │
+        ▼
+OnlineWrite
+```
+
+Configured values are never overwritten by the probe. Mismatch fails closed.
+
+`instance_hash` = SHA-256 of length-prefixed little-endian fields:
 schema, release, design, serial, firmware, calibration, sorted unique actuators.
+
+`write_online` re-probes. If the physical identity changes, or the device
+disconnects, this runtime instance FAULT/ABORTs: zero further writes.
+`clear_estop_requires_recovery` cannot resurrect it. Recovery is a complete
+ONLINE restart (`new_online`). Reconnect to the same or a different device
+under the previously authorized instance is refused.
 
 `write_online` independently checks digest equality and actuator-scope subset.
 
 A capability from Governor A is not transferable to Governor B merely because
 they share a release, design, or signing key.
 
-## 19. Judgment: powered physical testing?
+## 19. Authority clock and sensor freshness
+
+* `AuthorityClock::monotonic_now` is the issue / expiry / heartbeat / watchdog /
+  write-time / freshness anchor. Production uses `OsMonotonicClock` (OS
+  monotonic, not Unix wall time). Tests/HIL inject `FakeClock`.
+* `unix_now_s` is audit / CLI wall time only.
+* Production IPC (`ProductionProposal`) may carry verb, action, command_id,
+  proposer, optional intent metadata. It cannot set `now_s`, `write_now_s`, or
+  safety TTL. Those exist only on `HilFaultInjectionRequest`.
+* Sensor trust model:
+  * `device_capture_time` (`SensorPacket.timestamp_s`) — informative / validated
+    when synchronized later. Not a freshness anchor.
+  * `authority_receive_monotonic` — stamped internally on ingest; freshness =
+    `now_monotonic - last_sensor_s`.
+  * PTP / hardware timestamping is not implemented.
+
+## 20. Judgment: powered physical testing?
 
 **No.** See `docs/HIL.md`. Process separation and exclusive virtual I/O are
 demonstrated. Independent physical energy-stop is still a named hole. Do not
-energize a real actuator.
+energize a real actuator. This pass earns the right to plan the first
+controlled physical experiment; it does not authorize one.

@@ -23,7 +23,21 @@ mod tests {
     use realityos_core::{fixture, Certificate, Intent, RealityOs, WorldView};
     use realityos_governor::OnlineLocked;
     use realityos_kernel::DecisionStatus;
-    use realityos_plant::{ActionParams, Plant, SimPlant};
+    use realityos_plant::{ActionParams, HardwareIdentity, Plant, SimPlant};
+
+    fn bind_online_plant(plant: &mut SimPlant, args: &StartArgs) {
+        plant.go_online();
+        let _ = plant.bind_measured_identity(HardwareIdentity {
+            serial: args.serial_or_as_built.clone(),
+            firmware_id: args.firmware_id.clone(),
+            calibration_id: args.calibration_id.clone(),
+            design_content_hash: args.design_content_hash.clone(),
+            connected: true,
+            metal: false,
+            evidence_status: "TEST_ATTACHED".into(),
+            actuator_ids: Vec::new(),
+        });
+    }
 
     #[test]
     fn online_refuses_rail_opt_out() {
@@ -174,7 +188,6 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let journal = dir.join("driver.jsonl");
         let mut plant = SimPlant::new("p", 1, 10.0);
-        plant.go_online();
         let mut args = StartArgs::simulation("rel-online-1");
         args.release_class = "MFG_CANDIDATE".into();
         args.serial_or_as_built = "SN-1".into();
@@ -185,6 +198,7 @@ mod tests {
         args.signing_key = Some(b"online-session-key".to_vec());
         args.first_online = true;
         args.actuator_ids = vec!["joint-0".into()];
+        bind_online_plant(&mut plant, &args);
         let mut sess =
             RuntimeSession::<SimPlant, OnlineLocked>::start_online(args.clone(), plant, 10.0)
                 .unwrap();
@@ -206,8 +220,8 @@ mod tests {
         drop(sess);
 
         let mut plant2 = SimPlant::new("p", 1, 10.0);
-        plant2.go_online();
         args.first_online = false;
+        bind_online_plant(&mut plant2, &args);
         let mut sess2 =
             RuntimeSession::<SimPlant, OnlineLocked>::start_online(args, plant2, 11.0).unwrap();
         sess2
@@ -237,7 +251,6 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let journal = dir.join("driver.jsonl");
         let mut plant = SimPlant::new("p", 1, 10.0);
-        plant.go_online();
         let mut args = StartArgs::simulation("rel-online-hold");
         args.release_class = "MFG_CANDIDATE".into();
         args.serial_or_as_built = "SN-1".into();
@@ -248,6 +261,7 @@ mod tests {
         args.signing_key = Some(b"online-session-key".to_vec());
         args.first_online = true;
         args.actuator_ids = vec!["joint-0".into()];
+        bind_online_plant(&mut plant, &args);
         let mut sess =
             RuntimeSession::<SimPlant, OnlineLocked>::start_online(args, plant, 10.0).unwrap();
         sess.latch_safe_state(realityos_governor::SafeState::Hold, "test");
@@ -290,5 +304,43 @@ mod tests {
         let d = ros.decide(req);
         assert_eq!(d.status, DecisionStatus::Refuse);
         assert!(d.command.is_none());
+    }
+
+    #[test]
+    fn start_online_refuses_probed_serial_mismatch() {
+        let dir = std::env::temp_dir().join(format!(
+            "realityos-online-mm-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let mut plant = SimPlant::new("p", 1, 10.0);
+        let mut args = StartArgs::simulation("rel-online-mm");
+        args.release_class = "MFG_CANDIDATE".into();
+        args.serial_or_as_built = "SN-A".into();
+        args.firmware_id = "FW-1".into();
+        args.calibration_id = "cal-1".into();
+        args.design_content_hash = "des1".into();
+        args.journal_path = Some(dir.join("driver.jsonl"));
+        args.signing_key = Some(b"online-session-key".to_vec());
+        args.first_online = true;
+        args.actuator_ids = vec!["joint-0".into()];
+        bind_online_plant(&mut plant, &args);
+        plant.replace_measured_identity(HardwareIdentity {
+            serial: "SN-B".into(),
+            firmware_id: "FW-1".into(),
+            calibration_id: "cal-1".into(),
+            design_content_hash: "des1".into(),
+            connected: true,
+            metal: false,
+            evidence_status: "TEST_ATTACHED".into(),
+            actuator_ids: vec![],
+        });
+        let err = RuntimeSession::<SimPlant, OnlineLocked>::start_online(args, plant, 10.0)
+            .err()
+            .unwrap();
+        assert!(err.0.contains("hardware_serial_mismatch"), "{}", err.0);
     }
 }

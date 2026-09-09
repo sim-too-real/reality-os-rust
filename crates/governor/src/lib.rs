@@ -16,7 +16,10 @@ pub mod trace;
 pub use envelope::{per_joint_clip, DriverEnvelopePack};
 pub use gate::{admit_from_parts, GovernorGateRequest, GovernorGateVerdict};
 pub use governor::{GovernorConfig, OnlineInitError, OnlineWrite, RuntimeGovernor};
-pub use identity::RuntimeIdentity;
+pub use identity::{
+    canonical_instance_bytes, match_expected_to_measured, ExpectedRuntimeIdentity,
+    MeasuredHardwareIdentity, RuntimeIdentity, ValidatedRuntimeIdentity, INSTANCE_SCHEMA,
+};
 pub use latch::{EstopLatch, SafeState, SafeStateLatch};
 pub use rail::{Hil, OnlineLocked, Rail, Simulation, UnlockedRail};
 pub use trace::RuntimeTrace;
@@ -42,10 +45,13 @@ pub fn assert_veto_polarity(safe_veto: bool, unsafe_veto: bool) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
     use realityos_kernel::{
-        CalibrationId, DesignContentHash, FirmwareId, ReleaseHash, SerialOrAsBuilt,
+        AuthorityClock, CalibrationId, DesignContentHash, FakeClock, FirmwareId, ReleaseHash,
+        SerialOrAsBuilt,
     };
-    use realityos_plant::{Plant, SimPlant};
+    use realityos_plant::{HardwareIdentity, Plant, SimPlant};
 
     fn sim_gov() -> RuntimeGovernor<SimPlant> {
         let id = RuntimeIdentity::sim("rel-sim-1").unwrap();
@@ -113,8 +119,7 @@ mod tests {
         ));
         let _ = std::fs::create_dir_all(&dir);
         let journal = dir.join("driver.jsonl");
-        let mut plant = SimPlant::new("p", 1, 1.0);
-        plant.go_online();
+        let plant = online_plant(&id);
         let g = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
             id,
             plant,
@@ -122,7 +127,7 @@ mod tests {
             b"test-signing-key-32bytes-minimum".to_vec(),
             true,
             vec!["a0".into()],
-            1.0,
+            test_clock(1.0),
         )
         .expect("online governor");
         let c = g.config();
@@ -144,6 +149,30 @@ mod tests {
         }
     }
 
+    fn measured_matching(id: &RuntimeIdentity) -> HardwareIdentity {
+        HardwareIdentity {
+            serial: id.serial_str().to_string(),
+            firmware_id: id.firmware_str().to_string(),
+            calibration_id: id.calibration_id_str().to_string(),
+            design_content_hash: id.design_str().to_string(),
+            connected: true,
+            metal: false,
+            evidence_status: "TEST_ATTACHED".into(),
+            actuator_ids: Vec::new(),
+        }
+    }
+
+    fn online_plant(id: &RuntimeIdentity) -> SimPlant {
+        let mut plant = SimPlant::new("p", 1, 1.0);
+        plant.go_online();
+        plant.bind_measured_identity(measured_matching(id));
+        plant
+    }
+
+    fn test_clock(now_s: f64) -> Arc<dyn AuthorityClock> {
+        FakeClock::arc(now_s)
+    }
+
     fn temp_journal(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "realityos-gov-cap-{tag}-{}",
@@ -161,16 +190,14 @@ mod tests {
         use realityos_core::{DecideRequest, Intent, RealityOs, WorldView};
         use realityos_plant::ActionParams;
 
-        let mut plant = SimPlant::new("p", 1, 1.0);
-        plant.go_online();
         let mut g = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
             online_identity(),
-            plant,
+            online_plant(&online_identity()),
             temp_journal("one"),
             b"online-cap-key".to_vec(),
             true,
             vec!["joint-0".into()],
-            10.0,
+            test_clock(10.0),
         )
         .unwrap();
         g.record_sensor(&[("q0".into(), 0.0)], 10.0, 1, "frame", "s")
@@ -196,16 +223,14 @@ mod tests {
 
     #[test]
     fn online_safe_state_cannot_return_to_running() {
-        let mut plant = SimPlant::new("p", 1, 1.0);
-        plant.go_online();
         let mut g = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
             online_identity(),
-            plant,
+            online_plant(&online_identity()),
             temp_journal("hold"),
             b"online-cap-key".to_vec(),
             true,
             vec!["joint-0".into()],
-            10.0,
+            test_clock(10.0),
         )
         .unwrap();
         g.latch_safe_state(SafeState::Hold);
@@ -222,16 +247,14 @@ mod tests {
         key: &[u8],
         actuators: Vec<String>,
     ) -> RuntimeGovernor<SimPlant, OnlineLocked> {
-        let mut plant = SimPlant::new("p", 1, 1.0);
-        plant.go_online();
         let mut g = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
-            id,
-            plant,
+            id.clone(),
+            online_plant(&id),
             temp_journal(tag),
             key.to_vec(),
             true,
             actuators,
-            10.0,
+            test_clock(10.0),
         )
         .unwrap();
         g.record_sensor(&[("q0".into(), 0.0)], 10.0, 1, "frame", "s")
@@ -396,5 +419,236 @@ mod tests {
         assert!(!t.ok);
         assert_eq!(b.plant().write_count(), 0);
         assert_eq!(a.plant().write_count(), 0);
+    }
+
+    #[test]
+    fn new_online_refuses_configured_vs_probed_mismatches() {
+        let id = online_identity();
+        let mut plant = online_plant(&id);
+        let mut wrong = measured_matching(&id);
+        wrong.serial = "SN-B".into();
+        plant.replace_measured_identity(wrong);
+        let err = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            id.clone(),
+            plant,
+            temp_journal("mm-sn"),
+            b"k".to_vec(),
+            true,
+            vec!["joint-0".into()],
+            test_clock(1.0),
+        )
+        .err()
+        .unwrap();
+        assert!(err.0.contains("hardware_serial_mismatch"), "{err}");
+
+        let mut plant = online_plant(&id);
+        let mut wrong = measured_matching(&id);
+        wrong.firmware_id = "FW-B".into();
+        plant.replace_measured_identity(wrong);
+        let err = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            id.clone(),
+            plant,
+            temp_journal("mm-fw"),
+            b"k".to_vec(),
+            true,
+            vec!["joint-0".into()],
+            test_clock(1.0),
+        )
+        .err()
+        .unwrap();
+        assert!(err.0.contains("hardware_firmware_mismatch"), "{err}");
+
+        let mut plant = online_plant(&id);
+        let mut wrong = measured_matching(&id);
+        wrong.calibration_id = "cal-B".into();
+        plant.replace_measured_identity(wrong);
+        let err = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            id.clone(),
+            plant,
+            temp_journal("mm-cal"),
+            b"k".to_vec(),
+            true,
+            vec!["joint-0".into()],
+            test_clock(1.0),
+        )
+        .err()
+        .unwrap();
+        assert!(err.0.contains("hardware_calibration_mismatch"), "{err}");
+
+        let mut plant = online_plant(&id);
+        let mut wrong = measured_matching(&id);
+        wrong.design_content_hash = "des-B".into();
+        plant.replace_measured_identity(wrong);
+        let err = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            id,
+            plant,
+            temp_journal("mm-des"),
+            b"k".to_vec(),
+            true,
+            vec!["joint-0".into()],
+            test_clock(1.0),
+        )
+        .err()
+        .unwrap();
+        assert!(err.0.contains("hardware_design_mismatch"), "{err}");
+    }
+
+    #[test]
+    fn new_online_refuses_disconnected_placeholder_and_missing() {
+        let id = online_identity();
+        let mut plant = online_plant(&id);
+        plant.set_measured_connected(false);
+        let err = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            id.clone(),
+            plant,
+            temp_journal("disc"),
+            b"k".to_vec(),
+            true,
+            vec!["joint-0".into()],
+            test_clock(1.0),
+        )
+        .err()
+        .unwrap();
+        assert!(err.0.contains("disconnected"), "{err}");
+
+        let mut plant = SimPlant::new("p", 1, 1.0);
+        plant.go_online();
+        plant.bind_measured_identity(HardwareIdentity {
+            serial: "SIM_SERIAL".into(),
+            firmware_id: "SIM_FW".into(),
+            calibration_id: "SIM_CAL".into(),
+            design_content_hash: "des1".into(),
+            connected: true,
+            metal: false,
+            evidence_status: "TEST".into(),
+            actuator_ids: vec![],
+        });
+        let err = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            id.clone(),
+            plant,
+            temp_journal("simid"),
+            b"k".to_vec(),
+            true,
+            vec!["joint-0".into()],
+            test_clock(1.0),
+        )
+        .err()
+        .unwrap();
+        assert!(err.0.contains("placeholder"), "{err}");
+
+        let mut plant = SimPlant::new("p", 1, 1.0);
+        plant.go_online();
+        let err = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            id,
+            plant,
+            temp_journal("noid"),
+            b"k".to_vec(),
+            true,
+            vec!["joint-0".into()],
+            test_clock(1.0),
+        )
+        .err()
+        .unwrap();
+        assert!(err.0.contains("online_requires_hardware_identity"), "{err}");
+    }
+
+    #[test]
+    fn identity_change_after_online_faults_and_writes_zero() {
+        use realityos_plant::ActionParams;
+        let id = online_identity();
+        let mut plant = SimPlant::new("p", 1, 1.0);
+        plant.go_online();
+        let handle = plant.bind_measured_identity(measured_matching(&id));
+        let mut g = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            id,
+            plant,
+            temp_journal("hot"),
+            b"online-cap-key".to_vec(),
+            true,
+            vec!["joint-0".into()],
+            test_clock(10.0),
+        )
+        .unwrap();
+        g.record_sensor(&[("q0".into(), 0.0)], 10.0, 1, "frame", "s")
+            .unwrap();
+        let write = g.authorize_issued(decide_hold(1, 10.0)).unwrap();
+        assert!(g.write_online(&write, &ActionParams::empty(), 10.0).ok);
+        assert_eq!(g.plant().write_count(), 1);
+
+        handle.lock().unwrap().serial = "SN-REPLACED".into();
+        let t = g.write_online(&write, &ActionParams::empty(), 10.1);
+        assert!(!t.ok, "{:?}", t.violations);
+        assert!(t
+            .violations
+            .iter()
+            .any(|v| v.contains("hardware_serial_mismatch")
+                || v.contains("hardware_session_requires_online_restart")));
+        assert!(g.hardware_session_dead());
+        assert_eq!(g.plant().write_count(), 1);
+        assert_eq!(g.safe_state(), SafeState::Fault);
+        let rec = g.clear_estop_requires_recovery(true, 10.2);
+        assert!(!rec.ok);
+        assert!(g.hardware_session_dead());
+        assert!(g.authorize_issued(decide_hold(3, 10.3)).is_err());
+    }
+
+    #[test]
+    fn disconnect_then_reconnect_different_device_stays_dead() {
+        use realityos_plant::ActionParams;
+        let id = online_identity();
+        let mut plant = SimPlant::new("p", 1, 1.0);
+        plant.go_online();
+        let handle = plant.bind_measured_identity(measured_matching(&id));
+        let mut g = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            id,
+            plant,
+            temp_journal("reconn"),
+            b"online-cap-key".to_vec(),
+            true,
+            vec!["joint-0".into()],
+            test_clock(10.0),
+        )
+        .unwrap();
+        g.record_sensor(&[("q0".into(), 0.0)], 10.0, 1, "frame", "s")
+            .unwrap();
+        handle.lock().unwrap().connected = false;
+        let write = g.authorize_issued(decide_hold(1, 10.0)).unwrap();
+        let t = g.write_online(&write, &ActionParams::empty(), 10.0);
+        assert!(!t.ok);
+        assert!(g.hardware_session_dead());
+        assert_eq!(g.plant().write_count(), 0);
+
+        handle.lock().unwrap().connected = true;
+        handle.lock().unwrap().serial = "SN-OTHER".into();
+        let t2 = g.write_online(&write, &ActionParams::empty(), 10.1);
+        assert!(!t2.ok);
+        assert_eq!(g.plant().write_count(), 0);
+        assert!(g.hardware_session_dead());
+    }
+
+    #[test]
+    fn proposer_timestamp_cannot_refresh_online_freshness() {
+        let clock = FakeClock::arc(10.0);
+        let mut g = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            online_identity(),
+            online_plant(&online_identity()),
+            temp_journal("fresh"),
+            b"online-cap-key".to_vec(),
+            true,
+            vec!["joint-0".into()],
+            clock.clone(),
+        )
+        .unwrap();
+        g.record_sensor(&[("q0".into(), 0.0)], 999.0, 1, "frame", "s")
+            .unwrap();
+        assert!((g.last_sensor_s() - 10.0).abs() < 1e-9);
+        assert!((g.last_device_capture_s() - 999.0).abs() < 1e-9);
+        clock.set(80.0);
+        let errs = g.pre_actuation_check(80.0);
+        assert!(
+            errs.iter().any(|e| e == "sensor_stale"),
+            "{errs:?} last_sensor={}",
+            g.last_sensor_s()
+        );
     }
 }

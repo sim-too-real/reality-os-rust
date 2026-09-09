@@ -1,7 +1,9 @@
+use std::sync::{Arc, Mutex};
+
 use crate::caps::{check_hard_action_bounds, ActionParams, PlantCaps, PlantRealized};
 use crate::error::{PlantError, PlantResult};
 use crate::signing::signing_key_hash;
-use crate::traits::Plant;
+use crate::traits::{HardwareIdentity, Plant};
 use crate::write_guard::refuse_uncertified_online_write;
 
 /// In-process plant. ONLINE flag enables certified-write uniqueness.
@@ -14,6 +16,8 @@ pub struct SimPlant {
     backend: Option<crate::dynamics::BoxBackend>,
     production: bool,
     production_key_hash: Option<String>,
+    measured: Option<Arc<Mutex<HardwareIdentity>>>,
+    measured_connected: bool,
 }
 
 impl SimPlant {
@@ -27,6 +31,8 @@ impl SimPlant {
             backend: None,
             production: false,
             production_key_hash: None,
+            measured: None,
+            measured_connected: false,
         }
     }
 
@@ -51,6 +57,28 @@ impl SimPlant {
 
     pub fn attach_backend(&mut self, backend: crate::dynamics::BoxBackend) {
         self.backend = Some(backend);
+    }
+
+    /// Test/HIL attachment: what `probe_identity` will report. Not a config overwrite.
+    /// The returned handle can mutate the probe after the plant is locked in ONLINE.
+    pub fn bind_measured_identity(&mut self, id: HardwareIdentity) -> Arc<Mutex<HardwareIdentity>> {
+        self.measured_connected = id.connected;
+        let handle = Arc::new(Mutex::new(id));
+        self.measured = Some(handle.clone());
+        handle
+    }
+
+    pub fn set_measured_connected(&mut self, connected: bool) {
+        self.measured_connected = connected;
+        if let Some(id) = &self.measured {
+            if let Ok(mut g) = id.lock() {
+                g.connected = connected;
+            }
+        }
+    }
+
+    pub fn replace_measured_identity(&mut self, id: HardwareIdentity) {
+        let _ = self.bind_measured_identity(id);
     }
 }
 
@@ -100,6 +128,13 @@ impl Plant for SimPlant {
         }
         self.estop = false;
         Ok(())
+    }
+
+    fn probe_identity(&mut self) -> Option<HardwareIdentity> {
+        let guard = self.measured.as_ref()?.lock().ok()?;
+        let mut id = guard.clone();
+        id.connected = self.measured_connected && id.connected && !self.estop;
+        Some(id)
     }
 
     fn write_count(&self) -> u32 {

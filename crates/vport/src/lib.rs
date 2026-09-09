@@ -175,6 +175,7 @@ impl VirtualSerialPort {
                 connected: true,
                 metal: false,
                 evidence_status: HARNESS_EVIDENCE.into(),
+                actuator_ids: vec!["joint-0".into()],
             },
             estop: false,
             last: vec![("q0".into(), 0.0)],
@@ -192,13 +193,63 @@ impl VirtualSerialPort {
     pub fn disconnect_bus(&mut self) {
         self.endpoint.disconnect();
     }
+
+    pub fn reconnect_bus(&mut self) {
+        self.endpoint.reconnect();
+    }
+
+    pub fn replace_identity(&mut self, identity: HardwareIdentity) {
+        self.identity = identity;
+    }
+
+    fn overlay_identity(&self, mut id: HardwareIdentity) -> HardwareIdentity {
+        let swap = self.endpoint.root.join("hot_swap.json");
+        if let Ok(raw) = std::fs::read_to_string(&swap) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if let Some(s) = v.get("serial").and_then(|x| x.as_str()) {
+                    id.serial = s.to_string();
+                }
+                if let Some(s) = v.get("firmware_id").and_then(|x| x.as_str()) {
+                    id.firmware_id = s.to_string();
+                }
+                if let Some(s) = v.get("calibration_id").and_then(|x| x.as_str()) {
+                    id.calibration_id = s.to_string();
+                }
+                if let Some(s) = v.get("design_content_hash").and_then(|x| x.as_str()) {
+                    id.design_content_hash = s.to_string();
+                }
+                if let Some(arr) = v.get("actuator_ids").and_then(|x| x.as_array()) {
+                    id.actuator_ids = arr
+                        .iter()
+                        .filter_map(|x| x.as_str().map(str::to_string))
+                        .collect();
+                }
+            }
+        }
+        if self.endpoint.root.join("placeholder_identity").exists() {
+            id.serial = "SIM_SERIAL".into();
+            id.firmware_id = "SIM_FW".into();
+            id.calibration_id = "SIM_CAL".into();
+        }
+        if self.endpoint.root.join("missing_identity").exists() {
+            id.serial.clear();
+            id.firmware_id.clear();
+            id.calibration_id.clear();
+            id.design_content_hash.clear();
+        }
+        id
+    }
+
+    fn bus_connected(&self) -> bool {
+        !self.estop && !self.endpoint.root.join("force_disconnect").exists()
+    }
 }
 
 impl HardwareDriverPort for VirtualSerialPort {
     fn probe_identity(&self) -> HardwareIdentity {
-        let mut id = self.identity.clone();
+        let mut id = self.overlay_identity(self.identity.clone());
         id.metal = false;
-        id.connected = self.endpoint.is_connected() && !self.estop;
+        id.connected = self.bus_connected();
         id.evidence_status = HARNESS_EVIDENCE.into();
         id
     }
@@ -218,10 +269,7 @@ impl HardwareDriverPort for VirtualSerialPort {
         if self.estop {
             return Err(PlantError::EstopEngaged);
         }
-        if self.endpoint.root.join("force_disconnect").exists() {
-            self.endpoint.disconnect();
-        }
-        if !self.endpoint.is_connected() {
+        if !self.bus_connected() {
             return Err(PlantError::Disconnected);
         }
         self.endpoint
@@ -245,7 +293,7 @@ impl HardwareDriverPort for VirtualSerialPort {
     }
 
     fn is_connected(&self) -> bool {
-        self.endpoint.is_connected() && !self.estop
+        self.bus_connected()
     }
 
     fn is_sim_harness(&self) -> bool {

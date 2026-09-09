@@ -9,16 +9,18 @@
 
 use std::marker::PhantomData;
 use std::path::Path;
+use std::sync::Arc;
 
 use realityos_core::{CertifiedCommand, IssuedCommand};
+use realityos_kernel::{AuthorityClock, FakeClock};
 use realityos_plant::{
     execute_certified_command, hash_sensor_packet, ActionParams, ActuationCommand, CommandLedger,
-    ExecuteBind, Plant,
+    ExecuteBind, Plant, SensorPacket,
 };
 use serde_json::{json, Map, Value};
 
 use crate::envelope::DriverEnvelopePack;
-use crate::identity::RuntimeIdentity;
+use crate::identity::{match_expected_to_measured, RuntimeIdentity, ValidatedRuntimeIdentity};
 use crate::latch::{EstopLatch, SafeState};
 use crate::rail::{OnlineLocked, Rail, Simulation, UnlockedRail};
 use crate::trace::RuntimeTrace;
@@ -109,6 +111,10 @@ pub struct RuntimeGovernor<P: Plant, R: Rail = Simulation> {
     traces: Vec<RuntimeTrace>,
     watchdog_period_s: f64,
     last_watchdog_s: f64,
+    clock: Arc<dyn AuthorityClock>,
+    validated: Option<ValidatedRuntimeIdentity>,
+    hardware_session_dead: bool,
+    last_device_capture_s: f64,
     _rail: PhantomData<R>,
 }
 
@@ -177,8 +183,57 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
             traces: Vec::new(),
             watchdog_period_s: 0.05,
             last_watchdog_s: 0.0,
+            clock: FakeClock::arc(0.0),
+            validated: None,
+            hardware_session_dead: false,
+            last_device_capture_s: 0.0,
             _rail: PhantomData,
         }
+    }
+
+    pub fn authority_now_s(&self) -> f64 {
+        self.clock.monotonic_now().secs()
+    }
+
+    pub fn validated_identity(&self) -> Option<&ValidatedRuntimeIdentity> {
+        self.validated.as_ref()
+    }
+
+    pub fn hardware_session_dead(&self) -> bool {
+        self.hardware_session_dead
+    }
+
+    pub fn last_device_capture_s(&self) -> f64 {
+        self.last_device_capture_s
+    }
+
+    /// Re-probe the attached driver. Identity change, disconnect, placeholder,
+    /// or missing identity FAULT/ABORTs this runtime instance. Recovery is a
+    /// complete ONLINE restart — not continued execution under this instance.
+    fn verify_live_hardware(&mut self, now_s: f64) -> Vec<String> {
+        if self.hardware_session_dead {
+            return vec!["hardware_session_requires_online_restart".into()];
+        }
+        let Some(measured) = self.plant.probe_identity() else {
+            self.kill_hardware_session("hardware_identity_missing", now_s);
+            return vec!["hardware_identity_missing".into()];
+        };
+        if let Err(e) =
+            match_expected_to_measured(&self.identity, &measured, &self.authorized_actuator_ids)
+        {
+            self.kill_hardware_session(&e, now_s);
+            return vec![e];
+        }
+        vec![]
+    }
+
+    fn kill_hardware_session(&mut self, reason: &str, now_s: f64) {
+        let _ = now_s;
+        self.hardware_session_dead = true;
+        self.validated = None;
+        self.safe_state = self.safe_state.tighten(SafeState::Fault);
+        self.latch.engage(reason);
+        self.plant.engage_estop(reason);
     }
 
     pub fn identity(&self) -> &RuntimeIdentity {
@@ -280,9 +335,62 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
             return Err("sensor_timestamp_non_finite".into());
         }
         let hash = hash_sensor_packet(samples, timestamp_s, frame_id, sensor_id, sequence);
-        self.last_sensor_s = timestamp_s;
+        // ONLINE freshness is authority receive time. Device timestamp is informative.
+        let freshness_s = if R::ONLINE_LOCKED {
+            self.clock.monotonic_now().secs()
+        } else {
+            timestamp_s
+        };
+        self.last_device_capture_s = timestamp_s;
+        self.last_sensor_s = freshness_s;
         self.expected_sensor_packet_hash = Some(hash.clone());
         Ok(hash)
+    }
+
+    /// Production ingest: packet may carry a device capture time; receive is stamped here.
+    pub fn ingest_sensor_packet(&mut self, mut packet: SensorPacket) -> Result<String, String> {
+        if packet.samples.is_empty() {
+            return Err("sensor_reading_empty".into());
+        }
+        if packet.samples.iter().any(|(_, v)| !v.is_finite()) {
+            return Err("sensor_sample_non_finite".into());
+        }
+        if !packet.timestamp_s.is_finite() {
+            return Err("sensor_timestamp_non_finite".into());
+        }
+        let receive_s = self.clock.monotonic_now().secs();
+        if !receive_s.is_finite() {
+            return Err("authority_receive_non_finite".into());
+        }
+        if R::ONLINE_LOCKED {
+            let cal = self.identity.calibration_id_str();
+            if !cal.is_empty()
+                && !packet.calibration_hash.is_empty()
+                && packet.calibration_hash != cal
+            {
+                return Err("sensor_calibration_mismatch".into());
+            }
+        }
+        packet.authority_receive_s = Some(receive_s);
+        packet.rehash();
+        let hash = packet.content_hash.clone();
+        self.last_device_capture_s = packet.timestamp_s;
+        self.last_sensor_s = if R::ONLINE_LOCKED {
+            receive_s
+        } else {
+            packet.timestamp_s
+        };
+        self.expected_sensor_packet_hash = Some(hash.clone());
+        Ok(hash)
+    }
+
+    pub fn acquire_sensor(&mut self) -> Result<String, String> {
+        let now = self.clock.monotonic_now().secs();
+        match self.plant.read_driver_sensor(now) {
+            Some(Ok(pkt)) => self.ingest_sensor_packet(pkt),
+            Some(Err(e)) => Err(e.to_string()),
+            None => Err("no_driver_sensor".into()),
+        }
     }
 
     pub fn engage_estop(&mut self, reason: impl Into<String>, now_s: f64) -> RuntimeTrace {
@@ -298,6 +406,12 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
         now_s: f64,
     ) -> RuntimeTrace {
         let mut errs = Vec::new();
+        if R::ONLINE_LOCKED && self.hardware_session_dead {
+            return self.emit(
+                RuntimeTrace::new(false, "recovery_refused", now_s)
+                    .with_violations(vec!["hardware_session_requires_online_restart".into()]),
+            );
+        }
         if !operator_ack {
             errs.push("operator_ack_required".into());
         }
@@ -326,6 +440,12 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
 
     pub fn pre_actuation_check(&self, now_s: f64) -> Vec<String> {
         let mut errs = Vec::new();
+        if R::ONLINE_LOCKED && self.hardware_session_dead {
+            errs.push("hardware_session_requires_online_restart".into());
+        }
+        if R::ONLINE_LOCKED && self.validated.is_none() {
+            errs.push("online_identity_not_hardware_bound".into());
+        }
         if self.safe_state.blocks_actuation() {
             errs.push(format!(
                 "dispatch_safe_state_latched:{}",
@@ -383,6 +503,16 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
         params: &ActionParams,
         now_s: f64,
     ) -> RuntimeTrace {
+        if R::ONLINE_LOCKED {
+            let hw = self.verify_live_hardware(now_s);
+            if !hw.is_empty() {
+                return self.emit(
+                    RuntimeTrace::new(false, "driver_write_refused", now_s)
+                        .with_command(command.command_id())
+                        .with_violations(hw),
+                );
+            }
+        }
         let mut pre = self.pre_actuation_check(now_s);
         let cmd_hash = command.release_hash();
         if cmd_hash.is_empty() {
@@ -402,7 +532,11 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
             pre.push("calibration_id_not_on_command".into());
         }
         if R::ONLINE_LOCKED {
-            let expect = self.identity.instance_hash(&self.authorized_actuator_ids);
+            let expect = self
+                .validated
+                .as_ref()
+                .map(|v| v.instance_hash(&self.authorized_actuator_ids))
+                .unwrap_or_default();
             if command.runtime_instance_hash().is_empty() {
                 pre.push("command_missing_runtime_instance_hash".into());
             } else if command.runtime_instance_hash() != expect {
@@ -617,7 +751,7 @@ impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
         signing_key: Vec<u8>,
         first_online: bool,
         actuator_ids: Vec<String>,
-        now_s: f64,
+        clock: Arc<dyn AuthorityClock>,
     ) -> Result<Self, OnlineInitError> {
         if signing_key.is_empty() {
             return Err(OnlineInitError("online_requires_signing_key".into()));
@@ -628,6 +762,11 @@ impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
         if !identity.complete_online() {
             return Err(OnlineInitError("incomplete_online_runtime_identity".into()));
         }
+        let measured = plant
+            .probe_identity()
+            .ok_or_else(|| OnlineInitError("online_requires_hardware_identity".into()))?;
+        let validated = ValidatedRuntimeIdentity::bind(identity.clone(), &measured, &actuator_ids)
+            .map_err(OnlineInitError)?;
         plant.lock_production(&signing_key);
         let ledger = CommandLedger::with_online_journal(journal_path, first_online)
             .map_err(|e| OnlineInitError(e.to_string()))?;
@@ -642,8 +781,11 @@ impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
             GovernorConfig::online_locked(),
             Some(signing_key),
         );
+        g.clock = clock;
+        g.validated = Some(validated);
         g.authorized_actuator_ids = actuator_ids;
         g.envelope = Some(env);
+        let now_s = g.clock.monotonic_now().secs();
         g.heartbeat(now_s);
         let _ = g.watchdog_tick(now_s);
         let cont = g.apply_journal_continuity(false, now_s);
@@ -663,6 +805,12 @@ impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
     /// Bind, sign, and acknowledge a kernel-issued command with governor-owned
     /// identity, evidence, actuator ids, and signing key.
     pub fn authorize_issued(&self, issued: IssuedCommand) -> Result<OnlineWrite, Vec<String>> {
+        if self.hardware_session_dead {
+            return Err(vec!["hardware_session_requires_online_restart".into()]);
+        }
+        let Some(validated) = &self.validated else {
+            return Err(vec!["online_identity_not_hardware_bound".into()]);
+        };
         let Some(hash) = self.expected_sensor_packet_hash.as_deref() else {
             return Err(vec!["online_requires_sensor_hash".into()]);
         };
@@ -672,7 +820,7 @@ impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
         if self.authorized_actuator_ids.is_empty() {
             return Err(vec!["online_requires_actuator_ids".into()]);
         }
-        let instance = self.identity.instance_hash(&self.authorized_actuator_ids);
+        let instance = validated.instance_hash(&self.authorized_actuator_ids);
         let cmd = issued.bind_online(
             self.identity.release_hash.as_str(),
             self.identity.design_str(),
@@ -693,5 +841,17 @@ impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
         now_s: f64,
     ) -> RuntimeTrace {
         self.write_driver_inner(&write.command, params, now_s)
+    }
+
+    /// Production write: issue/write time comes from the authority clock.
+    pub fn write_online_now(&mut self, write: &OnlineWrite, params: &ActionParams) -> RuntimeTrace {
+        let now_s = self.clock.monotonic_now().secs();
+        self.write_online(write, params, now_s)
+    }
+
+    /// HIL fault injection only: drop authority-owned sensor evidence.
+    pub fn hil_drop_sensor_evidence(&mut self) {
+        self.last_sensor_s = 0.0;
+        self.expected_sensor_packet_hash = None;
     }
 }
