@@ -23,9 +23,10 @@ use crate::identity::{is_pty_path, usb_identity_for_tty, MeasuredIdentity};
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
     instruction_ok, is_xl330_model, le_i32, le_u16, ADDR_CURRENT_LIMIT, ADDR_FIRMWARE_VERSION,
-    ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR, ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE,
-    ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL,
-    ADDR_TORQUE_ENABLE, OPERATING_MODE_POSITION, STATUS_RETURN_ALL,
+    ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR, ADDR_MAX_POSITION_LIMIT, ADDR_MIN_POSITION_LIMIT,
+    ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY,
+    ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE, OPERATING_MODE_POSITION,
+    STATUS_RETURN_ALL,
 };
 
 pub struct Xl330Driver {
@@ -49,6 +50,8 @@ pub struct Xl330Driver {
     /// propose stays inside the 100 ms ONLINE software-watchdog miss.
     live_io: bool,
     last_hw_error: u8,
+    min_position: i32,
+    max_position: i32,
 }
 
 impl Xl330Driver {
@@ -93,6 +96,8 @@ impl Xl330Driver {
             torque_enabled: false,
             live_io: false,
             last_hw_error: 0,
+            min_position: 0,
+            max_position: 4095,
         };
         driver.connect_serial()?;
         driver.refresh_identity();
@@ -322,7 +327,13 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
+            // EEPROM mode write can drop the next RAM instruction. Re-identify
+            // (and re-force SRL) before profile/torque writes.
+            std::thread::sleep(Duration::from_millis(400));
+            self.ping_and_identify()
+                .map_err(|e| PlantError::refused(format!("dxl_mode_identify:{e}")))?;
         }
+        self.refresh_position_limits()?;
         let want = self.cfg.current_limit_milli;
         let got = self
             .read_reg(ADDR_CURRENT_LIMIT, 2)
@@ -357,6 +368,18 @@ impl Xl330Driver {
         // write is a single goal_position xfer, not torque_on + goal.
         self.write_reg(ADDR_TORQUE_ENABLE, &[1], "setup_torque_on", None, false)?;
         self.torque_enabled = true;
+        Ok(())
+    }
+
+    fn refresh_position_limits(&mut self) -> PlantResult<()> {
+        let max_b = self.read_reg(ADDR_MAX_POSITION_LIMIT, 4)?;
+        let min_b = self.read_reg(ADDR_MIN_POSITION_LIMIT, 4)?;
+        let max = le_i32(&max_b).unwrap_or(4095).clamp(0, 4095);
+        let min = le_i32(&min_b).unwrap_or(0).clamp(0, 4095);
+        if min <= max {
+            self.min_position = min;
+            self.max_position = max;
+        }
         Ok(())
     }
 
@@ -603,7 +626,27 @@ impl Xl330Driver {
             f64::from(-self.cfg.max_position_delta_ticks),
             f64::from(self.cfg.max_position_delta_ticks),
         ) as i32;
-        self.last_present.saturating_add(ticks).clamp(0, 4095)
+        // Hold also clamps: Wizard can leave present outside the EEPROM window
+        // only after a limit change; writing that present would NAK.
+        if ticks == 0 {
+            return self
+                .last_present
+                .clamp(self.min_position, self.max_position);
+        }
+        let goal = self
+            .last_present
+            .saturating_add(ticks)
+            .clamp(self.min_position, self.max_position);
+        if goal == self.last_present {
+            let inward = self
+                .last_present
+                .saturating_sub(ticks)
+                .clamp(self.min_position, self.max_position);
+            if inward != self.last_present {
+                return inward;
+            }
+        }
+        goal
     }
 }
 

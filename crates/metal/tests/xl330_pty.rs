@@ -160,6 +160,39 @@ fn xl330_pty_status_return_level_zero_can_still_identify() {
 }
 
 #[test]
+fn xl330_pty_nudge_steps_inward_at_wizard_max_limit() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_AT_MAX", "1")]);
+    let root = metal_test_root("pty-at-max");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("identify at Wizard max");
+    driver.read_sensor(0.0).expect("sensor before inward nudge");
+    assert_eq!(driver.last_present_position(), 2048);
+    driver
+        .write_action(&[0.05], &ActionParams::empty())
+        .expect("nudge at max must step inward, not NAK");
+    assert_eq!(driver.last_goal_position(), Some(2046));
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_pwm_operating_mode_is_forced_to_position() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_PWM", "1")]);
+    let root = metal_test_root("pty-pwm");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("PWM EEPROM mode must not block setup");
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold after forcing position mode");
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_start_online_hold_is_not_a_metal_proof() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder();

@@ -125,6 +125,12 @@ def init_regs() -> bytearray:
     regs[7] = 1
     regs[11] = 3
     regs[38:40] = struct.pack("<H", 200)
+    regs[48:52] = struct.pack("<i", 4095)
+    regs[52:56] = struct.pack("<i", 0)
+    if os.environ.get("REALITYOS_METAL_PTY_AT_MAX") == "1":
+        regs[48:52] = struct.pack("<i", 2048)
+    if os.environ.get("REALITYOS_METAL_PTY_PWM") == "1":
+        regs[11] = 16
     regs[68] = 0 if os.environ.get("REALITYOS_METAL_PTY_SRL0") == "1" else 2
     regs[120:122] = struct.pack("<H", 1234)
     regs[126:128] = struct.pack("<h", 0)
@@ -145,24 +151,30 @@ def status_wanted(srl: int, inst: int) -> bool:
     return False
 
 
-def handle(regs: bytearray, inst: int, params: bytes) -> bytes:
+def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
     if inst == INST_PING:
-        return b""
+        return b"", 0
     if inst == INST_READ and len(params) >= 4:
         addr, ln = struct.unpack_from("<HH", params)
-        return bytes(regs[addr : addr + ln])
+        return bytes(regs[addr : addr + ln]), 0
     if inst == INST_WRITE and len(params) >= 2:
         addr = struct.unpack_from("<H", params)[0]
         data = params[2:]
+        if addr == 116 and len(data) >= 4:
+            goal = struct.unpack_from("<i", data)[0]
+            max_p = struct.unpack_from("<i", regs, 48)[0]
+            min_p = struct.unpack_from("<i", regs, 52)[0]
+            if goal < min_p or goal > max_p:
+                return b"", 0x08  # Protocol 2.0 data range
         regs[addr : addr + len(data)] = data
         if addr == 116 and len(data) >= 4:
             regs[132:136] = data[:4]
-        return b""
+        return b"", 0
     if inst == INST_REBOOT:
         regs[70] = 0
         regs[68] = 2  # RAM reset; factory Status Return Level
-        return b""
-    return b""
+        return b"", 0
+    return b"", 0
 
 
 def main() -> None:
@@ -188,11 +200,14 @@ def main() -> None:
         del buf[:]
         alert = STATUS_ALERT if os.environ.get("REALITYOS_METAL_PTY_ALERT") == "1" else 0
         srl = regs[68]
-        payload = handle(regs, inst, params)
+        payload, inst_err = handle(regs, inst, params)
         # Half-duplex adapters often echo a request-shaped frame before status.
         echo = HEADER + bytes([servo_id, 0x07, 0x00, INST_PING, 0x00, 0x00])
         if status_wanted(srl, inst):
-            os.write(master, echo + encode_status(servo_id, payload, error=alert))
+            os.write(
+                master,
+                echo + encode_status(servo_id, payload, error=alert | inst_err),
+            )
         else:
             os.write(master, echo)
 

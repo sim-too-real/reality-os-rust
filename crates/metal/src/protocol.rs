@@ -21,6 +21,9 @@ pub const ADDR_ID: u16 = 7;
 pub const ADDR_OPERATING_MODE: u16 = 11;
 pub const OPERATING_MODE_POSITION: u8 = 3;
 pub const ADDR_CURRENT_LIMIT: u16 = 38;
+/// EEPROM. Factory max 4095 / min 0. Wizard can shrink this window.
+pub const ADDR_MAX_POSITION_LIMIT: u16 = 48;
+pub const ADDR_MIN_POSITION_LIMIT: u16 = 52;
 pub const ADDR_TORQUE_ENABLE: u16 = 64;
 /// RAM. 0 = no status except PING (Wizard); 2 = all instructions (factory).
 pub const ADDR_STATUS_RETURN_LEVEL: u16 = 68;
