@@ -197,3 +197,125 @@ fn xl330_pty_serve_hold_survives_idle_watchdog() {
     let _ = handle.join();
     let _ = std::fs::remove_dir_all(&root);
 }
+
+fn recover_req(id: &str) -> MetalRequest {
+    let mut r = MetalRequest::propose(id, "hold");
+    r.op = "recover".into();
+    r
+}
+
+#[test]
+fn xl330_pty_firmware_mismatch_kills_session_not_watchdog() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder();
+    let root = std::env::temp_dir().join(format!("realityos-metal-pty-fw-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let mut cfg = MetalConfig::example(&tty);
+    cfg.campaign_hooks = true;
+    {
+        let driver = Xl330Driver::open(cfg.clone(), &root).expect("identify");
+        let measured = driver.measured();
+        cfg.expected_serial = measured.serial;
+        cfg.expected_firmware = measured.firmware_id;
+    }
+    cfg.save(root.join(CONFIG_FILE)).unwrap();
+    let mut auth = MetalAuthority::start(&root, true).expect("start_online");
+    let hold = auth.handle(MetalRequest::propose("pty-fw-hold", "hold"));
+    assert!(hold.ok, "hold refused: {hold:?}");
+    let writes = auth.physical_writes();
+    std::fs::write(
+        root.join("bus/hot_swap.json"),
+        r#"{"firmware_id":"xl330-m288:1190:255"}"#,
+    )
+    .unwrap();
+    let fw = auth.handle(MetalRequest::propose("pty-fw", "hold"));
+    assert!(!fw.ok, "firmware overlay must refuse: {fw:?}");
+    assert!(
+        fw.violations
+            .iter()
+            .any(|v| v.contains("hardware_firmware_mismatch")),
+        "identity refuse, not a vacuous miss: {fw:?}"
+    );
+    assert!(
+        !fw.violations
+            .iter()
+            .any(|v| v.contains("software_watchdog_miss")),
+        "identity ESTOP must not be labeled watchdog miss: {fw:?}"
+    );
+    assert_eq!(auth.physical_writes(), writes);
+    let rec = auth.handle(recover_req("pty-fw-rec"));
+    assert!(!rec.ok, "recover after identity must refuse: {rec:?}");
+    assert!(
+        rec.violations
+            .iter()
+            .any(|v| v.contains("hardware_session_requires_online_restart")),
+        "recover must measure the dead hardware session: {rec:?}"
+    );
+    assert!(
+        !rec.violations
+            .iter()
+            .any(|v| v.contains("software_watchdog_miss")),
+        "recover after identity must not be a watchdog short-circuit: {rec:?}"
+    );
+    let again = auth.handle(MetalRequest::propose("pty-fw-again", "hold"));
+    assert!(!again.ok, "{again:?}");
+    assert_eq!(auth.physical_writes(), writes);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_disconnect_overlay_kills_session_via_verify() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder();
+    let root =
+        std::env::temp_dir().join(format!("realityos-metal-pty-disc-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let mut cfg = MetalConfig::example(&tty);
+    cfg.campaign_hooks = true;
+    {
+        let driver = Xl330Driver::open(cfg.clone(), &root).expect("identify");
+        let measured = driver.measured();
+        cfg.expected_serial = measured.serial;
+        cfg.expected_firmware = measured.firmware_id;
+    }
+    cfg.save(root.join(CONFIG_FILE)).unwrap();
+    let mut auth = MetalAuthority::start(&root, true).expect("start_online");
+    let hold = auth.handle(MetalRequest::propose("pty-disc-hold", "hold"));
+    assert!(hold.ok, "hold refused: {hold:?}");
+    let writes = auth.physical_writes();
+    std::fs::write(root.join("bus/force_disconnect"), b"1").unwrap();
+    let disc = auth.handle(MetalRequest::propose("pty-disc", "hold"));
+    assert!(!disc.ok, "disconnect overlay must refuse: {disc:?}");
+    assert!(
+        disc.violations
+            .iter()
+            .any(|v| v.contains("online_hardware_disconnected")),
+        "disconnect must reach verify_live_hardware: {disc:?}"
+    );
+    assert!(
+        !disc
+            .violations
+            .iter()
+            .any(|v| v.contains("software_watchdog_miss")),
+        "{disc:?}"
+    );
+    assert_eq!(auth.physical_writes(), writes);
+    let rec = auth.handle(recover_req("pty-disc-rec"));
+    assert!(!rec.ok, "{rec:?}");
+    assert!(
+        rec.violations
+            .iter()
+            .any(|v| v.contains("hardware_session_requires_online_restart")),
+        "recover must not resurrect a disconnected instance: {rec:?}"
+    );
+    std::fs::remove_file(root.join("bus/force_disconnect")).unwrap();
+    let again = auth.handle(MetalRequest::propose("pty-disc-again", "hold"));
+    assert!(
+        !again.ok,
+        "clearing the hook must not revive the instance: {again:?}"
+    );
+    assert_eq!(auth.physical_writes(), writes);
+    let _ = std::fs::remove_dir_all(&root);
+}

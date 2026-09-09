@@ -74,11 +74,55 @@ set_usb_serial_latency() {
   done
 }
 
+# ModemManager/brltty grab ttyUSB on typical Ubuntu benches. Between probe
+# close and serve open nobody holds TIOCEXCL.
+UDEV_RULE=""
+prepare_usb_serial_host() {
+  local dev="$1"
+  local real name rules
+  real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
+  name="$(basename "$real")"
+  if command -v fuser >/dev/null 2>&1 && [[ -e "$real" ]]; then
+    if fuser "$real" >/dev/null 2>&1; then
+      echo "error: $real is already open (ModemManager/brltty/another process)." >&2
+      fuser -v "$real" >&2 || true
+      echo "error: stop that process, then re-run. First contact cannot share the tty." >&2
+      exit 2
+    fi
+  fi
+  case "$name" in
+    ttyUSB*|ttyACM*) ;;
+    *)
+      set_usb_serial_latency "$dev"
+      return 0
+      ;;
+  esac
+  if [[ -d /run/udev/rules.d ]]; then
+    rules="/run/udev/rules.d/99-realityos-metal-${name}.rules"
+    cat >"$rules" <<EOF
+ACTION=="add|change", KERNEL=="${name}", ENV{ID_MM_DEVICE_IGNORE}="1", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
+EOF
+    UDEV_RULE="$rules"
+    udevadm control --reload 2>/dev/null || true
+    udevadm trigger --action=change --sysname-match="$name" 2>/dev/null || true
+    echo "metal-campaign: installed $rules (ID_MM_DEVICE_IGNORE + 0600 ${AUTHORITY_USER})"
+  fi
+  set_usb_serial_latency "$dev"
+}
+
+cleanup_usb_serial_host() {
+  if [[ -n "$UDEV_RULE" && -f "$UDEV_RULE" ]]; then
+    rm -f "$UDEV_RULE"
+    udevadm control --reload 2>/dev/null || true
+  fi
+}
+trap cleanup_usb_serial_host EXIT
+
 # Stale journal+seal makes --first-online refuse. Kill leftover serve first so
 # it cannot rewrite the journal after the wipe.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
-set_usb_serial_latency "$DEVICE"
+prepare_usb_serial_host "$DEVICE"
 
 metal_fstype() {
   local target="$1"
@@ -214,6 +258,12 @@ start_auth() {
   if [[ ! -S "$ROOT/ipc.sock" ]]; then
     echo "error: ipc.sock did not appear" >&2
     cat "$ROOT/authority.err" >&2 || true
+    cat "$ROOT/serve.err" >&2 || true
+    return 1
+  fi
+  if [[ -s "$ROOT/serve.err" ]]; then
+    echo "error: serve.err after bind:" >&2
+    cat "$ROOT/serve.err" >&2
     return 1
   fi
   chmod 0660 "$ROOT/ipc.sock"
@@ -234,9 +284,19 @@ stop_auth() {
 
 AUTH_PID=""
 SMOKE_PID=""
-cleanup() { stop_auth || true; }
+cleanup() {
+  stop_auth || true
+  cleanup_usb_serial_host || true
+}
 trap cleanup EXIT
+# probe/open drops exclusive; ModemManager can grab the tty before serve.
+prepare_usb_serial_host "$DEVICE"
 start_auth 1
+if [[ -s "$ROOT/serve.err" ]]; then
+  echo "error: serve.err after first bind; identity/hold would be unmeasured:" >&2
+  cat "$ROOT/serve.err" >&2
+  exit 1
+fi
 if [[ -e "$DEVICE" ]]; then
   chown "$AUTHORITY_USER:$AUTHORITY_USER" "$DEVICE" 2>/dev/null || true
   chmod 0600 "$DEVICE" 2>/dev/null || true
@@ -283,10 +343,12 @@ measure() {
   pa="$(present)"
   gp="$(goalpos)"
   python3 - "$name" "$proposal" "$layer" "$expected" "$before" "$after" "$ack_before" "$ack_after" "$respfile" "$pb" "$pa" "$gp" <<'PY'
-import json, sys
+import json, os, sys
 name, proposal, layer, expected, before, after, ab, aa, path, pb, pa, gp = sys.argv[1:13]
 before, after, ab, aa = map(int, (before, after, ab, aa))
 expected = expected == "true"
+require = os.environ.get("MEASURE_REQUIRE", "").strip()
+forbid = os.environ.get("MEASURE_FORBID", "").strip()
 delta = max(0, after - before)
 try:
     r = json.load(open(path))
@@ -305,6 +367,20 @@ if pa_i is not None or gp_i is not None:
 ack = aa > ab
 if r.get("device_acks") is not None and r.get("physical_writes") is not None:
     ack = ack or bool(r.get("ok") and aa > ab)
+blob = " ".join(str(x) for x in (r.get("violations") or []))
+blob = f"{blob} {r.get('stage','')} {r.get('status','')}"
+def has_token(spec):
+    return any(tok and tok in blob for tok in spec.split("|"))
+if expected:
+    if not r.get("ok") or delta < 1:
+        sys.exit("error: authorized case %s did not produce a physical write: %s delta=%s" % (name, r, delta))
+else:
+    if r.get("ok") or delta > 0:
+        sys.exit("error: unauthorized case %s executed or wrote: %s delta=%s" % (name, r, delta))
+    if require and not has_token(require):
+        sys.exit("error: case %s missing required token %r in %s" % (name, require, r))
+    if forbid and has_token(forbid):
+        sys.exit("error: case %s has forbidden token %r (vacuous refuse): %s" % (name, forbid, r))
 rec = {
     "name": name,
     "expected_authorization": expected,
@@ -348,21 +424,41 @@ add_case "$(measure caller_time_refused 'propose now_s' PROTOCOL_BLOCKED false "
 add_case "$(measure forged_sensor_refused 'autonomy sensor_samples' PROTOCOL_BLOCKED false "$PROP" --root "$ROOT" forged-sensor)"
 
 as_authority bash -c "echo 1 > '$ROOT/bus/fail_sensor'"
-add_case "$(measure missing_sensor 'fail_sensor then propose' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-miss "$PROP" --root "$ROOT" propose-id)"
+add_case "$(MEASURE_REQUIRE=metal_sensor_missing MEASURE_FORBID=software_watchdog_miss measure missing_sensor 'fail_sensor then propose' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-miss "$PROP" --root "$ROOT" propose-id)"
 as_authority rm -f "$ROOT/bus/fail_sensor"
 
+require_live_session() {
+  local sensor
+  sensor="$(as_autonomy "$PROP" --root "$ROOT" sensor)"
+  python3 - <<PY
+import json, sys
+r = json.loads('''$sensor''')
+if not r.get("ok"):
+    sys.exit("error: session is not live before the next measured case: %s" % (r,))
+print("session-live")
+PY
+  if [[ -s "$ROOT/serve.err" ]]; then
+    echo "error: serve.err while session should be live:" >&2
+    cat "$ROOT/serve.err" >&2
+    exit 1
+  fi
+}
+
+require_live_session
 as_authority bash -c "printf '%s' '{\"firmware_id\":\"xl330-m288:1190:255\"}' > '$ROOT/bus/hot_swap.json'"
-add_case "$(measure firmware_mismatch 'hot_swap firmware only' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-fw "$PROP" --root "$ROOT" propose-id)"
-add_case "$(measure recover_after_identity 'recover after firmware mismatch' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" recover)"
-add_case "$(measure reconnect_foreign 'same instance after foreign firmware' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-re "$PROP" --root "$ROOT" propose-id)"
+add_case "$(MEASURE_REQUIRE=hardware_firmware_mismatch MEASURE_FORBID=software_watchdog_miss measure firmware_mismatch 'hot_swap firmware only' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-fw "$PROP" --root "$ROOT" propose-id)"
+add_case "$(MEASURE_REQUIRE=hardware_session_requires_online_restart MEASURE_FORBID=software_watchdog_miss measure recover_after_identity 'recover after firmware mismatch' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" recover)"
+add_case "$(MEASURE_REQUIRE='hardware_session_requires_online_restart|dispatch_safe_state_latched' MEASURE_FORBID=software_watchdog_miss measure reconnect_foreign 'same instance after foreign firmware' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-re "$PROP" --root "$ROOT" propose-id)"
 as_authority rm -f "$ROOT/bus/hot_swap.json"
 
 stop_auth
 start_auth 0
+require_live_session
 as_authority bash -c "echo 1 > '$ROOT/bus/force_disconnect'"
-add_case "$(measure device_disconnect 'force_disconnect then propose' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-disc "$PROP" --root "$ROOT" propose-id)"
-add_case "$(measure recover_after_disconnect 'recover cannot resurrect binding' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" recover)"
+add_case "$(MEASURE_REQUIRE=online_hardware_disconnected MEASURE_FORBID=software_watchdog_miss measure device_disconnect 'force_disconnect then propose' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-disc "$PROP" --root "$ROOT" propose-id)"
+add_case "$(MEASURE_REQUIRE=hardware_session_requires_online_restart MEASURE_FORBID=software_watchdog_miss measure recover_after_disconnect 'recover cannot resurrect binding' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" recover)"
 as_authority rm -f "$ROOT/bus/force_disconnect"
+add_case "$(MEASURE_REQUIRE='hardware_session_requires_online_restart|dispatch_safe_state_latched' MEASURE_FORBID=software_watchdog_miss measure reconnect_after_disconnect 'cleared hook cannot revive instance' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-disc-re "$PROP" --root "$ROOT" propose-id)"
 
 BEFORE="$(writes)"
 PROBE_REC="$(python3 - <<PY
@@ -423,8 +519,10 @@ crash_replay() {
   as_autonomy env METAL_CMD_ID="$cid" "$PROP" --root "$ROOT" replay >/tmp/metal-"$cid"-replay.json || true
   after="$(writes)"
   python3 - <<PY
-import json
+import json, sys
 before=int("$before"); after=int("$after")
+if after > before:
+    sys.exit("error: crash/restart $point retried a command that may have reached hardware (%s→%s)" % (before, after))
 print(json.dumps({
     "name": "crash_restart_${point}",
     "expected_authorization": False,
@@ -492,7 +590,7 @@ if [[ "${REALITYOS_METAL_CUTOFF_LIVE:-0}" == "1" ]]; then
   fi
   export REALITYOS_METAL_CUTOFF_TESTED=1
   CUTOFF_TESTED=1
-  add_case "$(measure vin_cutoff_live 'propose after VIN open' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-cutoff "$PROP" --root "$ROOT" propose-id)"
+  add_case "$(MEASURE_REQUIRE='dxl_io|driver not connected|online_hardware_disconnected|metal_live_io_deadline' MEASURE_FORBID=software_watchdog_miss measure vin_cutoff_live 'propose after VIN open' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-cutoff "$PROP" --root "$ROOT" propose-id)"
 fi
 
 COMMIT="$(git -C "$(dirname "$SCRIPT_DIR")" rev-parse HEAD 2>/dev/null || echo unknown)"

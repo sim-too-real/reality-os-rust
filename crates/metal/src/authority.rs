@@ -94,15 +94,8 @@ impl MetalAuthority {
     pub fn handle(&mut self, req: MetalRequest) -> MetalResponse {
         // Watchdog only: a heartbeat emit is another journal+seal fsync pair.
         // Heartbeat stale is 2 s; idle serve already heartbeats ~every 800 ms.
-        if !self.pet_watchdog() {
-            return self.refuse(
-                "egress",
-                "refuse",
-                vec![
-                    "estop_engaged".into(),
-                    "abort_latched:software_watchdog_miss".into(),
-                ],
-            );
+        if let Err(v) = self.pet_watchdog() {
+            return self.refuse("egress", "refuse", v);
         }
         if req.injects_sensor_evidence() {
             return self.refuse(
@@ -209,15 +202,8 @@ impl MetalAuthority {
         // Sensor I/O sits between handle's tick and dispatch. A 40 ms live
         // read is inside the miss window; refresh so dispatch does not inherit
         // that gap. If acquire itself exceeded 100 ms, this tick latches.
-        if !self.pet_watchdog() {
-            return self.refuse(
-                "egress",
-                "refuse",
-                vec![
-                    "estop_engaged".into(),
-                    "abort_latched:software_watchdog_miss".into(),
-                ],
-            );
+        if let Err(v) = self.pet_watchdog() {
+            return self.refuse("egress", "refuse", v);
         }
         self.next_sequence = self.next_sequence.saturating_add(1);
         let now = self.session.governor.authority_now_s();
@@ -331,9 +317,23 @@ impl MetalAuthority {
 
     /// ONLINE software watchdog is 50 ms (miss at 100 ms). One journal+seal
     /// fsync pair. A gap >100 ms cannot be caught up.
-    fn pet_watchdog(&mut self) -> bool {
+    ///
+    /// Identity/disconnect ESTOP is not a watchdog miss. Folding `estop()`
+    /// into this tick made recover-after-identity return
+    /// `software_watchdog_miss` and left `hardware_session_requires_online_restart`
+    /// unmeasured. A real miss still returns `t.ok == false` and cannot be
+    /// caught up.
+    fn pet_watchdog(&mut self) -> Result<(), Vec<String>> {
         let t = self.session.governor.watchdog_tick_now();
-        t.ok && !self.session.governor.estop()
+        if t.ok {
+            return Ok(());
+        }
+        let mut v = t.violations;
+        if v.is_empty() {
+            v.push("estop_engaged".into());
+            v.push("abort_latched:software_watchdog_miss".into());
+        }
+        Err(v)
     }
 
     fn pet_heartbeat(&mut self) {
@@ -355,8 +355,8 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
     // new_online already ticked; one watchdog pet covers bind without a
     // heartbeat fsync. Schedule the next idle pet from *before* emit so a
     // slow journal fsync cannot push the following Instant gap past 100 ms.
-    if !auth.pet_watchdog() {
-        let msg = "software_watchdog_miss_before_bind";
+    if let Err(v) = auth.pet_watchdog() {
+        let msg = format!("software_watchdog_miss_before_bind:{}", v.join(","));
         let _ = std::fs::write(root.join("serve.err"), format!("{msg}\n"));
         anyhow::bail!("{msg}");
     }
@@ -380,18 +380,20 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
                 let now = std::time::Instant::now();
                 if now >= next_watchdog {
                     next_watchdog = std::time::Instant::now() + Duration::from_millis(40);
-                    if !auth.pet_watchdog() {
-                        let _ =
-                            std::fs::write(root.join("serve.err"), "software_watchdog_miss_idle\n");
+                    if let Err(v) = auth.pet_watchdog() {
+                        let _ = std::fs::write(
+                            root.join("serve.err"),
+                            format!("software_watchdog_miss_idle:{}\n", v.join(",")),
+                        );
                     }
                 }
                 if now >= next_heartbeat {
                     next_heartbeat = std::time::Instant::now() + Duration::from_millis(800);
                     auth.pet_heartbeat();
-                    if !auth.pet_watchdog() {
+                    if let Err(v) = auth.pet_watchdog() {
                         let _ = std::fs::write(
                             root.join("serve.err"),
-                            "software_watchdog_miss_after_heartbeat\n",
+                            format!("software_watchdog_miss_after_heartbeat:{}\n", v.join(",")),
                         );
                     }
                     next_watchdog = std::time::Instant::now() + Duration::from_millis(40);
@@ -415,10 +417,10 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
                     Err(e)
                         if e.kind() == ErrorKind::TimedOut || e.kind() == ErrorKind::WouldBlock =>
                     {
-                        if !auth.pet_watchdog() {
+                        if let Err(v) = auth.pet_watchdog() {
                             let _ = std::fs::write(
                                 root.join("serve.err"),
-                                "software_watchdog_miss_before_handle\n",
+                                format!("software_watchdog_miss_before_handle:{}\n", v.join(",")),
                             );
                             line.clear();
                             break;

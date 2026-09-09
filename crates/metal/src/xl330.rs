@@ -473,10 +473,12 @@ impl Xl330Driver {
     }
 
     fn bus_up(&self) -> bool {
-        self.connected
-            && self.port.is_some()
-            && !self.campaign_disconnected()
-            && self.cfg.device.exists()
+        // Campaign `force_disconnect` is an identity overlay (USB may stay
+        // enumerated). Keep the serial path up so propose reaches
+        // `verify_live_hardware` and FAULT/ABORTs the instance. Folding the
+        // hook into bus_up failed the sensor first, left the session alive,
+        // and made recover-after-disconnect a vacuous refuse.
+        self.connected && self.port.is_some() && self.cfg.device.exists()
     }
 
     /// Realtime Tick (120) through Present Input Voltage (144) is 26 bytes.
@@ -624,7 +626,7 @@ impl HardwareDriverPort for Xl330Driver {
     }
 
     fn is_connected(&self) -> bool {
-        self.bus_up()
+        self.bus_up() && !self.campaign_disconnected()
     }
 
     fn close(&mut self) {
