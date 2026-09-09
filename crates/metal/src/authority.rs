@@ -92,6 +92,7 @@ impl MetalAuthority {
     }
 
     pub fn handle(&mut self, req: MetalRequest) -> MetalResponse {
+        self.pet_supervisor();
         if req.injects_sensor_evidence() {
             return self.refuse(
                 "protocol",
@@ -127,8 +128,10 @@ impl MetalAuthority {
     }
 
     fn ingest_sensor(&mut self) -> MetalResponse {
+        self.pet_supervisor();
         match self.session.acquire_sensor() {
             Ok(_) => {
+                self.pet_supervisor();
                 let mut r = self.ok("sensor");
                 r.authority_receive_s = Some(self.session.governor.authority_now_s());
                 r.device_capture_s = Some(self.session.governor.last_device_capture_s());
@@ -191,6 +194,7 @@ impl MetalAuthority {
         if let Err(e) = self.session.acquire_sensor() {
             return self.refuse("authorize", "refuse", vec![e]);
         }
+        self.pet_supervisor();
         self.persist_freshness(
             Some(self.session.governor.last_device_capture_s()),
             Some(self.session.governor.authority_now_s()),
@@ -312,6 +316,9 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
     let listener = crate::ipc::bind_socket(root)?;
     listener.set_nonblocking(true)?;
     loop {
+        if root.join("stop_serve").exists() {
+            break Ok(());
+        }
         auth.pet_supervisor();
         let mut stream = match listener.accept() {
             Ok((s, _)) => s,

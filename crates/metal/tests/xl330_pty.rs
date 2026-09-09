@@ -151,6 +151,7 @@ fn xl330_pty_serve_hold_survives_idle_watchdog() {
         "first hold after idle watchdog gap must succeed: {resp:?}"
     );
     assert!(!resp.metal);
-    drop(handle);
+    let _ = std::fs::write(root.join("stop_serve"), b"1");
+    let _ = handle.join();
     let _ = std::fs::remove_dir_all(&root);
 }

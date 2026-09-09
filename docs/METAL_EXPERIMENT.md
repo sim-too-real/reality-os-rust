@@ -50,7 +50,7 @@ Model and firmware are latched at identify time. Later sensor packets do not rew
 
 ## Composition
 
-`realityos-metal-smoke serve` calls `RuntimeSession::start_online` → `OsMonotonicClock`. It does not use the HIL `Authority` object or `FakeClock`. While waiting for IPC it pets the 50 ms software watchdog every 10 ms; an idle gap after `os-probe` would otherwise latch `software_watchdog_miss` before the first hold.
+`realityos-metal-smoke serve` calls `RuntimeSession::start_online` → `OsMonotonicClock`. It does not use the HIL `Authority` object or `FakeClock`. While waiting for IPC it pets the 50 ms software watchdog every 10 ms, and again between sensor acquire and the certified write, so USB-UART I/O does not latch `software_watchdog_miss`. After identify, live I/O is one attempt at 40 ms and sensor sampling is a single 26-byte RAM block (no 5-read fallback). Goal writes reuse the last sensor present and skip redundant profile/torque pokes. `scripts/metal-kill-serve.sh` kills leftover `serve` processes for a metal root so a zombie cannot rewrite journal+seal after `rm -rf` and poison `--first-online`.
 
 Users: `realityos-authority` owns the tty, key, journal, and process. `realityos-autonomy` may use only the Unix socket. The metal root is `0751` so autonomy can traverse to `ipc.sock` (`0660` / `realityos-ipc`); `bus/` stays `0700`. A `0750` root would make IPC and `direct_device_open_attempts` fail closed without measuring the attacks. After each `serve` bind the campaign re-applies `0600` on the tty because udev may restore `0660 dialout`.
 
@@ -78,7 +78,7 @@ sudo -E env REALITYOS_METAL_DEVICE=/dev/ttyUSB0 \
   scripts/metal-campaign.sh
 ```
 
-`REALITYOS_METAL_BAUD` and `REALITYOS_METAL_SERVO_ID` are optional. Probe tries the configured pair first, then common XL330 baud/id pairs, and writes the working pair into `metal.json`. Each campaign wipes `REALITYOS_METAL_ROOT` so `--first-online` is not refused by a leftover journal.
+`REALITYOS_METAL_BAUD` and `REALITYOS_METAL_SERVO_ID` are optional. Probe tries the configured pair first, then common XL330 baud/id pairs, and writes the working pair into `metal.json`. Each campaign kills leftover `realityos-metal-smoke --root <root>` processes, then wipes `REALITYOS_METAL_ROOT` so `--first-online` is not refused by a leftover journal.
 
 `scripts/metal-os-boundary.sh` (CI `os-users`) proves the 0751 / device-open counting path with a dummy 0600 file, then a two-UID `serve` + hold on the PTY Protocol 2.0 stand-in (`REALITYOS_METAL_ALLOW_PTY=1`). That is **not** a substitute for the XL330 campaign and does not write `metal_proof.json`.
 

@@ -23,8 +23,7 @@ use crate::identity::{usb_identity_for_tty, MeasuredIdentity};
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_write, find_header, is_xl330_model,
     le_i32, le_u16, ADDR_CURRENT_LIMIT, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION,
-    ADDR_HARDWARE_ERROR, ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE, ADDR_PRESENT_CURRENT,
-    ADDR_PRESENT_POSITION, ADDR_PRESENT_VELOCITY, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL,
+    ADDR_HARDWARE_ERROR, ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE, ADDR_PROFILE_ACCEL,
     ADDR_PROFILE_VELOCITY, ADDR_REALTIME_TICK, ADDR_TORQUE_ENABLE, OPERATING_MODE_POSITION,
 };
 
@@ -44,6 +43,11 @@ pub struct Xl330Driver {
     model: u16,
     firmware: u8,
     seq: u64,
+    torque_enabled: bool,
+    /// After identify+limits, one serial attempt / 40 ms timeout so a USB-UART
+    /// propose stays inside the 100 ms ONLINE software-watchdog miss.
+    live_io: bool,
+    last_hw_error: u8,
 }
 
 impl Xl330Driver {
@@ -85,11 +89,17 @@ impl Xl330Driver {
             model: 0,
             firmware: 0,
             seq: 0,
+            torque_enabled: false,
+            live_io: false,
+            last_hw_error: 0,
         };
         driver.connect_serial()?;
         driver.refresh_identity();
         if driver.connected {
-            let _ = driver.apply_bench_limits();
+            driver
+                .apply_bench_limits()
+                .map_err(|e| io::Error::other(e.to_string()))?;
+            driver.enter_live_io();
         }
         Ok(driver)
     }
@@ -203,6 +213,7 @@ impl Xl330Driver {
     fn apply_bench_limits(&mut self) -> PlantResult<()> {
         // Current limit / operating mode are EEPROM; only write with torque off, and only if needed.
         self.write_reg(ADDR_TORQUE_ENABLE, &[0], "setup_torque_off", None, false)?;
+        self.torque_enabled = false;
         let mode = self
             .read_reg(ADDR_OPERATING_MODE, 1)
             .ok()
@@ -244,9 +255,19 @@ impl Xl330Driver {
             None,
             false,
         )?;
+        if let Ok(b) = self.read_reg(ADDR_HARDWARE_ERROR, 1) {
+            self.last_hw_error = b.first().copied().unwrap_or(0);
+        }
         // EEPROM writes can NAK the next instruction if we immediately continue.
         std::thread::sleep(Duration::from_millis(50));
         Ok(())
+    }
+
+    fn enter_live_io(&mut self) {
+        self.live_io = true;
+        if let Some(port) = self.port.as_mut() {
+            let _ = port.set_timeout(Duration::from_millis(40));
+        }
     }
 
     fn refresh_identity(&mut self) {
@@ -309,7 +330,8 @@ impl Xl330Driver {
         expect_status: bool,
     ) -> io::Result<crate::protocol::StatusPacket> {
         let mut last = io::Error::other("metal_xfer_empty");
-        for _ in 0..2 {
+        let attempts = if self.live_io { 1 } else { 2 };
+        for _ in 0..attempts {
             match self.xfer_once(request, expect_status) {
                 Ok(st) => return Ok(st),
                 Err(e) => last = e,
@@ -428,39 +450,22 @@ impl Xl330Driver {
             && self.cfg.device.exists()
     }
 
-    fn read_present_position(&mut self) -> PlantResult<i32> {
-        let b = self.read_reg(ADDR_PRESENT_POSITION, 4)?;
-        let q = le_i32(&b).ok_or_else(|| PlantError::refused("dxl_short_present_position"))?;
-        self.last_present = q;
-        self.persist_positions();
-        Ok(q)
-    }
-
     /// Realtime Tick (120) through Present Input Voltage (144) is 26 bytes.
+    /// One register read: a 5-read fallback would miss the 100 ms software watchdog.
     fn read_motion_block(&mut self) -> PlantResult<(i32, i32, i16, u16, u16)> {
         const LEN: u16 = 26;
-        if let Ok(b) = self.read_reg(ADDR_REALTIME_TICK, LEN) {
-            if b.len() >= LEN as usize {
-                let tick = le_u16(&b[0..2]).unwrap_or(0);
-                let cur = i16::from_le_bytes([b[6], b[7]]);
-                let vel = le_i32(&b[8..12]).unwrap_or(0);
-                let pos = le_i32(&b[12..16])
-                    .ok_or_else(|| PlantError::refused("dxl_short_present_position"))?;
-                let volt = le_u16(&b[24..26]).unwrap_or(0);
-                self.last_present = pos;
-                self.persist_positions();
-                return Ok((pos, vel, cur, volt, tick));
-            }
+        let b = self.read_reg(ADDR_REALTIME_TICK, LEN)?;
+        if b.len() < LEN as usize {
+            return Err(PlantError::refused("dxl_short_motion_block"));
         }
-        let pos = self.read_present_position()?;
-        let vel = le_i32(&self.read_reg(ADDR_PRESENT_VELOCITY, 4)?).unwrap_or(0);
-        let cur_b = self.read_reg(ADDR_PRESENT_CURRENT, 2)?;
-        let cur = i16::from_le_bytes([
-            cur_b.first().copied().unwrap_or(0),
-            cur_b.get(1).copied().unwrap_or(0),
-        ]);
-        let volt = le_u16(&self.read_reg(ADDR_PRESENT_VOLTAGE, 2)?).unwrap_or(0);
-        let tick = le_u16(&self.read_reg(ADDR_REALTIME_TICK, 2)?).unwrap_or(0);
+        let tick = le_u16(&b[0..2]).unwrap_or(0);
+        let cur = i16::from_le_bytes([b[6], b[7]]);
+        let vel = le_i32(&b[8..12]).unwrap_or(0);
+        let pos =
+            le_i32(&b[12..16]).ok_or_else(|| PlantError::refused("dxl_short_present_position"))?;
+        let volt = le_u16(&b[24..26]).unwrap_or(0);
+        self.last_present = pos;
+        self.persist_positions();
         Ok((pos, vel, cur, volt, tick))
     }
 
@@ -510,11 +515,7 @@ impl HardwareDriverPort for Xl330Driver {
             return Err(PlantError::refused("metal_sensor_missing"));
         }
         let (pos, vel, cur, volt, tick) = self.read_motion_block()?;
-        let err = self
-            .read_reg(ADDR_HARDWARE_ERROR, 1)?
-            .first()
-            .copied()
-            .unwrap_or(0);
+        let err = self.last_hw_error;
         self.persist_vin(volt);
         self.last_tick_s = f64::from(tick) / 1000.0;
         self.seq = self.seq.saturating_add(1);
@@ -550,17 +551,13 @@ impl HardwareDriverPort for Xl330Driver {
         if !is_xl330_model(self.model) {
             return Err(PlantError::refused("metal_refuses_non_xl330_model"));
         }
-        let _ = self.read_present_position();
+        // propose() already acquired sensors. Extra register pokes here would
+        // exceed the 100 ms software-watchdog miss on a USB-UART bench.
         let goal = self.goal_from_action(action);
-        self.write_reg(
-            ADDR_PROFILE_VELOCITY,
-            &self.cfg.max_profile_velocity.to_le_bytes(),
-            "profile_velocity",
-            None,
-            false,
-        )?;
-        self.write_reg(ADDR_TORQUE_ENABLE, &[1], "torque_on", None, false)?;
-        std::thread::sleep(Duration::from_millis(10));
+        if !self.torque_enabled {
+            self.write_reg(ADDR_TORQUE_ENABLE, &[1], "torque_on", None, false)?;
+            self.torque_enabled = true;
+        }
         self.write_reg(
             ADDR_GOAL_POSITION,
             &goal.to_le_bytes(),
@@ -569,7 +566,7 @@ impl HardwareDriverPort for Xl330Driver {
             true,
         )?;
         self.last_goal = Some(goal);
-        let present = self.read_present_position().unwrap_or(self.last_present);
+        let present = self.last_present;
         self.persist_positions();
         Ok(PlantRealized {
             ok: true,
@@ -584,6 +581,7 @@ impl HardwareDriverPort for Xl330Driver {
     fn engage_hw_estop(&mut self, _reason: &str) {
         if self.bus_up() {
             let _ = self.write_reg(ADDR_TORQUE_ENABLE, &[0], "hw_estop_torque_off", None, false);
+            self.torque_enabled = false;
         }
         self.estop = true;
     }
@@ -603,6 +601,7 @@ impl HardwareDriverPort for Xl330Driver {
     fn close(&mut self) {
         if self.bus_up() {
             let _ = self.write_reg(ADDR_TORQUE_ENABLE, &[0], "close_torque_off", None, false);
+            self.torque_enabled = false;
         }
         self.port = None;
         self.connected = false;

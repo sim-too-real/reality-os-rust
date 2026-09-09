@@ -10,7 +10,8 @@ AUTHORITY_USER="${REALITYOS_AUTHORITY_USER:-realityos-authority}"
 AUTONOMY_USER="${REALITYOS_AUTONOMY_USER:-realityos-autonomy}"
 IPC_GROUP="${REALITYOS_IPC_GROUP:-realityos-ipc}"
 ROOT="${REALITYOS_METAL_ROOT:-/tmp/realityos-metal-boundary}"
-IPC_ROOT="${REALITYOS_METAL_IPC_ROOT:-/tmp/realityos-metal-ipc}"
+# Unique per invocation so a leaked serve cannot rewrite another run's journal.
+IPC_ROOT="${REALITYOS_METAL_IPC_ROOT:-/tmp/realityos-metal-ipc-$$}"
 BIN_DIR="${REALITYOS_METAL_BIN:-}"
 DUMMY="${REALITYOS_METAL_DUMMY_DEVICE:-/tmp/realityos-metal-dummy-tty}"
 
@@ -37,6 +38,10 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RESPONDER="$SCRIPT_DIR/../crates/metal/tests/xl330_responder.py"
+# Historical default plus this run: leftover serve rewrites journal after rm -rf.
+"$SCRIPT_DIR/metal-kill-serve.sh" /tmp/realityos-metal-ipc || true
+"$SCRIPT_DIR/metal-kill-serve.sh" "$IPC_ROOT" || true
+"$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
 
 STAGE="${REALITYOS_METAL_STAGE:-/tmp/realityos-metal-boundary-bin}"
 rm -rf "$STAGE"
@@ -135,6 +140,7 @@ cleanup_ipc() {
     kill "$AUTH_PID" 2>/dev/null || true
     wait "$AUTH_PID" 2>/dev/null || true
   fi
+  "$SCRIPT_DIR/metal-kill-serve.sh" "$IPC_ROOT" || true
   kill "$RESP_PID" 2>/dev/null || true
   wait "$RESP_PID" 2>/dev/null || true
   rm -f "$RESP_OUT"

@@ -45,7 +45,10 @@ if [[ -z "$ROOT" || "$ROOT" == "/" || "$ROOT" == "/tmp" || "$ROOT" == "/var" ]];
   echo "error: refusing to wipe unexpected REALITYOS_METAL_ROOT=$ROOT" >&2
   exit 2
 fi
-# Stale journal+seal makes --first-online refuse. Each campaign is a fresh instance.
+# Stale journal+seal makes --first-online refuse. Kill leftover serve first so
+# it cannot rewrite the journal after the wipe.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+"$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
 rm -rf "$ROOT"
 
 STAGE="${REALITYOS_METAL_STAGE:-/tmp/realityos-metal-bin}"
@@ -62,7 +65,6 @@ BIN_DIR="$STAGE"
 SMOKE="$BIN_DIR/realityos-metal-smoke"
 PROP="$BIN_DIR/realityos-metal-propose"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 export REALITYOS_METAL_ROOT="$ROOT"
 export REALITYOS_METAL_DEVICE="$DEVICE"
 "$SCRIPT_DIR/metal-deploy.sh"
@@ -135,6 +137,7 @@ start_auth() {
 stop_auth() {
   kill "$AUTH_PID" 2>/dev/null || true
   wait "$AUTH_PID" 2>/dev/null || true
+  "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
 }
 
 AUTH_PID=""
