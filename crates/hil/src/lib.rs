@@ -218,12 +218,13 @@ impl Authority {
             clock.clone(),
         )
         .map_err(|e| anyhow::anyhow!(e.0))?;
+        let next_sequence = governor.ledger().last_sequence().max(0);
         Ok(Self {
             ros: RealityOs::new(),
             governor,
             root,
             clock,
-            next_sequence: governor.ledger().last_sequence().max(0),
+            next_sequence,
         })
     }
 
