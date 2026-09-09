@@ -6,7 +6,10 @@ pub const HEADER: [u8; 4] = [0xFF, 0xFF, 0xFD, 0x00];
 pub const INST_PING: u8 = 0x01;
 pub const INST_READ: u8 = 0x02;
 pub const INST_WRITE: u8 = 0x03;
+pub const INST_REBOOT: u8 = 0x08;
 pub const INST_STATUS: u8 = 0x55;
+/// Protocol 2.0 bit 7: Hardware Error Status is latched. The instruction still completed.
+pub const STATUS_ALERT: u8 = 0x80;
 
 pub const XL330_M288_MODEL: u16 = 1190;
 pub const XL330_M077_MODEL: u16 = 1200;
@@ -112,6 +115,15 @@ pub fn encode_packet(id: u8, inst: u8, params: &[u8]) -> Vec<u8> {
 
 pub fn encode_ping(id: u8) -> Vec<u8> {
     encode_packet(id, INST_PING, &[])
+}
+
+pub fn encode_reboot(id: u8) -> Vec<u8> {
+    encode_packet(id, INST_REBOOT, &[])
+}
+
+/// Instruction completed. `STATUS_ALERT` is leftover hardware-error state, not a NAK.
+pub fn instruction_ok(error: u8) -> bool {
+    error & !STATUS_ALERT == 0
 }
 
 pub fn encode_read(id: u8, addr: u16, len: u16) -> Vec<u8> {
@@ -314,5 +326,15 @@ mod tests {
         assert_eq!(got.id, 1);
         assert_eq!(got.error, 0);
         assert!(decode_status(&both).is_err());
+    }
+
+    #[test]
+    fn alert_bit_is_not_an_instruction_fault() {
+        assert!(instruction_ok(0));
+        assert!(instruction_ok(STATUS_ALERT));
+        assert!(!instruction_ok(0x01));
+        assert!(!instruction_ok(STATUS_ALERT | 0x01));
+        let reboot = encode_reboot(1);
+        assert_eq!(reboot[7], INST_REBOOT);
     }
 }

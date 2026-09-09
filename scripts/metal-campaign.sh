@@ -77,21 +77,55 @@ set_usb_serial_latency() {
 # ModemManager/brltty grab ttyUSB on typical Ubuntu benches. Between probe
 # close and serve open nobody holds TIOCEXCL.
 UDEV_RULE=""
+STOPPED_BRLTTY=0
+STOPPED_MM=0
+
+wait_tty_free() {
+  local real="$1"
+  local i
+  if ! command -v fuser >/dev/null 2>&1 || [[ ! -e "$real" ]]; then
+    return 0
+  fi
+  for i in $(seq 1 30); do
+    if ! fuser "$real" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+release_foreign_tty_holders() {
+  local real="$1"
+  local holders=""
+  holders="$(fuser -v "$real" 2>&1 || true)"
+  if echo "$holders" | grep -qE 'brltty'; then
+    echo "metal-campaign: $real is held by brltty; stopping brltty.service brltty-udev.service"
+    systemctl stop brltty.service brltty-udev.service 2>/dev/null || true
+    killall -q brltty 2>/dev/null || true
+    STOPPED_BRLTTY=1
+  fi
+  if echo "$holders" | grep -qE 'ModemManager'; then
+    echo "metal-campaign: $real is held by ModemManager; stopping ModemManager.service"
+    systemctl stop ModemManager.service 2>/dev/null || true
+    STOPPED_MM=1
+  fi
+}
+
 prepare_usb_serial_host() {
   local dev="$1"
-  local real name rules i
+  local real name rules
   real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
   name="$(basename "$real")"
   # Crash-replay and disconnect restart close exclusive, then reopen. Our
   # serve may still hold the tty for a few hundred ms; ModemManager can
   # grab it in that gap. Wait for our close, then refuse a foreign holder.
   if command -v fuser >/dev/null 2>&1 && [[ -e "$real" ]]; then
-    for i in $(seq 1 30); do
-      if ! fuser "$real" >/dev/null 2>&1; then
-        break
-      fi
-      sleep 0.1
-    done
+    wait_tty_free "$real" || true
+    if fuser "$real" >/dev/null 2>&1; then
+      release_foreign_tty_holders "$real"
+      wait_tty_free "$real" || true
+    fi
     if fuser "$real" >/dev/null 2>&1; then
       echo "error: $real is already open (ModemManager/brltty/another process)." >&2
       fuser -v "$real" >&2 || true
@@ -110,13 +144,13 @@ prepare_usb_serial_host() {
     rules="/run/udev/rules.d/99-realityos-metal-${name}.rules"
     if [[ ! -f "$rules" ]]; then
       cat >"$rules" <<EOF
-ACTION=="add|change", KERNEL=="${name}", ENV{ID_MM_DEVICE_IGNORE}="1", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
+ACTION=="add|change", KERNEL=="${name}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_BRLTTY}="0", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
 EOF
       UDEV_RULE="$rules"
       udevadm control --reload 2>/dev/null || true
       udevadm trigger --action=change --sysname-match="$name" 2>/dev/null || true
       udevadm settle --timeout=2 2>/dev/null || true
-      echo "metal-campaign: installed $rules (ID_MM_DEVICE_IGNORE + 0600 ${AUTHORITY_USER})"
+      echo "metal-campaign: installed $rules (ID_MM_DEVICE_IGNORE + ID_BRLTTY=0 + 0600 ${AUTHORITY_USER})"
     else
       UDEV_RULE="$rules"
     fi
@@ -132,6 +166,14 @@ cleanup_usb_serial_host() {
   if [[ -n "$UDEV_RULE" && -f "$UDEV_RULE" ]]; then
     rm -f "$UDEV_RULE"
     udevadm control --reload 2>/dev/null || true
+  fi
+  if [[ "$STOPPED_MM" == "1" ]]; then
+    systemctl start ModemManager.service 2>/dev/null || true
+    STOPPED_MM=0
+  fi
+  if [[ "$STOPPED_BRLTTY" == "1" ]]; then
+    systemctl start brltty.service brltty-udev.service 2>/dev/null || true
+    STOPPED_BRLTTY=0
   fi
 }
 trap cleanup_usb_serial_host EXIT

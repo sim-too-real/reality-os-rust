@@ -11,7 +11,8 @@ import termios
 import tty
 
 HEADER = bytes([0xFF, 0xFF, 0xFD, 0x00])
-INST_PING, INST_READ, INST_WRITE, INST_STATUS = 0x01, 0x02, 0x03, 0x55
+INST_PING, INST_READ, INST_WRITE, INST_REBOOT, INST_STATUS = 0x01, 0x02, 0x03, 0x08, 0x55
+STATUS_ALERT = 0x80
 
 CRC_TABLE = [
     0x0000, 0x8005, 0x800F, 0x000A, 0x801B, 0x001E, 0x0014, 0x8011, 0x8033, 0x0036, 0x003C, 0x8039,
@@ -145,6 +146,9 @@ def handle(regs: bytearray, inst: int, params: bytes) -> bytes:
         if addr == 116 and len(data) >= 4:
             regs[132:136] = data[:4]
         return b""
+    if inst == INST_REBOOT:
+        regs[70] = 0
+        return b""
     return b""
 
 
@@ -169,7 +173,8 @@ def main() -> None:
             continue
         servo_id, inst, params, _consumed = parsed
         del buf[:]
-        status = encode_status(servo_id, handle(regs, inst, params))
+        alert = STATUS_ALERT if os.environ.get("REALITYOS_METAL_PTY_ALERT") == "1" else 0
+        status = encode_status(servo_id, handle(regs, inst, params), error=alert)
         # Half-duplex adapters often echo a request-shaped frame before status.
         echo = HEADER + bytes([servo_id, 0x07, 0x00, INST_PING, 0x00, 0x00])
         os.write(master, echo + status)

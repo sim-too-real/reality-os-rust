@@ -21,10 +21,11 @@ use crate::config::{
 use crate::egress::EgressLog;
 use crate::identity::{usb_identity_for_tty, MeasuredIdentity};
 use crate::protocol::{
-    decode_status_scan, encode_ping, encode_read, encode_write, find_header, is_xl330_model,
-    le_i32, le_u16, ADDR_CURRENT_LIMIT, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION,
-    ADDR_HARDWARE_ERROR, ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE, ADDR_PROFILE_ACCEL,
-    ADDR_PROFILE_VELOCITY, ADDR_REALTIME_TICK, ADDR_TORQUE_ENABLE, OPERATING_MODE_POSITION,
+    decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
+    instruction_ok, is_xl330_model, le_i32, le_u16, ADDR_CURRENT_LIMIT, ADDR_FIRMWARE_VERSION,
+    ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR, ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE,
+    ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_REALTIME_TICK, ADDR_TORQUE_ENABLE,
+    OPERATING_MODE_POSITION,
 };
 
 pub struct Xl330Driver {
@@ -231,6 +232,29 @@ impl Xl330Driver {
         // Current limit / operating mode are EEPROM; only write with torque off, and only if needed.
         self.write_reg(ADDR_TORQUE_ENABLE, &[0], "setup_torque_off", None, false)?;
         self.torque_enabled = false;
+        // Protocol 2.0 sets STATUS_ALERT on every packet while Hardware Error
+        // Status is latched (Wizard overload, VIN blip). That is not a NAK.
+        // Reboot once *before* RAM profile writes — reboot clears RAM.
+        if let Ok(b) = self.read_reg(ADDR_HARDWARE_ERROR, 1) {
+            self.last_hw_error = b.first().copied().unwrap_or(0);
+        }
+        if self.last_hw_error != 0 {
+            let _ = self.xfer(&encode_reboot(self.cfg.servo_id), true);
+            std::thread::sleep(Duration::from_millis(400));
+            self.ping_and_identify()
+                .map_err(|e| PlantError::refused(format!("dxl_reboot_identify:{e}")))?;
+            self.last_hw_error = self
+                .read_reg(ADDR_HARDWARE_ERROR, 1)
+                .ok()
+                .and_then(|b| b.first().copied())
+                .unwrap_or(self.last_hw_error);
+            if self.last_hw_error != 0 {
+                return Err(PlantError::refused(format!(
+                    "dxl_hardware_error_latched:{}",
+                    self.last_hw_error
+                )));
+            }
+        }
         let mode = self
             .read_reg(ADDR_OPERATING_MODE, 1)
             .ok()
@@ -272,9 +296,6 @@ impl Xl330Driver {
             None,
             false,
         )?;
-        if let Ok(b) = self.read_reg(ADDR_HARDWARE_ERROR, 1) {
-            self.last_hw_error = b.first().copied().unwrap_or(0);
-        }
         // EEPROM writes can NAK the next instruction if we immediately continue.
         std::thread::sleep(Duration::from_millis(50));
         // Torque-on here (watchdog not running yet) so the first certified
@@ -442,7 +463,7 @@ impl Xl330Driver {
         }
         match self.xfer(&frame, true) {
             Ok(st) => {
-                let ok = st.error == 0;
+                let ok = instruction_ok(st.error);
                 if count_command_egress {
                     let _ = self
                         .egress
@@ -472,7 +493,7 @@ impl Xl330Driver {
         }
         let frame = encode_read(self.cfg.servo_id, addr, len);
         match self.xfer(&frame, true) {
-            Ok(st) if st.error == 0 => Ok(st.params),
+            Ok(st) if instruction_ok(st.error) => Ok(st.params),
             Ok(st) => Err(PlantError::refused(format!(
                 "dxl_status_error:{}",
                 st.error

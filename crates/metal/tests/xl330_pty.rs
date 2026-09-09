@@ -61,14 +61,20 @@ impl Drop for ChildGuard {
 }
 
 fn spawn_responder() -> (ChildGuard, String) {
+    spawn_responder_env(&[])
+}
+
+fn spawn_responder_env(vars: &[(&str, &str)]) -> (ChildGuard, String) {
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/xl330_responder.py");
     assert!(script.is_file(), "missing {}", script.display());
-    let mut child = Command::new("python3")
-        .arg(&script)
+    let mut cmd = Command::new("python3");
+    cmd.arg(&script)
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .expect("python3 xl330_responder");
+        .stderr(Stdio::inherit());
+    for (k, v) in vars {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().expect("python3 xl330_responder");
     let mut stdout = child.stdout.take().expect("responder stdout");
     let mut line = String::new();
     {
@@ -113,6 +119,24 @@ fn xl330_pty_firmware_survives_sensor_and_echoed_status() {
     driver
         .write_action(&[0.0], &ActionParams::empty())
         .expect("hold write");
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_alert_bit_is_not_instruction_failure() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ALERT", "1")]);
+    let root = metal_test_root("pty-alert");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("open despite Protocol 2.0 ALERT");
+    driver
+        .read_sensor(0.0)
+        .expect("sensor must accept STATUS_ALERT");
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold must accept STATUS_ALERT");
     assert_eq!(recorded_writes(root.join("bus")), 1);
     driver.close();
     let _ = std::fs::remove_dir_all(&root);

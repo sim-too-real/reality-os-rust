@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Factory XL330 is 57 600. U2D2 benches often use 1 Mbps.
-pub const CANDIDATE_BAUDS: &[u32] = &[57_600, 115_200, 1_000_000];
+/// Factory XL330 is 57 600. Wizard/U2D2 benches often use 1 Mbps or 2 Mbps.
+pub const CANDIDATE_BAUDS: &[u32] = &[57_600, 115_200, 1_000_000, 2_000_000];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetalConfig {
@@ -216,6 +216,7 @@ mod tests {
         assert_eq!(b.iter().filter(|x| **x == 1_000_000).count(), 1);
         assert!(b.contains(&57_600));
         assert!(b.contains(&115_200));
+        assert!(b.contains(&2_000_000));
     }
 
     #[test]
