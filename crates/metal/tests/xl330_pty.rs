@@ -171,7 +171,7 @@ fn xl330_pty_nudge_steps_inward_at_wizard_max_limit() {
     driver
         .write_action(&[0.05], &ActionParams::empty())
         .expect("nudge at max must step inward, not NAK");
-    assert_eq!(driver.last_goal_position(), Some(2046));
+    assert_eq!(driver.last_goal_position(), Some(2040));
     assert_eq!(recorded_writes(root.join("bus")), 1);
     driver.close();
     let _ = std::fs::remove_dir_all(&root);
@@ -462,6 +462,21 @@ fn xl330_pty_refuses_torque_when_vin_below_wizard_min() {
         err.to_string().contains("dxl_vin_outside_wizard_limits"),
         "got {err}"
     );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_discover_collapses_wizard_secondary_id_to_one_servo() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_SECONDARY", "1")]);
+    let root = metal_test_root("pty-secondary");
+    let cfg = MetalConfig::example(&tty);
+    let (mut driver, bound) = Xl330Driver::open_discovering(cfg, &root)
+        .expect("one servo with Secondary ID 7 must not look like two actuators");
+    assert_eq!(bound.servo_id, 1);
+    assert_eq!(driver.measured().actuator_id, "xl330:1");
+    driver.close();
+    assert_eq!(recorded_writes(root.join("bus")), 0);
     let _ = std::fs::remove_dir_all(&root);
 }
 

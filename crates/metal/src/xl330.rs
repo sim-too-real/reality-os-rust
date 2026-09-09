@@ -25,14 +25,15 @@ use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
     instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, unique_status_ids, ADDR_BUS_WATCHDOG,
     ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION,
-    ADDR_HARDWARE_ERROR, ADDR_HOMING_OFFSET, ADDR_MAX_POSITION_LIMIT, ADDR_MAX_VOLTAGE_LIMIT,
-    ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE,
-    ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL,
-    ADDR_PROFILE_VELOCITY, ADDR_PWM_LIMIT, ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL,
-    ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN,
-    BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_POSITION_P_GAIN, FACTORY_PWM_LIMIT,
-    FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN, MIN_PWM_LIMIT,
-    MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION, STATUS_RETURN_ALL,
+    ADDR_HARDWARE_ERROR, ADDR_HOMING_OFFSET, ADDR_ID, ADDR_MAX_POSITION_LIMIT,
+    ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER,
+    ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION, ADDR_PRESENT_VOLTAGE,
+    ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_PWM_LIMIT, ADDR_REALTIME_TICK,
+    ADDR_SECONDARY_ID, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN,
+    ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN, BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED,
+    FACTORY_POSITION_P_GAIN, FACTORY_PWM_LIMIT, FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN,
+    MIN_POSITION_P_GAIN, MIN_PWM_LIMIT, MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN,
+    OPERATING_MODE_POSITION, SECONDARY_ID_DISABLED, STATUS_RETURN_ALL,
 };
 
 pub struct Xl330Driver {
@@ -389,6 +390,20 @@ impl Xl330Driver {
             }
         }
         let mut eeprom_changed = false;
+        let secondary = self
+            .read_reg(ADDR_SECONDARY_ID, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if secondary != Some(SECONDARY_ID_DISABLED) {
+            self.write_reg(
+                ADDR_SECONDARY_ID,
+                &[SECONDARY_ID_DISABLED],
+                "setup_secondary_id_off",
+                None,
+                false,
+            )?;
+            eeprom_changed = true;
+        }
         let drive = self
             .read_reg(ADDR_DRIVE_MODE, 1)
             .ok()
@@ -1189,6 +1204,9 @@ fn sniff_servo_ids(device: &Path, baud: u32) -> io::Result<Vec<u8>> {
     }
     let ids = unique_status_ids(&acc);
     if ids.len() > 1 {
+        if let Some(primary) = primary_if_secondary_pair(device, baud, &ids) {
+            return Ok(vec![primary]);
+        }
         return Err(io::Error::other(format!(
             "dxl_multiple_servos_on_bus:{}",
             ids.iter()
@@ -1198,4 +1216,67 @@ fn sniff_servo_ids(device: &Path, baud: u32) -> io::Result<Vec<u8>> {
         )));
     }
     Ok(ids)
+}
+
+/// Wizard Secondary ID makes one servo answer two IDs. Both addresses then
+/// read the same ID register. Two distinct servos read two distinct IDs.
+fn primary_if_secondary_pair(device: &Path, baud: u32, ids: &[u8]) -> Option<u8> {
+    if ids.len() != 2 {
+        return None;
+    }
+    let mut port = open_xl330_serial_with(device, baud, false).ok()?;
+    for &id in ids {
+        poke_srl_all(&mut *port, id);
+    }
+    let via_a = read_id_register(&mut *port, ids[0])?;
+    let via_b = read_id_register(&mut *port, ids[1])?;
+    if via_a == via_b && via_a != BROADCAST_ID {
+        Some(via_a)
+    } else {
+        None
+    }
+}
+
+fn poke_srl_all(port: &mut dyn SerialPort, id: u8) {
+    let frame = encode_write(id, ADDR_STATUS_RETURN_LEVEL, &[STATUS_RETURN_ALL]);
+    let _ = port.clear(serialport::ClearBuffer::Input);
+    let _ = port.write_all(&frame);
+    let _ = port.flush();
+    let saved = port.timeout();
+    let _ = port.set_timeout(Duration::from_millis(25));
+    let mut tmp = [0u8; 64];
+    let end = std::time::Instant::now() + Duration::from_millis(25);
+    while std::time::Instant::now() < end {
+        if port.read(&mut tmp).is_err() {
+            break;
+        }
+    }
+    let _ = port.set_timeout(saved);
+}
+
+fn read_id_register(port: &mut dyn SerialPort, id: u8) -> Option<u8> {
+    let frame = encode_read(id, ADDR_ID, 1);
+    let _ = port.clear(serialport::ClearBuffer::Input);
+    port.write_all(&frame).ok()?;
+    port.flush().ok()?;
+    let saved = port.timeout();
+    let _ = port.set_timeout(Duration::from_millis(40));
+    let mut acc = Vec::new();
+    let mut tmp = [0u8; 64];
+    let end = std::time::Instant::now() + Duration::from_millis(40);
+    while std::time::Instant::now() < end {
+        match port.read(&mut tmp) {
+            Ok(0) => {}
+            Ok(n) => {
+                acc.extend_from_slice(&tmp[..n]);
+                if let Ok(st) = decode_status_scan(&acc) {
+                    let _ = port.set_timeout(saved);
+                    return st.params.first().copied();
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let _ = port.set_timeout(saved);
+    None
 }

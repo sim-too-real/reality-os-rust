@@ -25,6 +25,9 @@ pub const DRIVE_MODE_VELOCITY_BASED: u8 = 0;
 /// EEPROM. 3 = position control (factory XL330 default).
 pub const ADDR_OPERATING_MODE: u16 = 11;
 pub const OPERATING_MODE_POSITION: u8 = 3;
+/// EEPROM. 255 = disabled. Wizard can make one servo answer a second ID.
+pub const ADDR_SECONDARY_ID: u16 = 12;
+pub const SECONDARY_ID_DISABLED: u8 = 255;
 /// EEPROM. Signed. Wizard "zero the horn" shifts Present outside 0–4095.
 pub const ADDR_HOMING_OFFSET: u16 = 20;
 /// EEPROM. Unit 0.1 V. Factory XL330 max 70 / min 35.
@@ -33,10 +36,10 @@ pub const ADDR_MIN_VOLTAGE_LIMIT: u16 = 34;
 /// EEPROM. Unit 0.113%. Factory 885. Wizard 0 produces no PWM output.
 pub const ADDR_PWM_LIMIT: u16 = 36;
 pub const FACTORY_PWM_LIMIT: u16 = 885;
-/// Below this, an 8-tick no-load step will not move present.
+/// Below this, a 32-tick no-load step will not move present.
 pub const MIN_PWM_LIMIT: u16 = 80;
 pub const ADDR_CURRENT_LIMIT: u16 = 38;
-/// EEPROM. Unit ≈ 0.229 rpm. 0 or 1 makes an 8-tick nudge miss a 200 ms sample.
+/// EEPROM. Unit ≈ 0.229 rpm. 0 or 1 makes a 32-tick nudge miss a 300 ms sample.
 pub const ADDR_VELOCITY_LIMIT: u16 = 44;
 /// EEPROM. Factory max 4095 / min 0. Wizard can shrink this window.
 pub const ADDR_MAX_POSITION_LIMIT: u16 = 48;
@@ -57,7 +60,7 @@ pub const MIN_VELOCITY_P_GAIN: u16 = 20;
 /// RAM. Factory 400. Wizard 0 means the servo never tracks a goal.
 pub const ADDR_POSITION_P_GAIN: u16 = 84;
 pub const FACTORY_POSITION_P_GAIN: u16 = 400;
-/// Below this, an 8-tick nudge will not settle in the campaign sample window.
+/// Below this, a 32-tick nudge will not settle in the campaign sample window.
 pub const MIN_POSITION_P_GAIN: u16 = 80;
 /// RAM. Unit 20 ms. 0 = off; 0xFF (-1) = tripped (goal registers read-only).
 pub const ADDR_BUS_WATCHDOG: u16 = 98;

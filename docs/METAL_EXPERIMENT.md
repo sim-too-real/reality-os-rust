@@ -13,7 +13,7 @@ Physical-evidence milestone. Not a kernel redesign. Not certified safety.
 | Max configured velocity | Profile Velocity **20** (≈ 4.6 rpm) |
 | Max configured effort | Current Limit **200 mA**; Reality OS `tau_max` **0.2** |
 | Operating mode | Driver sets EEPROM **position control (3)** if it is not already |
-| Mechanical constraint | Horn fixture or zip-tie stop that still allows the certified **8-tick** (~0.7°) step; **no load**, no linkage, no person in the sweep |
+| Mechanical constraint | Horn fixture or zip-tie stop that still allows the certified **32-tick** (~2.8°) step; **no load**, no linkage, no person in the sweep |
 
 Why this is low-energy: stall torque is about **0.52 N·m** at 5 V, plastic gears, no mobile base, no high-voltage bus. Unexpected motion cannot throw a mass or travel.
 
@@ -64,7 +64,7 @@ Identity/disconnect ESTOP is not a software-watchdog miss. `serve` pets the watc
 * Freshness: authority monotonic receive time stamped by `ingest_sensor_packet`.
 * Threshold: `freshness_threshold_s` in `metal.json` (default 2 s), recorded into the proof from `bus/sensor_freshness.json`.
 * Autonomy cannot ingest or refresh evidence (`sensor_samples` is refused).
-* Observed motion is measured from `bus/present` / `bus/goal` (device registers), not inferred from IPC status. `bus/present` is the last acquired sample (pre-write during propose). After an authorized hold/nudge the campaign settles (~200 ms) and re-acquires so `valid_nudge` records a present change; a goal write against a stale cache is not motion. The certified nudge is `action=0.2` (the full 8-tick cap) so plastic-gear backlash is less likely to hide the step.
+* Observed motion is measured from `bus/present` / `bus/goal` (device registers), not inferred from IPC status. `bus/present` is the last acquired sample (pre-write during propose). After an authorized hold/nudge the campaign settles (~300 ms) and re-acquires so `valid_nudge` records a present change; a goal write against a stale cache is not motion. The certified nudge is `action=0.2` (the full 32-tick / ~2.8° cap) so plastic-gear backlash is less likely to hide the step.
 
 ## Proof
 
@@ -101,7 +101,7 @@ First-contact script invariants (found on the PTY sequence, would fail the first
 * Wizard PWM/velocity/current mode is EEPROM. After forcing position mode (3), setup waits and re-identifies before RAM profile/torque writes.
 * `valid_nudge` must change device present, not only increment the egress write count. Propose persists the pre-write present; the campaign re-samples after a short settle.
 * Wizard baud 3 Mbps / 4 Mbps and a non-1/2 servo ID would miss the candidate list. Probe broadcast-PINGs at each baud (PING still answers at SRL 0) and includes those bauds.
-* Wizard EEPROM Velocity Limit `0`/`1` caps motion so an 8-tick nudge is still sitting at the old present after 200 ms. Setup raises that limit to at least `max_profile_velocity` (does not raise a higher factory cap). Time-based Drive Mode is forced to velocity-based so profile velocity stays in rpm, not milliseconds.
+* Wizard EEPROM Velocity Limit `0`/`1` caps motion so a 32-tick nudge is still sitting at the old present after 300 ms. Setup raises that limit to at least `max_profile_velocity` (does not raise a higher factory cap). Time-based Drive Mode is forced to velocity-based so profile velocity stays in rpm, not milliseconds.
 * `probe` / `open_discovering` identify only. They must not write EEPROM or enable torque. If Startup Configuration already enabled torque (DTR reboot), probe writes torque-off and does not count it as command egress. `serve` / `open` apply bench limits and torque-on. Drop torque-off runs only when this process enabled torque; identify-only close used to write `torque_enable=0` and increment egress before serve.
 * Setup refuses torque-on when Present Input Voltage is outside Wizard min/max voltage EEPROM (`dxl_vin_outside_wizard_limits`). It does not widen those limits. Broadcast sniff does not take `TIOCEXCL` so probe cannot steal exclusive from the next serve open.
 * CI `os-users` runs `scripts/metal-pty-sequence.sh` so campaign-script first-contact bugs (empty `METAL_CMD_ID`, crash-replay hang, replay latch, identify-only probe, PTY `fuser` exclusive) fail before the XL330 bench. That job is not physical evidence. The sequence must skip exclusive-tty fail on `/dev/pts/*`; the responder holding the master is not ModemManager.
@@ -114,11 +114,11 @@ First-contact script invariants (found on the PTY sequence, would fail the first
 * Wizard PWM Limit `0` produces no output. Setup writes factory **885** when the register is below 80. It does not lower a higher Wizard PWM cap.
 * Wizard Velocity P Gain `0` leaves the profile loop dead. Setup writes factory **100** when the register is below 20. It does not lower a higher Wizard P.
 * Protocol 2.0 ID **0** is valid. Broadcast sniff and `prefer_servo_id` used to drop it as empty, so a Wizard ID-0 bus never bound.
-* `valid_nudge` uses `action=0.2` (8 ticks at `tau_max=0.2`). The old `0.05` step was 2 ticks and can disappear into plastic-gear backlash on a real horn.
+* `valid_nudge` uses `action=0.2` (32 ticks at `tau_max=0.2`). An 8-tick step can disappear into XL330 plastic-gear backlash on a real horn.
 * Wizard Homing Offset shifts Present outside the 0–4095 EEPROM window. Goal=present then NAKs. If present is outside and offset ≠ 0, setup writes offset 0 with torque off (no physical motion) and re-reads present. A true outside-window present with offset 0 still refuses.
 * Hardware Error reboot can re-enable torque (Startup Configuration). Setup torque-offs again before EEPROM writes; otherwise drive/mode/PWM NAKs and a stale Wizard goal moves.
 * Wizard Velocity I Gain `0` leaves the profile I-term dead. Setup writes factory **1600** when the register is below 200. It does not lower a higher Wizard I.
 * After torque-on, setup re-reads Torque Enable and Hardware Error Status. A tight fixture / overload Shutdown that drops torque is `dxl_torque_dropped_after_enable` (or `dxl_hardware_error_after_torque_on`), not a later present-delta=0 on the certified nudge.
-* Wizard Secondary ID (addr 12) can make one servo answer two IDs. Broadcast sniff already refuses `dxl_multiple_servos_on_bus`. Disable Secondary ID (255) in Wizard if probe fails closed on a single horn.
+* Wizard Secondary ID (addr 12) can make one servo answer two IDs. Sniff collapses the pair when both addresses read the same ID register, then setup writes Secondary ID **255**. Two distinct ID registers still refuse `dxl_multiple_servos_on_bus`.
 
 This Cloud Agent VM has **no** USB/serial actuator and **no** self-hosted worker. Attach a Cursor self-hosted worker (`cursor worker start`) on the bench host that can see `/dev/ttyUSB*` / `/dev/ttyACM*` / `/dev/ttyCH341*`. Until that happens, the experiment is blocked. That is not a software-architecture remaining task.

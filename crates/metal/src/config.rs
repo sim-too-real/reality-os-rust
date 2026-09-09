@@ -60,7 +60,7 @@ fn default_profile_accel() -> u32 {
     10
 }
 fn default_delta_ticks() -> i32 {
-    8
+    32
 }
 fn default_current_limit() -> u16 {
     200
@@ -84,7 +84,7 @@ impl MetalConfig {
             expected_firmware: String::new(),
             max_profile_velocity: 20,
             max_profile_acceleration: 10,
-            max_position_delta_ticks: 8,
+            max_position_delta_ticks: 32,
             current_limit_milli: 200,
             tau_max: 0.2,
             freshness_threshold_s: 2.0,

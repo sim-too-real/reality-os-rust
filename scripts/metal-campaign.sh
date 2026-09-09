@@ -480,10 +480,10 @@ measure() {
   fi
   # bus/present is the pre-write sample. After an authorized goal write,
   # settle and re-acquire so observed_motion is device present, not the
-  # cached tick. action=0.2 uses the full 8-tick cap; profile 20 + accel 10
-  # finishes that step in well under 200 ms.
+  # cached tick. action=0.2 uses the full 32-tick cap; profile 20 + accel 10
+  # finishes that step in well under 300 ms (plastic-gear backlash can hide 8).
   if [[ "$expected" == "true" ]] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("ok") else 1)' "$respfile"; then
-    sleep 0.20
+    sleep 0.30
     as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1 || true
   fi
   after="$(writes)"

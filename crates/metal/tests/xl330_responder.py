@@ -129,6 +129,9 @@ def init_regs() -> bytearray:
     except ValueError:
         own = 1
     regs[7] = own if own != 254 else 1
+    regs[12] = 255
+    if os.environ.get("REALITYOS_METAL_PTY_SECONDARY") == "1":
+        regs[12] = 7
     regs[10] = 4 if os.environ.get("REALITYOS_METAL_PTY_TIME_BASED") == "1" else 0
     regs[11] = 3
     regs[32:34] = struct.pack("<H", 70)
@@ -272,10 +275,16 @@ def main() -> None:
         req_id, inst, params, _consumed = parsed
         del buf[:]
         own = regs[7]
-        if req_id not in (254, own):
+        secondary = regs[12]
+        if req_id not in (254, own) and not (
+            secondary != 255 and req_id == secondary
+        ):
             continue
         if (
-            os.environ.get("REALITYOS_METAL_PTY_MULTI") == "1"
+            (
+                os.environ.get("REALITYOS_METAL_PTY_MULTI") == "1"
+                or os.environ.get("REALITYOS_METAL_PTY_SECONDARY") == "1"
+            )
             and req_id == 254
             and inst == INST_PING
         ):

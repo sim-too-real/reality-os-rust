@@ -8,7 +8,7 @@
   "expected_firmware": "",
   "max_profile_velocity": 20,
   "max_profile_acceleration": 10,
-  "max_position_delta_ticks": 8,
+  "max_position_delta_ticks": 32,
   "current_limit_milli": 200,
   "tau_max": 0.2,
   "freshness_threshold_s": 2.0,
