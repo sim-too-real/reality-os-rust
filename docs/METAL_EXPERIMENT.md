@@ -38,13 +38,13 @@ Operator test: open the switch; the servo must lose holding torque while USB/dat
 
 | Field | Source |
 |-------|--------|
-| `serial` | **Measured:** USB adapter serial (sysfs) + servo bus ID. XL330 EEPROM has **no** factory serial. |
+| `serial` | **Measured:** USB adapter serial (sysfs) + servo bus ID, else USB vid:pid:devpath, else tty name + rdev (UART/GPIO). XL330 EEPROM has **no** factory serial. |
 | `firmware_id` | **Measured:** model number register 0 + firmware version register 6 (`xl330-m288:1190:<fw>`). |
 | `actuator_ids` | **Measured:** `xl330:<id>`. |
 | `calibration_id` | **Deployment:** `metal.json`, not EEPROM. |
 | `design_content_hash` | **Deployment:** SHA-256 of `realityos.metal_design/1` (limits). Not EEPROM. |
 
-If USB serial cannot be read, a `usb:<vid>:<pid>:<devpath>` fallback is used if sysfs exposes it. If neither exists, ONLINE start fails closed. Values are not invented. `/dev/serial/by-id/*` paths are canonicalized to the real tty name before the sysfs walk.
+If USB serial cannot be read, a `usb:<vid>:<pid>:<devpath>` fallback is used if sysfs exposes it. If that is also missing, the char-device name and `rdev` are used (`tty:<name>:<rdev>:id<n>`). That is measured from the OS node, not invented EEPROM. Values are not invented. `/dev/serial/by-id/*` paths are canonicalized to the real tty name before the sysfs walk. The campaign and `serve` refuse `/dev/pts/*` so the PTY stand-in cannot emit `docs/metal_proof.json`.
 
 Model and firmware are latched at identify time. Later sensor packets do not rewrite `firmware_id`.
 

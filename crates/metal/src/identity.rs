@@ -46,9 +46,15 @@ impl MeasuredIdentity {
         firmware_version: u8,
         connected: bool,
     ) -> Self {
-        let serial = match (usb_serial.as_deref(), usb_fallback.as_deref()) {
-            (Some(s), _) if !s.trim().is_empty() => format!("{s}:id{}", cfg.servo_id),
-            (_, Some(f)) if !f.trim().is_empty() => format!("{f}:id{}", cfg.servo_id),
+        let node = device_node_identity(&cfg.device);
+        let serial = match (
+            usb_serial.as_deref(),
+            usb_fallback.as_deref(),
+            node.as_deref(),
+        ) {
+            (Some(s), _, _) if !s.trim().is_empty() => format!("{s}:id{}", cfg.servo_id),
+            (_, Some(f), _) if !f.trim().is_empty() => format!("{f}:id{}", cfg.servo_id),
+            (_, _, Some(n)) if !n.trim().is_empty() => format!("{n}:id{}", cfg.servo_id),
             _ => String::new(),
         };
         let model_name = match model {
@@ -67,7 +73,7 @@ impl MeasuredIdentity {
                 field: "serial".into(),
                 value: serial.clone(),
                 source: IdentitySource::MeasuredFromHardware,
-                note: "XL330 EEPROM has no factory serial. Measured USB adapter serial (or sysfs vendor:product:devpath fallback) plus the servo bus ID read from the device.".into(),
+                note: "XL330 EEPROM has no factory serial. Preference: USB adapter serial, then USB vid:pid:devpath, then measured tty name+rdev (UART/GPIO adapters). Plus the servo bus ID.".into(),
             },
             IdentityField {
                 field: "firmware_id".into(),
@@ -129,6 +135,19 @@ impl MeasuredIdentity {
 pub fn tty_sysfs_name(tty: &Path) -> Option<String> {
     let resolved = std::fs::canonicalize(tty).unwrap_or_else(|_| tty.to_path_buf());
     resolved.file_name()?.to_str().map(str::to_string)
+}
+
+/// Character-device identity from the OS node (major/minor). Not a factory serial.
+pub fn device_node_identity(tty: &Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(tty).ok()?;
+    let name = tty_sysfs_name(tty)?;
+    Some(format!("tty:{name}:{:x}", meta.rdev()))
+}
+
+pub fn is_pty_path(tty: &Path) -> bool {
+    let canon = std::fs::canonicalize(tty).unwrap_or_else(|_| tty.to_path_buf());
+    canon.starts_with("/dev/pts") || tty_sysfs_name(&canon).is_some_and(|n| n.starts_with("pts"))
 }
 
 /// Walk sysfs for a USB serial, then a vendor:product:devpath fallback.
@@ -194,6 +213,7 @@ mod tests {
         let m = MeasuredIdentity::from_hardware(&cfg, None, None, 1190, 46, true);
         assert!(m.serial.is_empty());
         assert!(!m.connected);
+        assert!(device_node_identity(Path::new("/dev/missing")).is_none());
         assert_eq!(
             m.provenance
                 .iter()
@@ -230,6 +250,18 @@ mod tests {
             MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1190, 0, true);
         assert_eq!(measured.firmware_id, "xl330-m288:1190:46");
         assert_ne!(measured.firmware_id, after_sensor_clobber.firmware_id);
+    }
+
+    #[test]
+    fn char_device_rdev_is_measured_not_invented() {
+        let cfg = MetalConfig::example(PathBuf::from("/dev/zero"));
+        let node = device_node_identity(&cfg.device).expect("/dev/zero is a char device");
+        assert!(node.starts_with("tty:zero:"), "{node}");
+        let m = MeasuredIdentity::from_hardware(&cfg, None, None, 1190, 46, true);
+        assert!(m.serial.starts_with("tty:zero:"));
+        assert!(m.serial.ends_with(":id1"));
+        assert!(m.connected);
+        assert!(!is_pty_path(Path::new("/dev/zero")));
     }
 
     #[test]

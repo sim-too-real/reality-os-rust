@@ -26,6 +26,15 @@ if [[ -z "$DEVICE" || ! -e "$DEVICE" ]]; then
   echo "error: this host has no actuator; will not write a success metal proof." >&2
   exit 2
 fi
+DEVICE_REAL="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
+if [[ ! -c "$DEVICE" && ! -c "$DEVICE_REAL" ]]; then
+  echo "error: $DEVICE is not a character device; will not write a metal proof." >&2
+  exit 2
+fi
+if [[ "$DEVICE_REAL" == /dev/pts/* ]]; then
+  echo "error: refusing PTY $DEVICE_REAL; not a physical actuator. Will not write metal_proof.json." >&2
+  exit 2
+fi
 if [[ -z "$ROOT" || "$ROOT" == "/" || "$ROOT" == "/tmp" || "$ROOT" == "/var" ]]; then
   echo "error: refusing to wipe unexpected REALITYOS_METAL_ROOT=$ROOT" >&2
   exit 2

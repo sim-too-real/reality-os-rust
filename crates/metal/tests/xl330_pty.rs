@@ -5,8 +5,11 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use realityos_metal::config::MetalConfig;
+use realityos_metal::authority::MetalAuthority;
+use realityos_metal::config::{MetalConfig, CONFIG_FILE};
 use realityos_metal::egress::recorded_writes;
+use realityos_metal::identity::is_pty_path;
+use realityos_metal::ipc::MetalRequest;
 use realityos_metal::xl330::Xl330Driver;
 use realityos_plant::{ActionParams, HardwareDriverPort};
 
@@ -19,8 +22,7 @@ impl Drop for ChildGuard {
     }
 }
 
-#[test]
-fn xl330_pty_firmware_survives_sensor_and_echoed_status() {
+fn spawn_responder() -> (ChildGuard, String) {
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/xl330_responder.py");
     assert!(script.is_file(), "missing {}", script.display());
     let mut child = Command::new("python3")
@@ -30,7 +32,6 @@ fn xl330_pty_firmware_survives_sensor_and_echoed_status() {
         .spawn()
         .expect("python3 xl330_responder");
     let mut stdout = child.stdout.take().expect("responder stdout");
-    let _guard = ChildGuard(child);
     let mut line = String::new();
     {
         use std::io::Read;
@@ -49,7 +50,14 @@ fn xl330_pty_firmware_survives_sensor_and_echoed_status() {
     }
     let tty = line.lines().next().unwrap_or("").trim().to_string();
     assert!(tty.starts_with("/dev/"), "responder tty got {tty:?}");
-    let root = std::env::temp_dir().join(format!("realityos-metal-pty-{}", std::process::id()));
+    (ChildGuard(child), tty)
+}
+
+#[test]
+fn xl330_pty_firmware_survives_sensor_and_echoed_status() {
+    let (_guard, tty) = spawn_responder();
+    let root =
+        std::env::temp_dir().join(format!("realityos-metal-pty-driver-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let mut cfg = MetalConfig::example(&tty);
@@ -71,5 +79,39 @@ fn xl330_pty_firmware_survives_sensor_and_echoed_status() {
         .expect("hold write");
     assert_eq!(recorded_writes(root.join("bus")), 1);
     driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_start_online_hold_is_not_a_metal_proof() {
+    let (_guard, tty) = spawn_responder();
+    assert!(is_pty_path(std::path::Path::new(&tty)));
+    let root =
+        std::env::temp_dir().join(format!("realityos-metal-pty-online-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let mut cfg = MetalConfig::example(&tty);
+    {
+        let driver = Xl330Driver::open(cfg.clone(), &root).expect("identify");
+        let measured = driver.measured();
+        assert!(
+            measured.serial.starts_with("tty:"),
+            "PTY must use measured tty+rdev, got {}",
+            measured.serial
+        );
+        cfg.expected_serial = measured.serial;
+        cfg.expected_firmware = measured.firmware_id;
+    }
+    cfg.save(root.join(CONFIG_FILE)).unwrap();
+    let mut auth = MetalAuthority::start(&root, true).expect("start_online on PTY stand-in");
+    let resp = auth.handle(MetalRequest::propose("pty-hold", "hold"));
+    assert!(resp.ok, "hold refused: {resp:?}");
+    assert_eq!(auth.physical_writes(), 1);
+    assert_eq!(resp.clock, "OsMonotonicClock");
+    let repo_proof = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/metal_proof.json");
+    assert!(
+        !repo_proof.exists(),
+        "PTY stand-in must not write docs/metal_proof.json"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }

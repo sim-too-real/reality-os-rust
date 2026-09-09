@@ -115,6 +115,15 @@ fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&cfg)?);
         }
         "serve" => {
+            let cfg_path = root.join(CONFIG_FILE);
+            if cfg_path.exists() {
+                let cfg = MetalConfig::load(&cfg_path)?;
+                if realityos_metal::identity::is_pty_path(&cfg.device)
+                    && env::var("REALITYOS_METAL_ALLOW_PTY").ok().as_deref() != Some("1")
+                {
+                    anyhow::bail!("metal_refuses_pty_not_physical_actuator");
+                }
+            }
             if let Ok(v) = env::var("REALITYOS_METAL_CAMPAIGN") {
                 if v == "1" {
                     let cfg_path = root.join(CONFIG_FILE);
