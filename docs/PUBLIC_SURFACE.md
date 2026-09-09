@@ -27,8 +27,9 @@ Topics listed in `realityos_ros2::TOPICS`. Boot veto is **true**. `HARDWARE_WRIT
 
 ## Authority kernel
 
-Process-level write uniqueness and ONLINE typestate lock are documented in
-`docs/AUTHORITY_KERNEL.md`. Rust privacy is not machine-wide single-writer.
+Process-level write uniqueness, ONLINE typestate lock, and the `IssuedCommand` →
+`OnlineWrite` capability path are documented in `docs/AUTHORITY_KERNEL.md`.
+Rust privacy is not machine-wide single-writer.
 
 ## Not public
 

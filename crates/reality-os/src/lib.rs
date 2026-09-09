@@ -25,7 +25,7 @@ pub use bounded_trust::{certify_dispose_step, BoundedTrustEnvelope, DisposeStatu
 pub use certificate::Certificate;
 #[cfg(any(test, feature = "fixtures"))]
 pub use command::fixture;
-pub use command::{narrow_certified_command, CertifiedCommand};
+pub use command::{narrow_certified_command, CertifiedCommand, IssuedCommand};
 pub use control::{
     runtime_assurance, AssuranceAction, ComponentClamp, ControlProposal, Controller,
 };

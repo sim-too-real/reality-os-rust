@@ -1,15 +1,15 @@
 use realityos_kernel::{DecisionStatus, UnifiedDecision};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::attestation::CertificateLedger;
 use crate::authority::{is_forbidden_tool, screen_proposal};
 use crate::certificate::Certificate;
-use crate::command::CertifiedCommand;
+use crate::command::{CertifiedCommand, IssuedCommand};
 use crate::domains::{DomainRegistry, WorldView};
 use crate::plan::{Intent, PhysicalPlan, PolicyProposal};
 use crate::see::evaluate_manip_observation_gate;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct KernelDecision {
     pub status: DecisionStatus,
     pub allowed: bool,
@@ -18,7 +18,7 @@ pub struct KernelDecision {
     pub plan: Option<PhysicalPlan>,
     pub certificate: Certificate,
     pub n_probes: u32,
-    pub command: Option<CertifiedCommand>,
+    pub command: Option<IssuedCommand>,
     pub unified: UnifiedDecision,
     pub metal: bool,
 }
@@ -29,7 +29,7 @@ impl KernelDecision {
         plan: Option<PhysicalPlan>,
         action: Vec<f64>,
         n_probes: u32,
-        command: Option<CertifiedCommand>,
+        command: Option<IssuedCommand>,
     ) -> Self {
         let status = cert.status;
         let physical_reason = cert.physical_reason.clone();
@@ -232,6 +232,7 @@ impl RealityOs {
                 action.clone(),
             )
             .ok()
+            .and_then(IssuedCommand::from_certified)
         } else {
             None
         };

@@ -1,0 +1,13 @@
+error[E0599]: the method `write_driver` exists for mutable reference `&mut RuntimeGovernor<SimPlant, OnlineLocked>`, but its trait bounds were not satisfied
+ --> tests/ui/online_no_write_driver.rs:8:15
+  |
+8 |     let _ = g.write_driver(cmd, &ActionParams::empty(), 1.0);
+  |               ^^^^^^^^^^^^ method cannot be called on `&mut RuntimeGovernor<SimPlant, OnlineLocked>` due to unsatisfied trait bounds
+  |
+ ::: src/rail.rs
+  |
+  | pub struct OnlineLocked;
+  | ----------------------- doesn't satisfy `OnlineLocked: UnlockedRail`
+  |
+  = note: the following trait bounds were not satisfied:
+          `OnlineLocked: UnlockedRail`

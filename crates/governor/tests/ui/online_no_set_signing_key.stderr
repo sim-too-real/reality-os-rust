@@ -2,7 +2,7 @@ error[E0599]: the method `set_signing_key` exists for mutable reference `&mut Ru
  --> tests/ui/online_no_set_signing_key.rs:5:7
   |
 5 |     g.set_signing_key(None);
-  |       ^^^^^^^^^^^^^^^
+  |       ^^^^^^^^^^^^^^^ method cannot be called on `&mut RuntimeGovernor<SimPlant, OnlineLocked>` due to unsatisfied trait bounds
   |
  ::: src/rail.rs
   |

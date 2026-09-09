@@ -1,7 +1,7 @@
 //! Product wiring: sensor in → session → Governor → backed plant → port.
 //! Does not invent a second write path.
 
-use realityos_core::CertifiedCommand;
+use realityos_core::IssuedCommand;
 use realityos_data::{DebugEvent, EventKind, EventStore, SessionSnapshot};
 use realityos_kernel::{CorrelationId, Layer};
 use realityos_plant::{
@@ -80,11 +80,11 @@ impl<P: Plant> HardwareControlBridge<P> {
         Ok(hash)
     }
 
-    pub fn dispatch(&mut self, command: CertifiedCommand, now_s: f64) -> DispatchResult {
+    pub fn dispatch(&mut self, command: IssuedCommand, now_s: f64) -> DispatchResult {
         let corr = CorrelationId::from_command(command.command_id(), command.sequence_value());
-        let out = self
-            .session
-            .bind_and_dispatch(command, &ActionParams::empty(), now_s);
+        let out =
+            self.session
+                .bind_and_dispatch(command.into_command(), &ActionParams::empty(), now_s);
         let kind = if out.ok {
             EventKind::Write
         } else {

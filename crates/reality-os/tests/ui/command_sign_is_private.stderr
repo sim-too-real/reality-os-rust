@@ -1,0 +1,10 @@
+error[E0624]: method `sign` is private
+ --> tests/ui/command_sign_is_private.rs:4:17
+  |
+4 |     let _ = cmd.sign(b"stolen-key");
+  |                 ^^^^ private method
+  |
+ ::: src/command.rs
+  |
+  |     pub(crate) fn sign(mut self, key: &[u8]) -> Self {
+  |     ------------------------------------------------ private method defined here

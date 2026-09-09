@@ -10,6 +10,7 @@
 use std::marker::PhantomData;
 use std::path::Path;
 
+use realityos_core::{CertifiedCommand, IssuedCommand};
 use realityos_plant::{
     execute_certified_command, hash_sensor_packet, ActionParams, ActuationCommand, CommandLedger,
     ExecuteBind, Plant,
@@ -18,7 +19,7 @@ use serde_json::{json, Map, Value};
 
 use crate::envelope::DriverEnvelopePack;
 use crate::identity::RuntimeIdentity;
-use crate::latch::EstopLatch;
+use crate::latch::{EstopLatch, SafeState};
 use crate::rail::{OnlineLocked, Rail, Simulation, UnlockedRail};
 use crate::trace::RuntimeTrace;
 
@@ -100,11 +101,30 @@ pub struct RuntimeGovernor<P: Plant, R: Rail = Simulation> {
     last_now_s: f64,
     expected_sensor_packet_hash: Option<String>,
     signing_key: Option<Vec<u8>>,
+    authorized_actuator_ids: Vec<String>,
+    safe_state: SafeState,
     latch: EstopLatch,
     traces: Vec<RuntimeTrace>,
     watchdog_period_s: f64,
     last_watchdog_s: f64,
     _rail: PhantomData<R>,
+}
+
+/// Unforgeable ONLINE write capability.
+/// Only [`RuntimeGovernor<OnlineLocked>::authorize_issued`] can construct this.
+#[derive(Debug)]
+pub struct OnlineWrite {
+    command: CertifiedCommand,
+}
+
+impl OnlineWrite {
+    pub fn command_id(&self) -> &str {
+        self.command.command_id()
+    }
+
+    pub fn as_command(&self) -> &CertifiedCommand {
+        &self.command
+    }
 }
 
 impl<P: Plant> RuntimeGovernor<P, Simulation> {
@@ -149,6 +169,8 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
             last_now_s: 0.0,
             expected_sensor_packet_hash: None,
             signing_key,
+            authorized_actuator_ids: Vec::new(),
+            safe_state: SafeState::Running,
             latch: EstopLatch::default(),
             traces: Vec::new(),
             watchdog_period_s: 0.05,
@@ -175,10 +197,6 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
 
     pub fn envelope(&self) -> Option<&DriverEnvelopePack> {
         self.envelope.as_ref()
-    }
-
-    pub fn signing_key(&self) -> Option<&[u8]> {
-        self.signing_key.as_deref()
     }
 
     pub fn last_heartbeat_s(&self) -> f64 {
@@ -306,6 +324,12 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
 
     pub fn pre_actuation_check(&self, now_s: f64) -> Vec<String> {
         let mut errs = Vec::new();
+        if self.safe_state.blocks_actuation() {
+            errs.push(format!(
+                "dispatch_safe_state_latched:{}",
+                self.safe_state.as_str()
+            ));
+        }
         if self.config.require_online_identity {
             if !self.identity.complete_online() {
                 errs.push("incomplete_online_runtime_identity".into());
@@ -339,8 +363,19 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
         errs
     }
 
-    /// THE driver write. Never calls plant.act directly.
-    pub fn write_driver(
+    pub fn latch_safe_state(&mut self, state: SafeState) {
+        if R::ONLINE_LOCKED {
+            self.safe_state = self.safe_state.tighten(state);
+        } else {
+            self.safe_state = state;
+        }
+    }
+
+    pub fn safe_state(&self) -> SafeState {
+        self.safe_state
+    }
+
+    fn write_driver_inner(
         &mut self,
         command: &dyn ActuationCommand,
         params: &ActionParams,
@@ -543,6 +578,16 @@ impl<P: Plant, R: UnlockedRail> RuntimeGovernor<P, R> {
             self.expected_sensor_packet_hash = Some(h);
         }
     }
+
+    /// SIM/HIL driver write. ONLINE uses [`RuntimeGovernor<OnlineLocked>::write_online`].
+    pub fn write_driver(
+        &mut self,
+        command: &dyn ActuationCommand,
+        params: &ActionParams,
+        now_s: f64,
+    ) -> RuntimeTrace {
+        self.write_driver_inner(command, params, now_s)
+    }
 }
 
 impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
@@ -552,10 +597,14 @@ impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
         journal_path: impl AsRef<Path>,
         signing_key: Vec<u8>,
         first_online: bool,
+        actuator_ids: Vec<String>,
         now_s: f64,
     ) -> Result<Self, OnlineInitError> {
         if signing_key.is_empty() {
             return Err(OnlineInitError("online_requires_signing_key".into()));
+        }
+        if actuator_ids.is_empty() {
+            return Err(OnlineInitError("online_requires_actuator_ids".into()));
         }
         if !identity.complete_online() {
             return Err(OnlineInitError("incomplete_online_runtime_identity".into()));
@@ -574,6 +623,7 @@ impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
             GovernorConfig::online_locked(),
             Some(signing_key),
         );
+        g.authorized_actuator_ids = actuator_ids;
         g.envelope = Some(env);
         g.heartbeat(now_s);
         let _ = g.watchdog_tick(now_s);
@@ -589,5 +639,38 @@ impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
             ));
         }
         Ok(g)
+    }
+
+    /// Bind, sign, and acknowledge a kernel-issued command with governor-owned
+    /// identity, evidence, actuator ids, and signing key.
+    pub fn authorize_issued(&self, issued: IssuedCommand) -> Result<OnlineWrite, Vec<String>> {
+        let Some(hash) = self.expected_sensor_packet_hash.as_deref() else {
+            return Err(vec!["online_requires_sensor_hash".into()]);
+        };
+        let Some(key) = self.signing_key.as_deref() else {
+            return Err(vec!["online_signing_key_missing".into()]);
+        };
+        if self.authorized_actuator_ids.is_empty() {
+            return Err(vec!["online_requires_actuator_ids".into()]);
+        }
+        let cmd = issued.bind_online(
+            self.identity.release_hash.as_str(),
+            self.identity.design_str(),
+            self.identity.calibration_id_str(),
+            hash,
+            self.authorized_actuator_ids.clone(),
+        )?;
+        Ok(OnlineWrite {
+            command: cmd.seal_online(key)?,
+        })
+    }
+
+    pub fn write_online(
+        &mut self,
+        write: &OnlineWrite,
+        params: &ActionParams,
+        now_s: f64,
+    ) -> RuntimeTrace {
+        self.write_driver_inner(&write.command, params, now_s)
     }
 }

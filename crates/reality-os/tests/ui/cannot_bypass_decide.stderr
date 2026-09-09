@@ -1,0 +1,27 @@
+error[E0624]: associated function `issue` is private
+ --> tests/ui/cannot_bypass_decide.rs:7:31
+  |
+7 |       let _ = CertifiedCommand::issue("forged", 1, 0.0, 10.0, cert, vec![0.1])
+  |                                 ^^^^^ private associated function
+  |
+ ::: src/command.rs
+  |
+  | /     pub(crate) fn issue(
+  | |         command_id: impl Into<String>,
+  | |         sequence: i64,
+  | |         now_s: f64,
+... |
+  | |         allowed_action: Vec<f64>,
+  | |     ) -> KernelResult<Self> {
+  | |___________________________- private associated function defined here
+
+error[E0624]: method `sign` is private
+ --> tests/ui/cannot_bypass_decide.rs:9:10
+  |
+9 |         .sign(b"k")
+  |          ^^^^ private method
+  |
+ ::: src/command.rs
+  |
+  |     pub(crate) fn sign(mut self, key: &[u8]) -> Self {
+  |     ------------------------------------------------ private method defined here

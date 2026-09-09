@@ -9,9 +9,9 @@ crates stay; they are not inside the write-uniqueness kernel.
 |----------------|--------------|
 | `realityos-kernel` honesty, ids, `CommandOutcome`, evidence contract | Honesty floor |
 | `realityos-plant` write_guard, execute, ledger+seal, signing, sealed `Plant` | Only certified write token |
-| `realityos-governor` typestate rails, envelope, identity, `write_driver` | Last gate |
-| `realityos-session` bind, ingest, ONLINE start, acknowledge | Session binder / ack |
-| `realityos-core` `decide`, `Certificate`, `CertifiedCommand`, lifecycle, typed provenance | Semantic certifier |
+| `realityos-governor` typestate rails, `OnlineWrite`, private signing key | Last ONLINE gate |
+| `realityos-session` ingest, ONLINE start, SIM `write_driver` | Composition root |
+| `realityos-core` `decide` → `IssuedCommand`, `Certificate`, lifecycle | Semantic certifier |
 
 Physics **screens** used by `certify()` affect ALLOW/REFUSE. They are in the
 *semantic* TCB for predicates, not in the *write-token* TCB.

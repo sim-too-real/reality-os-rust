@@ -1,5 +1,5 @@
 use proptest::prelude::*;
-use realityos_core::{narrow_certified_command, Certificate, CertifiedCommand};
+use realityos_core::{narrow_certified_command, Certificate};
 use realityos_kernel::DecisionStatus;
 
 proptest! {
@@ -10,7 +10,7 @@ proptest! {
     ) {
         let issuer = vec![mag];
         let cert = Certificate::new(DecisionStatus::Allow, "ok");
-        let cmd = CertifiedCommand::issue("c", 1, 0.0, 10.0, cert, issuer.clone()).unwrap();
+        let cmd = realityos_core::fixture::issue("c", 1, 0.0, 10.0, cert, issuer.clone()).unwrap();
         let narrowed = vec![mag * scale];
         let next = narrow_certified_command(
             cmd,

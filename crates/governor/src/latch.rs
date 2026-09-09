@@ -36,6 +36,26 @@ impl SafeState {
     pub const fn blocks_actuation(self) -> bool {
         matches!(self, Self::Hold | Self::Freeze | Self::Fault)
     }
+
+    #[inline]
+    const fn restrictiveness(self) -> u8 {
+        match self {
+            Self::Running => 0,
+            Self::Hold => 1,
+            Self::Freeze => 2,
+            Self::Fault => 3,
+        }
+    }
+
+    /// ONLINE may only move toward a more restrictive state.
+    #[inline]
+    pub const fn tighten(self, requested: Self) -> Self {
+        if requested.restrictiveness() >= self.restrictiveness() {
+            requested
+        } else {
+            self
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

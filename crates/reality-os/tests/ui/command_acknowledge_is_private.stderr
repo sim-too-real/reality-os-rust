@@ -1,0 +1,10 @@
+error[E0624]: method `acknowledge` is private
+ --> tests/ui/command_acknowledge_is_private.rs:4:17
+  |
+4 |     let _ = cmd.acknowledge();
+  |                 ^^^^^^^^^^^ private method
+  |
+ ::: src/command.rs
+  |
+  |     pub(crate) fn acknowledge(mut self) -> Self {
+  |     ------------------------------------------- private method defined here

@@ -150,7 +150,11 @@ fn dispatch(verb: &str, release: &str) -> Result<()> {
         bail!("kernel {} — {}", d.status, d.physical_reason);
     }
     let cmd = d.command.expect("allow issues command");
-    let out = sess.bind_and_dispatch(cmd, &realityos_plant::ActionParams::empty(), 10.0);
+    let out = sess.bind_and_dispatch(
+        cmd.into_command(),
+        &realityos_plant::ActionParams::empty(),
+        10.0,
+    );
     println!("{}", serde_json::to_string_pretty(&out.to_json())?);
     Ok(())
 }
