@@ -417,10 +417,26 @@ fresh = json.loads('''$FRESH''') if '''$FRESH'''.strip() else {}
 if isinstance(measured, dict) and fresh.get("vin_0.1v") is not None:
     measured = dict(measured)
     measured["vin_0.1v"] = fresh.get("vin_0.1v")
+inner = measured.get("measured") if isinstance(measured, dict) and isinstance(measured.get("measured"), dict) else measured
+model = inner.get("model") if isinstance(inner, dict) else None
+hardware_model = {1190: "XL330-M288-T", 1200: "XL330-M077-T"}.get(model)
+if hardware_model is None:
+    raise SystemExit("error: proof meta refuses unknown/missing XL330 model: %r" % (model,))
+serial = ""
+if isinstance(inner, dict):
+    serial = str(inner.get("serial") or "")
+if not serial:
+    raise SystemExit("error: proof meta refuses empty measured serial")
+if serial.startswith("tty:"):
+    controller = "Dynamixel Protocol 2.0 UART (measured tty name+rdev; no USB serial)"
+elif serial.startswith("usb:"):
+    controller = "Dynamixel Protocol 2.0 USB-UART (measured usb vid:pid:devpath)"
+else:
+    controller = "Dynamixel Protocol 2.0 USB-UART (measured adapter serial)"
 cutoff = os.environ.get("REALITYOS_METAL_CUTOFF_TESTED","0") == "1"
 meta = {
-  "hardware_model": "XL330-M288-T",
-  "controller_model": "Dynamixel Protocol 2.0 USB-UART",
+  "hardware_model": hardware_model,
+  "controller_model": controller,
   "real_device_identity": measured,
   "software_commit_sha": "$COMMIT",
   "authority_uid": "$AUTHORITY_USER",
