@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+/// Factory XL330 is 57 600. U2D2 benches often use 1 Mbps.
+pub const CANDIDATE_BAUDS: &[u32] = &[57_600, 115_200, 1_000_000];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetalConfig {
     pub device: PathBuf,
@@ -87,6 +90,28 @@ impl MetalConfig {
         }
     }
 
+    pub fn apply_process_env(&mut self) {
+        if let Ok(d) = std::env::var("REALITYOS_METAL_DEVICE") {
+            if !d.trim().is_empty() {
+                self.device = PathBuf::from(d);
+            }
+        }
+        if let Ok(b) = std::env::var("REALITYOS_METAL_BAUD") {
+            if let Ok(n) = b.parse::<u32>() {
+                if n > 0 {
+                    self.baud = n;
+                }
+            }
+        }
+        if let Ok(id) = std::env::var("REALITYOS_METAL_SERVO_ID") {
+            if let Ok(n) = id.parse::<u8>() {
+                if n != 0 && n != 254 {
+                    self.servo_id = n;
+                }
+            }
+        }
+    }
+
     pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let raw = std::fs::read_to_string(path)?;
         Ok(serde_json::from_str(&raw)?)
@@ -140,5 +165,55 @@ pub const EGRESS_LOG: &str = "egress.jsonl";
 pub const LOCK_FILE: &str = "actuator.lock";
 pub const PRESENT_FILE: &str = "present";
 pub const GOAL_FILE: &str = "goal";
+pub const VIN_FILE: &str = "vin";
 pub const FRESHNESS_FILE: &str = "sensor_freshness.json";
 pub const IPC_SOCKET_MODE: u32 = 0o660;
+
+pub fn candidate_bauds(configured: u32, extra: Option<u32>) -> Vec<u32> {
+    let mut out = Vec::new();
+    for b in std::iter::once(configured)
+        .chain(extra)
+        .chain(CANDIDATE_BAUDS.iter().copied())
+    {
+        if b > 0 && !out.contains(&b) {
+            out.push(b);
+        }
+    }
+    out
+}
+
+pub fn candidate_servo_ids(configured: u8, extra: Option<u8>) -> Vec<u8> {
+    let mut out = Vec::new();
+    for id in std::iter::once(configured)
+        .chain(extra)
+        .chain([1_u8, 2])
+    {
+        if id != 0 && id != 254 && !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn candidate_bauds_keep_configured_first_and_dedup() {
+        let b = candidate_bauds(1_000_000, Some(57_600));
+        assert_eq!(b[0], 1_000_000);
+        assert_eq!(b.iter().filter(|x| **x == 1_000_000).count(), 1);
+        assert!(b.contains(&57_600));
+        assert!(b.contains(&115_200));
+    }
+
+    #[test]
+    fn candidate_ids_skip_broadcast_and_zero() {
+        let ids = candidate_servo_ids(7, Some(0));
+        assert_eq!(ids[0], 7);
+        assert!(!ids.contains(&0));
+        assert!(!ids.contains(&254));
+        assert!(ids.contains(&1));
+    }
+}

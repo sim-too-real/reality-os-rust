@@ -155,6 +155,13 @@ impl MetalAuthority {
     }
 
     fn persist_freshness(&self, capture: Option<f64>, receive: Option<f64>) {
+        let vin = std::fs::read_to_string(
+            self.root
+                .join(crate::config::BUS_DIR)
+                .join(crate::config::VIN_FILE),
+        )
+        .ok()
+        .and_then(|s| s.trim().parse::<u16>().ok());
         let v = serde_json::json!({
             "sensor_source": "xl330 present_position/velocity/current; capture=Realtime Tick (ms/1000)",
             "device_capture_s": capture,
@@ -162,6 +169,8 @@ impl MetalAuthority {
             "freshness_threshold_s": self.cfg.freshness_threshold_s,
             "clock": "OsMonotonicClock",
             "acquisition": "authority acquire_sensor on propose/sensor; autonomy cannot ingest",
+            "vin_0.1v": vin,
+            "firmware_id_latched": self.cfg.expected_firmware,
         });
         let _ = std::fs::write(
             self.root.join(crate::config::BUS_DIR).join(FRESHNESS_FILE),

@@ -9,7 +9,7 @@ Physical-evidence milestone. Not a kernel redesign. Not certified safety.
 | Actuator | Robotis Dynamixel **XL330-M288-T** (also accept XL330-M077-T) |
 | Controller | Servo onboard MCU + USB–UART adapter (U2D2 / FTDI / CP2102) |
 | Supply | **5.0 V**, current limited to **≤ 0.5 A** at the bench PSU |
-| Interface | Dynamixel Protocol 2.0, default **57 600** 8N1 on `/dev/ttyUSB*` |
+| Interface | Dynamixel Protocol 2.0, default **57 600** 8N1 on `/dev/ttyUSB*` (probe also tries 115 200 and 1 Mbps) |
 | Max configured velocity | Profile Velocity **20** (≈ 4.6 rpm) |
 | Max configured effort | Current Limit **200 mA**; Reality OS `tau_max` **0.2** |
 | Max position step | **8 ticks** (≈ 0.7°) |
@@ -30,7 +30,7 @@ Reality OS torque-disable is a register write. It is **not** the cutoff.
 
 This cutoff is **not** STO, SS1, PL, or SIL unless the chosen hardware’s own documentation says it is and that certification is in force. A bench switch is none of those.
 
-Operator test: open the switch; the servo must lose holding torque while USB/data may stay enumerated. Record `REALITYOS_METAL_CUTOFF_TESTED=1` only after that observation.
+Operator test: open the switch; the servo must lose holding torque while USB/data may stay enumerated. Record `REALITYOS_METAL_CUTOFF_TESTED=1` only after that observation. Optional live measurement during the campaign: `REALITYOS_METAL_CUTOFF_LIVE=1` waits for VIN to drop, then proposes and records `write_delta`.
 
 ## Identity mapping
 
@@ -44,7 +44,9 @@ Operator test: open the switch; the servo must lose holding torque while USB/dat
 | `calibration_id` | **Deployment:** `metal.json`, not EEPROM. |
 | `design_content_hash` | **Deployment:** SHA-256 of `realityos.metal_design/1` (limits). Not EEPROM. |
 
-If USB serial cannot be read, a `usb:<vid>:<pid>:<devpath>` fallback is used if sysfs exposes it. If neither exists, ONLINE start fails closed. Values are not invented.
+If USB serial cannot be read, a `usb:<vid>:<pid>:<devpath>` fallback is used if sysfs exposes it. If neither exists, ONLINE start fails closed. Values are not invented. `/dev/serial/by-id/*` paths are canonicalized to the real tty name before the sysfs walk.
+
+Model and firmware are latched at identify time. Later sensor packets do not rewrite `firmware_id`.
 
 ## Composition
 
@@ -71,8 +73,11 @@ Users: `realityos-authority` owns the tty, key, journal, and process. `realityos
 cargo build -p realityos-metal --bins
 sudo -E env REALITYOS_METAL_DEVICE=/dev/ttyUSB0 \
   REALITYOS_METAL_BIN=$PWD/target/debug \
+  REALITYOS_METAL_BAUD=1000000 \
   REALITYOS_METAL_CUTOFF_TESTED=1 \
   scripts/metal-campaign.sh
 ```
 
-This Cloud Agent VM has **no** USB/serial actuator and **no** self-hosted worker. Until a bench host with the XL330 and cutoff is attached, the experiment is blocked. That is not a software-architecture remaining task.
+`REALITYOS_METAL_BAUD` and `REALITYOS_METAL_SERVO_ID` are optional. Probe tries the configured pair first, then common XL330 baud/id pairs, and writes the working pair into `metal.json`. Each campaign wipes `REALITYOS_METAL_ROOT` so `--first-online` is not refused by a leftover journal.
+
+This Cloud Agent VM has **no** USB/serial actuator and **no** self-hosted worker. Attach a Cursor self-hosted worker (`cursor worker start`) on the bench host that can see `/dev/ttyUSB*` / `/dev/ttyACM*`. Until that happens, the experiment is blocked. That is not a software-architecture remaining task.

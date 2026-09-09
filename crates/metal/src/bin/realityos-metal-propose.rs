@@ -31,9 +31,8 @@ fn main() -> anyhow::Result<()> {
                 let _ = args.next();
             }
             "propose" | "propose-id" | "unsupported" | "oversized" | "replay" | "raw"
-            | "hil_fault" | "caller_time" | "os-probe" | "status" | "recover" | "forged-sensor" => {
-                cmd = a
-            }
+            | "hil_fault" | "caller_time" | "os-probe" | "status" | "recover" | "sensor"
+            | "forged-sensor" => cmd = a,
             other if other.starts_with('{') => raw = Some(other.to_string()),
             other => anyhow::bail!("unknown_arg:{other}"),
         }
@@ -45,6 +44,11 @@ fn main() -> anyhow::Result<()> {
         "status" => {
             let mut r = MetalRequest::propose(&id, "hold");
             r.op = "status".into();
+            println!("{}", serde_json::to_string(&call(&root, &r)?)?);
+        }
+        "sensor" => {
+            let mut r = MetalRequest::propose(&id, "hold");
+            r.op = "sensor".into();
             println!("{}", serde_json::to_string(&call(&root, &r)?)?);
         }
         "propose" | "propose-id" => {
@@ -144,7 +148,6 @@ fn os_probe(root: &std::path::Path) -> anyhow::Result<serde_json::Value> {
     }
 
     let lock = root.join("bus/actuator.lock");
-    device_open_attempts += 1;
     let lock_open = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -153,9 +156,6 @@ fn os_probe(root: &std::path::Path) -> anyhow::Result<serde_json::Value> {
         Ok(f) => (true, fs2::FileExt::try_lock_exclusive(&f).is_ok()),
         Err(_) => (false, false),
     };
-    if open_actuator_lock {
-        device_open_successes += 1;
-    }
 
     let key = root.join(SIGNING_KEY_FILE);
     let read_signing_key = std::fs::read(&key).is_ok();

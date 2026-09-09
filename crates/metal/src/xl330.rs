@@ -14,15 +14,18 @@ use realityos_plant::{
 };
 use serialport::SerialPort;
 
-use crate::config::{MetalConfig, BUS_DIR, GOAL_FILE, LOCK_FILE, PRESENT_FILE};
+use crate::config::{
+    candidate_bauds, candidate_servo_ids, MetalConfig, BUS_DIR, GOAL_FILE, LOCK_FILE, PRESENT_FILE,
+    VIN_FILE,
+};
 use crate::egress::EgressLog;
 use crate::identity::{usb_identity_for_tty, MeasuredIdentity};
 use crate::protocol::{
-    decode_status, encode_ping, encode_read, encode_write, find_header, is_xl330_model, le_i32,
-    le_u16, ADDR_CURRENT_LIMIT, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR,
-    ADDR_MODEL_NUMBER, ADDR_PRESENT_CURRENT, ADDR_PRESENT_POSITION, ADDR_PRESENT_VELOCITY,
-    ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_REALTIME_TICK,
-    ADDR_TORQUE_ENABLE,
+    decode_status_scan, encode_ping, encode_read, encode_write, find_header, is_xl330_model,
+    le_i32, le_u16, ADDR_CURRENT_LIMIT, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION,
+    ADDR_HARDWARE_ERROR, ADDR_MODEL_NUMBER, ADDR_PRESENT_CURRENT, ADDR_PRESENT_POSITION,
+    ADDR_PRESENT_VELOCITY, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY,
+    ADDR_REALTIME_TICK, ADDR_TORQUE_ENABLE,
 };
 
 pub struct Xl330Driver {
@@ -35,11 +38,11 @@ pub struct Xl330Driver {
     connected: bool,
     estop: bool,
     last_identity: HardwareIdentity,
-    last_samples: Vec<(String, f64)>,
     last_tick_s: f64,
     last_present: i32,
     last_goal: Option<i32>,
     model: u16,
+    firmware: u8,
     seq: u64,
 }
 
@@ -76,11 +79,11 @@ impl Xl330Driver {
                 evidence_status: "MEASURED_XL330_PROTOCOL2".into(),
                 actuator_ids: Vec::new(),
             },
-            last_samples: Vec::new(),
             last_tick_s: 0.0,
             last_present: 0,
             last_goal: None,
             model: 0,
+            firmware: 0,
             seq: 0,
         };
         driver.connect_serial()?;
@@ -89,6 +92,42 @@ impl Xl330Driver {
             let _ = driver.apply_bench_limits();
         }
         Ok(driver)
+    }
+
+    /// Probe-only: try configured baud/id first, then common XL330 bus settings.
+    /// Production `serve` keeps using [`Self::open`] with the bound config.
+    pub fn open_discovering(
+        cfg: MetalConfig,
+        root: impl AsRef<Path>,
+    ) -> io::Result<(Self, MetalConfig)> {
+        if !cfg.device.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("metal_device_missing:{}", cfg.device.display()),
+            ));
+        }
+        let extra_baud = std::env::var("REALITYOS_METAL_BAUD")
+            .ok()
+            .and_then(|s| s.parse().ok());
+        let extra_id = std::env::var("REALITYOS_METAL_SERVO_ID")
+            .ok()
+            .and_then(|s| s.parse().ok());
+        let bauds = candidate_bauds(cfg.baud, extra_baud);
+        let ids = candidate_servo_ids(cfg.servo_id, extra_id);
+        let mut last_err: Option<io::Error> = None;
+        for baud in bauds {
+            for id in &ids {
+                let mut attempt = cfg.clone();
+                attempt.baud = baud;
+                attempt.servo_id = *id;
+                match Self::open(attempt.clone(), root.as_ref()) {
+                    Ok(driver) => return Ok((driver, attempt)),
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Err(e),
+                    Err(e) => last_err = Some(e),
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| io::Error::other("metal_discover_failed")))
     }
 
     pub fn bus_dir(&self) -> &Path {
@@ -110,17 +149,9 @@ impl Xl330Driver {
             usb_serial,
             usb_fallback,
             self.model,
-            self.firmware_byte(),
+            self.firmware,
             self.connected,
         )
-    }
-
-    fn firmware_byte(&self) -> u8 {
-        self.last_samples
-            .iter()
-            .find(|(k, _)| k == "firmware_version")
-            .map(|(_, v)| *v as u8)
-            .unwrap_or(0)
     }
 
     fn connect_serial(&mut self) -> io::Result<()> {
@@ -160,7 +191,7 @@ impl Xl330Driver {
         )?;
         let fw = fw_pkt.params.first().copied().unwrap_or(0);
         self.model = model;
-        self.last_samples = vec![("firmware_version".into(), f64::from(fw))];
+        self.firmware = fw;
         if !is_xl330_model(model) {
             return Err(io::Error::other(format!(
                 "metal_refuses_non_xl330_model:{model}"
@@ -170,15 +201,22 @@ impl Xl330Driver {
     }
 
     fn apply_bench_limits(&mut self) -> PlantResult<()> {
-        // Current limit is EEPROM; only write with torque off.
+        // Current limit is EEPROM; only write with torque off, and only if needed.
         self.write_reg(ADDR_TORQUE_ENABLE, &[0], "setup_torque_off", None, false)?;
-        self.write_reg(
-            ADDR_CURRENT_LIMIT,
-            &self.cfg.current_limit_milli.to_le_bytes(),
-            "setup_current_limit",
-            None,
-            false,
-        )?;
+        let want = self.cfg.current_limit_milli;
+        let got = self
+            .read_reg(ADDR_CURRENT_LIMIT, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        if got != Some(want) {
+            self.write_reg(
+                ADDR_CURRENT_LIMIT,
+                &want.to_le_bytes(),
+                "setup_current_limit",
+                None,
+                false,
+            )?;
+        }
         self.write_reg(
             ADDR_PROFILE_VELOCITY,
             &self.cfg.max_profile_velocity.to_le_bytes(),
@@ -230,6 +268,10 @@ impl Xl330Driver {
         }
     }
 
+    fn persist_vin(&self, vin_tenth: u16) {
+        let _ = std::fs::write(self.bus.join(VIN_FILE), vin_tenth.to_string());
+    }
+
     fn campaign_disconnected(&self) -> bool {
         self.cfg.campaign_hooks && self.bus.join("force_disconnect").exists()
     }
@@ -247,6 +289,21 @@ impl Xl330Driver {
     }
 
     fn xfer(
+        &mut self,
+        request: &[u8],
+        expect_status: bool,
+    ) -> io::Result<crate::protocol::StatusPacket> {
+        let mut last = io::Error::other("metal_xfer_empty");
+        for _ in 0..2 {
+            match self.xfer_once(request, expect_status) {
+                Ok(st) => return Ok(st),
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    }
+
+    fn xfer_once(
         &mut self,
         request: &[u8],
         expect_status: bool,
@@ -276,12 +333,12 @@ impl Xl330Driver {
                 Err(e) => return Err(e),
             }
             if find_header(&acc).is_some() && acc.len() >= 11 {
-                if let Ok(st) = decode_status(&acc) {
+                if let Ok(st) = decode_status_scan(&acc) {
                     return Ok(st);
                 }
             }
         }
-        decode_status(&acc).map_err(|e| io::Error::other(e.to_string()))
+        decode_status_scan(&acc).map_err(|e| io::Error::other(e.to_string()))
     }
 
     fn write_reg(
@@ -364,6 +421,34 @@ impl Xl330Driver {
         Ok(q)
     }
 
+    /// Realtime Tick (120) through Present Input Voltage (144) is 26 bytes.
+    fn read_motion_block(&mut self) -> PlantResult<(i32, i32, i16, u16, u16)> {
+        const LEN: u16 = 26;
+        if let Ok(b) = self.read_reg(ADDR_REALTIME_TICK, LEN) {
+            if b.len() >= LEN as usize {
+                let tick = le_u16(&b[0..2]).unwrap_or(0);
+                let cur = i16::from_le_bytes([b[6], b[7]]);
+                let vel = le_i32(&b[8..12]).unwrap_or(0);
+                let pos = le_i32(&b[12..16])
+                    .ok_or_else(|| PlantError::refused("dxl_short_present_position"))?;
+                let volt = le_u16(&b[24..26]).unwrap_or(0);
+                self.last_present = pos;
+                self.persist_positions();
+                return Ok((pos, vel, cur, volt, tick));
+            }
+        }
+        let pos = self.read_present_position()?;
+        let vel = le_i32(&self.read_reg(ADDR_PRESENT_VELOCITY, 4)?).unwrap_or(0);
+        let cur_b = self.read_reg(ADDR_PRESENT_CURRENT, 2)?;
+        let cur = i16::from_le_bytes([
+            cur_b.first().copied().unwrap_or(0),
+            cur_b.get(1).copied().unwrap_or(0),
+        ]);
+        let volt = le_u16(&self.read_reg(ADDR_PRESENT_VOLTAGE, 2)?).unwrap_or(0);
+        let tick = le_u16(&self.read_reg(ADDR_REALTIME_TICK, 2)?).unwrap_or(0);
+        Ok((pos, vel, cur, volt, tick))
+    }
+
     /// Authorized action[0]==0 → hold present. Non-zero → one bounded tick step.
     fn goal_from_action(&self, action: &[f64]) -> i32 {
         let a0 = action.first().copied().unwrap_or(0.0);
@@ -409,20 +494,13 @@ impl HardwareDriverPort for Xl330Driver {
         if self.campaign_fail_sensor() {
             return Err(PlantError::refused("metal_sensor_missing"));
         }
-        let pos = self.read_present_position()?;
-        let vel = le_i32(&self.read_reg(ADDR_PRESENT_VELOCITY, 4)?).unwrap_or(0);
-        let cur_b = self.read_reg(ADDR_PRESENT_CURRENT, 2)?;
-        let cur = i16::from_le_bytes([
-            cur_b.first().copied().unwrap_or(0),
-            cur_b.get(1).copied().unwrap_or(0),
-        ]);
-        let volt = le_u16(&self.read_reg(ADDR_PRESENT_VOLTAGE, 2)?).unwrap_or(0);
-        let tick = le_u16(&self.read_reg(ADDR_REALTIME_TICK, 2)?).unwrap_or(0);
+        let (pos, vel, cur, volt, tick) = self.read_motion_block()?;
         let err = self
             .read_reg(ADDR_HARDWARE_ERROR, 1)?
             .first()
             .copied()
             .unwrap_or(0);
+        self.persist_vin(volt);
         self.last_tick_s = f64::from(tick) / 1000.0;
         self.seq = self.seq.saturating_add(1);
         let samples = vec![
@@ -433,7 +511,6 @@ impl HardwareDriverPort for Xl330Driver {
             ("hw_error".into(), f64::from(err)),
             ("realtime_tick_s".into(), self.last_tick_s),
         ];
-        self.last_samples = samples.clone();
         let mut pkt = SensorPacket::from_samples(samples, self.last_tick_s);
         pkt.frame_id = "xl330/joint".into();
         pkt.sensor_id = self.cfg.actuator_id();

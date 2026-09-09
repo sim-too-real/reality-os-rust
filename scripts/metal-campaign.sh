@@ -26,6 +26,12 @@ if [[ -z "$DEVICE" || ! -e "$DEVICE" ]]; then
   echo "error: this host has no actuator; will not write a success metal proof." >&2
   exit 2
 fi
+if [[ -z "$ROOT" || "$ROOT" == "/" || "$ROOT" == "/tmp" || "$ROOT" == "/var" ]]; then
+  echo "error: refusing to wipe unexpected REALITYOS_METAL_ROOT=$ROOT" >&2
+  exit 2
+fi
+# Stale journal+seal makes --first-online refuse. Each campaign is a fresh instance.
+rm -rf "$ROOT"
 
 STAGE="${REALITYOS_METAL_STAGE:-/tmp/realityos-metal-bin}"
 rm -rf "$STAGE"
@@ -47,7 +53,15 @@ export REALITYOS_METAL_DEVICE="$DEVICE"
 "$SCRIPT_DIR/metal-deploy.sh"
 
 as_autonomy() { sudo -u "$AUTONOMY_USER" -- "$@"; }
-as_authority() { sudo -u "$AUTHORITY_USER" -- "$@"; }
+as_authority() {
+  sudo -u "$AUTHORITY_USER" -- env \
+    REALITYOS_METAL_DEVICE="${REALITYOS_METAL_DEVICE:-}" \
+    REALITYOS_METAL_BAUD="${REALITYOS_METAL_BAUD:-}" \
+    REALITYOS_METAL_SERVO_ID="${REALITYOS_METAL_SERVO_ID:-}" \
+    REALITYOS_METAL_CAMPAIGN="${REALITYOS_METAL_CAMPAIGN:-}" \
+    REALITYOS_HIL_CRASH="${REALITYOS_HIL_CRASH:-}" \
+    "$@"
+}
 
 as_authority "$SMOKE" --root "$ROOT" --device "$DEVICE" init
 as_authority "$SMOKE" --root "$ROOT" --device "$DEVICE" probe
@@ -60,12 +74,19 @@ goalpos() { cat "$ROOT/bus/goal" 2>/dev/null || echo ""; }
 
 start_auth() {
   local first="$1"
+  local crash="${2:-}"
   rm -f "$ROOT/ipc.sock"
+  export REALITYOS_METAL_CAMPAIGN=1
+  if [[ -n "$crash" ]]; then
+    export REALITYOS_HIL_CRASH="$crash"
+  else
+    unset REALITYOS_HIL_CRASH
+  fi
   if [[ "$first" == "1" ]]; then
-    as_authority env REALITYOS_METAL_CAMPAIGN=1 "$SMOKE" --root "$ROOT" --first-online serve \
+    as_authority "$SMOKE" --root "$ROOT" --first-online serve \
       >"$ROOT/authority.out" 2>"$ROOT/authority.err" &
   else
-    as_authority env REALITYOS_METAL_CAMPAIGN=1 "$SMOKE" --root "$ROOT" --restart serve \
+    as_authority "$SMOKE" --root "$ROOT" --restart serve \
       >"$ROOT/authority.out" 2>"$ROOT/authority.err" &
   fi
   AUTH_PID=$!
@@ -75,10 +96,11 @@ start_auth() {
     fi
     sleep 0.05
   done
+  unset REALITYOS_HIL_CRASH
   if [[ ! -S "$ROOT/ipc.sock" ]]; then
     echo "error: ipc.sock did not appear" >&2
     cat "$ROOT/authority.err" >&2 || true
-    exit 1
+    return 1
   fi
   chmod 0660 "$ROOT/ipc.sock"
   chgrp "$IPC_GROUP" "$ROOT/ipc.sock"
@@ -89,9 +111,10 @@ stop_auth() {
   wait "$AUTH_PID" 2>/dev/null || true
 }
 
-start_auth 1
+AUTH_PID=""
 cleanup() { stop_auth || true; }
 trap cleanup EXIT
+start_auth 1
 
 PROBE="$(as_autonomy env METAL_AUTHORITY_PID="$AUTH_PID" "$PROP" --root "$ROOT" --authority-pid "$AUTH_PID" os-probe)"
 echo "os-probe=$PROBE"
@@ -235,22 +258,16 @@ crash_replay() {
   local cid="$2"
   stop_auth
   trap - EXIT
-  as_authority env REALITYOS_HIL_CRASH="$point" REALITYOS_METAL_CAMPAIGN=1 \
-    "$SMOKE" --root "$ROOT" --restart serve >"$ROOT/authority.out" 2>"$ROOT/authority.err" &
-  AUTH_PID=$!
-  for _ in $(seq 1 80); do
-    if [[ -S "$ROOT/ipc.sock" ]]; then
-      break
-    fi
-    sleep 0.05
-  done
-  if [[ -S "$ROOT/ipc.sock" ]]; then
-    chmod 0660 "$ROOT/ipc.sock" || true
-    chgrp "$IPC_GROUP" "$ROOT/ipc.sock" || true
+  if ! start_auth 0 "$point"; then
+    echo "error: crash serve did not bind for $point" >&2
+    exit 1
   fi
   as_autonomy "$PROP" --root "$ROOT" --id "$cid" --verb hold propose >/tmp/metal-"$cid".json || true
   wait "$AUTH_PID" 2>/dev/null || true
-  start_auth 0
+  if ! start_auth 0; then
+    echo "error: restart after $point crash failed" >&2
+    exit 1
+  fi
   trap cleanup EXIT
   local before after
   before="$(writes)"
@@ -281,18 +298,21 @@ add_case "$(crash_replay during_write metal-crash-during)"
 add_case "$(crash_replay after_write_before_ack metal-crash-ack)"
 add_case "$(crash_replay after_ack metal-crash-afterack)"
 
+VIN="$(cat "$ROOT/bus/vin" 2>/dev/null || echo "")"
 if [[ "$CUTOFF_TESTED" == "1" ]]; then
+  CUTOFF_BEFORE="$(writes)"
   add_case "$(python3 - <<PY
 import json
+before=int("$CUTOFF_BEFORE")
 print(json.dumps({
     "name": "independent_vin_cutoff",
     "expected_authorization": False,
     "decision_result": "operator:vin_open_servo_lost_torque",
-    "writes_before": 0,
-    "writes_after": 0,
+    "writes_before": before,
+    "writes_after": before,
     "write_delta": 0,
     "device_acknowledgement": False,
-    "observed_motion": "operator opened VIN disconnect; servo lost holding torque independent of Reality OS",
+    "observed_motion": "operator opened VIN disconnect; servo lost holding torque independent of Reality OS; last vin_0.1v=$VIN",
     "blocking_layer": "OS_BLOCKED",
     "journal_result": "unchanged",
     "proposal": "physical VIN disconnect (not STO/SS1/PL/SIL)",
@@ -300,6 +320,30 @@ print(json.dumps({
 }))
 PY
 )"
+fi
+
+if [[ "${REALITYOS_METAL_CUTOFF_LIVE:-0}" == "1" ]]; then
+  echo "Open the independent VIN switch now (USB data may stay enumerated)." >&2
+  dropped=0
+  for _ in $(seq 1 120); do
+    if ! as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1; then
+      dropped=1
+      break
+    fi
+    vin_now="$(cat "$ROOT/bus/vin" 2>/dev/null || echo 999)"
+    if [[ "$vin_now" =~ ^[0-9]+$ ]] && [[ "$vin_now" -lt 20 ]]; then
+      dropped=1
+      break
+    fi
+    sleep 0.5
+  done
+  if [[ "$dropped" != "1" ]]; then
+    echo "error: VIN did not drop within 60s; cutoff live test failed" >&2
+    exit 1
+  fi
+  export REALITYOS_METAL_CUTOFF_TESTED=1
+  CUTOFF_TESTED=1
+  add_case "$(measure vin_cutoff_live 'propose after VIN open' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-cutoff "$PROP" --root "$ROOT" propose-id)"
 fi
 
 COMMIT="$(git -C "$(dirname "$SCRIPT_DIR")" rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -311,6 +355,9 @@ import json, os
 p = json.loads('''$PROBE''')
 measured = json.loads('''$MEASURED''')
 fresh = json.loads('''$FRESH''') if '''$FRESH'''.strip() else {}
+if isinstance(measured, dict) and fresh.get("vin_0.1v") is not None:
+    measured = dict(measured)
+    measured["vin_0.1v"] = fresh.get("vin_0.1v")
 cutoff = os.environ.get("REALITYOS_METAL_CUTOFF_TESTED","0") == "1"
 meta = {
   "hardware_model": "XL330-M288-T",

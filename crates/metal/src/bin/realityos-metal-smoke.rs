@@ -30,9 +30,7 @@ fn main() -> anyhow::Result<()> {
         "init" => {
             std::fs::create_dir_all(&root)?;
             let mut cfg = MetalConfig::example(device.unwrap_or_else(|| "/dev/ttyUSB0".into()));
-            if let Ok(env_dev) = env::var("REALITYOS_METAL_DEVICE") {
-                cfg.device = PathBuf::from(env_dev);
-            }
+            cfg.apply_process_env();
             cfg.save(root.join(CONFIG_FILE))?;
             println!("{}", serde_json::to_string_pretty(&cfg)?);
         }
@@ -47,9 +45,7 @@ fn main() -> anyhow::Result<()> {
             if let Some(d) = device {
                 cfg.device = d;
             }
-            if let Ok(env_dev) = env::var("REALITYOS_METAL_DEVICE") {
-                cfg.device = PathBuf::from(env_dev);
-            }
+            cfg.apply_process_env();
             cfg.save(&cfg_path)?;
             if !cfg.device.exists() {
                 let (usb, fb) = usb_identity_for_tty(&cfg.device);
@@ -65,7 +61,9 @@ fn main() -> anyhow::Result<()> {
                 );
                 std::process::exit(2);
             }
-            let driver = Xl330Driver::open(cfg.clone(), &root)?;
+            let (driver, discovered) = Xl330Driver::open_discovering(cfg, &root)?;
+            let cfg = discovered;
+            cfg.save(&cfg_path)?;
             let measured = driver.measured();
             let id = measured.hardware_identity(&cfg);
             let report = serde_json::json!({
@@ -83,6 +81,8 @@ fn main() -> anyhow::Result<()> {
                 },
                 "design_content_hash_source": "deployment_configuration",
                 "calibration_id_source": "deployment_configuration",
+                "discovered_baud": cfg.baud,
+                "discovered_servo_id": cfg.servo_id,
                 "clock": "OsMonotonicClock_on_start_online",
             });
             std::fs::write(

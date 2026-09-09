@@ -156,6 +156,30 @@ pub fn decode_status(buf: &[u8]) -> Result<StatusPacket, ProtocolError> {
     })
 }
 
+/// Half-duplex USB-UART adapters often echo the request before the status.
+/// Scan past non-status frames instead of treating the echo as the reply.
+pub fn decode_status_scan(buf: &[u8]) -> Result<StatusPacket, ProtocolError> {
+    let mut search = 0;
+    let mut last_err = ProtocolError::BadHeader;
+    while search < buf.len() {
+        let Some(rel) = find_header(&buf[search..]) else {
+            return Err(last_err);
+        };
+        let start = search + rel;
+        match decode_status(&buf[start..]) {
+            Ok(st) => return Ok(st),
+            Err(ProtocolError::Truncated) | Err(ProtocolError::TooShort) => {
+                return Err(ProtocolError::Truncated);
+            }
+            Err(e) => {
+                last_err = e;
+                search = start + 1;
+            }
+        }
+    }
+    Err(last_err)
+}
+
 /// Stuff after CRC (Robotis): insert 0xFD after 0xFF 0xFF 0xFD except in the header.
 fn stuff(unstuffed: &[u8]) -> Vec<u8> {
     if unstuffed.len() < 4 {
@@ -275,5 +299,17 @@ mod tests {
         assert!(is_xl330_model(XL330_M288_MODEL));
         assert!(is_xl330_model(XL330_M077_MODEL));
         assert!(!is_xl330_model(1030));
+    }
+
+    #[test]
+    fn status_scan_skips_request_echo() {
+        let request = encode_ping(1);
+        let status = encode_packet(1, INST_STATUS, &[0]);
+        let mut both = request;
+        both.extend_from_slice(&status);
+        let got = decode_status_scan(&both).expect("status after echo");
+        assert_eq!(got.id, 1);
+        assert_eq!(got.error, 0);
+        assert!(decode_status(&both).is_err());
     }
 }

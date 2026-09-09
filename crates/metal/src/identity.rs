@@ -125,9 +125,15 @@ impl MeasuredIdentity {
     }
 }
 
+/// Prefer the real tty name so `/dev/serial/by-id/...` still walks sysfs.
+pub fn tty_sysfs_name(tty: &Path) -> Option<String> {
+    let resolved = std::fs::canonicalize(tty).unwrap_or_else(|_| tty.to_path_buf());
+    resolved.file_name()?.to_str().map(str::to_string)
+}
+
 /// Walk sysfs for a USB serial, then a vendor:product:devpath fallback.
 pub fn usb_identity_for_tty(tty: &Path) -> (Option<String>, Option<String>) {
-    let Some(name) = tty.file_name().and_then(|s| s.to_str()) else {
+    let Some(name) = tty_sysfs_name(tty) else {
         return (None, None);
     };
     let class = Path::new("/sys/class/tty").join(name);
@@ -213,5 +219,28 @@ mod tests {
         assert_eq!(m.serial, "FT123:id1");
         assert_eq!(m.firmware_id, "xl330-m288:1190:46");
         assert!(m.connected);
+    }
+
+    #[test]
+    fn firmware_zero_is_not_the_measured_firmware() {
+        let cfg = MetalConfig::example(PathBuf::from("/dev/ttyUSB0"));
+        let measured =
+            MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1190, 46, true);
+        let after_sensor_clobber =
+            MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1190, 0, true);
+        assert_eq!(measured.firmware_id, "xl330-m288:1190:46");
+        assert_ne!(measured.firmware_id, after_sensor_clobber.firmware_id);
+    }
+
+    #[test]
+    fn by_id_path_uses_basename_when_unresolved() {
+        assert_eq!(
+            tty_sysfs_name(Path::new("/dev/serial/by-id/usb-FTDI_FT123-if00-port0")).as_deref(),
+            Some("usb-FTDI_FT123-if00-port0")
+        );
+        assert_eq!(
+            tty_sysfs_name(Path::new("/dev/ttyUSB0")).as_deref(),
+            Some("ttyUSB0")
+        );
     }
 }
