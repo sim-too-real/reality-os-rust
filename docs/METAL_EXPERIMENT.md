@@ -64,7 +64,7 @@ Users: `realityos-authority` owns the tty, key, journal, and process. `realityos
 
 ## Proof
 
-`docs/metal_proof.json` schema `realityos.metal_proof/1` is written only from measured cases on a real device. The reporter refuses to emit a success artifact when `hardware_present` is false. It does not overwrite `docs/hil_proof.json`.
+`docs/metal_proof.json` schema `docs/metal_proof.json` schema `realityos.metal_proof/1` is written only from measured cases on a real device. The reporter refuses to emit a success artifact when `hardware_present` is false. It does not overwrite `docs/hil_proof.json`. The PTY Protocol 2.0 stand-in in `crates/metal/tests/` is a driver regression test, not physical evidence. The PTY Protocol 2.0 stand-in in `crates/metal/tests/` is a driver regression test, not physical evidence.
 
 ## How to run (bench host)
 
