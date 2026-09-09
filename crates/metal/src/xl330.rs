@@ -25,8 +25,8 @@ use crate::protocol::{
     instruction_ok, is_xl330_model, le_i32, le_u16, ADDR_CURRENT_LIMIT, ADDR_FIRMWARE_VERSION,
     ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR, ADDR_MAX_POSITION_LIMIT, ADDR_MIN_POSITION_LIMIT,
     ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY,
-    ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE, OPERATING_MODE_POSITION,
-    STATUS_RETURN_ALL,
+    ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE, BROADCAST_ID,
+    OPERATING_MODE_POSITION, STATUS_RETURN_ALL,
 };
 
 pub struct Xl330Driver {
@@ -132,10 +132,13 @@ impl Xl330Driver {
         let ids = candidate_servo_ids(cfg.servo_id, extra_id);
         let mut last_err: Option<io::Error> = None;
         for baud in bauds {
-            for id in &ids {
+            // Wizard may leave a non-1/2 ID. Broadcast PING still answers at
+            // SRL=0 and the status carries the servo's own ID.
+            let try_ids = prefer_servo_id(&ids, sniff_servo_id(&cfg.device, baud));
+            for id in try_ids {
                 let mut attempt = cfg.clone();
                 attempt.baud = baud;
-                attempt.servo_id = *id;
+                attempt.servo_id = id;
                 match Self::open(attempt.clone(), root.as_ref()) {
                     Ok(driver) => return Ok((driver, attempt)),
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Err(e),
@@ -778,4 +781,55 @@ impl Drop for Xl330Driver {
     fn drop(&mut self) {
         self.close();
     }
+}
+
+fn prefer_servo_id(ids: &[u8], found: Option<u8>) -> Vec<u8> {
+    let mut out = Vec::new();
+    if let Some(id) = found {
+        if id != 0 && id != BROADCAST_ID {
+            out.push(id);
+        }
+    }
+    for id in ids {
+        if !out.contains(id) {
+            out.push(*id);
+        }
+    }
+    out
+}
+
+/// Broadcast PING. Status ID is the servo's own ID even when Status Return Level is 0.
+fn sniff_servo_id(device: &Path, baud: u32) -> Option<u8> {
+    if !device.exists() {
+        return None;
+    }
+    let mut port = serialport::new(device.to_string_lossy(), baud)
+        .timeout(Duration::from_millis(150))
+        .exclusive(!is_pty_path(device))
+        .open()
+        .ok()?;
+    std::thread::sleep(Duration::from_millis(100));
+    let frame = encode_ping(BROADCAST_ID);
+    port.clear(serialport::ClearBuffer::Input).ok()?;
+    port.write_all(&frame).ok()?;
+    port.flush().ok()?;
+    let mut acc = Vec::new();
+    let mut tmp = [0u8; 64];
+    let end = std::time::Instant::now() + Duration::from_millis(150);
+    while std::time::Instant::now() < end {
+        match port.read(&mut tmp) {
+            Ok(0) => {}
+            Ok(n) => {
+                acc.extend_from_slice(&tmp[..n]);
+                if let Ok(st) = decode_status_scan(&acc) {
+                    if st.id != 0 && st.id != BROADCAST_ID {
+                        return Some(st.id);
+                    }
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::TimedOut => break,
+            Err(_) => return None,
+        }
+    }
+    None
 }

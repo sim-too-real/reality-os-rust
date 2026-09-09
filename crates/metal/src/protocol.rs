@@ -8,6 +8,8 @@ pub const INST_READ: u8 = 0x02;
 pub const INST_WRITE: u8 = 0x03;
 pub const INST_REBOOT: u8 = 0x08;
 pub const INST_STATUS: u8 = 0x55;
+/// Protocol 2.0 broadcast. Status replies carry the servo's own ID.
+pub const BROADCAST_ID: u8 = 254;
 /// Protocol 2.0 bit 7: Hardware Error Status is latched. The instruction still completed.
 pub const STATUS_ALERT: u8 = 0x80;
 
@@ -274,6 +276,8 @@ mod tests {
     #[test]
     fn ping_roundtrip_crc() {
         let pkt = encode_ping(1);
+        assert_eq!(pkt.len(), 10);
+        assert_eq!(encode_ping(BROADCAST_ID).len(), 10);
         assert_eq!(&pkt[0..4], &HEADER);
         assert_eq!(pkt[4], 1);
         let destuffed = destuff(&pkt).unwrap();

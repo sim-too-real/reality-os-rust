@@ -100,7 +100,10 @@ def encode_status(servo_id: int, params: bytes, error: int = 0) -> bytes:
 
 def parse_request(buf: bytes) -> tuple[int, int, bytes, int] | None:
     destuffed = destuff(buf)
-    if destuffed is None or len(destuffed) < 11:
+    # Ping is 10 bytes (header+id+len+inst+crc). A 11-byte floor left PING
+    # unparsed until a later READ/WRITE arrived, so a single broadcast PING
+    # got no status and Wizard ID discovery missed.
+    if destuffed is None or len(destuffed) < 10:
         return None
     length = struct.unpack_from("<H", destuffed, 5)[0]
     need = 7 + length
@@ -113,16 +116,19 @@ def parse_request(buf: bytes) -> tuple[int, int, bytes, int] | None:
     servo_id = destuffed[4]
     inst = destuffed[7]
     params = destuffed[8 : need - 2]
-    # consumed ≈ stuffed length; drop through first header plus frame
     start = buf.find(HEADER)
-    return servo_id, inst, params, start + max(need, 11)
+    return servo_id, inst, params, start + need
 
 
 def init_regs() -> bytearray:
     regs = bytearray(256)
     regs[0:2] = struct.pack("<H", 1190)
     regs[6] = 46
-    regs[7] = 1
+    try:
+        own = int(os.environ.get("REALITYOS_METAL_PTY_ID", "1"))
+    except ValueError:
+        own = 1
+    regs[7] = own if own not in (0, 254) else 1
     regs[11] = 3
     regs[38:40] = struct.pack("<H", 200)
     regs[48:52] = struct.pack("<i", 4095)
@@ -196,17 +202,20 @@ def main() -> None:
             if len(buf) > 512:
                 del buf[:256]
             continue
-        servo_id, inst, params, _consumed = parsed
+        req_id, inst, params, _consumed = parsed
         del buf[:]
+        own = regs[7] or 1
+        if req_id not in (254, own):
+            continue
         alert = STATUS_ALERT if os.environ.get("REALITYOS_METAL_PTY_ALERT") == "1" else 0
         srl = regs[68]
         payload, inst_err = handle(regs, inst, params)
         # Half-duplex adapters often echo a request-shaped frame before status.
-        echo = HEADER + bytes([servo_id, 0x07, 0x00, INST_PING, 0x00, 0x00])
+        echo = HEADER + bytes([own, 0x07, 0x00, INST_PING, 0x00, 0x00])
         if status_wanted(srl, inst):
             os.write(
                 master,
-                echo + encode_status(servo_id, payload, error=alert | inst_err),
+                echo + encode_status(own, payload, error=alert | inst_err),
             )
         else:
             os.write(master, echo)

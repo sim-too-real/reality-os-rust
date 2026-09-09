@@ -193,6 +193,21 @@ fn xl330_pty_pwm_operating_mode_is_forced_to_position() {
 }
 
 #[test]
+fn xl330_pty_discover_finds_wizard_id_via_broadcast() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ID", "7")]);
+    let root = metal_test_root("pty-id7");
+    let cfg = MetalConfig::example(&tty);
+    assert_eq!(cfg.servo_id, 1);
+    let (mut driver, bound) =
+        Xl330Driver::open_discovering(cfg, &root).expect("broadcast PING must find Wizard ID 7");
+    assert_eq!(bound.servo_id, 7);
+    assert_eq!(driver.measured().actuator_id, "xl330:7");
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_start_online_hold_is_not_a_metal_proof() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder();
