@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
             "--restart" => first = false,
             "serve" => serve = true,
             "once" => {
-                let mut req = HilRequest::propose("once", "hold", 20.0, 1);
+                let mut req = HilRequest::propose("once", "hold");
                 while let Some(b) = args.next() {
                     match b.as_str() {
                         "--verb" => req.verb = args.next().unwrap_or_default(),

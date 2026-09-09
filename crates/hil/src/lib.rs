@@ -1,23 +1,68 @@
 //! Two-process HIL harness. Untrusted autonomy ≠ execution authority.
 //! Does not extend the authority kernel.
 
+mod proof;
+
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use realityos_core::{DecideRequest, Intent, IssuedCommand, PolicyProposal, RealityOs, WorldView};
 use realityos_governor::{OnlineLocked, RuntimeGovernor, RuntimeIdentity};
 use realityos_kernel::{
-    CalibrationId, DesignContentHash, FirmwareId, ReleaseHash, SerialOrAsBuilt,
+    AuthorityClock, CalibrationId, DesignContentHash, FakeClock, FirmwareId, ReleaseHash,
+    SerialOrAsBuilt,
 };
 use realityos_plant::{ActionParams, HardwareBackedPlant};
 use realityos_vport::{recorded_writes, VirtualSerialPort};
 use serde::{Deserialize, Serialize};
 
+pub use proof::{
+    aggregates_from_cases, verify_proof_consistency, BlockingLayer, CaseRecord, ProofAggregates,
+    ProofExtras, ProofReport, PROOF_SCHEMA,
+};
+
 pub const IPC_SOCK: &str = "ipc.sock";
 pub const JOURNAL: &str = "driver.jsonl";
 pub const SIGNING_KEY: &[u8] = b"hil-authority-signing-key";
+pub const AUTHORITY_MAX_TTL_S: f64 = 30.0;
+
+/// Data an untrusted proposer may legitimately own.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProductionProposal {
+    #[serde(default)]
+    pub verb: String,
+    #[serde(default)]
+    pub action: Option<Vec<f64>>,
+    #[serde(default)]
+    pub command_id: String,
+    #[serde(default)]
+    pub proposer: String,
+    #[serde(default)]
+    pub intent_metadata: serde_json::Value,
+}
+
+/// HIL / test-only time and rail injection. Not accepted as production authority.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HilFaultInjectionRequest {
+    #[serde(default)]
+    pub now_s: Option<f64>,
+    #[serde(default)]
+    pub write_now_s: Option<f64>,
+    #[serde(default)]
+    pub ttl_s: Option<f64>,
+    #[serde(default)]
+    pub sequence: Option<i64>,
+    #[serde(default)]
+    pub skip_sensor: bool,
+    /// Drop previously ingested evidence (missing-evidence attacks).
+    #[serde(default)]
+    pub drop_sensor: bool,
+    #[serde(default)]
+    pub skip_heartbeat: bool,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HilRequest {
@@ -25,13 +70,18 @@ pub struct HilRequest {
     #[serde(default)]
     pub verb: String,
     #[serde(default)]
-    pub now_s: f64,
-    #[serde(default)]
-    pub sequence: i64,
-    #[serde(default)]
     pub command_id: String,
     #[serde(default)]
     pub action: Option<Vec<f64>>,
+    #[serde(default)]
+    pub proposer: String,
+    #[serde(default)]
+    pub fault: Option<HilFaultInjectionRequest>,
+    /// Legacy fields. Ignored on `op=propose`. Used only when `op=hil_fault`.
+    #[serde(default)]
+    pub now_s: f64,
+    #[serde(default)]
+    pub sequence: i64,
     #[serde(default)]
     pub ttl_s: f64,
     #[serde(default)]
@@ -45,19 +95,68 @@ pub struct HilRequest {
 }
 
 impl HilRequest {
-    pub fn propose(id: &str, verb: &str, now_s: f64, sequence: i64) -> Self {
+    pub fn propose(id: &str, verb: &str) -> Self {
         Self {
             op: "propose".into(),
             verb: verb.into(),
-            now_s,
-            sequence,
             command_id: id.into(),
             action: None,
-            ttl_s: 30.0,
+            proposer: "autonomy".into(),
+            fault: None,
+            now_s: 0.0,
+            sequence: 0,
+            ttl_s: 0.0,
             skip_sensor: false,
             write_now_s: None,
             ttl_override: None,
             skip_heartbeat: false,
+        }
+    }
+
+    /// Back-compat helper used by older call sites; treated as production propose.
+    pub fn propose_legacy(id: &str, verb: &str, _now_s: f64, _sequence: i64) -> Self {
+        Self::propose(id, verb)
+    }
+
+    pub fn hil_fault(id: &str, verb: &str, fault: HilFaultInjectionRequest) -> Self {
+        let mut r = Self::propose(id, verb);
+        r.op = "hil_fault".into();
+        r.fault = Some(fault);
+        r
+    }
+
+    pub fn production(&self) -> ProductionProposal {
+        ProductionProposal {
+            verb: self.verb.clone(),
+            action: self.action.clone(),
+            command_id: self.command_id.clone(),
+            proposer: if self.proposer.is_empty() {
+                "autonomy".into()
+            } else {
+                self.proposer.clone()
+            },
+            intent_metadata: serde_json::Value::Null,
+        }
+    }
+
+    pub fn is_fault_surface(&self) -> bool {
+        self.op == "hil_fault" || self.fault.is_some()
+    }
+
+    fn fault(&self) -> HilFaultInjectionRequest {
+        if let Some(f) = &self.fault {
+            return f.clone();
+        }
+        HilFaultInjectionRequest {
+            now_s: (self.now_s > 0.0).then_some(self.now_s),
+            write_now_s: self.write_now_s,
+            ttl_s: self
+                .ttl_override
+                .or((self.ttl_s > 0.0).then_some(self.ttl_s)),
+            sequence: (self.sequence != 0).then_some(self.sequence),
+            skip_sensor: self.skip_sensor,
+            drop_sensor: false,
+            skip_heartbeat: self.skip_heartbeat,
         }
     }
 }
@@ -74,51 +173,6 @@ pub struct HilResponse {
     pub metal: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CaseRecord {
-    pub name: String,
-    pub proposal: String,
-    pub semantic_verdict: String,
-    pub authority_transition: String,
-    pub driver_write_count: u64,
-    pub journal_state: String,
-    pub outcome: String,
-    pub unauthorized_write: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ProofReport {
-    pub schema: String,
-    pub hostile_cases: u64,
-    pub refused_before_authorization: u64,
-    pub refused_before_driver_egress: u64,
-    pub unauthorized_driver_writes: u64,
-    pub valid_commands: u64,
-    pub valid_driver_writes: u64,
-    pub duplicate_writes_after_restart: u64,
-    pub direct_device_open_attempts: u64,
-    pub direct_device_open_succeeded: u64,
-    pub journal_continuity_failures_detected: u64,
-    pub unresolved_trust_assumptions: Vec<String>,
-    pub cases: Vec<CaseRecord>,
-}
-
-impl ProofReport {
-    pub fn new() -> Self {
-        Self {
-            schema: "realityos.hil_proof/1".into(),
-            unresolved_trust_assumptions: vec![
-                "same-UID chmod or /proc/<pid>/fd can recover a mode-000 log".into(),
-                "root can open any endpoint".into(),
-                "journal+seal is tamper-evident, not authenticated or WORM".into(),
-                "independent STO/SS1 / safety PLC is a named hole".into(),
-                "sensor samples are still caller-supplied".into(),
-            ],
-            ..Self::default()
-        }
-    }
-}
-
 pub fn hil_identity() -> RuntimeIdentity {
     RuntimeIdentity {
         release_hash: ReleaseHash::new("rel-hil-1").expect("rel"),
@@ -133,29 +187,44 @@ pub struct Authority {
     ros: RealityOs,
     governor: RuntimeGovernor<HardwareBackedPlant<VirtualSerialPort>, OnlineLocked>,
     root: PathBuf,
+    clock: Arc<FakeClock>,
+    next_sequence: i64,
 }
 
 impl Authority {
     pub fn start(root: impl AsRef<Path>, first_online: bool, now_s: f64) -> anyhow::Result<Self> {
+        Self::start_with_identity(root, first_online, now_s, hil_identity())
+    }
+
+    pub fn start_with_identity(
+        root: impl AsRef<Path>,
+        first_online: bool,
+        now_s: f64,
+        identity: RuntimeIdentity,
+    ) -> anyhow::Result<Self> {
         let root = root.as_ref().to_path_buf();
         std::fs::create_dir_all(&root)?;
+        let clock = FakeClock::arc(now_s);
         let port = VirtualSerialPort::open(root.join("bus"), "SN-HIL-1")?;
         let plant = HardwareBackedPlant::new(port, "hil", 1, 5.0);
         let journal = root.join(JOURNAL);
         let governor = RuntimeGovernor::new_online(
-            hil_identity(),
+            identity,
             plant,
             journal,
             SIGNING_KEY.to_vec(),
             first_online,
             vec!["joint-0".into()],
-            now_s,
+            clock.clone(),
         )
         .map_err(|e| anyhow::anyhow!(e.0))?;
+        let next_sequence = governor.ledger().last_sequence().max(0);
         Ok(Self {
             ros: RealityOs::new(),
             governor,
             root,
+            clock,
+            next_sequence,
         })
     }
 
@@ -165,12 +234,14 @@ impl Authority {
 
     pub fn handle(&mut self, req: HilRequest) -> HilResponse {
         match req.op.as_str() {
-            "sensor" => self.ingest(req.now_s),
+            "sensor" => self.ingest_production(),
             "heartbeat" => {
-                let _ = self.governor.heartbeat(req.now_s);
+                let now = self.clock.monotonic_now().secs();
+                let _ = self.governor.heartbeat(now);
                 self.ok_status("observe")
             }
-            "propose" => self.propose(req),
+            "propose" => self.propose_production(req.production()),
+            "hil_fault" => self.propose_fault(req.production(), req.fault()),
             "forge_certificate" | "forge_actuation_command" | "write_online_blob" => HilResponse {
                 ok: false,
                 executed: false,
@@ -199,11 +270,8 @@ impl Authority {
         }
     }
 
-    fn ingest(&mut self, now_s: f64) -> HilResponse {
-        match self
-            .governor
-            .record_sensor(&[("q0".into(), 0.0)], now_s, 1, "hil/sensor", "hil")
-        {
+    fn ingest_production(&mut self) -> HilResponse {
+        match self.governor.acquire_sensor() {
             Ok(_) => self.ok_status("sensor"),
             Err(e) => HilResponse {
                 ok: false,
@@ -217,33 +285,76 @@ impl Authority {
         }
     }
 
-    fn propose(&mut self, req: HilRequest) -> HilResponse {
-        if !req.skip_heartbeat {
-            let _ = self.governor.heartbeat(req.now_s);
+    fn propose_production(&mut self, proposal: ProductionProposal) -> HilResponse {
+        let now = self.clock.monotonic_now().secs();
+        let _ = self.governor.heartbeat(now);
+        if let Err(e) = self.governor.acquire_sensor() {
+            return HilResponse {
+                ok: false,
+                executed: false,
+                stage: "authorize".into(),
+                status: "refuse".into(),
+                violations: vec![e],
+                driver_writes: self.driver_writes(),
+                metal: false,
+                ..HilResponse::default()
+            };
         }
-        if !req.skip_sensor {
-            let _ = self.ingest(req.now_s);
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        let seq = self.next_sequence;
+        self.finish_propose(proposal, now, AUTHORITY_MAX_TTL_S, seq, now)
+    }
+
+    fn propose_fault(
+        &mut self,
+        proposal: ProductionProposal,
+        fault: HilFaultInjectionRequest,
+    ) -> HilResponse {
+        if let Some(t) = fault.now_s {
+            self.clock.set(t);
         }
+        let now = self.clock.monotonic_now().secs();
+        if !fault.skip_heartbeat {
+            let _ = self.governor.heartbeat(now);
+        }
+        if fault.drop_sensor {
+            self.governor.hil_drop_sensor_evidence();
+        } else if !fault.skip_sensor {
+            let _ = self.governor.acquire_sensor();
+        }
+        let ttl = fault.ttl_s.unwrap_or(AUTHORITY_MAX_TTL_S);
+        let seq = fault.sequence.unwrap_or_else(|| {
+            self.next_sequence = self.next_sequence.saturating_add(1);
+            self.next_sequence
+        });
+        let write_at = fault.write_now_s.unwrap_or(now);
+        self.finish_propose(proposal, now, ttl, seq, write_at)
+    }
+
+    fn finish_propose(
+        &mut self,
+        proposal: ProductionProposal,
+        now_s: f64,
+        ttl_s: f64,
+        sequence: i64,
+        write_at: f64,
+    ) -> HilResponse {
         let mut dreq = DecideRequest::new(
-            Intent::language(&req.verb, &req.verb),
+            Intent::language(&proposal.verb, &proposal.verb),
             WorldView {
                 tau_max: vec![5.0],
                 ..WorldView::default()
             },
-            req.now_s,
+            now_s,
         );
-        dreq.sequence = if req.sequence == 0 { 1 } else { req.sequence };
-        dreq.command_id = if req.command_id.is_empty() {
-            format!("hil-{}", req.now_s)
+        dreq.sequence = sequence;
+        dreq.ttl_s = ttl_s;
+        dreq.command_id = if proposal.command_id.is_empty() {
+            format!("hil-{}", now_s)
         } else {
-            req.command_id.clone()
+            proposal.command_id.clone()
         };
-        if let Some(ttl) = req.ttl_override {
-            dreq.ttl_s = ttl;
-        } else if req.ttl_s > 0.0 {
-            dreq.ttl_s = req.ttl_s;
-        }
-        if let Some(action) = &req.action {
+        if let Some(action) = &proposal.action {
             let mut p = PolicyProposal::operator(action.clone(), "hil");
             p.policy_id = "hil".into();
             dreq.proposal = Some(p);
@@ -288,7 +399,6 @@ impl Authority {
                 };
             }
         };
-        let write_at = req.write_now_s.unwrap_or(req.now_s);
         let trace = self
             .governor
             .write_online(&write, &ActionParams::empty(), write_at);
@@ -385,7 +495,7 @@ pub fn call(root: impl AsRef<Path>, req: &HilRequest) -> anyhow::Result<HilRespo
     let mut stream = UnixStream::connect(ipc_path(root))?;
     writeln!(stream, "{}", serde_json::to_string(req)?)?;
     let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line)?;
+    BufReader::new(&stream).read_line(&mut line)?;
     Ok(serde_json::from_str(line.trim())?)
 }
 
@@ -415,4 +525,20 @@ pub fn nanos() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0)
+}
+
+pub fn layer_from_stage(stage: &str) -> BlockingLayer {
+    match stage {
+        "protocol" | "ipc" => BlockingLayer::ProtocolBlocked,
+        "semantic" | "authorize" => BlockingLayer::AuthorizationBlocked,
+        "egress" | "observe" => BlockingLayer::EgressBlocked,
+        "os" => BlockingLayer::OsBlocked,
+        "write" => BlockingLayer::None,
+        other
+            if other.starts_with("crash") || other.contains("prepare") || other.contains("ack") =>
+        {
+            BlockingLayer::CrashRecoveryBlocked
+        }
+        _ => BlockingLayer::AuthorizationBlocked,
+    }
 }

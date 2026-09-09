@@ -9,8 +9,6 @@ fn main() -> anyhow::Result<()> {
     let mut root = PathBuf::from("/tmp/realityos-hil");
     let mut op = "propose".to_string();
     let mut verb = "hold".to_string();
-    let mut now_s = 10.0;
-    let mut seq = 1i64;
     let mut id = "u1".to_string();
     let mut action: Option<Vec<f64>> = None;
     let mut skip_sensor = false;
@@ -20,8 +18,10 @@ fn main() -> anyhow::Result<()> {
             "--root" => root = PathBuf::from(args.next().unwrap_or_default()),
             "--op" => op = args.next().unwrap_or_default(),
             "--verb" => verb = args.next().unwrap_or_default(),
-            "--now" => now_s = args.next().unwrap_or_default().parse().unwrap_or(10.0),
-            "--seq" => seq = args.next().unwrap_or_default().parse().unwrap_or(1),
+            "--now" | "--seq" => {
+                // Production proposal cannot set authority time or sequence.
+                let _ = args.next();
+            }
             "--id" => id = args.next().unwrap_or_default(),
             "--action" => {
                 let raw = args.next().unwrap_or_default();
@@ -38,18 +38,23 @@ fn main() -> anyhow::Result<()> {
             _ => {}
         }
     }
-    let req = HilRequest {
-        op,
-        verb,
-        now_s,
-        sequence: seq,
-        command_id: id,
-        action,
-        ttl_s: 30.0,
-        skip_sensor,
-        write_now_s: None,
-        ttl_override: None,
-        skip_heartbeat: false,
+    let req = if skip_sensor || op == "hil_fault" {
+        let mut r = HilRequest::hil_fault(
+            &id,
+            &verb,
+            realityos_hil::HilFaultInjectionRequest {
+                skip_sensor,
+                ..Default::default()
+            },
+        );
+        r.op = op;
+        r.action = action;
+        r
+    } else {
+        let mut r = HilRequest::propose(&id, &verb);
+        r.op = op;
+        r.action = action;
+        r
     };
     let resp = call(&root, &req)?;
     println!("{}", serde_json::to_string(&resp)?);

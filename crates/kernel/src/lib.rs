@@ -22,7 +22,9 @@ pub mod violation;
 
 pub use belief::{BeliefState, Estimator, SensorHealth};
 pub use capability::{capabilities_for_kind, Capability};
-pub use clock::{finite_or_err, unix_now_s};
+pub use clock::{
+    arc_clock, finite_or_err, unix_now_s, AuthorityClock, FakeClock, OsMonotonicClock,
+};
 pub use correlation::CorrelationId;
 pub use decision::{DecisionStatus, UnifiedDecision};
 pub use error::{KernelError, KernelResult};

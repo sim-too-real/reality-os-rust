@@ -1,10 +1,12 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use realityos_core::{lifecycle, CertifiedCommand, IssuedCommand};
 use realityos_governor::{
     DriverEnvelopePack, Hil, OnlineLocked, Rail, RuntimeGovernor, RuntimeIdentity, RuntimeTrace,
     SafeState, Simulation, UnlockedRail,
 };
+use realityos_kernel::{AuthorityClock, FakeClock};
 use realityos_kernel::{
     CalibrationId, DesignContentHash, FirmwareId, ReleaseHash, SerialOrAsBuilt,
 };
@@ -141,6 +143,14 @@ impl<P: Plant> RuntimeSession<P, Hil> {
 
 impl<P: Plant> RuntimeSession<P, OnlineLocked> {
     pub fn start_online(args: StartArgs, plant: P, now_s: f64) -> Result<Self, SessionStartError> {
+        Self::start_online_with_clock(args, plant, FakeClock::arc(now_s))
+    }
+
+    pub fn start_online_with_clock(
+        args: StartArgs,
+        plant: P,
+        clock: Arc<dyn AuthorityClock>,
+    ) -> Result<Self, SessionStartError> {
         let mut opted = Vec::new();
         if args.require_verified_release == Some(false) {
             opted.push("verified_release");
@@ -203,7 +213,7 @@ impl<P: Plant> RuntimeSession<P, OnlineLocked> {
             key,
             args.first_online,
             args.actuator_ids.clone(),
-            now_s,
+            clock,
         )
         .map_err(|e| SessionStartError(e.0))?;
         Ok(Self {
@@ -353,14 +363,18 @@ impl<P: Plant, R: Rail> RuntimeSession<P, R> {
         if samples.iter().any(|(_, v)| !v.is_finite()) {
             return Err("sensor_sample_non_finite".into());
         }
-        if self.mode != RuntimeMode::Simulation && timestamp_s.is_none() {
+        if self.mode == RuntimeMode::Hil && timestamp_s.is_none() {
             return Err("sensor_timestamp_required".into());
         }
         let ts = timestamp_s.unwrap_or(now_s);
         if !ts.is_finite() || !now_s.is_finite() {
             return Err("sensor_timestamp_non_finite".into());
         }
-        if timestamp_s.is_some() && (ts - now_s).abs() > self.governor.config().sensor_stale_s {
+        // ONLINE freshness is authority receive time; device capture is informative.
+        if self.mode != RuntimeMode::Online
+            && timestamp_s.is_some()
+            && (ts - now_s).abs() > self.governor.config().sensor_stale_s
+        {
             return Err("sensor_timestamp_stale_vs_now".into());
         }
         self.last_sequence = self.last_sequence.saturating_add(1);

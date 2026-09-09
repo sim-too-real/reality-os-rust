@@ -27,6 +27,14 @@ impl SimulatedHardwarePort {
     pub fn disconnect(&mut self) {
         self.connected = false;
     }
+
+    pub fn reconnect(&mut self) {
+        self.connected = true;
+    }
+
+    pub fn replace_identity(&mut self, identity: HardwareIdentity) {
+        self.identity = identity;
+    }
 }
 
 impl HardwareDriverPort for SimulatedHardwarePort {

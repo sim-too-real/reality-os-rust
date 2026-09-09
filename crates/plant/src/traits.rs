@@ -25,6 +25,12 @@ pub trait Plant: sealed::Sealed {
     fn probe_identity(&mut self) -> Option<HardwareIdentity> {
         None
     }
+    /// Trusted acquisition when the plant wraps a [`HardwareDriverPort`].
+    /// `authority_now_s` is the authority monotonic receive hint passed to the driver.
+    fn read_driver_sensor(&mut self, authority_now_s: f64) -> Option<PlantResult<SensorPacket>> {
+        let _ = authority_now_s;
+        None
+    }
     fn write_count(&self) -> u32 {
         0
     }
@@ -72,6 +78,8 @@ pub struct HardwareIdentity {
     pub connected: bool,
     pub metal: bool,
     pub evidence_status: String,
+    /// Empty means topology was not reported; skip the exact-set check.
+    pub actuator_ids: Vec<String>,
 }
 
 impl HardwareIdentity {
@@ -84,6 +92,7 @@ impl HardwareIdentity {
             connected: true,
             metal: false,
             evidence_status: HARNESS_EVIDENCE.into(),
+            actuator_ids: Vec::new(),
         }
     }
 
@@ -108,6 +117,8 @@ pub struct SensorPacket {
     pub sequence: u64,
     pub sensor_id: String,
     pub calibration_hash: String,
+    /// Set by the authority on ingest. Device `timestamp_s` is capture-time only.
+    pub authority_receive_s: Option<f64>,
 }
 
 impl SensorPacket {
@@ -120,6 +131,7 @@ impl SensorPacket {
             sequence: 0,
             sensor_id: String::new(),
             calibration_hash: String::new(),
+            authority_receive_s: None,
         }
     }
 
@@ -133,6 +145,7 @@ impl SensorPacket {
             sequence: 0,
             sensor_id: String::new(),
             calibration_hash: String::new(),
+            authority_receive_s: None,
         }
     }
 

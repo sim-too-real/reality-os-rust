@@ -7,7 +7,8 @@ Evidence for process separation and exclusive virtual I/O. Not metal.
 ```text
 hil-untrusted (Process A)
   VLA / LLM / ROS / planner / hostile
-  may send: HilRequest (verb, optional action)
+  may send: ProductionProposal (verb, optional action, command_id, proposer)
+  must never send: now_s / write_now_s / safety TTL as authority
   must never receive: signing key, OnlineWrite, Plant, bus fd, journal
         │ Unix socket IPC (jsonl)
         ▼
@@ -45,7 +46,8 @@ On the HIL host:
 * A same-UID process that `chmod`s the log, or writes `/proc/<pid>/fd/N`,
   can recover the inode.
 * This is not udev, systemd, or a dedicated service user. Those remain
-  operational deployment choices on a real machine.
+  operational deployment choices on a real machine. `scripts/hil-deploy-users.sh`
+  is the documented two-user harness.
 
 ## Journal attacks (authority process down)
 
@@ -73,21 +75,37 @@ external sealed medium the autonomy host cannot rewrite.
 They consume public APIs. `hil-faults` on `realityos-plant` is a test-only
 `REALITYOS_HIL_CRASH` exit hook, compiled out without the feature.
 
+## Reconnect / hot-swap
+
+If the physical identity changes after ONLINE startup, or the device
+disconnects:
+
+* the runtime instance enters FAULT / ABORT
+* further writes are zero
+* operator `clear_estop` cannot restore the binding
+* recovery is a complete ONLINE restart (`new_online`)
+
+Reconnect to a different device under the previously authorized instance is
+refused. Root is outside this threat model.
+
+## OS users (deployment / HIL, not default CI)
+
+See `scripts/hil-deploy-users.sh`. Authority user owns the socket, signing
+key, journal, and actuator endpoint. Autonomy user may connect to proposal
+IPC only. GitHub Actions does not prove this. Do not treat a unit test as
+multi-user success.
+
 ## Physical testing
 
 Not justified. Blocker: no independent STO/SS1 / safety PLC, and exclusive
 ownership is not proven against root or same-UID fd escape.
 
+This is semantic execution authority, not independent physical energy safety.
+
 ## Measured proof (from `docs/hil_proof.json`)
 
-Headline is only the numbers the campaign wrote:
+Headline is only the numbers the campaign **derived** from case write deltas
+(`realityos.hil_proof/2`). Re-run: `cargo test -p realityos-hil --test campaign`.
 
-* 25 hostile cases
-* 0 unauthorized driver writes
-* 1 valid command
-* 1 valid driver write
-* 0 duplicate writes after crash/restart
-* 0 successful direct device opens from the untrusted process
-* 8 journal-continuity failures detected
-
-Re-run: `cargo test -p realityos-hil --test campaign`.
+`unauthorized_write` is `!expected_authorized && write_delta > 0`. Aggregates
+are recomputed and checked before the JSON is written.
