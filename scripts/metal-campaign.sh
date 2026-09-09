@@ -129,7 +129,11 @@ prepare_usb_serial_host() {
   # Crash-replay and disconnect restart close exclusive, then reopen. Our
   # serve may still hold the tty for a few hundred ms; ModemManager can
   # grab it in that gap. Wait for our close, then refuse a foreign holder.
-  if command -v fuser >/dev/null 2>&1 && [[ -e "$real" ]]; then
+  # The PTY Protocol 2.0 stand-in must keep the master open. fuser on
+  # /dev/pts/N reports that python as a holder; treating it as
+  # ModemManager exits 2 before the first serve (CI os-users). Exclusive
+  # tty is a USB-UART check. PTY open is already non-TIOCEXCL.
+  if [[ "$PTY_SEQUENCE_ACTIVE" != "1" ]] && command -v fuser >/dev/null 2>&1 && [[ -e "$real" ]]; then
     wait_tty_free "$real" || true
     if fuser "$real" >/dev/null 2>&1; then
       release_foreign_tty_holders "$real"

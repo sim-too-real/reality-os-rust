@@ -259,6 +259,11 @@ fn xl330_pty_discover_finds_wizard_id_via_broadcast() {
         "probe/discover must not torque-on"
     );
     driver.close();
+    assert_eq!(
+        recorded_writes(root.join("bus")),
+        0,
+        "identify-only close must not write torque-off"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 

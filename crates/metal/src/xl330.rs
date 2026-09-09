@@ -848,7 +848,9 @@ impl HardwareDriverPort for Xl330Driver {
     }
 
     fn close(&mut self) {
-        if self.bus_up() {
+        // Identify-only probe never enables torque. Writing 0 here is still a
+        // physical bus write and used to increment egress before serve.
+        if self.bus_up() && self.torque_enabled {
             let _ = self.write_reg(ADDR_TORQUE_ENABLE, &[0], "close_torque_off", None, false);
             self.torque_enabled = false;
         }
