@@ -111,7 +111,7 @@ start_auth() {
       >"$ROOT/authority.out" 2>"$ROOT/authority.err" &
   fi
   AUTH_PID=$!
-  for _ in $(seq 1 200); do
+  for _ in $(seq 1 400); do
     if [[ -S "$ROOT/ipc.sock" ]]; then
       break
     fi
@@ -141,6 +141,10 @@ AUTH_PID=""
 cleanup() { stop_auth || true; }
 trap cleanup EXIT
 start_auth 1
+if [[ -e "$DEVICE" ]]; then
+  chown "$AUTHORITY_USER:$AUTHORITY_USER" "$DEVICE" 2>/dev/null || true
+  chmod 0600 "$DEVICE" 2>/dev/null || true
+fi
 
 PROBE="$(as_autonomy env METAL_AUTHORITY_PID="$AUTH_PID" "$PROP" --root "$ROOT" --authority-pid "$AUTH_PID" os-probe)"
 echo "os-probe=$PROBE"

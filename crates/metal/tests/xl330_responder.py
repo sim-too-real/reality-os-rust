@@ -122,6 +122,7 @@ def init_regs() -> bytearray:
     regs[0:2] = struct.pack("<H", 1190)
     regs[6] = 46
     regs[7] = 1
+    regs[11] = 3
     regs[38:40] = struct.pack("<H", 200)
     regs[120:122] = struct.pack("<H", 1234)
     regs[126:128] = struct.pack("<h", 0)

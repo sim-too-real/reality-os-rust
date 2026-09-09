@@ -41,7 +41,7 @@ chmod 0600 "$ROOT/signing.key"
 if [[ -n "$DEVICE" && -e "$DEVICE" ]]; then
   chown "$AUTHORITY_USER:$AUTHORITY_USER" "$DEVICE" 2>/dev/null || true
   chmod 0600 "$DEVICE" 2>/dev/null || true
-  if [[ -c "$DEVICE" ]] && ! id -nG "$AUTHORITY_USER" | grep -qw dialout; then
+  if [[ -c "$DEVICE" && "$DEVICE" != /dev/pts/* ]] && ! id -nG "$AUTHORITY_USER" | grep -qw dialout; then
     echo "note: add $AUTHORITY_USER to dialout if device chmod/chown is refused" >&2
   fi
 fi

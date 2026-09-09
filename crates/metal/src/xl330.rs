@@ -23,9 +23,9 @@ use crate::identity::{usb_identity_for_tty, MeasuredIdentity};
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_write, find_header, is_xl330_model,
     le_i32, le_u16, ADDR_CURRENT_LIMIT, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION,
-    ADDR_HARDWARE_ERROR, ADDR_MODEL_NUMBER, ADDR_PRESENT_CURRENT, ADDR_PRESENT_POSITION,
-    ADDR_PRESENT_VELOCITY, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY,
-    ADDR_REALTIME_TICK, ADDR_TORQUE_ENABLE,
+    ADDR_HARDWARE_ERROR, ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE, ADDR_PRESENT_CURRENT,
+    ADDR_PRESENT_POSITION, ADDR_PRESENT_VELOCITY, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL,
+    ADDR_PROFILE_VELOCITY, ADDR_REALTIME_TICK, ADDR_TORQUE_ENABLE, OPERATING_MODE_POSITION,
 };
 
 pub struct Xl330Driver {
@@ -201,8 +201,21 @@ impl Xl330Driver {
     }
 
     fn apply_bench_limits(&mut self) -> PlantResult<()> {
-        // Current limit is EEPROM; only write with torque off, and only if needed.
+        // Current limit / operating mode are EEPROM; only write with torque off, and only if needed.
         self.write_reg(ADDR_TORQUE_ENABLE, &[0], "setup_torque_off", None, false)?;
+        let mode = self
+            .read_reg(ADDR_OPERATING_MODE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if mode != Some(OPERATING_MODE_POSITION) {
+            self.write_reg(
+                ADDR_OPERATING_MODE,
+                &[OPERATING_MODE_POSITION],
+                "setup_operating_mode_position",
+                None,
+                false,
+            )?;
+        }
         let want = self.cfg.current_limit_milli;
         let got = self
             .read_reg(ADDR_CURRENT_LIMIT, 2)

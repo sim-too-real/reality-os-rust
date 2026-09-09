@@ -12,7 +12,7 @@ Physical-evidence milestone. Not a kernel redesign. Not certified safety.
 | Interface | Dynamixel Protocol 2.0, default **57 600** 8N1 on `/dev/ttyUSB*` (probe also tries 115 200 and 1 Mbps) |
 | Max configured velocity | Profile Velocity **20** (≈ 4.6 rpm) |
 | Max configured effort | Current Limit **200 mA**; Reality OS `tau_max` **0.2** |
-| Max position step | **8 ticks** (≈ 0.7°) |
+| Operating mode | Driver sets EEPROM **position control (3)** if it is not already |
 | Mechanical constraint | Horn fixture or zip-tie stop; **no load**, no linkage, no person in the sweep |
 
 Why this is low-energy: stall torque is about **0.52 N·m** at 5 V, plastic gears, no mobile base, no high-voltage bus. Unexpected motion cannot throw a mass or travel.
@@ -80,6 +80,6 @@ sudo -E env REALITYOS_METAL_DEVICE=/dev/ttyUSB0 \
 
 `REALITYOS_METAL_BAUD` and `REALITYOS_METAL_SERVO_ID` are optional. Probe tries the configured pair first, then common XL330 baud/id pairs, and writes the working pair into `metal.json`. Each campaign wipes `REALITYOS_METAL_ROOT` so `--first-online` is not refused by a leftover journal.
 
-`scripts/metal-os-boundary.sh` (CI `os-users`) proves the 0751 / device-open counting path with a dummy 0600 file. It is **not** a substitute for the XL330 campaign.
+`scripts/metal-os-boundary.sh` (CI `os-users`) proves the 0751 / device-open counting path with a dummy 0600 file, then a two-UID `serve` + hold on the PTY Protocol 2.0 stand-in (`REALITYOS_METAL_ALLOW_PTY=1`). That is **not** a substitute for the XL330 campaign and does not write `metal_proof.json`.
 
 This Cloud Agent VM has **no** USB/serial actuator and **no** self-hosted worker. Attach a Cursor self-hosted worker (`cursor worker start`) on the bench host that can see `/dev/ttyUSB*` / `/dev/ttyACM*`. Until that happens, the experiment is blocked. That is not a software-architecture remaining task.
