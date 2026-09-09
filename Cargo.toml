@@ -16,6 +16,7 @@ members = [
     "crates/gauntlet",
     "crates/vport",
     "crates/hil",
+    "crates/metal",
     "apps/ros-governor",
 ]
 default-members = [
@@ -34,6 +35,7 @@ default-members = [
     "crates/gauntlet",
     "crates/vport",
     "crates/hil",
+    "crates/metal",
     "apps/ros-governor",
 ]
 
@@ -62,6 +64,8 @@ realityos-agent = { path = "crates/agent" }
 realityos-gauntlet = { path = "crates/gauntlet" }
 realityos-vport = { path = "crates/vport" }
 realityos-hil = { path = "crates/hil" }
+realityos-metal = { path = "crates/metal" }
+serialport = { version = "4.7", default-features = false }
 
 serde = { version = "1", features = ["derive"] }
 fs2 = "0.4"

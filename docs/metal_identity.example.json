@@ -1,0 +1,16 @@
+{
+  "device": "/dev/ttyUSB0",
+  "servo_id": 1,
+  "baud": 57600,
+  "release_hash": "rel-metal-xl330-1",
+  "calibration_id": "xl330-bench-cal-1",
+  "expected_serial": "",
+  "expected_firmware": "",
+  "max_profile_velocity": 20,
+  "max_profile_acceleration": 10,
+  "max_position_delta_ticks": 8,
+  "current_limit_milli": 200,
+  "tau_max": 0.2,
+  "freshness_threshold_s": 2.0,
+  "campaign_hooks": false
+}
