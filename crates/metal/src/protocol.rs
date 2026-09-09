@@ -25,6 +25,8 @@ pub const DRIVE_MODE_VELOCITY_BASED: u8 = 0;
 /// EEPROM. 3 = position control (factory XL330 default).
 pub const ADDR_OPERATING_MODE: u16 = 11;
 pub const OPERATING_MODE_POSITION: u8 = 3;
+/// EEPROM. Signed. Wizard "zero the horn" shifts Present outside 0–4095.
+pub const ADDR_HOMING_OFFSET: u16 = 20;
 /// EEPROM. Unit 0.1 V. Factory XL330 max 70 / min 35.
 pub const ADDR_MAX_VOLTAGE_LIMIT: u16 = 32;
 pub const ADDR_MIN_VOLTAGE_LIMIT: u16 = 34;

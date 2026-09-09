@@ -115,5 +115,7 @@ First-contact script invariants (found on the PTY sequence, would fail the first
 * Wizard Velocity P Gain `0` leaves the profile loop dead. Setup writes factory **100** when the register is below 20. It does not lower a higher Wizard P.
 * Protocol 2.0 ID **0** is valid. Broadcast sniff and `prefer_servo_id` used to drop it as empty, so a Wizard ID-0 bus never bound.
 * `valid_nudge` uses `action=0.2` (8 ticks at `tau_max=0.2`). The old `0.05` step was 2 ticks and can disappear into plastic-gear backlash on a real horn.
+* Wizard Homing Offset shifts Present outside the 0–4095 EEPROM window. Goal=present then NAKs. If present is outside and offset ≠ 0, setup writes offset 0 with torque off (no physical motion) and re-reads present. A true outside-window present with offset 0 still refuses.
+* Hardware Error reboot can re-enable torque (Startup Configuration). Setup torque-offs again before EEPROM writes; otherwise drive/mode/PWM NAKs and a stale Wizard goal moves.
 
 This Cloud Agent VM has **no** USB/serial actuator and **no** self-hosted worker. Attach a Cursor self-hosted worker (`cursor worker start`) on the bench host that can see `/dev/ttyUSB*` / `/dev/ttyACM*` / `/dev/ttyCH341*`. Until that happens, the experiment is blocked. That is not a software-architecture remaining task.

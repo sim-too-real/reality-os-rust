@@ -282,6 +282,51 @@ fn xl330_pty_raises_wizard_zero_velocity_p_so_nudge_can_track() {
 }
 
 #[test]
+fn xl330_pty_clears_wizard_homing_offset_so_present_is_in_window() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_HOMING", "1")]);
+    let root = metal_test_root("pty-homing");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver =
+        Xl330Driver::open(cfg, &root).expect("clear Homing Offset 10000 with torque off");
+    assert_eq!(driver.applied_homing_offset(), 0);
+    driver.read_sensor(0.0).expect("sensor");
+    assert_eq!(
+        driver.last_present_position(),
+        2048,
+        "clearing Homing Offset must not yank the horn; present returns to encoder space"
+    );
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold after clearing homing offset");
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_torque_off_after_hw_error_reboot_so_eeprom_can_write() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_HW_ERROR", "1")]);
+    let root = metal_test_root("pty-hw-error");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("reboot then torque-off so PWM-mode EEPROM can become position");
+    driver.read_sensor(0.0).expect("sensor");
+    assert_eq!(
+        driver.last_present_position(),
+        2048,
+        "stale goal 0 must not yank after Startup Configuration torque-on"
+    );
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold after hw-error reboot");
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_refuses_torque_when_present_outside_wizard_limits() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_PRESENT_OUTSIDE", "1")]);

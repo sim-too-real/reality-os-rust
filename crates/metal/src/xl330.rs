@@ -25,13 +25,14 @@ use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
     instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, unique_status_ids, ADDR_BUS_WATCHDOG,
     ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION,
-    ADDR_HARDWARE_ERROR, ADDR_MAX_POSITION_LIMIT, ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT,
-    ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN,
-    ADDR_PRESENT_POSITION, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY,
-    ADDR_PWM_LIMIT, ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE,
-    ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN, BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED,
-    FACTORY_POSITION_P_GAIN, FACTORY_PWM_LIMIT, FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN,
-    MIN_PWM_LIMIT, MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION, STATUS_RETURN_ALL,
+    ADDR_HARDWARE_ERROR, ADDR_HOMING_OFFSET, ADDR_MAX_POSITION_LIMIT, ADDR_MAX_VOLTAGE_LIMIT,
+    ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE,
+    ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL,
+    ADDR_PROFILE_VELOCITY, ADDR_PWM_LIMIT, ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL,
+    ADDR_TORQUE_ENABLE, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN, BROADCAST_ID,
+    DRIVE_MODE_VELOCITY_BASED, FACTORY_POSITION_P_GAIN, FACTORY_PWM_LIMIT, FACTORY_VELOCITY_P_GAIN,
+    MIN_POSITION_P_GAIN, MIN_PWM_LIMIT, MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION,
+    STATUS_RETURN_ALL,
 };
 
 pub struct Xl330Driver {
@@ -62,6 +63,7 @@ pub struct Xl330Driver {
     position_p_gain: u16,
     velocity_p_gain: u16,
     pwm_limit: u16,
+    homing_offset: i32,
     bus_watchdog: u8,
 }
 
@@ -122,6 +124,7 @@ impl Xl330Driver {
             position_p_gain: 0,
             velocity_p_gain: 0,
             pwm_limit: 0,
+            homing_offset: 0,
             bus_watchdog: 0,
         };
         driver.connect_serial()?;
@@ -222,6 +225,10 @@ impl Xl330Driver {
 
     pub fn applied_pwm_limit(&self) -> u16 {
         self.pwm_limit
+    }
+
+    pub fn applied_homing_offset(&self) -> i32 {
+        self.homing_offset
     }
 
     pub fn applied_bus_watchdog(&self) -> u8 {
@@ -353,6 +360,16 @@ impl Xl330Driver {
             std::thread::sleep(Duration::from_millis(400));
             self.ping_and_identify()
                 .map_err(|e| PlantError::refused(format!("dxl_reboot_identify:{e}")))?;
+            // Startup Configuration can re-enable torque after reboot.
+            // EEPROM writes then access-NAK, and a stale Wizard goal moves.
+            self.write_reg(
+                ADDR_TORQUE_ENABLE,
+                &[0],
+                "setup_torque_off_after_reboot",
+                None,
+                false,
+            )?;
+            self.torque_enabled = false;
             self.last_hw_error = self
                 .read_reg(ADDR_HARDWARE_ERROR, 1)
                 .ok()
@@ -542,18 +559,43 @@ impl Xl330Driver {
         // Torque-on tracks Goal Position. A stale Wizard goal (often 0)
         // would move before any certified command. Match present first.
         // Not counted as command egress.
-        let present = self
+        let mut present = self
             .read_reg(ADDR_PRESENT_POSITION, 4)
             .ok()
             .and_then(|b| le_i32(&b))
             .ok_or_else(|| PlantError::refused("dxl_present_unreadable_before_torque"))?;
+        // Wizard Homing Offset shifts Present without moving the horn.
+        // Limits stay 0–4095, so a "zeroed" horn is outside the window and
+        // goal=present would NAK. Clearing offset with torque off is not motion.
+        let offset = self
+            .read_reg(ADDR_HOMING_OFFSET, 4)
+            .ok()
+            .and_then(|b| le_i32(&b))
+            .unwrap_or(0);
+        self.homing_offset = offset;
+        if (present < self.min_position || present > self.max_position) && offset != 0 {
+            self.write_reg(
+                ADDR_HOMING_OFFSET,
+                &0i32.to_le_bytes(),
+                "setup_homing_offset_zero",
+                None,
+                false,
+            )?;
+            self.homing_offset = 0;
+            std::thread::sleep(Duration::from_millis(50));
+            present = self
+                .read_reg(ADDR_PRESENT_POSITION, 4)
+                .ok()
+                .and_then(|b| le_i32(&b))
+                .ok_or_else(|| PlantError::refused("dxl_present_unreadable_before_torque"))?;
+        }
         // Do not yank present onto the Wizard window. Clamping then
         // torque-on would move before any certified command and break
         // the zero-motion baseline.
         if present < self.min_position || present > self.max_position {
             return Err(PlantError::refused(format!(
-                "dxl_present_outside_wizard_limits:present={present}:min={}:max={}",
-                self.min_position, self.max_position
+                "dxl_present_outside_wizard_limits:present={present}:min={}:max={}:homing_offset={}",
+                self.min_position, self.max_position, self.homing_offset
             )));
         }
         self.last_present = present;

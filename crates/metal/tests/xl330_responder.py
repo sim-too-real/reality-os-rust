@@ -147,6 +147,11 @@ def init_regs() -> bytearray:
         regs[52:56] = struct.pack("<i", 2000)
     if os.environ.get("REALITYOS_METAL_PTY_PWM") == "1":
         regs[11] = 16
+    if os.environ.get("REALITYOS_METAL_PTY_HW_ERROR") == "1":
+        # Latched Hardware Error Status. Reboot clears it and (on XL330)
+        # Startup Configuration can re-enable torque; EEPROM then needs torque off.
+        regs[70] = 4
+        regs[11] = 16
     p_gain = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_P") == "1" else 400
     regs[84:86] = struct.pack("<H", p_gain)
     vel_p = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_VEL_P") == "1" else 100
@@ -164,6 +169,9 @@ def init_regs() -> bytearray:
     regs[132:136] = struct.pack("<i", 2048)
     if os.environ.get("REALITYOS_METAL_PTY_PRESENT_OUTSIDE") == "1":
         regs[132:136] = struct.pack("<i", 100)
+    if os.environ.get("REALITYOS_METAL_PTY_HOMING") == "1":
+        regs[20:24] = struct.pack("<i", 10000)
+        regs[132:136] = struct.pack("<i", 12048)
     regs[144:146] = struct.pack("<H", 50)
     return regs
 
@@ -207,6 +215,16 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
                 if goal != present:
                     regs[132:136] = regs[116:120]
             return b"", 0
+        # Protocol 2.0 access error: EEPROM (0–63) is read-only while torque is on.
+        if addr < 64 and regs[64] == 1:
+            return b"", 0x40
+        if addr == 20 and len(data) >= 4:
+            old = struct.unpack_from("<i", regs, 20)[0]
+            new = struct.unpack_from("<i", data)[0]
+            present = struct.unpack_from("<i", regs, 132)[0]
+            regs[addr : addr + len(data)] = data
+            regs[132:136] = struct.pack("<i", present - old + new)
+            return b"", 0
         regs[addr : addr + len(data)] = data
         if addr == 116 and len(data) >= 4:
             p_gain = struct.unpack_from("<H", regs, 84)[0]
@@ -219,6 +237,8 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         regs[70] = 0
         regs[68] = 2  # RAM reset; factory Status Return Level
         regs[98] = 0
+        if os.environ.get("REALITYOS_METAL_PTY_HW_ERROR") == "1":
+            regs[64] = 1  # Startup Configuration torque-on after reboot
         return b"", 0
     return b"", 0
 
