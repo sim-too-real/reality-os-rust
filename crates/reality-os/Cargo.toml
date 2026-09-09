@@ -17,5 +17,12 @@ thiserror.workspace = true
 sha2.workspace = true
 hex.workspace = true
 
+[features]
+default = []
+fixtures = []
+
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true

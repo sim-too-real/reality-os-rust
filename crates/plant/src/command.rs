@@ -58,4 +58,6 @@ pub struct ExecuteBind<'a> {
     pub require_monotonic_sequence: bool,
     pub require_signature: bool,
     pub signing_key: Option<&'a [u8]>,
+    /// Set only by `RuntimeGovernor<OnlineLocked>`. Weakening flags are ignored.
+    pub force_online_rails: bool,
 }

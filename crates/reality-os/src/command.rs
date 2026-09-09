@@ -20,7 +20,7 @@ pub struct CertifiedCommand {
     as_built_hash: String,
     #[serde(default)]
     calibration_ids: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_deserializing)]
     acknowledged: bool,
     #[serde(default)]
     issuer_allowed_action: Vec<f64>,
@@ -144,6 +144,13 @@ impl CertifiedCommand {
         now_s.is_finite() && now_s > self.expires_at_s
     }
 
+    fn invalidate_signature(&mut self) {
+        self.signature.clear();
+        self.payload_hash.clear();
+        self.signing_scheme.clear();
+        self.signer.clear();
+    }
+
     pub fn with_identity(
         mut self,
         release_hash: impl Into<String>,
@@ -156,21 +163,25 @@ impl CertifiedCommand {
         if !cal.is_empty() {
             self.calibration_ids = vec![cal];
         }
+        self.invalidate_signature();
         self
     }
 
     pub fn with_sensor_packet_hash(mut self, hash: impl Into<String>) -> Self {
         self.sensor_packet_hash = hash.into();
+        self.invalidate_signature();
         self
     }
 
     pub fn with_actuator_ids(mut self, ids: Vec<String>) -> Self {
         self.actuator_ids = ids;
+        self.invalidate_signature();
         self
     }
 
     pub fn with_mode(mut self, mode: impl Into<String>) -> Self {
         self.mode = mode.into();
+        self.invalidate_signature();
         self
     }
 
@@ -215,14 +226,41 @@ impl CertifiedCommand {
         if !errs.is_empty() {
             return Err(errs);
         }
+        let mut mutated = false;
         if self.release_hash.is_empty() {
             self.release_hash = release_hash.into();
+            mutated = true;
         }
         if self.as_built_hash.is_empty() {
             self.as_built_hash = as_built.into();
+            mutated = true;
         }
         if self.calibration_ids.is_empty() && !calibration_id.is_empty() {
             self.calibration_ids = vec![calibration_id.into()];
+            mutated = true;
+        }
+        if mutated {
+            if !self.signature.is_empty() {
+                return Err(vec!["cannot_bind_identity_after_sign".into()]);
+            }
+            self.invalidate_signature();
+        }
+        Ok(self)
+    }
+
+    pub fn bind_evidence(mut self, expected_hash: &str) -> Result<Self, Vec<String>> {
+        if expected_hash.is_empty() {
+            return Err(vec!["missing_expected_sensor_packet_hash".into()]);
+        }
+        if !self.sensor_packet_hash.is_empty() && self.sensor_packet_hash != expected_hash {
+            return Err(vec!["foreign_sensor_packet_hash".into()]);
+        }
+        if self.sensor_packet_hash.is_empty() {
+            if !self.signature.is_empty() {
+                return Err(vec!["cannot_bind_evidence_after_sign".into()]);
+            }
+            self.sensor_packet_hash = expected_hash.into();
+            self.invalidate_signature();
         }
         Ok(self)
     }
@@ -432,5 +470,51 @@ mod tests {
         let err = narrow_certified_command(cmd, DecisionStatus::Modify, Some(vec![-0.1]), None)
             .unwrap_err();
         assert!(err.to_string().contains("only narrow"));
+    }
+
+    #[test]
+    fn deserialize_cannot_ack() {
+        let cert = Certificate::new(DecisionStatus::Allow, "ok");
+        let cmd = CertifiedCommand::issue("c", 1, 0.0, 10.0, cert, vec![0.5])
+            .unwrap()
+            .acknowledge();
+        let raw = serde_json::to_string(&cmd).unwrap();
+        let back: CertifiedCommand = serde_json::from_str(&raw).unwrap();
+        assert!(!back.is_acknowledged());
+    }
+
+    #[test]
+    fn bind_after_sign_refuses() {
+        let cert = Certificate::new(DecisionStatus::Allow, "ok");
+        let cmd = CertifiedCommand::issue("c", 1, 0.0, 10.0, cert, vec![0.5])
+            .unwrap()
+            .sign(b"key");
+        let err = cmd.bind_identity("rel", "", "cal").unwrap_err();
+        assert!(err.iter().any(|e| e.contains("after_sign")));
+    }
+}
+
+/// Test/demo constructors. Not part of the production certifier path.
+/// Enable with feature `fixtures`. Production `decide()` uses crate-private issue.
+#[cfg(any(test, feature = "fixtures"))]
+pub mod fixture {
+    use super::*;
+
+    pub fn issue(
+        command_id: impl Into<String>,
+        sequence: i64,
+        now_s: f64,
+        ttl_s: f64,
+        certificate: Certificate,
+        allowed_action: Vec<f64>,
+    ) -> KernelResult<CertifiedCommand> {
+        CertifiedCommand::issue(
+            command_id,
+            sequence,
+            now_s,
+            ttl_s,
+            certificate,
+            allowed_action,
+        )
     }
 }

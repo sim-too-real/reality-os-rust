@@ -7,7 +7,8 @@ mod sealed {
 }
 
 /// Plant protocol. ONLINE implementations must refuse `act` outside certified scope.
-/// Sealed: only this crate may implement `Plant`.
+/// Sealed: only this crate may implement `Plant`. External crates implement
+/// [`HardwareDriverPort`] and wrap it in [`crate::HardwareBackedPlant`].
 pub trait Plant: sealed::Sealed {
     fn caps(&self) -> PlantCaps;
     fn is_online(&self) -> bool;
@@ -27,12 +28,26 @@ pub trait Plant: sealed::Sealed {
     fn write_count(&self) -> u32 {
         0
     }
+    /// Irreversible production lock. Default is a no-op (SIM plants that ignore it
+    /// still face `force_online_rails` from `RuntimeGovernor<OnlineLocked>`).
+    fn lock_production(&mut self, signing_key: &[u8]) {
+        let _ = signing_key;
+    }
+    fn production_locked(&self) -> bool {
+        false
+    }
+    fn production_key_hash(&self) -> Option<&str> {
+        None
+    }
 }
 
-/// Robot-side port. Governor depends on [`Plant`], never on this trait.
-/// A port never certifies or acknowledges a command.
-/// Sealed: only this crate may implement a driver port.
-pub trait HardwareDriverPort: sealed::Sealed {
+/// Robot-side transport. Governor depends on [`Plant`], never on this trait.
+///
+/// **Unsealed on purpose.** Vendor crates may implement this port. A port cannot
+/// certify, acknowledge, widen, or mint the certified-write token. Calling
+/// `write_action` on a port you own is transport ownership — not semantic
+/// certification. Machine-wide single-writer is an OS/bus topology property.
+pub trait HardwareDriverPort {
     fn probe_identity(&self) -> HardwareIdentity;
     fn read_sensor(&mut self, now_s: f64) -> PlantResult<SensorPacket>;
     fn write_action(&mut self, action: &[f64], params: &ActionParams)
@@ -168,4 +183,3 @@ pub fn hash_sensor_packet(
 
 impl sealed::Sealed for crate::sim::SimPlant {}
 impl<P: HardwareDriverPort> sealed::Sealed for crate::backed::HardwareBackedPlant<P> {}
-impl sealed::Sealed for crate::harness::SimulatedHardwarePort {}

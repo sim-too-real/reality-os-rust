@@ -45,6 +45,10 @@ pub fn command_payload_hash(cmd: &dyn ActuationCommand) -> String {
     hex::encode(Sha256::digest(raw.as_bytes()))
 }
 
+pub fn signing_key_hash(key: &[u8]) -> String {
+    hex::encode(Sha256::digest(key))
+}
+
 pub fn sign_payload(key: &[u8], payload_hash: &str) -> String {
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC key");
     mac.update(payload_hash.as_bytes());

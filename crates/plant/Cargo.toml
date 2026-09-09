@@ -21,7 +21,8 @@ default = []
 mujoco = []
 
 [dev-dependencies]
-trybuild = "1"
+trybuild.workspace = true
+proptest.workspace = true
 
 [lints]
 workspace = true

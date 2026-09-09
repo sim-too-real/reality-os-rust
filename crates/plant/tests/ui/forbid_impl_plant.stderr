@@ -16,8 +16,6 @@ help: the following other types implement trait `traits::sealed::Sealed`
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SimPlant`
   | impl<P: HardwareDriverPort> sealed::Sealed for crate::backed::HardwareBackedPlant<P> {}
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HardwareBackedPlant<P>`
-  | impl sealed::Sealed for crate::harness::SimulatedHardwarePort {}
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SimulatedHardwarePort`
 note: required by a bound in `Plant`
  --> src/traits.rs
   |
@@ -27,4 +25,3 @@ note: required by a bound in `Plant`
   = help: the following types implement the trait:
             realityos_plant::SimPlant
             realityos_plant::HardwareBackedPlant<P>
-            realityos_plant::SimulatedHardwarePort

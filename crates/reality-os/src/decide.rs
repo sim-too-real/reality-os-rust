@@ -2,7 +2,7 @@ use realityos_kernel::{DecisionStatus, UnifiedDecision};
 use serde::{Deserialize, Serialize};
 
 use crate::attestation::CertificateLedger;
-use crate::authority::{is_forbidden_tool, screen_external_proposal};
+use crate::authority::{is_forbidden_tool, screen_proposal};
 use crate::certificate::Certificate;
 use crate::command::CertifiedCommand;
 use crate::domains::{DomainRegistry, WorldView};
@@ -113,20 +113,7 @@ impl RealityOs {
         }
 
         if let Some(p) = &req.proposal {
-            let screen = screen_external_proposal(&p.source);
-            if screen.learned_actuator_authority {
-                return self.finalize(
-                    Certificate::new(DecisionStatus::Abort, "learned_actuator_authority")
-                        .with_reasons(["learned_actuator_authority"]),
-                    None,
-                    vec![],
-                    0,
-                    req.now_s,
-                    req.ttl_s,
-                    &req.command_id,
-                    req.sequence,
-                );
-            }
+            let _screen = screen_proposal(p.class);
         }
 
         let mog = evaluate_manip_observation_gate(

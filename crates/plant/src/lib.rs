@@ -6,6 +6,7 @@
 pub mod backed;
 pub mod caps;
 pub mod command;
+pub mod consume;
 pub mod dynamics;
 pub mod egress;
 pub mod error;
@@ -20,8 +21,9 @@ pub mod traits;
 mod write_guard;
 
 pub use backed::HardwareBackedPlant;
-pub use caps::{ActionParams, PlantCaps, PlantRealized};
+pub use caps::{check_hard_action_bounds, ActionParams, PlantCaps, PlantRealized};
 pub use command::{ActuationCommand, ExecuteBind};
+pub use consume::{ConsumePhase, CrashPoint};
 pub use dynamics::{AnalyticIntegrator, DynamicsBackend, DynamicsState, MujocoBackend};
 pub use egress::{CommandEgress, RecordingCommandEgress, RefuseCommandEgress};
 pub use error::{PlantError, PlantResult};
@@ -32,7 +34,7 @@ pub use ledger::{CommandLedger, ContinuityState};
 pub use safety_protocol::{SafeTransition, SafetyFrame};
 pub use signing::{
     action_within_issuer_envelope, command_payload_hash, sign_payload, signature_violations,
-    SIGNING_SCHEME,
+    signing_key_hash, SIGNING_SCHEME,
 };
 pub use sim::SimPlant;
 pub use traits::{
@@ -148,6 +150,7 @@ mod tests {
             require_monotonic_sequence: false,
             require_signature: false,
             signing_key: None,
+            force_online_rails: false,
         };
         let out = execute_certified_command(
             &mut p,
@@ -161,6 +164,73 @@ mod tests {
         assert_eq!(out.outcome, CommandOutcome::Executed);
         assert_eq!(p.write_count(), 1);
         assert!(!out.realized.unwrap().metal);
+    }
+
+    struct ExternalStylePort;
+
+    impl HardwareDriverPort for ExternalStylePort {
+        fn probe_identity(&self) -> HardwareIdentity {
+            HardwareIdentity::harness("EXT-1")
+        }
+        fn read_sensor(&mut self, now_s: f64) -> PlantResult<SensorPacket> {
+            Ok(SensorPacket::from_samples(vec![("x".into(), 0.0)], now_s))
+        }
+        fn write_action(
+            &mut self,
+            action: &[f64],
+            _params: &ActionParams,
+        ) -> PlantResult<PlantRealized> {
+            Ok(PlantRealized::sim([("n".into(), action.len() as f64)]))
+        }
+        fn engage_hw_estop(&mut self, _reason: &str) {}
+        fn clear_hw_estop(&mut self, _operator_ack: bool) -> PlantResult<()> {
+            Ok(())
+        }
+        fn is_connected(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn external_port_wraps_but_cannot_skip_certified_write() {
+        let mut plant = HardwareBackedPlant::new(ExternalStylePort, "ext", 1, 1.0);
+        let err = plant.act(&[0.1], &ActionParams::empty()).unwrap_err();
+        match err {
+            PlantError::UncertifiedOnline { method } => assert_eq!(method, "act"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn production_lock_refuses_unsigned_even_if_bind_opts_out() {
+        let mut p = SimPlant::new("stub", 1, 1.0);
+        p.lock_production(b"prod-key");
+        let mut ledger = CommandLedger::new();
+        let cmd = AllowCmd {
+            id: "c-prod".into(),
+            action: vec![0.2],
+            ack: true,
+        };
+        let bind = ExecuteBind {
+            expected_release_hash: None,
+            expected_calibration_ids: &[],
+            expected_sensor_packet_hash: None,
+            require_sensor_packet_hash: false,
+            require_monotonic_sequence: false,
+            require_signature: false,
+            signing_key: None,
+            force_online_rails: false,
+        };
+        let out = execute_certified_command(
+            &mut p,
+            &cmd,
+            &ActionParams::empty(),
+            &mut ledger,
+            1.0,
+            &bind,
+        );
+        assert!(!out.ok);
+        assert_eq!(p.write_count(), 0);
     }
 
     #[test]

@@ -1,8 +1,9 @@
 //! HardwareBackedPlant: Plant adapter over HardwareDriverPort.
 //! Governor never imports a robot SDK.
 
-use crate::caps::{ActionParams, PlantCaps, PlantRealized};
+use crate::caps::{check_hard_action_bounds, ActionParams, PlantCaps, PlantRealized};
 use crate::error::{PlantError, PlantResult};
+use crate::signing::signing_key_hash;
 use crate::traits::{HardwareDriverPort, HardwareIdentity, Plant};
 use crate::write_guard::refuse_uncertified_online_write;
 
@@ -15,6 +16,8 @@ pub struct HardwareBackedPlant<P: HardwareDriverPort> {
     estop: bool,
     last_sense: PlantRealized,
     last_identity: Option<HardwareIdentity>,
+    production: bool,
+    production_key_hash: Option<String>,
 }
 
 impl<P: HardwareDriverPort> HardwareBackedPlant<P> {
@@ -28,6 +31,8 @@ impl<P: HardwareDriverPort> HardwareBackedPlant<P> {
             estop: false,
             last_sense: PlantRealized::sim([]),
             last_identity: None,
+            production: false,
+            production_key_hash: None,
         }
     }
 
@@ -80,6 +85,7 @@ impl<P: HardwareDriverPort> Plant for HardwareBackedPlant<P> {
         if !self.port.is_connected() {
             return Err(PlantError::Disconnected);
         }
+        check_hard_action_bounds(action, &self.caps())?;
         let mut realized = self.port.write_action(action, params)?;
         realized.metal = self.effective_metal();
         self.last_sense = realized.clone();
@@ -106,5 +112,19 @@ impl<P: HardwareDriverPort> Plant for HardwareBackedPlant<P> {
 
     fn probe_identity(&mut self) -> Option<HardwareIdentity> {
         Some(self.read_port_identity())
+    }
+
+    fn lock_production(&mut self, signing_key: &[u8]) {
+        self.online = true;
+        self.production = true;
+        self.production_key_hash = Some(signing_key_hash(signing_key));
+    }
+
+    fn production_locked(&self) -> bool {
+        self.production
+    }
+
+    fn production_key_hash(&self) -> Option<&str> {
+        self.production_key_hash.as_deref()
     }
 }

@@ -87,13 +87,43 @@ impl Intent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PolicyProposal {
     pub action: Vec<f64>,
+    #[serde(default)]
+    pub class: crate::authority::ProposalClass,
+    #[serde(default)]
     pub source: String,
     #[serde(default)]
     pub policy_id: String,
 }
 
 impl PolicyProposal {
+    pub fn learned(action: Vec<f64>, note: impl Into<String>) -> Self {
+        Self {
+            action,
+            class: crate::authority::ProposalClass::UntrustedLearned,
+            source: note.into(),
+            policy_id: String::new(),
+        }
+    }
+
+    pub fn operator(action: Vec<f64>, note: impl Into<String>) -> Self {
+        Self {
+            action,
+            class: crate::authority::ProposalClass::Operator,
+            source: note.into(),
+            policy_id: String::new(),
+        }
+    }
+
+    pub fn external_deterministic(action: Vec<f64>, note: impl Into<String>) -> Self {
+        Self {
+            action,
+            class: crate::authority::ProposalClass::ExternalDeterministic,
+            source: note.into(),
+            policy_id: String::new(),
+        }
+    }
+
     pub fn is_learned(&self) -> bool {
-        crate::authority::is_learned_source(&self.source)
+        self.class == crate::authority::ProposalClass::UntrustedLearned
     }
 }

@@ -12,7 +12,7 @@ realityos-kernel.workspace = true
 realityos-physics.workspace = true
 realityos-plant.workspace = true
 realityos-governor.workspace = true
-realityos-core.workspace = true
+realityos-core = { workspace = true, features = ["fixtures"] }
 realityos-session.workspace = true
 realityos-embodiment.workspace = true
 realityos-vision.workspace = true

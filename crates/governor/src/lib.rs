@@ -1,19 +1,24 @@
 //! Last driver gate. Identity + safety + envelope. Does not invent. Does not plan tasks.
 //!
 //! Distinct from any slide-task PhysicsGovernor. Foundry never spends through this crate.
+//!
+//! Typestates: [`Simulation`], [`Hil`], [`OnlineLocked`]. Only unlocked rails expose
+//! `config_mut` / `envelope_mut` / `plant_mut` / `ledger_mut`.
 
 pub mod envelope;
 pub mod gate;
 pub mod governor;
 pub mod identity;
 pub mod latch;
+pub mod rail;
 pub mod trace;
 
 pub use envelope::{per_joint_clip, DriverEnvelopePack};
 pub use gate::{admit_from_parts, GovernorGateRequest, GovernorGateVerdict};
-pub use governor::{GovernorConfig, RuntimeGovernor};
+pub use governor::{GovernorConfig, OnlineInitError, RuntimeGovernor};
 pub use identity::RuntimeIdentity;
 pub use latch::{EstopLatch, SafeState, SafeStateLatch};
+pub use rail::{Hil, OnlineLocked, Rail, Simulation, UnlockedRail};
 pub use trace::RuntimeTrace;
 
 pub const SCHEMA: &str = "realityos.governor/1";
@@ -40,7 +45,7 @@ mod tests {
     use realityos_kernel::{
         CalibrationId, DesignContentHash, FirmwareId, ReleaseHash, SerialOrAsBuilt,
     };
-    use realityos_plant::SimPlant;
+    use realityos_plant::{Plant, SimPlant};
 
     fn sim_gov() -> RuntimeGovernor<SimPlant> {
         let id = RuntimeIdentity::sim("rel-sim-1").unwrap();
@@ -88,5 +93,43 @@ mod tests {
     fn veto_polarity() {
         assert!(assert_veto_polarity(false, true).is_ok());
         assert!(assert_veto_polarity(true, true).is_err());
+    }
+
+    #[test]
+    fn online_locked_config_cannot_disable_rails() {
+        let id = RuntimeIdentity {
+            release_hash: ReleaseHash::new("rel1").unwrap(),
+            design_content_hash: Some(DesignContentHash::new("des1").unwrap()),
+            serial_or_as_built: Some(SerialOrAsBuilt::new("SN-1").unwrap()),
+            firmware_id: Some(FirmwareId::new("FW-1").unwrap()),
+            calibration_id: Some(CalibrationId::new("cal-1").unwrap()),
+        };
+        let dir = std::env::temp_dir().join(format!(
+            "realityos-gov-online-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let journal = dir.join("driver.jsonl");
+        let mut plant = SimPlant::new("p", 1, 1.0);
+        plant.go_online();
+        let g = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            id,
+            plant,
+            journal,
+            b"test-signing-key-32bytes-minimum".to_vec(),
+            true,
+            1.0,
+        )
+        .expect("online governor");
+        let c = g.config();
+        assert!(c.require_command_signature);
+        assert!(c.require_monotonic_sequence);
+        assert!(c.require_sensor_packet_hash);
+        assert!(c.require_online_identity);
+        assert!(c.require_sensor_before_write);
+        assert!(g.plant().production_locked());
     }
 }

@@ -44,7 +44,7 @@ impl HardwareControlBridge<HardwareBackedPlant<SimulatedHardwarePort>> {
                 "session",
             )
             .with_payload(serde_json::json!({
-                "release": session.governor.identity.release_hash.as_str(),
+                "release": session.governor.identity().release_hash.as_str(),
                 "metal": false,
             })),
         );
@@ -104,8 +104,14 @@ impl<P: Plant> HardwareControlBridge<P> {
     pub fn snapshot(&self) -> SessionSnapshot {
         let mut snap = SessionSnapshot::empty();
         snap.mode = self.session.mode.as_str().into();
-        snap.release_hash = self.session.governor.identity.release_hash.as_str().into();
-        snap.serial = self.session.governor.identity.serial_str().into();
+        snap.release_hash = self
+            .session
+            .governor
+            .identity()
+            .release_hash
+            .as_str()
+            .into();
+        snap.serial = self.session.governor.identity().serial_str().into();
         snap.estop = self.session.governor.estop();
         snap.last_heartbeat_s = self.session.governor.last_heartbeat_s();
         snap.last_sensor_s = self.session.governor.last_sensor_s();

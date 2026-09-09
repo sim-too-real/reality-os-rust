@@ -9,6 +9,7 @@ pub mod correlation;
 pub mod decision;
 pub mod error;
 pub mod evidence;
+pub mod evidence_contract;
 pub mod fault;
 pub mod honesty;
 pub mod ids;
@@ -29,6 +30,7 @@ pub use evidence::{
     EvidenceTier, BOUNDED_TRUST_EVIDENCE, GATE_EVIDENCE, KERNEL_EVIDENCE, LEDGER_EVIDENCE,
     PFL_EVIDENCE,
 };
+pub use evidence_contract::PerceptionContract;
 pub use fault::{CommandOutcome, FaultKind};
 pub use honesty::HonestyStamp;
 pub use ids::{

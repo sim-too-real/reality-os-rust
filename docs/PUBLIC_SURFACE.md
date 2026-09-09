@@ -25,6 +25,11 @@ Stamps always: `metal=false`, `online=false`, `learned_actuator_authority=false`
 
 Topics listed in `realityos_ros2::TOPICS`. Boot veto is **true**. `HARDWARE_WRITES_ENABLED=false`. Do not port `governor_node.py` as the production governor.
 
+## Authority kernel
+
+Process-level write uniqueness and ONLINE typestate lock are documented in
+`docs/AUTHORITY_KERNEL.md`. Rust privacy is not machine-wide single-writer.
+
 ## Not public
 
 Campaign plants, walk improvers, Foundry FEA (`theworld.native`), studio HUD, ONNX.

@@ -11,6 +11,7 @@ pub mod command;
 pub mod control;
 pub mod decide;
 pub mod domains;
+pub mod lifecycle;
 pub mod plan;
 pub mod see;
 pub mod skills;
@@ -18,17 +19,21 @@ pub mod trajectory;
 
 pub use attestation::CertificateLedger;
 pub use authority::{
-    assert_no_learned_actuator_authority, is_forbidden_tool, is_learned_source,
-    screen_external_proposal,
+    is_forbidden_tool, is_learned_source, screen_external_proposal, screen_proposal, ProposalClass,
 };
 pub use bounded_trust::{certify_dispose_step, BoundedTrustEnvelope, DisposeStatus, ExecutionMode};
 pub use certificate::Certificate;
+#[cfg(any(test, feature = "fixtures"))]
+pub use command::fixture;
 pub use command::{narrow_certified_command, CertifiedCommand};
 pub use control::{
     runtime_assurance, AssuranceAction, ComponentClamp, ControlProposal, Controller,
 };
 pub use decide::{DecideRequest, KernelDecision, RealityOs};
 pub use domains::{DomainPlugin, DomainRegistry, WorldView};
+pub use lifecycle::{
+    AcknowledgedCommand, CertifiedIntent, EvidenceBound, SessionBound, SignedCommand,
+};
 pub use plan::{Intent, PhysicalPlan, PolicyProposal};
 pub use skills::{GoalIR, SkillIR};
 pub use trajectory::TrajectoryReference;
@@ -116,11 +121,7 @@ mod tests {
             },
             1.0,
         );
-        req.proposal = Some(PolicyProposal {
-            action: vec![50.0],
-            source: "openvla".into(),
-            policy_id: "x".into(),
-        });
+        req.proposal = Some(PolicyProposal::learned(vec![50.0], "openvla"));
         let d = ros.decide(req);
         assert_eq!(d.status, DecisionStatus::Refuse);
         assert!(d.command.is_none());

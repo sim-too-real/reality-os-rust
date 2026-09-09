@@ -11,9 +11,14 @@ SIM software. Never metal. Never invent.
 | Replay / expiry fail closed before `act` | ACTIVE | `CommandLedger` tests |
 | Governor cannot upgrade REFUSE→ALLOW or widen action | ACTIVE | `crates/reality-os` narrow tests |
 | `complete_online` refuses `SIM_*` identity | ACTIVE | `crates/governor` identity tests |
-| `start(ONLINE, require_*=false)` → `online_refuses_safety_rail_opt_out` | ACTIVE | `crates/session` |
+| `start_online(..., require_*=false)` → `online_refuses_safety_rail_opt_out` | ACTIVE | `crates/session` |
+| `RuntimeGovernor<OnlineLocked>` has no `config_mut` / `plant_mut` / `envelope_mut` / `ledger_mut` | ACTIVE | `crates/governor/tests/ui` compile-fail |
+| ONLINE default is a durable journal+seal, not an in-memory ledger | ACTIVE | `CommandLedger::with_online_journal`; `start_online` |
+| Journal missing/deleted/rollback/replaced fail closed | ACTIVE | `crates/plant` ledger tests |
+| Prepare/unknown/consume are not retryable | ACTIVE | `ConsumePhase`; `docs/models/consume_write.tla` |
 | Safe-state HOLD/FREEZE/FAULT blocks dispatch in SIM too | ACTIVE | `crates/session` `hold_blocks_all_modes` |
-| VLA / learned source is proposal-only | ACTIVE | `authority::screen_external_proposal` |
+| ProposalClass cannot certify/ack/sign/execute; source strings are diagnostic | ACTIVE | `crates/reality-os` `authority.rs` |
+| `HardwareDriverPort` is vendor-implementable; `Plant` stays sealed | ACTIVE | `crates/plant` `external_port_wraps_but_cannot_skip_certified_write` |
 | See-before-act: gifted pose without pixels cannot ALLOW place | ACTIVE | `gifted_pose_without_pixels_refuses_place` |
 | Bounded-trust modes: fastpath / box project / passive | ACTIVE | `crates/reality-os` bounded_trust tests |
 | PFL table is a SIM screen, not ISO 10218 / TS 15066 certified | ACTIVE | `domains/pfl.rs` |

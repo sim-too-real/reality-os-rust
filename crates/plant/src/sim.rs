@@ -1,5 +1,6 @@
-use crate::caps::{ActionParams, PlantCaps, PlantRealized};
+use crate::caps::{check_hard_action_bounds, ActionParams, PlantCaps, PlantRealized};
 use crate::error::{PlantError, PlantResult};
+use crate::signing::signing_key_hash;
 use crate::traits::Plant;
 use crate::write_guard::refuse_uncertified_online_write;
 
@@ -11,6 +12,8 @@ pub struct SimPlant {
     last_action: Vec<f64>,
     writes: u32,
     backend: Option<crate::dynamics::BoxBackend>,
+    production: bool,
+    production_key_hash: Option<String>,
 }
 
 impl SimPlant {
@@ -22,6 +25,8 @@ impl SimPlant {
             last_action: vec![0.0; action_dim.max(1)],
             writes: 0,
             backend: None,
+            production: false,
+            production_key_hash: None,
         }
     }
 
@@ -63,6 +68,7 @@ impl Plant for SimPlant {
         if self.estop {
             return Err(PlantError::EstopEngaged);
         }
+        check_hard_action_bounds(action, &self.caps())?;
         self.last_action = action.to_vec();
         self.writes += 1;
         if let Some(backend) = &mut self.backend {
@@ -98,6 +104,20 @@ impl Plant for SimPlant {
 
     fn write_count(&self) -> u32 {
         self.writes
+    }
+
+    fn lock_production(&mut self, signing_key: &[u8]) {
+        self.go_online();
+        self.production = true;
+        self.production_key_hash = Some(signing_key_hash(signing_key));
+    }
+
+    fn production_locked(&self) -> bool {
+        self.production
+    }
+
+    fn production_key_hash(&self) -> Option<&str> {
+        self.production_key_hash.as_deref()
     }
 
     fn follow_waypoints(&mut self, waypoints: &[Vec<f64>]) -> PlantResult<PlantRealized> {
