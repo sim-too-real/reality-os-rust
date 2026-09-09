@@ -29,10 +29,10 @@ use crate::protocol::{
     ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER, ADDR_OPERATING_MODE,
     ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL,
     ADDR_PROFILE_VELOCITY, ADDR_PWM_LIMIT, ADDR_REALTIME_TICK, ADDR_STATUS_RETURN_LEVEL,
-    ADDR_TORQUE_ENABLE, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN, BROADCAST_ID,
-    DRIVE_MODE_VELOCITY_BASED, FACTORY_POSITION_P_GAIN, FACTORY_PWM_LIMIT, FACTORY_VELOCITY_P_GAIN,
-    MIN_POSITION_P_GAIN, MIN_PWM_LIMIT, MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION,
-    STATUS_RETURN_ALL,
+    ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN,
+    BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_POSITION_P_GAIN, FACTORY_PWM_LIMIT,
+    FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN, MIN_PWM_LIMIT,
+    MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION, STATUS_RETURN_ALL,
 };
 
 pub struct Xl330Driver {
@@ -62,6 +62,7 @@ pub struct Xl330Driver {
     drive_mode: u8,
     position_p_gain: u16,
     velocity_p_gain: u16,
+    velocity_i_gain: u16,
     pwm_limit: u16,
     homing_offset: i32,
     bus_watchdog: u8,
@@ -123,6 +124,7 @@ impl Xl330Driver {
             drive_mode: 0,
             position_p_gain: 0,
             velocity_p_gain: 0,
+            velocity_i_gain: 0,
             pwm_limit: 0,
             homing_offset: 0,
             bus_watchdog: 0,
@@ -221,6 +223,10 @@ impl Xl330Driver {
 
     pub fn applied_velocity_p_gain(&self) -> u16 {
         self.velocity_p_gain
+    }
+
+    pub fn applied_velocity_i_gain(&self) -> u16 {
+        self.velocity_i_gain
     }
 
     pub fn applied_pwm_limit(&self) -> u16 {
@@ -497,6 +503,22 @@ impl Xl330Driver {
             )?;
             self.velocity_p_gain = FACTORY_VELOCITY_P_GAIN;
         }
+        let got_vi = self
+            .read_reg(ADDR_VELOCITY_I_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b))
+            .unwrap_or(0);
+        self.velocity_i_gain = got_vi;
+        if got_vi < MIN_VELOCITY_I_GAIN {
+            self.write_reg(
+                ADDR_VELOCITY_I_GAIN,
+                &FACTORY_VELOCITY_I_GAIN.to_le_bytes(),
+                "setup_velocity_i_gain",
+                None,
+                false,
+            )?;
+            self.velocity_i_gain = FACTORY_VELOCITY_I_GAIN;
+        }
         let got_pwm = self
             .read_reg(ADDR_PWM_LIMIT, 2)
             .ok()
@@ -611,6 +633,36 @@ impl Xl330Driver {
         // Torque-on here (software watchdog not running yet) so the first
         // certified write is a single goal_position xfer, not torque_on + goal.
         self.write_reg(ADDR_TORQUE_ENABLE, &[1], "setup_torque_on", None, false)?;
+        // A tight fixture / overload Shutdown can drop torque immediately.
+        // Then a certified nudge writes a goal and present never moves.
+        let still_on = self
+            .read_reg(ADDR_TORQUE_ENABLE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if still_on != Some(1) {
+            self.torque_enabled = false;
+            return Err(PlantError::refused(format!(
+                "dxl_torque_dropped_after_enable:{}",
+                still_on.unwrap_or(0)
+            )));
+        }
+        if let Ok(b) = self.read_reg(ADDR_HARDWARE_ERROR, 1) {
+            self.last_hw_error = b.first().copied().unwrap_or(0);
+            if self.last_hw_error != 0 {
+                let _ = self.write_reg(
+                    ADDR_TORQUE_ENABLE,
+                    &[0],
+                    "setup_torque_off_hw_error",
+                    None,
+                    false,
+                );
+                self.torque_enabled = false;
+                return Err(PlantError::refused(format!(
+                    "dxl_hardware_error_after_torque_on:{}",
+                    self.last_hw_error
+                )));
+            }
+        }
         self.torque_enabled = true;
         Ok(())
     }

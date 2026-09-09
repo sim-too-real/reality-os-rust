@@ -156,6 +156,8 @@ def init_regs() -> bytearray:
     regs[84:86] = struct.pack("<H", p_gain)
     vel_p = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_VEL_P") == "1" else 100
     regs[78:80] = struct.pack("<H", vel_p)
+    vel_i = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_VEL_I") == "1" else 1600
+    regs[76:78] = struct.pack("<H", vel_i)
     # Default Goal Position is 0 (unset). Present is 2048. Torque-on without
     # syncing goal jumps present — that is the stale-Wizard-goal landmine.
     if os.environ.get("REALITYOS_METAL_PTY_BUS_WATCHDOG") == "1":
@@ -209,6 +211,11 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         if addr == 64 and data:
             was = regs[64]
             regs[64] = data[0]
+            if data[0] == 1 and os.environ.get("REALITYOS_METAL_PTY_TORQUE_DROP") == "1":
+                # Overload Shutdown: torque enable does not stick.
+                regs[64] = 0
+                regs[70] = 4
+                return b"", 0
             if was == 0 and data[0] == 1:
                 goal = struct.unpack_from("<i", regs, 116)[0]
                 present = struct.unpack_from("<i", regs, 132)[0]

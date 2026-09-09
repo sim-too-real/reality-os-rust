@@ -117,5 +117,8 @@ First-contact script invariants (found on the PTY sequence, would fail the first
 * `valid_nudge` uses `action=0.2` (8 ticks at `tau_max=0.2`). The old `0.05` step was 2 ticks and can disappear into plastic-gear backlash on a real horn.
 * Wizard Homing Offset shifts Present outside the 0–4095 EEPROM window. Goal=present then NAKs. If present is outside and offset ≠ 0, setup writes offset 0 with torque off (no physical motion) and re-reads present. A true outside-window present with offset 0 still refuses.
 * Hardware Error reboot can re-enable torque (Startup Configuration). Setup torque-offs again before EEPROM writes; otherwise drive/mode/PWM NAKs and a stale Wizard goal moves.
+* Wizard Velocity I Gain `0` leaves the profile I-term dead. Setup writes factory **1600** when the register is below 200. It does not lower a higher Wizard I.
+* After torque-on, setup re-reads Torque Enable and Hardware Error Status. A tight fixture / overload Shutdown that drops torque is `dxl_torque_dropped_after_enable` (or `dxl_hardware_error_after_torque_on`), not a later present-delta=0 on the certified nudge.
+* Wizard Secondary ID (addr 12) can make one servo answer two IDs. Broadcast sniff already refuses `dxl_multiple_servos_on_bus`. Disable Secondary ID (255) in Wizard if probe fails closed on a single horn.
 
 This Cloud Agent VM has **no** USB/serial actuator and **no** self-hosted worker. Attach a Cursor self-hosted worker (`cursor worker start`) on the bench host that can see `/dev/ttyUSB*` / `/dev/ttyACM*` / `/dev/ttyCH341*`. Until that happens, the experiment is blocked. That is not a software-architecture remaining task.

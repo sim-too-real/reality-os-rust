@@ -282,6 +282,40 @@ fn xl330_pty_raises_wizard_zero_velocity_p_so_nudge_can_track() {
 }
 
 #[test]
+fn xl330_pty_raises_wizard_zero_velocity_i_so_profile_can_settle() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_VEL_I", "1")]);
+    let root = metal_test_root("pty-zero-vel-i");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver =
+        Xl330Driver::open(cfg, &root).expect("raise Velocity I Gain 0 to factory 1600");
+    assert_eq!(driver.applied_velocity_i_gain(), 1600);
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold after restoring Velocity I");
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_torque_drops_after_enable() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_TORQUE_DROP", "1")]);
+    let root = metal_test_root("pty-torque-drop");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("overload drop after torque-on must not look like a live hold"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_torque_dropped_after_enable"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_clears_wizard_homing_offset_so_present_is_in_window() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_HOMING", "1")]);

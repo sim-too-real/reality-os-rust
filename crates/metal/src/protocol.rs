@@ -46,6 +46,10 @@ pub const ADDR_TORQUE_ENABLE: u16 = 64;
 pub const ADDR_STATUS_RETURN_LEVEL: u16 = 68;
 pub const STATUS_RETURN_ALL: u8 = 2;
 pub const ADDR_HARDWARE_ERROR: u16 = 70;
+/// RAM. Factory 1600. Wizard 0 leaves profile following with a dead I-term.
+pub const ADDR_VELOCITY_I_GAIN: u16 = 76;
+pub const FACTORY_VELOCITY_I_GAIN: u16 = 1600;
+pub const MIN_VELOCITY_I_GAIN: u16 = 200;
 /// RAM. Factory 100. Wizard 0 means the profile velocity loop does not track.
 pub const ADDR_VELOCITY_P_GAIN: u16 = 78;
 pub const FACTORY_VELOCITY_P_GAIN: u16 = 100;
