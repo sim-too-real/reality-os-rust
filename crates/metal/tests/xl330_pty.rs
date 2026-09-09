@@ -1004,6 +1004,45 @@ fn xl330_pty_firmware_mismatch_kills_session_not_watchdog() {
 }
 
 #[test]
+fn xl330_pty_eeprom_identity_change_refuses_write() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_FLIP_IDENTITY", "1")]);
+    let root = metal_test_root("pty-eeprom-flip");
+    let mut cfg = MetalConfig::example(&tty);
+    cfg.campaign_hooks = false;
+    {
+        let driver = Xl330Driver::open(cfg.clone(), &root).expect("identify");
+        let measured = driver.measured();
+        cfg.expected_serial = measured.serial;
+        cfg.expected_firmware = measured.firmware_id;
+        assert_eq!(measured.firmware_id, "xl330-m288:1190:46");
+    }
+    cfg.save(root.join(CONFIG_FILE)).unwrap();
+    let mut auth = MetalAuthority::start(&root, true).expect("start_online");
+    let hold = auth.handle(MetalRequest::propose("pty-eep-hold", "hold"));
+    assert!(hold.ok, "first hold before EEPROM flip: {hold:?}");
+    let writes = auth.physical_writes();
+    let flipped = auth.handle(MetalRequest::propose("pty-eep-flip", "hold"));
+    assert!(!flipped.ok, "swapped model/fw must refuse: {flipped:?}");
+    assert!(
+        flipped
+            .violations
+            .iter()
+            .any(|v| v.contains("hardware_firmware_mismatch")),
+        "EEPROM re-read must reach verify_live_hardware: {flipped:?}"
+    );
+    assert!(
+        !flipped
+            .violations
+            .iter()
+            .any(|v| v.contains("software_watchdog_miss")),
+        "identity change must not be a watchdog miss: {flipped:?}"
+    );
+    assert_eq!(auth.physical_writes(), writes);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_disconnect_overlay_kills_session_via_verify() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder();

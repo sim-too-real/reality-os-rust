@@ -56,7 +56,7 @@ Never promote one level into another.
 | Independent safety / STO / SS1 / PL / SIL | Physical safety | **NOT_CLAIMED** | named hole |
 | ONLINE `OnlineWrite` is instance-bound (serial/firmware/cal/actuators in digest) | Rust type/API + same-process | ACTIVE | `ValidatedRuntimeIdentity::instance_hash`; governor cross-instance tests |
 | ONLINE start requires exact expected vs `probe_identity` match | Same-process | ACTIVE | `ValidatedRuntimeIdentity::bind`; mismatch / placeholder / disconnected / missing tests |
-| Physical identity change after ONLINE FAULT/ABORTs the instance | Same-process | ACTIVE | `verify_live_hardware`; hot-swap / reconnect tests; zero further writes |
+| Physical identity change after ONLINE FAULT/ABORTs the instance | Same-process | ACTIVE | `verify_live_hardware`; metal live sensor re-reads EEPROM model/fw/id; hot-swap / PTY EEPROM-flip / reconnect tests; zero further writes |
 | Production proposal cannot set `now_s` / `write_now_s` / safety TTL | Same-process (HIL IPC) | ACTIVE | `ProductionProposal` vs `HilFaultInjectionRequest`; `--production` refuses `hil_fault` |
 | Ordinary ONLINE APIs cannot take caller safety time | Rust type/API | ACTIVE | `start_online(args, plant)`; `*_now()`; compile-fail |
 | ONLINE sensor freshness uses authority receive time, not proposer timestamps | Same-process | ACTIVE | `ingest_sensor_packet` / `acquire_sensor` on `OnlineLocked` |

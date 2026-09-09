@@ -195,7 +195,11 @@ def status_wanted(srl: int, inst: int) -> bool:
     return False
 
 
+_motion_block_reads = 0
+
+
 def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
+    global _motion_block_reads
     if inst == INST_PING:
         return b"", 0
     if inst == INST_READ and len(params) >= 4:
@@ -210,12 +214,25 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             and regs[64] == 1
         ):
             return b"", 0x80  # torque is on; do not skip the post-enable check
-        chunk = bytes(regs[addr : addr + ln])
+        if addr == 120:
+            _motion_block_reads += 1
+        chunk = bytearray(regs[addr : addr + ln])
+        # After two motion-block reads, flip model/fw so live confirm_eeprom
+        # sees a physical servo swap on the same UART (not just hot_swap.json).
+        if (
+            os.environ.get("REALITYOS_METAL_PTY_FLIP_IDENTITY") == "1"
+            and addr == 0
+            and _motion_block_reads >= 2
+        ):
+            if len(chunk) >= 2:
+                chunk[0:2] = struct.pack("<H", 1200)
+            if len(chunk) >= 7:
+                chunk[6] = 99
         # First motion-block / Moving read after a goal step reports Moving=1,
         # then clears so the campaign wait-for-Moving=0 path is exercised.
         if addr <= 122 < addr + ln and regs[122] == 1:
             regs[122] = 0
-        return chunk, 0
+        return bytes(chunk), 0
     if inst == INST_WRITE and len(params) >= 2:
         addr = struct.unpack_from("<H", params)[0]
         data = params[2:]

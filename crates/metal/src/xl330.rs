@@ -778,6 +778,29 @@ impl Xl330Driver {
         let _ = std::fs::write(self.bus.join(VIN_FILE), vin_tenth.to_string());
     }
 
+    /// Model (0) + firmware (6) + ID (7). Not a motion-block field.
+    /// A swapped XL330 on the same adapter must not keep the latched identity.
+    fn confirm_eeprom_identity(&mut self) -> PlantResult<()> {
+        let b = self.read_reg(ADDR_MODEL_NUMBER, 8)?;
+        if b.len() < 8 {
+            return Err(PlantError::refused("dxl_short_identity_block"));
+        }
+        let model = le_u16(&b[0..2]).unwrap_or(0);
+        let fw = b[(ADDR_FIRMWARE_VERSION - ADDR_MODEL_NUMBER) as usize];
+        let id = b[(ADDR_ID - ADDR_MODEL_NUMBER) as usize];
+        if id != self.cfg.servo_id {
+            return Err(PlantError::refused(format!(
+                "dxl_identity_changed:id={id}:expected={}",
+                self.cfg.servo_id
+            )));
+        }
+        if model != self.model || fw != self.firmware {
+            self.model = model;
+            self.firmware = fw;
+        }
+        Ok(())
+    }
+
     fn campaign_disconnected(&self) -> bool {
         self.cfg.campaign_hooks && self.bus.join("force_disconnect").exists()
     }
@@ -1029,6 +1052,13 @@ impl HardwareDriverPort for Xl330Driver {
             return Err(PlantError::refused("metal_sensor_missing"));
         }
         let (pos, vel, cur, volt, tick) = self.read_motion_block()?;
+        // Motion block has no model/fw. Re-read EEPROM so a physical swap on
+        // this UART updates last_identity before write-time verify. Overlay
+        // hot_swap still wins in refresh_identity. One 8-byte READ; live I/O
+        // is one attempt / 40 ms.
+        if self.live_io {
+            self.confirm_eeprom_identity()?;
+        }
         let err = self.last_hw_error;
         self.persist_vin(volt);
         self.last_tick_s = f64::from(tick) / 1000.0;
