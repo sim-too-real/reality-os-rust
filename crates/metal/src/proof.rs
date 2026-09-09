@@ -150,6 +150,14 @@ impl MetalProof {
             return Err("metal_proof_requires_measured_cases".into());
         }
         let a = aggregates_from_cases(&cases);
+        let has_hold = cases
+            .iter()
+            .any(|c| c.name == "valid_hold" && c.expected_authorization && c.write_delta > 0);
+        let has_nudge = cases
+            .iter()
+            .any(|c| c.name == "valid_nudge" && c.expected_authorization && c.write_delta > 0);
+        let freshness_measured =
+            meta.device_capture_s.is_some() && meta.authority_receive_s.is_some();
         Ok(Self {
             schema: PROOF_SCHEMA.into(),
             hardware_model: meta.hardware_model,
@@ -180,10 +188,17 @@ impl MetalProof {
             freshness_threshold_s: meta.freshness_threshold_s,
             experiment_status: if a.unauthorized_physical_writes == 0
                 && a.valid_physical_writes >= 2
+                && has_hold
+                && has_nudge
                 && meta.direct_device_open_successes == 0
                 && meta.direct_device_open_attempts > 0
                 && meta.cutoff_tested
                 && a.duplicate_writes_after_restart + meta.duplicate_writes_after_restart == 0
+                && a.identity_mismatch_refusals > 0
+                && a.disconnect_refusals > 0
+                && freshness_measured
+                && meta.used_os_monotonic_clock
+                && meta.used_hardware_driver_port
             {
                 "measured_success".into()
             } else {
@@ -488,5 +503,28 @@ mod tests {
         let t = incomplete.sixteen_point_report();
         assert!(t.contains("not success"));
         assert!(!t.contains("every listed criterion is true on this run"));
+    }
+
+    #[test]
+    fn measured_success_requires_identity_disconnect_and_freshness() {
+        let writes_only: Vec<CaseRecord> = ok_cases()
+            .into_iter()
+            .filter(|c| c.expected_authorization)
+            .collect();
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), writes_only, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+        let mut no_fresh = ok_meta(true);
+        no_fresh.device_capture_s = None;
+        no_fresh.authority_receive_s = None;
+        let incomplete =
+            MetalProof::from_measured(no_fresh, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
     }
 }

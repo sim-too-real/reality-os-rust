@@ -720,6 +720,14 @@ assert r["direct_device_open_attempts"] > 0, r
 assert r["direct_device_open_successes"] == 0, r
 assert r["duplicate_writes_after_restart"] == 0, r
 assert r["cutoff_tested"] is True, r
+assert r["identity_mismatch_refusals"] > 0, r
+assert r["disconnect_refusals"] > 0, r
+assert r.get("device_capture_s") is not None, r
+assert r.get("authority_receive_s") is not None, r
+assert r["used_os_monotonic_clock"] is True, r
+assert r["used_hardware_driver_port"] is True, r
+assert any(c.get("name") == "valid_hold" and int(c.get("write_delta") or 0) > 0 for c in r.get("cases") or []), r
+assert any(c.get("name") == "valid_nudge" and int(c.get("write_delta") or 0) > 0 for c in r.get("cases") or []), r
 assert r["experiment_status"] == "measured_success", r
 print("metal-proof-ok status=%s writes=%s" % (r["experiment_status"], r["valid_physical_device_writes"]))
 PY
