@@ -836,8 +836,12 @@ impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
         g.validated = Some(validated);
         g.authorized_actuator_ids = actuator_ids;
         g.envelope = Some(env);
+        // Each emit fsyncs journal+seal. Stamping both ticks with one pre-emit
+        // time makes the next watchdog_tick_now see persist latency as a miss
+        // (software_watchdog_miss_before_bind on GHA / slow disks). Use current
+        // authority time for the watchdog after the heartbeat persist.
+        g.heartbeat_at(g.clock.monotonic_now().secs());
         let now_s = g.clock.monotonic_now().secs();
-        g.heartbeat_at(now_s);
         let _ = g.watchdog_tick_at(now_s);
         let cont = g.apply_journal_continuity(false, now_s);
         if cont.get("start_refused").and_then(Value::as_bool) == Some(true) {
