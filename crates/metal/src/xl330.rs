@@ -358,13 +358,20 @@ impl Xl330Driver {
         }
         let mut acc = Vec::new();
         let mut tmp = [0u8; 64];
-        for _ in 0..16 {
+        // Setup may wait through several 150 ms timeouts. After enter_live_io,
+        // one timeout must fail closed: 16×40 ms is 640 ms and latches the
+        // 100 ms ONLINE software watchdog.
+        let rounds = if self.live_io { 4 } else { 16 };
+        for _ in 0..rounds {
             match port.read(&mut tmp) {
                 Ok(0) => continue,
                 Ok(n) => acc.extend_from_slice(&tmp[..n]),
                 Err(e) if e.kind() == io::ErrorKind::TimedOut => {
                     if acc.len() >= 11 {
                         break;
+                    }
+                    if self.live_io {
+                        return Err(e);
                     }
                 }
                 Err(e) => return Err(e),

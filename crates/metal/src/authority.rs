@@ -194,7 +194,16 @@ impl MetalAuthority {
         if let Err(e) = self.session.acquire_sensor() {
             return self.refuse("authorize", "refuse", vec![e]);
         }
-        self.pet_supervisor();
+        if !self.pet_supervisor() {
+            return self.refuse(
+                "egress",
+                "refuse",
+                vec![
+                    "estop_engaged".into(),
+                    "abort_latched:software_watchdog_miss".into(),
+                ],
+            );
+        }
         self.persist_freshness(
             Some(self.session.governor.last_device_capture_s()),
             Some(self.session.governor.authority_now_s()),
@@ -302,9 +311,11 @@ impl MetalAuthority {
     }
 
     /// ONLINE software watchdog is 50 ms (miss at 100 ms). Idle IPC must pet it.
-    fn pet_supervisor(&mut self) {
-        let _ = self.session.governor.watchdog_tick_now();
+    /// Returns false if the tick latched ESTOP (a gap >100 ms cannot be caught up).
+    fn pet_supervisor(&mut self) -> bool {
+        let t = self.session.governor.watchdog_tick_now();
         let _ = self.session.governor.heartbeat_now();
+        t.ok && !self.session.governor.estop()
     }
 }
 
