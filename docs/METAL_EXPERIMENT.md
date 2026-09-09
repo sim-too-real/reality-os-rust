@@ -50,7 +50,7 @@ Model and firmware are latched at identify time. Later sensor packets do not rew
 
 ## Composition
 
-`realityos-metal-smoke serve` calls `RuntimeSession::start_online` → `OsMonotonicClock`. It does not use the HIL `Authority` object or `FakeClock`.
+`realityos-metal-smoke serve` calls `RuntimeSession::start_online` → `OsMonotonicClock`. It does not use the HIL `Authority` object or `FakeClock`. While waiting for IPC it pets the 50 ms software watchdog every 10 ms; an idle gap after `os-probe` would otherwise latch `software_watchdog_miss` before the first hold.
 
 Users: `realityos-authority` owns the tty, key, journal, and process. `realityos-autonomy` may use only the Unix socket. The metal root is `0751` so autonomy can traverse to `ipc.sock` (`0660` / `realityos-ipc`); `bus/` stays `0700`. A `0750` root would make IPC and `direct_device_open_attempts` fail closed without measuring the attacks. After each `serve` bind the campaign re-applies `0600` on the tty because udev may restore `0660 dialout`.
 

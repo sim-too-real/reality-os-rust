@@ -296,18 +296,32 @@ impl MetalAuthority {
             ..MetalResponse::default()
         }
     }
+
+    /// ONLINE software watchdog is 50 ms (miss at 100 ms). Idle IPC must pet it.
+    fn pet_supervisor(&mut self) {
+        let _ = self.session.governor.watchdog_tick_now();
+        let _ = self.session.governor.heartbeat_now();
+    }
 }
 
 pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
-    use std::io::{BufRead, BufReader};
+    use std::io::{BufRead, BufReader, ErrorKind};
+    use std::time::Duration;
 
     let mut auth = MetalAuthority::start(root, first_online)?;
     let listener = crate::ipc::bind_socket(root)?;
-    for stream in listener.incoming() {
-        let mut stream = match stream {
-            Ok(s) => s,
+    listener.set_nonblocking(true)?;
+    loop {
+        auth.pet_supervisor();
+        let mut stream = match listener.accept() {
+            Ok((s, _)) => s,
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            }
             Err(_) => continue,
         };
+        stream.set_nonblocking(false)?;
         let mut line = String::new();
         if BufReader::new(&stream).read_line(&mut line).is_err() {
             continue;
@@ -349,7 +363,6 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
         let resp = auth.handle(req);
         crate::ipc::write_response(&mut stream, &resp);
     }
-    Ok(())
 }
 
 /// Filesystem key. Not a TPM/HSM.

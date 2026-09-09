@@ -119,3 +119,38 @@ fn xl330_pty_start_online_hold_is_not_a_metal_proof() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn xl330_pty_serve_hold_survives_idle_watchdog() {
+    let (_guard, tty) = spawn_responder();
+    let root =
+        std::env::temp_dir().join(format!("realityos-metal-pty-idle-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let mut cfg = MetalConfig::example(&tty);
+    {
+        let driver = Xl330Driver::open(cfg.clone(), &root).expect("identify");
+        let measured = driver.measured();
+        cfg.expected_serial = measured.serial;
+        cfg.expected_firmware = measured.firmware_id;
+    }
+    cfg.save(root.join(CONFIG_FILE)).unwrap();
+    let serve_root = root.clone();
+    let handle = std::thread::spawn(move || {
+        let _ = realityos_metal::serve_forever(&serve_root, true);
+    });
+    assert!(
+        realityos_metal::ipc::wait_for_ipc(&root, 5_000),
+        "serve did not bind ipc.sock"
+    );
+    std::thread::sleep(Duration::from_millis(250));
+    let resp = realityos_metal::ipc::call(&root, &MetalRequest::propose("pty-idle-hold", "hold"))
+        .expect("ipc hold after idle");
+    assert!(
+        resp.ok,
+        "first hold after idle watchdog gap must succeed: {resp:?}"
+    );
+    assert!(!resp.metal);
+    drop(handle);
+    let _ = std::fs::remove_dir_all(&root);
+}
