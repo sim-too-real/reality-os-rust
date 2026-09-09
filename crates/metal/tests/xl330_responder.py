@@ -173,6 +173,8 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         return b"", 0
     if inst == INST_READ and len(params) >= 4:
         addr, ln = struct.unpack_from("<HH", params)
+        if os.environ.get("REALITYOS_METAL_PTY_NO_PRESENT") == "1" and addr == 132:
+            return b"", 0x80  # refuse present so setup cannot invent goal=0
         return bytes(regs[addr : addr + ln]), 0
     if inst == INST_WRITE and len(params) >= 2:
         addr = struct.unpack_from("<H", params)[0]

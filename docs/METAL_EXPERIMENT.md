@@ -108,7 +108,7 @@ First-contact script invariants (found on the PTY sequence, would fail the first
 * Wizard baud index 0 is 9 600. Probe tries it last so a factory 57 600 bus does not wait on a slow miss.
 * Linux asserts DTR on the first USB-serial open. Cheap FTDI/CP2102 boards wire that to servo RESET. The driver and campaign clear HUPCL before exclusive open so close/crash-replay does not reboot; real UART waits 300 ms after open. U2D2 has no DTR-RESET. Do not toggle DTR/RTS from userspace.
 * Wizard Position P Gain `0` never tracks a goal. Setup raises it to factory **400** when it is below 80. It does not lower a higher Wizard P.
-* Torque-on tracks Goal Position. A stale Wizard goal (often 0) would move before any certified command. Setup writes goal = present (clamped) before torque-on. That write is not command egress.
+* Torque-on tracks Goal Position. A stale Wizard goal (often 0) would move before any certified command. Setup writes goal = present (clamped) before torque-on. That write is not command egress. If present cannot be read, setup refuses (`dxl_present_unreadable_before_torque`) instead of inventing goal 0.
 * Wizard Bus Watchdog (addr 98, 20 ms units) trips after a quiet gap and latches `0xFF`; Goal Position then NAKs data-range. Setup writes 0 if the register is non-zero. This is not a certified safety watchdog.
 
 This Cloud Agent VM has **no** USB/serial actuator and **no** self-hosted worker. Attach a Cursor self-hosted worker (`cursor worker start`) on the bench host that can see `/dev/ttyUSB*` / `/dev/ttyACM*`. Until that happens, the experiment is blocked. That is not a software-architecture remaining task.

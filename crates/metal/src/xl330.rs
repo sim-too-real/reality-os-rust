@@ -496,7 +496,7 @@ impl Xl330Driver {
             .read_reg(ADDR_PRESENT_POSITION, 4)
             .ok()
             .and_then(|b| le_i32(&b))
-            .unwrap_or(self.last_present)
+            .ok_or_else(|| PlantError::refused("dxl_present_unreadable_before_torque"))?
             .clamp(self.min_position, self.max_position);
         self.last_present = present;
         self.write_reg(

@@ -234,6 +234,24 @@ fn xl330_pty_raises_wizard_zero_p_gain_so_nudge_can_track() {
 }
 
 #[test]
+fn xl330_pty_refuses_torque_when_present_cannot_be_read() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_NO_PRESENT", "1")]);
+    let root = metal_test_root("pty-no-present");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("unreadable present must not torque-on with invented goal 0"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("dxl_present_unreadable_before_torque"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_syncs_stale_goal_before_torque_so_present_does_not_jump() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder();
