@@ -23,14 +23,20 @@ if [[ -z "$BIN_DIR" ]]; then
   exit 2
 fi
 
-AUTH="$BIN_DIR/hil-authority"
-OSU="$BIN_DIR/hil-os-users"
-for b in "$AUTH" "$OSU"; do
-  if [[ ! -x "$b" ]]; then
-    echo "error: missing $b" >&2
+# GHA /home/runner is typically 750 — other UIDs cannot exec out of target/.
+STAGE="${REALITYOS_HIL_STAGE:-/tmp/realityos-hil-bin}"
+rm -rf "$STAGE"
+install -d -m 0755 "$STAGE"
+for b in hil-authority hil-os-users; do
+  if [[ ! -x "$BIN_DIR/$b" ]]; then
+    echo "error: missing $BIN_DIR/$b" >&2
     exit 2
   fi
+  install -m 0755 "$BIN_DIR/$b" "$STAGE/$b"
 done
+BIN_DIR="$STAGE"
+AUTH="$BIN_DIR/hil-authority"
+OSU="$BIN_DIR/hil-os-users"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 "$SCRIPT_DIR/hil-deploy-users.sh"
