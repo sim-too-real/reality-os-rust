@@ -58,6 +58,8 @@ pub struct CertifiedCommand {
     policy_hash: String,
     #[serde(default)]
     config_hash: String,
+    #[serde(default)]
+    runtime_instance_hash: String,
 }
 
 impl CertifiedCommand {
@@ -113,6 +115,7 @@ impl CertifiedCommand {
             units: String::new(),
             policy_hash: String::new(),
             config_hash: String::new(),
+            runtime_instance_hash: String::new(),
         })
     }
 
@@ -175,6 +178,12 @@ impl CertifiedCommand {
 
     pub fn with_actuator_ids(mut self, ids: Vec<String>) -> Self {
         self.actuator_ids = ids;
+        self.invalidate_signature();
+        self
+    }
+
+    pub(crate) fn with_runtime_instance_hash(mut self, hash: impl Into<String>) -> Self {
+        self.runtime_instance_hash = hash.into();
         self.invalidate_signature();
         self
     }
@@ -325,12 +334,16 @@ impl IssuedCommand {
         calibration_id: &str,
         evidence_hash: &str,
         actuator_ids: Vec<String>,
+        instance_hash: &str,
     ) -> Result<CertifiedCommand, Vec<String>> {
         if evidence_hash.is_empty() {
             return Err(vec!["online_requires_sensor_hash".into()]);
         }
         if actuator_ids.is_empty() {
             return Err(vec!["online_requires_actuator_ids".into()]);
+        }
+        if instance_hash.is_empty() {
+            return Err(vec!["online_requires_runtime_instance_hash".into()]);
         }
         if self.command.is_acknowledged() {
             return Err(vec!["issued_command_already_acknowledged".into()]);
@@ -342,17 +355,18 @@ impl IssuedCommand {
             .command
             .bind_identity(release_hash, as_built, calibration_id)?;
         let cmd = cmd.bind_evidence(evidence_hash)?;
-        if cmd.actuator_ids().is_empty() {
-            Ok(cmd.with_actuator_ids(actuator_ids))
+        let cmd = if cmd.actuator_ids().is_empty() {
+            cmd.with_actuator_ids(actuator_ids)
         } else if !cmd
             .actuator_ids()
             .iter()
             .all(|id| actuator_ids.iter().any(|a| a == id))
         {
-            Err(vec!["foreign_actuator_ids".into()])
+            return Err(vec!["foreign_actuator_ids".into()]);
         } else {
-            Ok(cmd)
-        }
+            cmd
+        };
+        Ok(cmd.with_runtime_instance_hash(instance_hash))
     }
 }
 
@@ -462,6 +476,9 @@ impl ActuationCommand for CertifiedCommand {
     }
     fn config_hash(&self) -> &str {
         &self.config_hash
+    }
+    fn runtime_instance_hash(&self) -> &str {
+        &self.runtime_instance_hash
     }
 }
 

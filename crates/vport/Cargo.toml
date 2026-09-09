@@ -1,0 +1,17 @@
+[package]
+name = "realityos-vport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Exclusive virtual serial/file motor port. HardwareDriverPort only. Not a Plant."
+readme = false
+
+[dependencies]
+realityos-plant = { workspace = true, features = ["hil-faults"] }
+fs2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

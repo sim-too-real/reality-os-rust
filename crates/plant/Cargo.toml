@@ -19,6 +19,7 @@ hmac.workspace = true
 [features]
 default = []
 mujoco = []
+hil-faults = []
 
 [dev-dependencies]
 trybuild.workspace = true

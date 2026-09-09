@@ -13,6 +13,7 @@ pub mod error;
 pub mod execute;
 pub mod fieldbus;
 pub mod harness;
+pub mod hil_faults;
 pub mod ledger;
 pub mod safety_protocol;
 pub mod signing;

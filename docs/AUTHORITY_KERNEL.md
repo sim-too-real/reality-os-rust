@@ -287,9 +287,43 @@ drive → physical energy
 **Machine-wide single-writer** requires OS exclusivity plus an independent safety
 controller. Rust privacy does not provide this.
 
-## 17. Judgment: one-robot hardware experiment?
+## 17. Frozen software authority kernel
 
-**No.** The same-process software authority boundary is now typestate-complete
-enough to stop expanding Rust architecture. It is **not** strong enough to
-energize a real actuator. Use it as the last software gate in SIM/HIL after
-deployment topology in §16 is true on the machine.
+The following public types/APIs are **frozen**. Change them only for a
+demonstrated failed invariant, not speculative features. SIM/fixture surfaces
+are outside this freeze.
+
+* `IssuedCommand`
+* `OnlineWrite`
+* `RuntimeGovernor<OnlineLocked>` (`new_online`, `authorize_issued`, `write_online`)
+* certified-write scope (`execute_certified_command`, `with_certified_write`)
+* consume ledger (`CommandLedger::with_online_journal`, prepare/ack/unknown)
+* signing payload (`command_payload_for_sign` / `realityos.command_signing/1`)
+* runtime identity (`RuntimeIdentity`, `instance_hash`, `realityos.runtime_instance/1`)
+
+## 18. Identity-binding audit (from signed bytes)
+
+Traced values, not field names:
+
+| Runtime concept | Bound into signed payload? | How |
+|-----------------|----------------------------|-----|
+| release | yes | `release_hash` |
+| design | yes | copied into `as_built_hash` (name is historical) |
+| serial / as-built | **yes after this pass** | `runtime_instance_hash` |
+| firmware | **yes after this pass** | `runtime_instance_hash` |
+| calibration | yes | `calibration_ids` + digest |
+| authorized actuators | yes | `actuator_ids` + digest |
+
+`instance_hash` = SHA-256 of a canonical NUL-delimited record:
+schema, release, design, serial, firmware, calibration, sorted unique actuators.
+
+`write_online` independently checks digest equality and actuator-scope subset.
+
+A capability from Governor A is not transferable to Governor B merely because
+they share a release, design, or signing key.
+
+## 19. Judgment: powered physical testing?
+
+**No.** See `docs/HIL.md`. Process separation and exclusive virtual I/O are
+demonstrated. Independent physical energy-stop is still a named hole. Do not
+energize a real actuator.

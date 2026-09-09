@@ -30,5 +30,7 @@ Physics **screens** used by `certify()` affect ALLOW/REFUSE. They are in the
 | `data` | Debug event store |
 | `gauntlet` | Scenario matrix |
 | `apps/ros-governor` | SIM CLI |
+| `vport` | Exclusive virtual serial port (`HardwareDriverPort`) |
+| `hil` | Two-process HIL harness + proof report |
 
 Do not put a proposer, ROS adapter, or vendor SDK inside the kernel.

@@ -37,6 +37,7 @@ pub fn command_payload_for_sign(cmd: &dyn ActuationCommand) -> Value {
         "units": cmd.units(),
         "policy_hash": cmd.policy_hash(),
         "config_hash": cmd.config_hash(),
+        "runtime_instance_hash": cmd.runtime_instance_hash(),
     })
 }
 

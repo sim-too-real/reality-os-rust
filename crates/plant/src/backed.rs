@@ -18,6 +18,7 @@ pub struct HardwareBackedPlant<P: HardwareDriverPort> {
     last_identity: Option<HardwareIdentity>,
     production: bool,
     production_key_hash: Option<String>,
+    writes: u32,
 }
 
 impl<P: HardwareDriverPort> HardwareBackedPlant<P> {
@@ -33,6 +34,7 @@ impl<P: HardwareDriverPort> HardwareBackedPlant<P> {
             last_identity: None,
             production: false,
             production_key_hash: None,
+            writes: 0,
         }
     }
 
@@ -89,6 +91,7 @@ impl<P: HardwareDriverPort> Plant for HardwareBackedPlant<P> {
         let mut realized = self.port.write_action(action, params)?;
         realized.metal = self.effective_metal();
         self.last_sense = realized.clone();
+        self.writes = self.writes.saturating_add(1);
         Ok(realized)
     }
 
@@ -126,5 +129,9 @@ impl<P: HardwareDriverPort> Plant for HardwareBackedPlant<P> {
 
     fn production_key_hash(&self) -> Option<&str> {
         self.production_key_hash.as_deref()
+    }
+
+    fn write_count(&self) -> u32 {
+        self.writes
     }
 }
