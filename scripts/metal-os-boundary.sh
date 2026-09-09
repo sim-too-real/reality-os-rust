@@ -180,14 +180,25 @@ if [[ ! -S "$IPC_ROOT/ipc.sock" ]]; then
   cat "$IPC_ROOT/authority.err" >&2 || true
   exit 1
 fi
+SMOKE_PID="$AUTH_PID"
+while read -r pid cmdline; do
+  case "$cmdline" in
+    sudo*|*" sudo "*) continue ;;
+  esac
+  rest="${cmdline##*realityos-metal-smoke --root }"
+  if [[ "$rest" != "$cmdline" && ( "$rest" == "${IPC_ROOT} "* || "$rest" == "${IPC_ROOT}" ) ]]; then
+    SMOKE_PID="$pid"
+    break
+  fi
+done < <(pgrep -af 'realityos-metal-smoke' 2>/dev/null || true)
 chmod 0660 "$IPC_ROOT/ipc.sock"
 chgrp "$IPC_GROUP" "$IPC_ROOT/ipc.sock"
 chmod 0600 "$TTY" 2>/dev/null || true
 
 IPC_PROBE="$(sudo -u "$AUTONOMY_USER" -- env \
   REALITYOS_METAL_DEVICE="$TTY" \
-  METAL_AUTHORITY_PID="$AUTH_PID" \
-  "$PROP" --root "$IPC_ROOT" --authority-pid "$AUTH_PID" os-probe)"
+  METAL_AUTHORITY_PID="$SMOKE_PID" \
+  "$PROP" --root "$IPC_ROOT" --authority-pid "$SMOKE_PID" os-probe)"
 echo "os-probe-ipc=$IPC_PROBE"
 
 HOLD="$(sudo -u "$AUTONOMY_USER" -- env REALITYOS_METAL_DEVICE="$TTY" \

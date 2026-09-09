@@ -313,6 +313,9 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
     use std::time::Duration;
 
     let mut auth = MetalAuthority::start(root, first_online)?;
+    // new_online already ticked the watchdog; pet before bind so socket setup
+    // cannot create a 100 ms miss before the idle loop.
+    auth.pet_supervisor();
     let listener = crate::ipc::bind_socket(root)?;
     listener.set_nonblocking(true)?;
     loop {

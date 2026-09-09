@@ -95,6 +95,24 @@ acks() { cat "$ROOT/bus/acks" 2>/dev/null || echo 0; }
 present() { cat "$ROOT/bus/present" 2>/dev/null || echo ""; }
 goalpos() { cat "$ROOT/bus/goal" 2>/dev/null || echo ""; }
 
+# $! after `sudo -u ... serve &` is the sudo wrapper. /proc/<sudo>/fd is not
+# the authority tty; measure proc-fd against the smoke child.
+resolve_metal_smoke_pid() {
+  local root="$1"
+  local pid cmdline rest
+  while read -r pid cmdline; do
+    case "$cmdline" in
+      sudo*|*" sudo "*) continue ;;
+    esac
+    rest="${cmdline##*realityos-metal-smoke --root }"
+    if [[ "$rest" != "$cmdline" && ( "$rest" == "${root} "* || "$rest" == "${root}" ) ]]; then
+      echo "$pid"
+      return 0
+    fi
+  done < <(pgrep -af 'realityos-metal-smoke' 2>/dev/null || true)
+  return 1
+}
+
 start_auth() {
   local first="$1"
   local crash="${2:-}"
@@ -120,6 +138,7 @@ start_auth() {
     sleep 0.05
   done
   unset REALITYOS_HIL_CRASH
+  SMOKE_PID="$(resolve_metal_smoke_pid "$ROOT" || echo "$AUTH_PID")"
   if [[ ! -S "$ROOT/ipc.sock" ]]; then
     echo "error: ipc.sock did not appear" >&2
     cat "$ROOT/authority.err" >&2 || true
@@ -141,6 +160,7 @@ stop_auth() {
 }
 
 AUTH_PID=""
+SMOKE_PID=""
 cleanup() { stop_auth || true; }
 trap cleanup EXIT
 start_auth 1
@@ -149,7 +169,7 @@ if [[ -e "$DEVICE" ]]; then
   chmod 0600 "$DEVICE" 2>/dev/null || true
 fi
 
-PROBE="$(as_autonomy env METAL_AUTHORITY_PID="$AUTH_PID" "$PROP" --root "$ROOT" --authority-pid "$AUTH_PID" os-probe)"
+PROBE="$(as_autonomy env METAL_AUTHORITY_PID="${SMOKE_PID:-$AUTH_PID}" "$PROP" --root "$ROOT" --authority-pid "${SMOKE_PID:-$AUTH_PID}" os-probe)"
 echo "os-probe=$PROBE"
 
 python3 - <<'PY' "$PROBE"
@@ -297,18 +317,17 @@ crash_replay() {
   local point="$1"
   local cid="$2"
   stop_auth
-  trap - EXIT
   if ! start_auth 0 "$point"; then
     echo "error: crash serve did not bind for $point" >&2
     exit 1
   fi
   as_autonomy "$PROP" --root "$ROOT" --id "$cid" --verb hold propose >/tmp/metal-"$cid".json || true
   wait "$AUTH_PID" 2>/dev/null || true
+  "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
   if ! start_auth 0; then
     echo "error: restart after $point crash failed" >&2
     exit 1
   fi
-  trap cleanup EXIT
   local before after
   before="$(writes)"
   as_autonomy env METAL_CMD_ID="$cid" "$PROP" --root "$ROOT" replay >/tmp/metal-"$cid"-replay.json || true
