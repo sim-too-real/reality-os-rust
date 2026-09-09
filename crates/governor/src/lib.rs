@@ -161,7 +161,7 @@ mod tests {
         );
         assert!(
             g.watchdog_age_s() < 0.05,
-            "age is measured from the tick stamp, got {}",
+            "watchdog_tick_now stamps after persist, got {}",
             g.watchdog_age_s()
         );
     }

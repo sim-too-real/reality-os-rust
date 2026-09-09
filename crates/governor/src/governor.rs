@@ -306,8 +306,18 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
     }
 
     /// Software supervisor using the authority clock. Not an independent hardware watchdog.
+    ///
+    /// After a successful tick, the stamp is the time *after* journal+seal
+    /// persist. Persist latency is not a missed period (same exception as
+    /// [`Self::new_online`] start). A gap >100 ms with no successful tick
+    /// still latches and cannot be caught up. Caller-time [`Self::watchdog_tick`]
+    /// (HIL) is unchanged.
     pub fn watchdog_tick_now(&mut self) -> RuntimeTrace {
-        self.watchdog_tick_at(self.clock.monotonic_now().secs())
+        let t = self.watchdog_tick_at(self.clock.monotonic_now().secs());
+        if t.ok && !self.estop() {
+            self.last_watchdog_s = self.clock.monotonic_now().secs();
+        }
+        t
     }
 
     fn emit(&mut self, t: RuntimeTrace) -> RuntimeTrace {
@@ -852,13 +862,13 @@ impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
         g.validated = Some(validated);
         g.authorized_actuator_ids = actuator_ids;
         g.envelope = Some(env);
-        // Each emit fsyncs journal+seal. Stamping both ticks with one pre-emit
-        // time makes the next watchdog_tick_now see persist latency as a miss
-        // (software_watchdog_miss_before_bind on GHA / slow disks). Use current
-        // authority time for the watchdog after the heartbeat persist.
+        // Each emit fsyncs journal+seal. Stamping heartbeat and watchdog with
+        // one pre-emit time makes the next watchdog_tick_now see persist
+        // latency as a miss (software_watchdog_miss_before_bind on GHA).
+        // Heartbeat first, then watchdog_tick_now (stamps after persist).
         g.heartbeat_at(g.clock.monotonic_now().secs());
+        let _ = g.watchdog_tick_now();
         let now_s = g.clock.monotonic_now().secs();
-        let _ = g.watchdog_tick_at(now_s);
         let cont = g.apply_journal_continuity(false, now_s);
         if cont.get("start_refused").and_then(Value::as_bool) == Some(true) {
             return Err(OnlineInitError(
