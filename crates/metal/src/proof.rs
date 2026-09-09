@@ -104,6 +104,35 @@ pub fn aggregates_from_cases(cases: &[CaseRecord]) -> ProofAggregates {
     a
 }
 
+/// Device present delta from campaign `observed_motion`.
+/// Prefers `delta=N`; otherwise `present A->B`.
+pub fn present_position_delta(motion: Option<&str>) -> Option<i64> {
+    let s = motion?;
+    if let Some(idx) = s.find("delta=") {
+        let tok = s[idx + 6..].split_whitespace().next()?;
+        if tok == "None" {
+            return None;
+        }
+        return tok.parse().ok();
+    }
+    let rest = s.split_once("present ")?.1;
+    let pair = rest.split_whitespace().next()?;
+    let (a, b) = pair.split_once("->")?;
+    Some(b.parse::<i64>().ok()? - a.parse::<i64>().ok()?)
+}
+
+fn identity_looks_like_pty_stand_in(id: &serde_json::Value) -> bool {
+    let status = id
+        .pointer("/hardware_identity/evidence_status")
+        .and_then(|v| v.as_str())
+        .or_else(|| id.get("evidence_status").and_then(|v| v.as_str()));
+    let metal = id
+        .pointer("/hardware_identity/metal")
+        .and_then(|v| v.as_bool())
+        .or_else(|| id.get("metal").and_then(|v| v.as_bool()));
+    status == Some("PTY_STAND_IN_NOT_METAL") || metal == Some(false)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetalProof {
     pub schema: String,
@@ -150,14 +179,21 @@ impl MetalProof {
             return Err("metal_proof_requires_measured_cases".into());
         }
         let a = aggregates_from_cases(&cases);
-        let has_hold = cases
-            .iter()
-            .any(|c| c.name == "valid_hold" && c.expected_authorization && c.write_delta > 0);
-        let has_nudge = cases
-            .iter()
-            .any(|c| c.name == "valid_nudge" && c.expected_authorization && c.write_delta > 0);
+        let has_hold = cases.iter().any(|c| {
+            c.name == "valid_hold"
+                && c.expected_authorization
+                && c.write_delta > 0
+                && present_position_delta(c.observed_motion.as_deref()) == Some(0)
+        });
+        let has_nudge = cases.iter().any(|c| {
+            c.name == "valid_nudge"
+                && c.expected_authorization
+                && c.write_delta > 0
+                && present_position_delta(c.observed_motion.as_deref()).is_some_and(|d| d != 0)
+        });
         let freshness_measured =
             meta.device_capture_s.is_some() && meta.authority_receive_s.is_some();
+        let not_pty_stand_in = !identity_looks_like_pty_stand_in(&meta.real_device_identity);
         Ok(Self {
             schema: PROOF_SCHEMA.into(),
             hardware_model: meta.hardware_model,
@@ -197,6 +233,7 @@ impl MetalProof {
                 && a.identity_mismatch_refusals > 0
                 && a.disconnect_refusals > 0
                 && freshness_measured
+                && not_pty_stand_in
                 && meta.used_os_monotonic_clock
                 && meta.used_hardware_driver_port
             {
@@ -522,6 +559,43 @@ mod tests {
         no_fresh.authority_receive_s = None;
         let incomplete =
             MetalProof::from_measured(no_fresh, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+    }
+
+    #[test]
+    fn measured_success_requires_hold_still_and_nudge_present_delta() {
+        let mut stuck = ok_cases();
+        stuck[1].observed_motion = Some("present 2048->2048 goal=2080 delta=0".into());
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), stuck, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status, "measured_incomplete_or_failed",
+            "a goal write without present motion is not a nudge"
+        );
+        let mut yanked = ok_cases();
+        yanked[0].observed_motion = Some("present 2048->2080 goal=2080 delta=32".into());
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), yanked, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status, "measured_incomplete_or_failed",
+            "a hold that moved is not a zero-motion baseline"
+        );
+    }
+
+    #[test]
+    fn measured_success_refuses_pty_stand_in_identity() {
+        let mut pty = ok_meta(true);
+        pty.real_device_identity = serde_json::json!({
+            "hardware_identity": {
+                "metal": false,
+                "evidence_status": "PTY_STAND_IN_NOT_METAL",
+                "serial": "tty:2:1:id1"
+            }
+        });
+        let incomplete = MetalProof::from_measured(pty, ok_cases(), default_unresolved()).unwrap();
         assert_eq!(
             incomplete.experiment_status,
             "measured_incomplete_or_failed"
