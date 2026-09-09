@@ -101,7 +101,9 @@ mod tests {
         assert_eq!(d.status, DecisionStatus::Refuse);
         assert!(d.command.is_none());
         assert!(
-            d.physical_reason.contains("no domain") || d.physical_reason.contains("unsupported")
+            d.physical_reason.contains("no domain")
+                || d.physical_reason.contains("unsupported")
+                || d.physical_reason.contains("skillir")
         );
     }
 

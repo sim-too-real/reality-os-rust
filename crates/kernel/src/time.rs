@@ -75,4 +75,13 @@ mod tests {
         let now = MonoTime::from_secs(f64::MAX).unwrap();
         assert!(now.checked_add(f64::MAX).is_err());
     }
+
+    #[test]
+    fn clock_rollback_does_not_yield_negative_age() {
+        let later = MonoTime::from_secs(10.0).unwrap();
+        let earlier = MonoTime::from_secs(3.0).unwrap();
+        assert_eq!(later.saturating_age_s(earlier), 0.0);
+        assert!(MonoTime::from_secs(f64::NAN).is_err());
+        assert!(SimTime::from_secs(f64::INFINITY).is_err());
+    }
 }

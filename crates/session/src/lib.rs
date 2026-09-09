@@ -143,6 +143,124 @@ mod tests {
     }
 
     #[test]
+    fn journal_kill_restart_refuses_replay_and_restores_estop() {
+        let dir = std::env::temp_dir().join(format!(
+            "realityos-journal-{}-kill",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+        let _ = std::fs::remove_file(&path);
+
+        let plant = SimPlant::new("p", 1, 10.0);
+        let mut args = StartArgs::simulation("rel-journal-aa");
+        args.journal_path = Some(path.clone());
+        let mut sess = RuntimeSession::start(args.clone(), plant, 10.0).unwrap();
+        sess.governor.mark_sensor(10.0, None);
+        let mut ros = RealityOs::new();
+        let d = ros.decide(realityos_core::DecideRequest::new(
+            Intent::language("hold", "hold"),
+            WorldView {
+                tau_max: vec![5.0],
+                ..WorldView::default()
+            },
+            10.0,
+        ));
+        let cmd = d.command.unwrap();
+        let replay = cmd.clone();
+        let out = sess.bind_and_dispatch(cmd, &ActionParams::empty(), 10.0);
+        assert!(out.ok, "{:?}", out.violations);
+        sess.governor.engage_estop("kill_test", 10.0);
+        drop(sess);
+
+        let plant2 = SimPlant::new("p", 1, 10.0);
+        let mut sess2 = RuntimeSession::start(args, plant2, 10.0).unwrap();
+        assert!(sess2.governor.estop());
+        sess2.governor.mark_sensor(10.0, None);
+        let out2 = sess2.bind_and_dispatch(replay, &ActionParams::empty(), 10.0);
+        assert!(!out2.ok);
+        assert_eq!(sess2.governor.plant().write_count(), 0);
+        let blob = out2.violations.join(" ");
+        assert!(
+            blob.contains("estop") || blob.contains("replayed") || blob.contains("safe_state"),
+            "{blob}"
+        );
+    }
+
+    #[test]
+    fn journal_missing_file_is_empty_genesis_and_tamper_fails_closed() {
+        let dir = std::env::temp_dir().join(format!(
+            "realityos-journal-{}-tamper",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let missing = dir.join("does-not-exist-yet.jsonl");
+        let _ = std::fs::remove_file(&missing);
+        let plant = SimPlant::new("p", 1, 10.0);
+        let mut args = StartArgs::simulation("rel-journal-bb");
+        args.journal_path = Some(missing.clone());
+        let sess = RuntimeSession::start(args, plant, 1.0);
+        assert!(sess.is_ok(), "{:?}", sess.err());
+
+        let path = dir.join("tamper.jsonl");
+        let _ = std::fs::remove_file(&path);
+        let mut ledger = realityos_plant::CommandLedger::with_journal(&path, true).unwrap();
+        let mut body = serde_json::Map::new();
+        body.insert("event".into(), serde_json::json!("heartbeat"));
+        ledger
+            .append_event("governor_event", body)
+            .unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let tampered = raw.replace("prev_hash", "prev_XXXX");
+        std::fs::write(&path, tampered).unwrap();
+        let mut args = StartArgs::simulation("rel-journal-cc");
+        args.journal_path = Some(path);
+        args.journal_fail_closed = true;
+        let plant = SimPlant::new("p", 1, 10.0);
+        match RuntimeSession::start(args, plant, 1.0) {
+            Err(err) => assert!(
+                err.0.contains("journal") || err.0.contains("unreadable"),
+                "{}",
+                err.0
+            ),
+            Ok(_) => panic!("expected journal tamper to fail closed"),
+        }
+    }
+
+    #[test]
+    fn mailbox_overload_latches_hold_without_writing() {
+        let plant = SimPlant::new("p", 1, 10.0);
+        let mut sess =
+            RuntimeSession::start(StartArgs::simulation("rel-bus-1"), plant, 1.0).unwrap();
+        for i in 0..32 {
+            sess.push_outbound(realityos_rate::TelemetryFrame::new("t", 1.0, i.to_string()))
+                .unwrap();
+        }
+        assert_eq!(
+            sess.push_outbound(realityos_rate::TelemetryFrame::new("t", 1.0, "x")),
+            Err(realityos_rate::OverloadDisposition::Hold)
+        );
+        let cert = Certificate::new(DecisionStatus::Allow, "ok");
+        let cmd = CertifiedCommand::issue("bus1", 1, 1.0, 30.0, cert, vec![0.1]).unwrap();
+        let out = sess.bind_and_dispatch(cmd, &ActionParams::empty(), 1.0);
+        assert!(!out.ok);
+        assert_eq!(sess.governor.plant().write_count(), 0);
+    }
+
+    #[test]
+    fn sensor_timestamp_rollback_is_refused() {
+        let plant = SimPlant::new("p", 1, 10.0);
+        let mut sess =
+            RuntimeSession::start(StartArgs::simulation("rel-roll-1"), plant, 5.0).unwrap();
+        sess.ingest_sensor(&[("j".into(), 0.1)], Some(4.0), 5.0)
+            .unwrap();
+        let err = sess
+            .ingest_sensor(&[("j".into(), 0.2)], Some(3.0), 5.0)
+            .unwrap_err();
+        assert!(err.contains("rollback"));
+    }
+
+    #[test]
     fn stop_distance_domain_refuses_too_fast() {
         let mut ros = RealityOs::new();
         let mut req = realityos_core::DecideRequest::new(

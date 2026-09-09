@@ -9,12 +9,17 @@ pub mod kinematics;
 pub mod limits;
 pub mod motor;
 pub mod newton;
+pub mod rigid;
 pub mod sampling;
 pub mod si;
 
 pub use energy::{contact_energy_j, mechanical_power_w, rotational_ke_j, translational_ke_j};
 pub use error::{PhysicsError, PhysicsResult};
 pub use kinematics::{coulomb_decel_m_s2, stop_distance_m, stop_time_s};
+pub use rigid::{
+    default_backend, fk_serial, rnea_serial, JointKind, NativeRigidBackend, RigidBodyBackend,
+    SerialJoint, SerialModel,
+};
 pub use limits::{in_limits, joint_limit_margin};
 pub use motor::{joule_w, motor_torque_nm, thermal_derate};
 pub use newton::{accel_from_force, force_n, torque_nm};

@@ -81,6 +81,74 @@ impl Camera {
         let y = (v - self.cy) / self.fy * self.table_z_m;
         (x, y)
     }
+
+    pub fn validate(&self, width: u32, height: u32) -> Result<(), &'static str> {
+        if !self.fx.is_finite() || !self.fy.is_finite() || self.fx <= 0.0 || self.fy <= 0.0 {
+            return Err("camera_focal_invalid");
+        }
+        if !self.cx.is_finite() || !self.cy.is_finite() || !self.table_z_m.is_finite() {
+            return Err("camera_principal_non_finite");
+        }
+        if self.table_z_m <= 0.0 {
+            return Err("camera_table_z_non_positive");
+        }
+        if self.cx < 0.0 || self.cy < 0.0 || self.cx > f64::from(width) || self.cy > f64::from(height)
+        {
+            return Err("camera_principal_outside_frame");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FrameStats {
+    pub fill: f64,
+    pub mean: f64,
+    pub contrast: f64,
+    pub edge_mass: f64,
+}
+
+pub fn frame_stats(frame: &Frame) -> FrameStats {
+    let n = frame.n_pixels().max(1) as f64;
+    let mut sum = 0.0;
+    let mut sum2 = 0.0;
+    let mut lit = 0.0;
+    let mut edge = 0.0;
+    let w = frame.width as usize;
+    let h = frame.height as usize;
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) * 3;
+            let yv = 0.299 * f64::from(frame.rgb[i])
+                + 0.587 * f64::from(frame.rgb[i + 1])
+                + 0.114 * f64::from(frame.rgb[i + 2]);
+            sum += yv;
+            sum2 += yv * yv;
+            if frame.rgb[i] > 130 {
+                lit += 1.0;
+                if x < 2 || y < 2 || x + 2 >= w || y + 2 >= h {
+                    edge += 1.0;
+                }
+            }
+        }
+    }
+    let mean = sum / n;
+    let var = (sum2 / n - mean * mean).max(0.0);
+    FrameStats {
+        fill: lit / n,
+        mean: mean / 255.0,
+        contrast: (var.sqrt() / 255.0).clamp(0.0, 1.0),
+        edge_mass: if lit > 0.0 { edge / lit } else { 1.0 },
+    }
+}
+
+pub fn quality_from_stats(stats: &FrameStats, has_blob: bool) -> (f64, f64) {
+    if !has_blob {
+        return (0.12, 0.92);
+    }
+    let quality = (0.35 + 0.4 * stats.contrast + 0.25 * (1.0 - stats.edge_mass)).clamp(0.0, 1.0);
+    let ood = (stats.edge_mass * 0.6 + (stats.fill - 0.25).abs() * 0.8).clamp(0.0, 1.0);
+    (quality, ood)
 }
 
 pub fn centroid_uv(frame: &Frame, r_min: u8) -> Option<(f64, f64)> {
@@ -136,6 +204,19 @@ pub fn see_from_pixels(frame: &Frame, camera: Option<&Camera>) -> SeeResult {
             metal: false,
         };
     };
+    if let Err(reason) = cam.validate(frame.width, frame.height) {
+        return SeeResult {
+            ok: false,
+            status: DecisionStatus::Refuse,
+            seen_xy_m: None,
+            pose_std_m: 0.08,
+            n_lit: 0,
+            source: "invalid_camera".into(),
+            reason: reason.into(),
+            pixel_hash: hash,
+            metal: false,
+        };
+    }
     match centroid_uv(frame, 130) {
         None => SeeResult {
             ok: false,
@@ -150,12 +231,14 @@ pub fn see_from_pixels(frame: &Frame, camera: Option<&Camera>) -> SeeResult {
         },
         Some((u, v)) => {
             let xy = cam.unproject(u, v);
+            let stats = frame_stats(frame);
+            let n_lit = (stats.fill * frame.n_pixels() as f64) as u32;
             SeeResult {
                 ok: true,
                 status: DecisionStatus::Allow,
                 seen_xy_m: Some(xy),
-                pose_std_m: 0.01,
-                n_lit: 1,
+                pose_std_m: (0.008 + 0.04 * stats.edge_mass).min(0.08),
+                n_lit,
                 source: "pinhole_centroid".into(),
                 reason: "compiled_from_pixels".into(),
                 pixel_hash: hash,
@@ -172,17 +255,11 @@ pub fn compile_observation(
     now_s: f64,
     ttl_s: f64,
 ) -> KernelResult<ObservationEvidence> {
-    if !camera.fx.is_finite() || !camera.fy.is_finite() || camera.fx <= 0.0 || camera.fy <= 0.0 {
-        return Err(realityos_kernel::KernelError::validation(
-            "camera.focal",
-            "non-finite or non-positive",
-        ));
-    }
-    let quality = if centroid_uv(frame, 130).is_some() {
-        0.9
-    } else {
-        0.15
-    };
+    camera
+        .validate(frame.width, frame.height)
+        .map_err(|e| realityos_kernel::KernelError::validation("camera", e))?;
+    let has_blob = centroid_uv(frame, 130).is_some();
+    let (quality, ood) = quality_from_stats(&frame_stats(frame), has_blob);
     ObservationEvidence::new(
         sensor_id,
         format!("cam-{:.3}-{:.3}", camera.fx, camera.fy),
@@ -191,7 +268,7 @@ pub fn compile_observation(
         frame.content_hash(),
         "vision/optical".to_string(),
         quality,
-        if quality < 0.2 { 0.9 } else { 0.1 },
+        ood,
         now_s + ttl_s,
     )
 }
@@ -234,5 +311,20 @@ mod tests {
         let ev = compile_observation(&f, &cam, "cam0", 1.0, 5.0).unwrap();
         assert!(!ev.digest().is_empty());
         assert!(!ev.is_expired(2.0));
+    }
+
+    #[test]
+    fn invalid_camera_refuses() {
+        let f = Frame::with_blob(16, 16, 8, 8, 2);
+        let cam = Camera {
+            fx: f64::NAN,
+            fy: 16.0,
+            cx: 8.0,
+            cy: 8.0,
+            table_z_m: 0.75,
+        };
+        let s = see_from_pixels(&f, Some(&cam));
+        assert!(!s.ok);
+        assert!(compile_observation(&f, &cam, "cam0", 1.0, 2.0).is_err());
     }
 }

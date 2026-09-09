@@ -3,8 +3,11 @@
 //! Does not replace RealityOS.decide. Does not invent. Both must cross here
 //! to touch a plant.
 
+use std::path::Path;
+
 use realityos_plant::{
     execute_certified_command, ActionParams, ActuationCommand, CommandLedger, ExecuteBind, Plant,
+    PlantResult,
 };
 use serde_json::{json, Map, Value};
 
@@ -105,6 +108,12 @@ impl<P: Plant> RuntimeGovernor<P> {
         &mut self.ledger
     }
 
+    /// Replace the in-memory ledger with a durable journal. Load recomputes every hash.
+    pub fn attach_journal(&mut self, path: impl AsRef<Path>, fail_closed: bool) -> PlantResult<()> {
+        self.ledger = CommandLedger::with_journal(path, fail_closed)?;
+        Ok(())
+    }
+
     pub fn config(&self) -> &GovernorConfig {
         &self.config
     }
@@ -141,6 +150,9 @@ impl<P: Plant> RuntimeGovernor<P> {
     pub fn watchdog_tick(&mut self, now_s: f64) -> RuntimeTrace {
         if !now_s.is_finite() {
             return self.engage_estop("watchdog_non_finite_time", 0.0);
+        }
+        if self.last_watchdog_s > 0.0 && now_s < self.last_watchdog_s {
+            return self.engage_estop("watchdog_clock_rollback", now_s);
         }
         if self.last_watchdog_s > 0.0
             && (now_s - self.last_watchdog_s) > self.watchdog_period_s * 2.0

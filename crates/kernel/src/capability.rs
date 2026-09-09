@@ -50,7 +50,7 @@ pub fn capabilities_for_kind(kind: &str) -> Vec<Capability> {
         "biped" | "quadruped" | "humanoid" => vec![Capability::FloatingBase],
         "differential_drive" | "ackermann" => vec![Capability::DifferentialDrive],
         "serial_arm" => vec![Capability::SerialArm, Capability::CartesianImpedance],
-        "uniaxial" | "single_dof" => vec![Capability::SingleDof],
+        "uniaxial" | "single_dof" | "prismatic" => vec![Capability::SingleDof],
         "bimanual" => vec![Capability::Bimanual, Capability::SerialArm],
         "aerial" => vec![Capability::FloatingBase],
         _ => Vec::new(),
@@ -66,5 +66,8 @@ mod tests {
         assert!(capabilities_for_kind("unitree_h1").is_empty());
         assert!(capabilities_for_kind("biped").contains(&Capability::FloatingBase));
         assert!(capabilities_for_kind("serial_arm").contains(&Capability::SerialArm));
+        assert!(capabilities_for_kind("quadruped").contains(&Capability::FloatingBase));
+        assert!(capabilities_for_kind("aerial").contains(&Capability::FloatingBase));
+        assert!(capabilities_for_kind("prismatic").contains(&Capability::SingleDof));
     }
 }

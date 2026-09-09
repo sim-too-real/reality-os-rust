@@ -416,6 +416,8 @@ pub fn narrow_certified_command(
 
 #[cfg(test)]
 mod tests {
+    use realityos_plant::ActuationCommand;
+
     use super::*;
 
     #[test]
@@ -432,5 +434,36 @@ mod tests {
         let err = narrow_certified_command(cmd, DecisionStatus::Modify, Some(vec![-0.1]), None)
             .unwrap_err();
         assert!(err.to_string().contains("only narrow"));
+    }
+
+    #[test]
+    fn property_nan_inf_dim_and_mutation_after_sign() {
+        let cert = Certificate::new(DecisionStatus::Allow, "ok");
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(CertifiedCommand::issue("c", 1, 1.0, 10.0, cert.clone(), vec![bad]).is_err());
+            assert!(CertifiedCommand::issue("c", 1, bad, 10.0, cert.clone(), vec![0.1]).is_err());
+        }
+        let signed = CertifiedCommand::issue("c", 1, 0.0, 10.0, cert, vec![0.4, -0.2])
+            .unwrap()
+            .sign(b"key");
+        let parent = signed.payload_hash().to_string();
+        assert!(!parent.is_empty());
+        let err = narrow_certified_command(
+            signed.clone(),
+            DecisionStatus::Modify,
+            Some(vec![0.4]),
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("dimensionality"));
+        let derived = narrow_certified_command(
+            signed,
+            DecisionStatus::Modify,
+            Some(vec![0.1, -0.1]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(derived.parent_payload_hash(), parent);
+        assert!(derived.signature().is_empty());
     }
 }

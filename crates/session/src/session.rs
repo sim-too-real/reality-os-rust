@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use realityos_core::CertifiedCommand;
 use realityos_governor::{
     DriverEnvelopePack, RuntimeGovernor, RuntimeIdentity, RuntimeTrace, SafeState,
@@ -6,6 +8,7 @@ use realityos_kernel::{
     CalibrationId, DesignContentHash, FirmwareId, ReleaseHash, SerialOrAsBuilt,
 };
 use realityos_plant::{ActionParams, Plant, PlantRealized, SimPlant};
+use realityos_rate::{BoundedMailbox, OverloadDisposition, TelemetryFrame};
 use serde_json::json;
 
 use crate::mode::{RuntimeMode, SessionStartError};
@@ -23,6 +26,8 @@ pub struct StartArgs {
     pub require_command_signature: Option<bool>,
     pub require_driver_envelope: Option<bool>,
     pub max_action_abs: f64,
+    pub journal_path: Option<PathBuf>,
+    pub journal_fail_closed: bool,
 }
 
 impl StartArgs {
@@ -39,6 +44,8 @@ impl StartArgs {
             require_command_signature: None,
             require_driver_envelope: None,
             max_action_abs: 10.0,
+            journal_path: None,
+            journal_fail_closed: true,
         }
     }
 }
@@ -50,6 +57,8 @@ pub struct RuntimeSession<P: Plant> {
     acknowledged_ids: std::collections::HashSet<String>,
     safe_state: SafeState,
     last_sensor_hash: Option<String>,
+    last_sensor_ts: Option<f64>,
+    outbound: BoundedMailbox<TelemetryFrame>,
 }
 
 impl RuntimeSession<SimPlant> {
@@ -127,6 +136,25 @@ impl<P: Plant> RuntimeSession<P> {
         }
 
         let mut governor = RuntimeGovernor::new(identity, plant);
+        if let Some(path) = args.journal_path.as_ref() {
+            governor
+                .attach_journal(path, args.journal_fail_closed)
+                .map_err(|e| SessionStartError(format!("journal:{e}")))?;
+            let cont = governor.apply_journal_continuity(false, now_s);
+            if cont.get("start_refused").and_then(serde_json::Value::as_bool) == Some(true) {
+                let viols = cont
+                    .get("violations")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .unwrap_or_else(|| "continuity".into());
+                return Err(SessionStartError(format!("journal_continuity:{viols}")));
+            }
+        }
         governor.config_mut().require_online_identity = args.mode == RuntimeMode::Online;
         governor.config_mut().require_sensor_before_write = args.mode != RuntimeMode::Simulation;
         governor.config_mut().require_monotonic_sequence =
@@ -143,14 +171,17 @@ impl<P: Plant> RuntimeSession<P> {
         governor.set_envelope(env);
         governor.heartbeat(now_s);
         let _ = governor.watchdog_tick(now_s);
+        let last_sequence = governor.ledger().last_sequence();
 
         Ok(Self {
             mode: args.mode,
             governor,
-            last_sequence: 0,
+            last_sequence,
             acknowledged_ids: std::collections::HashSet::new(),
             safe_state: SafeState::Running,
             last_sensor_hash: None,
+            last_sensor_ts: None,
+            outbound: BoundedMailbox::new(32),
         })
     }
 
@@ -193,6 +224,11 @@ impl<P: Plant> RuntimeSession<P> {
         if timestamp_s.is_some() && (ts - now_s).abs() > self.governor.config().sensor_stale_s {
             return Err("sensor_timestamp_stale_vs_now".into());
         }
+        if let Some(prev) = self.last_sensor_ts {
+            if ts < prev {
+                return Err("sensor_timestamp_rollback".into());
+            }
+        }
         self.last_sequence = self.last_sequence.saturating_add(1);
         let hash = realityos_plant::hash_sensor_packet(
             samples,
@@ -203,7 +239,19 @@ impl<P: Plant> RuntimeSession<P> {
         );
         self.governor.mark_sensor(ts, Some(hash.clone()));
         self.last_sensor_hash = Some(hash.clone());
+        self.last_sensor_ts = Some(ts);
         Ok(hash)
+    }
+
+    /// Telemetry / audit enqueue. Overload latches HOLD and is never a plant write.
+    pub fn push_outbound(&mut self, frame: TelemetryFrame) -> Result<(), OverloadDisposition> {
+        self.outbound.push(frame).inspect_err(|_| {
+            self.latch_safe_state(SafeState::Hold, "mailbox_overload");
+        })
+    }
+
+    pub fn outbound_dropped(&self) -> u64 {
+        self.outbound.dropped()
     }
 
     pub fn bind_and_dispatch(

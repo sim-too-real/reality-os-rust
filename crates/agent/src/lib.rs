@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
+pub mod memory;
+pub use memory::{EvidenceMemory, EvidenceTrace};
+
 pub const EVIDENCE_STATUS: &str = "SIM_LLM_PROPOSED_NOT_MEASURED";
 pub const GROK_BASE: &str = "https://api.x.ai/v1";
 pub const GROK_MODEL: &str = "grok-4.5";
@@ -23,21 +26,24 @@ pub const FORBIDDEN_KEYS: &[&str] = &[
     "provenance",
 ];
 
-pub const ALLOWED_VERBS: &[&str] = &[
-    "grasp", "pick", "lift", "hold", "place", "slide", "push", "insert", "press", "carry", "walk",
-    "stop", "reach",
-];
-
 pub fn skill_registry() -> Vec<SkillIR> {
-    ALLOWED_VERBS
-        .iter()
-        .map(|verb| {
-            let mut s = SkillIR::hold();
-            s.id = format!("skill.{verb}");
-            s.verb = (*verb).into();
-            s
-        })
-        .collect()
+    SkillIR::catalog()
+}
+
+pub fn grok_system_prompt() -> String {
+    let verbs: Vec<String> = SkillIR::catalog().into_iter().map(|s| s.verb).collect();
+    format!(
+        "You are a robot skill programmer. Return ONLY JSON \
+         {{program_name, notes, phases:[{{name,verb,target_object}}]}}. \
+         verb must be one of: {}. Never torques, never metal, never MEASURED. \
+         Free text is not motion. Skills are proposals only.",
+        verbs.join(",")
+    )
+}
+
+/// Offline or live JSON must pass SkillIR admission before it is a program.
+pub fn propose_offline(prompt: &str) -> Result<SkillProgram, AgentError> {
+    admit_program(serde_json::to_value(offline_propose(prompt)).unwrap_or(Value::Null))
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -170,7 +176,7 @@ pub fn grok_propose(prompt: &str) -> Result<SkillProgram, AgentError> {
     let body = serde_json::json!({
         "model": GROK_MODEL,
         "messages": [
-            {"role": "system", "content": "You are a robot skill programmer. Return ONLY JSON {program_name, notes, phases:[{name,verb,target_object}]}. verb in grasp,pick,hold,place,slide,push,insert,press,carry,walk,stop,reach. Never torques, never metal, never MEASURED."},
+            {"role": "system", "content": grok_system_prompt()},
             {"role": "user", "content": prompt}
         ]
     });
@@ -237,5 +243,16 @@ mod tests {
         let p = offline_propose("pick and place the cube");
         assert_eq!(p.phases[0].verb, "place");
         assert!(!p.learned_actuator_authority);
+    }
+
+    #[test]
+    fn unknown_verb_is_not_in_skillir_catalog() {
+        let raw = serde_json::json!({
+            "program_name": "x",
+            "phases": [{"name": "a", "verb": "dance"}]
+        });
+        assert!(admit_program(raw).is_err());
+        assert!(SkillIR::admit("dance").is_none());
+        assert_eq!(skill_registry().len(), SkillIR::catalog().len());
     }
 }

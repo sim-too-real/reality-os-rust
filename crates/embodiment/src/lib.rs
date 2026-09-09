@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+mod import;
 mod world;
+pub use import::{import_mjcf, import_urdf};
 pub use world::{OperatingEnvelope, ScenarioSpec, SurfaceBelief, WorldBelief};
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -20,6 +22,14 @@ pub enum EmbodimentError {
     DofMismatch,
 }
 
+fn default_axis() -> [f64; 3] {
+    [0.0, 0.0, 1.0]
+}
+
+fn default_joint_type() -> String {
+    "revolute".into()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JointSpec {
     pub name: String,
@@ -27,6 +37,12 @@ pub struct JointSpec {
     pub q_max: f64,
     pub tau_max: f64,
     pub dq_max: f64,
+    #[serde(default = "default_axis")]
+    pub axis: [f64; 3],
+    #[serde(default = "default_joint_type")]
+    pub joint_type: String,
+    #[serde(default)]
+    pub origin_xyz: [f64; 3],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,6 +50,10 @@ pub struct LinkSpec {
     pub name: String,
     pub parent_joint: Option<String>,
     pub mass_kg: Option<f64>,
+    #[serde(default)]
+    pub com_m: Option<[f64; 3]>,
+    #[serde(default)]
+    pub inertia_diag: Option<[f64; 3]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +131,35 @@ impl EmbodimentGraph {
 
     pub fn requires(&self, cap: Capability) -> bool {
         self.capabilities.has(cap)
+    }
+
+    pub fn serial_model(&self) -> realityos_physics::SerialModel {
+        realityos_physics::SerialModel {
+            joints: self
+                .joints
+                .iter()
+                .map(|j| {
+                    let link = self
+                        .links
+                        .iter()
+                        .find(|l| l.parent_joint.as_deref() == Some(j.name.as_str()));
+                    realityos_physics::SerialJoint {
+                        kind: if j.joint_type == "prismatic" {
+                            realityos_physics::JointKind::Prismatic
+                        } else {
+                            realityos_physics::JointKind::Revolute
+                        },
+                        axis: j.axis,
+                        origin: j.origin_xyz,
+                        mass: link.and_then(|l| l.mass_kg).unwrap_or(0.0),
+                        com: link.and_then(|l| l.com_m).unwrap_or([0.0, 0.0, 0.0]),
+                        inertia_diag: link
+                            .and_then(|l| l.inertia_diag)
+                            .unwrap_or([0.0, 0.0, 0.0]),
+                    }
+                })
+                .collect(),
+        }
     }
 }
 
@@ -205,6 +254,8 @@ fn graph_from_model_json(raw: &str) -> Result<EmbodimentGraph, EmbodimentError> 
             name: link.clone(),
             parent_joint: Some(j.name.clone()),
             mass_kg: None,
+            com_m: None,
+            inertia_diag: None,
         });
         frames.push(FrameSpec {
             name: j.name.clone(),
@@ -239,16 +290,25 @@ pub fn load_embedded(id: &str) -> Result<EmbodimentGraph, EmbodimentError> {
         "arm6" => include_str!("../../../robots/arm6.json"),
         "wheeled" => include_str!("../../../robots/wheeled.json"),
         "unitree_h1" => include_str!("../../../robots/unitree_h1.json"),
+        "quadruped" => include_str!("../../../robots/quadruped.json"),
+        "aerial" => include_str!("../../../robots/aerial.json"),
         other => return Err(EmbodimentError::UnknownRobot(other.into())),
     };
     graph_from_model_json(raw)
 }
 
 pub fn catalog() -> Vec<EmbodimentGraph> {
-    ["uniaxial", "arm6", "wheeled", "unitree_h1"]
-        .iter()
-        .map(|id| load_embedded(id).expect("embedded robot json"))
-        .collect()
+    [
+        "uniaxial",
+        "arm6",
+        "wheeled",
+        "unitree_h1",
+        "quadruped",
+        "aerial",
+    ]
+    .iter()
+    .map(|id| load_embedded(id).expect("embedded robot json"))
+    .collect()
 }
 
 #[cfg(test)]
@@ -268,9 +328,15 @@ mod tests {
     fn capability_queries_do_not_branch_on_fixture_id() {
         let h1 = load_embedded("unitree_h1").unwrap();
         let arm = load_embedded("arm6").unwrap();
+        let quad = load_embedded("quadruped").unwrap();
+        let air = load_embedded("aerial").unwrap();
         assert!(h1.requires(Capability::FloatingBase));
         assert!(arm.requires(Capability::SerialArm));
         assert!(!arm.requires(Capability::FloatingBase));
+        assert!(quad.requires(Capability::FloatingBase));
+        assert!(air.requires(Capability::FloatingBase));
+        assert_eq!(quad.kind, "quadruped");
+        assert_eq!(air.kind, "aerial");
     }
 
     #[test]

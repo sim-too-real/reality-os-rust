@@ -1,10 +1,12 @@
 //! Queryable event/data layer. Does not authorize motion.
 
 pub mod event;
+pub mod mcap;
 pub mod snapshot;
 pub mod store;
 
 pub use event::{DebugEvent, EventFilter, EventKind};
+pub use mcap::McapWriter;
 pub use snapshot::SessionSnapshot;
 pub use store::{DataError, EventStore};
 

@@ -3,6 +3,7 @@
 
 mod actuator;
 mod energy;
+mod locomotion;
 mod motor;
 mod pfl;
 mod stop;
@@ -48,6 +49,9 @@ pub struct WorldView {
     pub current_a: Option<f64>,
     pub gear_ratio: Option<f64>,
     pub motor_eta: Option<f64>,
+    pub capabilities: Vec<String>,
+    pub mu: Option<f64>,
+    pub g_m_s2: Option<f64>,
 }
 
 #[derive(Default)]
@@ -64,6 +68,7 @@ impl DomainRegistry {
         r.register(Box::new(StopDistance));
         r.register(Box::new(EnergyEnvelope));
         r.register(Box::new(MotorTorque));
+        r.register(Box::new(locomotion::LocomotionScreen));
         r
     }
 
@@ -103,6 +108,7 @@ impl DomainRegistry {
             "stop" | "halt" | "estop_distance" => "stop_distance",
             "energy" | "ke" => "energy_envelope",
             "motor" | "current" => "motor_torque",
+            "walk" | "stand" => "locomotion",
             _ => return None,
         };
         self.plugins.contains_key(mapped).then_some(mapped)

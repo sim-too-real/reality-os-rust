@@ -19,7 +19,17 @@ impl DomainPlugin for StopDistance {
 
     fn certify(&self, plan: &PhysicalPlan, world: &WorldView) -> Certificate {
         let v = plan.action.first().copied().unwrap_or(0.0);
-        let a = world.decel_m_s2.unwrap_or(G0);
+        let declared = world.decel_m_s2.unwrap_or(G0);
+        let a = match (world.mu, world.g_m_s2.or(Some(G0))) {
+            (Some(mu), Some(g)) => match realityos_physics::coulomb_decel_m_s2(mu, g) {
+                Ok(ceil) => declared.min(ceil),
+                Err(e) => {
+                    return Certificate::new(DecisionStatus::Abort, e.to_string())
+                        .with_reasons(["non_finite"]);
+                }
+            },
+            _ => declared,
+        };
         let s = match stop_distance_m(v, a) {
             Ok(s) => s,
             Err(e) => {

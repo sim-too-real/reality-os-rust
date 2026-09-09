@@ -1,0 +1,11 @@
+{
+  "id": "aerial",
+  "kind": "aerial",
+  "source": "generic 4-rotor rate fixture (SIM screens, not a certified aircraft)",
+  "joints": [
+    { "name": "rotor_fl", "q_min": 0.0, "q_max": 800.0, "tau_max": 2.0, "dq_max": 200.0 },
+    { "name": "rotor_fr", "q_min": 0.0, "q_max": 800.0, "tau_max": 2.0, "dq_max": 200.0 },
+    { "name": "rotor_rl", "q_min": 0.0, "q_max": 800.0, "tau_max": 2.0, "dq_max": 200.0 },
+    { "name": "rotor_rr", "q_min": 0.0, "q_max": 800.0, "tau_max": 2.0, "dq_max": 200.0 }
+  ]
+}

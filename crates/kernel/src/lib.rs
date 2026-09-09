@@ -2,6 +2,7 @@
 //!
 //! No plant I/O. No invent. No motor write. Types here are the honesty floor.
 
+pub mod adapter;
 pub mod belief;
 pub mod capability;
 pub mod clock;
@@ -19,6 +20,9 @@ pub mod time;
 pub mod units;
 pub mod violation;
 
+pub use adapter::{
+    handshake, AdapterCancel, AdapterError, AdapterOffer, AdapterSession, ADAPTER_PROTOCOL,
+};
 pub use belief::{BeliefState, Estimator, SensorHealth};
 pub use capability::{capabilities_for_kind, Capability};
 pub use clock::{finite_or_err, unix_now_s};

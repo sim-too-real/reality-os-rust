@@ -1,0 +1,15 @@
+{
+  "id": "quadruped",
+  "kind": "quadruped",
+  "source": "generic 8-DoF quadruped fixture (SIM screens, not a vendor robot)",
+  "joints": [
+    { "name": "fl_hip", "q_min": -0.8, "q_max": 0.8, "tau_max": 40.0, "dq_max": 8.0 },
+    { "name": "fl_knee", "q_min": -1.6, "q_max": 0.1, "tau_max": 40.0, "dq_max": 10.0 },
+    { "name": "fr_hip", "q_min": -0.8, "q_max": 0.8, "tau_max": 40.0, "dq_max": 8.0 },
+    { "name": "fr_knee", "q_min": -1.6, "q_max": 0.1, "tau_max": 40.0, "dq_max": 10.0 },
+    { "name": "rl_hip", "q_min": -0.8, "q_max": 0.8, "tau_max": 40.0, "dq_max": 8.0 },
+    { "name": "rl_knee", "q_min": -1.6, "q_max": 0.1, "tau_max": 40.0, "dq_max": 10.0 },
+    { "name": "rr_hip", "q_min": -0.8, "q_max": 0.8, "tau_max": 40.0, "dq_max": 8.0 },
+    { "name": "rr_knee", "q_min": -1.6, "q_max": 0.1, "tau_max": 40.0, "dq_max": 10.0 }
+  ]
+}

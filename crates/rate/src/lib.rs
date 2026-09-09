@@ -5,6 +5,11 @@ use realityos_core::{certify_dispose_step, BoundedTrustEnvelope, DisposeStatus, 
 use realityos_physics::{period_s, DISPOSE_HZ, SCREEN_HZ};
 use serde::{Deserialize, Serialize};
 
+pub mod channel;
+pub use channel::{
+    overload_degrades_to_hold, BoundedMailbox, OverloadDisposition, TelemetryFrame,
+};
+
 pub const BUDGET_FASTPATH_US: f64 = 15.0;
 pub const BUDGET_QP_US: f64 = 250.0;
 pub const BUDGET_PASSIVE_US: f64 = 5.0;
@@ -73,7 +78,19 @@ pub fn certify_tick(
     hold: bool,
     sensor_this_tick: bool,
 ) -> DisposeStatus {
-    if missing_input_forces_passive(sensor_this_tick) {
+    certify_tick_with_bus(u_nom, dq, envelope, hold, sensor_this_tick, false)
+}
+
+/// Same dispose path; mailbox overload selects the tested hold/passive fallback.
+pub fn certify_tick_with_bus(
+    u_nom: &[f64],
+    dq: &[f64],
+    envelope: &BoundedTrustEnvelope,
+    hold: bool,
+    sensor_this_tick: bool,
+    mailbox_overload: bool,
+) -> DisposeStatus {
+    if mailbox_overload || missing_input_forces_passive(sensor_this_tick) {
         return certify_dispose_step(u_nom, dq, envelope, true);
     }
     certify_dispose_step(u_nom, dq, envelope, hold)
@@ -114,6 +131,14 @@ pub fn run_dispose_ticks(
             }
         })
         .collect()
+}
+
+/// Compact debug line for a tick. SIM work_us, not a wall clock.
+pub fn debug_tick(t: &TickRecord) -> String {
+    format!(
+        "hz={:.0} t={:.4} mode={} miss={} work_us={:.1}/budget_us={:.1} metal={}",
+        t.hz, t.t_s, t.mode, t.deadline_miss, t.work_us, t.budget_us, t.metal
+    )
 }
 
 pub fn bands() -> [RateBand; 6] {
@@ -174,5 +199,7 @@ mod tests {
         assert_eq!(st.mode, ExecutionMode::PassiveFallback);
         let st2 = certify_tick(&[0.2], &[0.0], &env, false, true);
         assert_eq!(st2.mode, ExecutionMode::TrustedFastpath);
+        let over = certify_tick_with_bus(&[0.2], &[0.0], &env, false, true, true);
+        assert_eq!(over.mode, ExecutionMode::PassiveFallback);
     }
 }

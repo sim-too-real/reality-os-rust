@@ -8,6 +8,12 @@ pub enum PhysicsError {
     NonPositive(&'static str),
     #[error("negative {0}")]
     Negative(&'static str),
+    #[error("{name} dim {got} != {expected}")]
+    DimMismatch {
+        name: &'static str,
+        expected: usize,
+        got: usize,
+    },
 }
 
 pub type PhysicsResult<T> = Result<T, PhysicsError>;

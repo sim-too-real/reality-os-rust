@@ -13,6 +13,7 @@ realityos-plant.workspace = true
 realityos-governor.workspace = true
 realityos-core.workspace = true
 realityos-data.workspace = true
+realityos-rate.workspace = true
 realityos-ros2.workspace = true
 serde.workspace = true
 serde_json.workspace = true

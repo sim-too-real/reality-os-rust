@@ -659,6 +659,7 @@ dependencies = [
  "realityos-governor",
  "realityos-kernel",
  "realityos-plant",
+ "realityos-rate",
  "realityos-ros2",
  "serde",
  "serde_json",

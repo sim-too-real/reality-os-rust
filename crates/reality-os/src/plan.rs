@@ -70,10 +70,13 @@ pub struct Intent {
 impl Intent {
     pub fn language(text: impl Into<String>, verb: impl Into<String>) -> Self {
         let verb = verb.into();
-        let require_scene = matches!(
-            verb.as_str(),
-            "precision_place" | "place" | "pick" | "grasp" | "insert"
-        );
+        let require_scene = crate::skills::SkillIR::admit(&verb)
+            .map(|s| {
+                s.preconditions
+                    .iter()
+                    .any(|p| p == "observation_fresh")
+            })
+            .unwrap_or(false);
         Self {
             text: text.into(),
             verb,

@@ -8,6 +8,7 @@ use crate::command::CertifiedCommand;
 use crate::domains::{DomainRegistry, WorldView};
 use crate::plan::{Intent, PhysicalPlan, PolicyProposal};
 use crate::see::evaluate_manip_observation_gate;
+use crate::skills::SkillIR;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KernelDecision {
@@ -102,6 +103,44 @@ impl RealityOs {
             return self.finalize(
                 Certificate::new(DecisionStatus::Refuse, "forbidden_tool_name")
                     .with_reasons(["forbidden_tool"]),
+                None,
+                vec![],
+                0,
+                req.now_s,
+                req.ttl_s,
+                &req.command_id,
+                req.sequence,
+            );
+        }
+
+        if let Some(skill) = SkillIR::admit(&req.intent.verb) {
+            for cap in &skill.required_capabilities {
+                if !req
+                    .world
+                    .capabilities
+                    .iter()
+                    .any(|c| c == cap)
+                {
+                    return self.finalize(
+                        Certificate::new(
+                            DecisionStatus::Refuse,
+                            format!("skill {} requires capability {cap}", skill.id),
+                        )
+                        .with_reasons(["capability_missing", cap.as_str()]),
+                        None,
+                        vec![],
+                        0,
+                        req.now_s,
+                        req.ttl_s,
+                        &req.command_id,
+                        req.sequence,
+                    );
+                }
+            }
+        } else if self.registry.infer_kind(&req.intent).is_none() {
+            return self.finalize(
+                Certificate::new(DecisionStatus::Refuse, "verb_not_in_skillir_or_domain")
+                    .with_reasons(["unsupported_plan_kind", "skill_not_admitted"]),
                 None,
                 vec![],
                 0,

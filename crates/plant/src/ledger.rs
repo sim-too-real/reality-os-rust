@@ -181,8 +181,9 @@ impl CommandLedger {
         if self.unreadable && self.fail_closed {
             return Err(PlantError::JournalUnreadable("journal_unreadable".into()));
         }
-        body.entry("t_s")
-            .or_insert(json!(realityos_kernel::unix_now_s()));
+        // Integer millis survive JSON parse/re-serialize. Raw f64 seconds do not.
+        let t_ms = (realityos_kernel::unix_now_s() * 1000.0).round() as i64;
+        body.entry("t_s").or_insert(json!(t_ms));
         body.insert("prev_hash".into(), json!(self.chain_hash.clone()));
         let rec_for_hash = Value::Object(body.clone());
         let raw = canonical_json(&rec_for_hash);
@@ -202,7 +203,8 @@ impl CommandLedger {
                 .append(true)
                 .open(path)
                 .map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
-            writeln!(fh, "{rec}").map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
+            let line = serde_json::to_string(&rec).unwrap_or_else(|_| "{}".into());
+            writeln!(fh, "{line}").map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
             fh.sync_all()
                 .map_err(|e| PlantError::JournalUnreadable(e.to_string()))?;
         }
@@ -409,7 +411,36 @@ impl CommandLedger {
 }
 
 fn canonical_json(v: &Value) -> String {
-    serde_json::to_string(v).unwrap_or_else(|_| "{}".into())
+    match v {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let inner = keys
+                .iter()
+                .map(|k| format!("{}:{}", k, canonical_json(&map[*k])))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{{{inner}}}")
+        }
+        Value::Array(items) => {
+            let inner = items.iter().map(canonical_json).collect::<Vec<_>>().join(",");
+            format!("[{inner}]")
+        }
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i.to_string()
+            } else if let Some(u) = n.as_u64() {
+                u.to_string()
+            } else if let Some(f) = n.as_f64() {
+                format!("{:x}", f.to_bits())
+            } else {
+                n.to_string()
+            }
+        }
+        Value::String(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => "null".into(),
+    }
 }
 
 #[cfg(test)]
@@ -520,5 +551,72 @@ mod tests {
         l.append_event("governor_event", body).unwrap();
         assert!(l.seen_ids.is_empty());
         assert_eq!(l.events_of("governor_event").len(), 1);
+    }
+
+    #[test]
+    fn load_recomputes_prev_hash_and_rejects_tamper() {
+        let dir = std::env::temp_dir().join(format!("realityos-ledger-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("chain.jsonl");
+        let _ = std::fs::remove_file(&path);
+        {
+            let mut l = CommandLedger::with_journal(&path, true).unwrap();
+            let cmd = Dummy {
+                id: "c-load".into(),
+                seq: 1,
+                exp: 1e12,
+                rh: "r".into(),
+                cals: vec!["cal".into()],
+                sph: String::new(),
+            };
+            l.consume(&cmd).unwrap();
+        }
+        let loaded = CommandLedger::with_journal(&path, true).unwrap();
+        assert!(loaded.seen_ids.contains("c-load"));
+        assert_eq!(loaded.last_sequence(), 1);
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut lines: Vec<String> = raw.lines().map(str::to_string).collect();
+        if let Some(first) = lines.first_mut() {
+            *first = first.replacen(
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "1111111111111111111111111111111111111111111111111111111111111111",
+                1,
+            );
+        }
+        std::fs::write(&path, lines.join("\n")).unwrap();
+        let err = CommandLedger::with_journal(&path, true).unwrap_err();
+        assert!(err.to_string().contains("unreadable") || err.to_string().contains("journal"));
+    }
+
+    #[test]
+    fn property_nan_dim_replay_and_sequence_gap() {
+        let mut l = CommandLedger::new();
+        for seq in [1_i64, 3, 8] {
+            let cmd = Dummy {
+                id: format!("p{seq}"),
+                seq,
+                exp: 1e12,
+                rh: "r".into(),
+                cals: vec!["cal".into()],
+                sph: String::new(),
+            };
+            assert!(l
+                .check(&cmd, 0.0, Some("r"), &["cal".into()], None, false, true)
+                .is_empty());
+            l.consume(&cmd).unwrap();
+            let replay = l.check(&cmd, 0.0, Some("r"), &["cal".into()], None, false, true);
+            assert!(replay.iter().any(|s| s.contains("replayed")));
+        }
+        let late = Dummy {
+            id: "late".into(),
+            seq: 2,
+            exp: 1e12,
+            rh: "r".into(),
+            cals: vec!["cal".into()],
+            sph: String::new(),
+        };
+        let v = l.check(&late, 0.0, Some("r"), &["cal".into()], None, false, true);
+        assert!(v.iter().any(|s| s.contains("sequence")));
     }
 }
