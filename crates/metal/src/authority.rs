@@ -53,6 +53,18 @@ impl MetalAuthority {
         if !cfg.device.exists() {
             anyhow::bail!("metal_device_missing:{}", cfg.device.display());
         }
+        // Measure the USB-adapter serial before open(). `open` applies
+        // bench limits and torque-on; a recycled ttyUSB0 that is a
+        // different UART would command the wrong actuator first.
+        if !crate::identity::adapter_serial_matches(&cfg.device, &cfg.expected_serial, cfg.servo_id)
+        {
+            anyhow::bail!(
+                "metal_adapter_serial_mismatch:expected={} actual={} device={}",
+                cfg.expected_serial,
+                crate::identity::adapter_serial_for_tty(&cfg.device, cfg.servo_id),
+                cfg.device.display()
+            );
+        }
         let key = load_or_create_key(&root)?;
         let driver = Xl330Driver::open(cfg.clone(), &root)?;
         let measured = driver.measured();

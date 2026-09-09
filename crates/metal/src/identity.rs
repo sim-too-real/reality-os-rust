@@ -264,6 +264,11 @@ pub fn find_tty_for_expected_serial(expected_serial: &str, servo_id: u8) -> Opti
         .find(|p| adapter_serial_for_tty(p, servo_id) == want)
 }
 
+/// Sentinel when the bound adapter is gone. `serve` must not open a living
+/// recycled `ttyUSB0` — `Xl330Driver::open` applies torque before the
+/// post-open identity compare.
+pub const MISSING_ADAPTER_PATH: &str = "/dev/realityos-metal-missing-adapter";
+
 /// Prefer a USB-UART whose measured adapter serial matches the bind, then an
 /// existing env/config path, then `metal.json`. CH340/CP2102 often have no
 /// USB serial; udev `change` can rename `ttyUSB0` → `ttyUSB1`. A living
@@ -271,7 +276,8 @@ pub fn find_tty_for_expected_serial(expected_serial: &str, servo_id: u8) -> Opti
 /// name can be a *different* adapter on the same bench. Opening that node
 /// would identify-fail (or command the wrong UART if identity fell back to
 /// tty name+rdev). When `expected_serial` is known, keep a path only if its
-/// measured adapter serial matches.
+/// measured adapter serial matches. If the bound adapter is gone, return a
+/// missing path instead of a living preferred whose serial drifted.
 pub fn pick_live_device(
     preferred: PathBuf,
     fallback: PathBuf,
@@ -286,7 +292,16 @@ pub fn pick_live_device(
         if fallback.exists() && adapter_serial_for_tty(&fallback, servo_id) == want {
             return fallback;
         }
-        return find_tty_for_expected_serial(want, servo_id).unwrap_or(preferred);
+        if let Some(found) = find_tty_for_expected_serial(want, servo_id) {
+            return found;
+        }
+        if !preferred.exists() {
+            return preferred;
+        }
+        if !fallback.exists() {
+            return fallback;
+        }
+        return PathBuf::from(MISSING_ADAPTER_PATH);
     }
     if preferred.exists() {
         return preferred;
@@ -295,6 +310,12 @@ pub fn pick_live_device(
         return fallback;
     }
     preferred
+}
+
+/// USB-adapter serial on this node, before any servo open / torque-on.
+pub fn adapter_serial_matches(device: &Path, expected_serial: &str, servo_id: u8) -> bool {
+    let want = expected_serial.trim();
+    !want.is_empty() && device.exists() && adapter_serial_for_tty(device, servo_id) == want
 }
 
 #[cfg(test)]
@@ -433,6 +454,37 @@ mod tests {
             ),
             PathBuf::from("/dev/null")
         );
+    }
+
+    #[test]
+    fn pick_live_device_refuses_living_wrong_adapter_when_bound_is_gone() {
+        let expected = "usb:dead:beef:missing:id1";
+        let got = pick_live_device(
+            PathBuf::from("/dev/null"),
+            PathBuf::from("/dev/zero"),
+            expected,
+            1,
+        );
+        assert_ne!(got, PathBuf::from("/dev/null"));
+        assert_ne!(got, PathBuf::from("/dev/zero"));
+        assert!(!got.exists() || adapter_serial_for_tty(&got, 1) == expected);
+        assert_eq!(got, PathBuf::from(MISSING_ADAPTER_PATH));
+    }
+
+    #[test]
+    fn adapter_serial_matches_requires_live_node() {
+        let expected = adapter_serial_for_tty(Path::new("/dev/null"), 1);
+        assert!(adapter_serial_matches(Path::new("/dev/null"), &expected, 1));
+        assert!(!adapter_serial_matches(
+            Path::new("/dev/zero"),
+            &expected,
+            1
+        ));
+        assert!(!adapter_serial_matches(
+            Path::new("/dev/missing-metal-tty"),
+            &expected,
+            1
+        ));
     }
 
     #[test]

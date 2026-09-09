@@ -18,8 +18,8 @@ use realityos_plant::{
 use serialport::SerialPort;
 
 use crate::config::{
-    candidate_bauds, candidate_servo_ids, MetalConfig, BUS_DIR, GOAL_FILE, LOCK_FILE, MOVING_FILE,
-    PRESENT_FILE, VIN_FILE,
+    candidate_bauds, candidate_servo_ids, discover_baud_attempts, MetalConfig, BUS_DIR, GOAL_FILE,
+    LOCK_FILE, MOVING_FILE, PRESENT_FILE, VIN_FILE,
 };
 use crate::egress::EgressLog;
 use crate::identity::{is_pty_path, usb_identity_for_tty, MeasuredIdentity};
@@ -175,7 +175,7 @@ impl Xl330Driver {
         let extra_id = std::env::var("REALITYOS_METAL_SERVO_ID")
             .ok()
             .and_then(|s| s.parse().ok());
-        let bauds = candidate_bauds(cfg.baud, extra_baud);
+        let bauds = discover_baud_attempts(&candidate_bauds(cfg.baud, extra_baud));
         let ids = candidate_servo_ids(cfg.servo_id, extra_id);
         let mut last_err: Option<io::Error> = None;
         for baud in bauds {

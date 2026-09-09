@@ -5,11 +5,13 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Factory XL330 is 57 600. Automatic scan also tries 115 200, 1–2 Mbps, and
-/// Wizard 9 600 last. 3 Mbps / 4 Mbps are U2D2/Wizard rates only — a
-/// CH340/CP2102 (max ~2 Mbps) can wedge after those opens, so a cold miss
-/// at 57 600 never recovers on the configured retry.
-pub const CANDIDATE_BAUDS: &[u32] = &[57_600, 115_200, 1_000_000, 2_000_000, 9_600];
+/// Factory XL330 is 57 600. Automatic scan also tries 115 200, 1 Mbps, and
+/// Wizard 9 600 last. 2 / 3 / 4 Mbps are Wizard rates only — a CH340/CP2102
+/// (datasheet max ~2 Mbps) can wedge after those opens, so a cold miss at
+/// 57 600 never recovers on the configured retry.
+pub const CANDIDATE_BAUDS: &[u32] = &[57_600, 115_200, 1_000_000, 9_600];
+/// Only added when configured or `REALITYOS_METAL_BAUD` is already 2 Mbps.
+pub const FAST_WIZARD_BAUDS: &[u32] = &[2_000_000];
 /// Only added when configured or `REALITYOS_METAL_BAUD` is already 3 or 4 Mbps.
 pub const HIGH_WIZARD_BAUDS: &[u32] = &[3_000_000, 4_000_000];
 
@@ -219,12 +221,31 @@ pub fn candidate_bauds(configured: u32, extra: Option<u32>) -> Vec<u32> {
     for b in CANDIDATE_BAUDS.iter().copied().filter(|b| *b != 9_600) {
         push(&mut out, b);
     }
+    if out.iter().any(|b| FAST_WIZARD_BAUDS.contains(b)) {
+        for b in FAST_WIZARD_BAUDS {
+            push(&mut out, *b);
+        }
+    }
     if out.iter().any(|b| HIGH_WIZARD_BAUDS.contains(b)) {
         for b in HIGH_WIZARD_BAUDS {
             push(&mut out, *b);
         }
     }
     push(&mut out, 9_600);
+    out
+}
+
+/// Repeat the first baud immediately. U2D2/FTDI often drop a cold first
+/// ping; the after-scan retry used to run only after 2 Mbps had already
+/// opened (and could wedge) a CH340.
+pub fn discover_baud_attempts(bauds: &[u32]) -> Vec<u32> {
+    let mut out = Vec::new();
+    for (i, b) in bauds.iter().copied().enumerate() {
+        out.push(b);
+        if i == 0 {
+            out.push(b);
+        }
+    }
     out
 }
 
@@ -249,7 +270,10 @@ mod tests {
         assert_eq!(b.iter().filter(|x| **x == 1_000_000).count(), 1);
         assert!(b.contains(&57_600));
         assert!(b.contains(&115_200));
-        assert!(b.contains(&2_000_000));
+        assert!(
+            !b.contains(&2_000_000),
+            "2 Mbps is a Wizard hint, not an automatic CH340 scan"
+        );
         assert!(
             !b.contains(&3_000_000),
             "3 Mbps is a U2D2 hint, not an automatic CH340 scan"
@@ -265,10 +289,39 @@ mod tests {
         assert_eq!(hi[0], 57_600);
         assert!(hi.contains(&3_000_000));
         assert!(hi.contains(&4_000_000));
+        assert!(
+            !hi.contains(&2_000_000),
+            "a 4 Mbps hint must not also open 2 Mbps"
+        );
         let four = hi.iter().position(|&x| x == 4_000_000).unwrap();
         let slow = hi.iter().position(|&x| x == 9_600).unwrap();
         assert!(four < slow, "4 Mbps must be tried before Wizard 9600");
         assert_eq!(*hi.last().unwrap(), 9_600);
+    }
+
+    #[test]
+    fn fast_wizard_baud_joins_scan_only_when_hinted() {
+        let hi = candidate_bauds(57_600, Some(2_000_000));
+        assert_eq!(hi[0], 57_600);
+        assert!(hi.contains(&2_000_000));
+        assert!(
+            !hi.contains(&3_000_000),
+            "a 2 Mbps hint must not also open 3/4 Mbps"
+        );
+        assert!(!hi.contains(&4_000_000));
+        let two = hi.iter().position(|&x| x == 2_000_000).unwrap();
+        let slow = hi.iter().position(|&x| x == 9_600).unwrap();
+        assert!(two < slow, "2 Mbps must be tried before Wizard 9600");
+    }
+
+    #[test]
+    fn discover_retries_configured_baud_before_other_rates() {
+        let bauds = candidate_bauds(57_600, None);
+        let attempts = discover_baud_attempts(&bauds);
+        assert_eq!(attempts[0], 57_600);
+        assert_eq!(attempts[1], 57_600);
+        assert!(attempts[2..].contains(&115_200));
+        assert!(!attempts.contains(&2_000_000));
     }
 
     #[test]

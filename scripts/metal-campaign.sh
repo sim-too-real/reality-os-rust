@@ -359,7 +359,8 @@ stabilize_metal_device() {
         return 0
       fi
     done
-    echo "warning: USB-UART $dev did not reappear with the recorded identity after 4s" >&2
+    echo "error: USB-UART $dev did not reappear with the recorded identity after 4s" >&2
+    return 1
   fi
   echo "$dev"
 }
@@ -496,7 +497,14 @@ EOF
       UDEV_RULE="$rules"
     fi
   fi
-  DEVICE="$(stabilize_metal_device "$dev")"
+  if ! DEVICE="$(stabilize_metal_device "$dev")"; then
+    echo "error: refusing recycled $dev; bound USB-UART identity is not on the bus" >&2
+    return 1
+  fi
+  if [[ -z "$DEVICE" ]]; then
+    echo "error: stabilize_metal_device returned an empty path" >&2
+    return 1
+  fi
   export REALITYOS_METAL_DEVICE="$DEVICE"
   sync_metal_device_config
   real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
