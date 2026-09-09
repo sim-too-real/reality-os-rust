@@ -66,6 +66,7 @@ realityos-vport = { path = "crates/vport" }
 realityos-hil = { path = "crates/hil" }
 realityos-metal = { path = "crates/metal" }
 serialport = { version = "4.7", default-features = false }
+nix = { version = "0.26", default-features = false, features = ["term"] }
 
 serde = { version = "1", features = ["derive"] }
 fs2 = "0.4"

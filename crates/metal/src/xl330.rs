@@ -4,9 +4,11 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::Duration;
+
+use nix::sys::termios::{tcgetattr, tcsetattr, ControlFlags, SetArg};
 
 use fs2::FileExt;
 use realityos_plant::{
@@ -1327,21 +1329,24 @@ impl Drop for Xl330Driver {
 /// Cheap FTDI/CP2102 boards wire DTR to servo RESET. Linux asserts DTR on
 /// the first open. A fresh USB-serial session restores kernel-default
 /// HUPCL (`cfmakeraw` does not clear it). After `TIOCEXCL`, a child
-/// `stty -F` on the node is EBUSY, and `/proc/self/fd/N` / `/proc/<pid>/fd/N`
-/// also miss or EBUSY (`O_CLOEXEC` + exclusive). Open shared first, clear
-/// HUPCL on the node while a second open is still allowed, then take
-/// exclusive. With HUPCL set, probe close / `crash_if` / Drop lowers DTR
-/// and cheap FTDI/CP2102 reboot the XL330 before the next serve. U2D2
-/// does not need DTR. Do not toggle DTR/RTS from userspace.
-fn clear_hupcl(device: &Path) {
-    if is_pty_path(device) {
-        return;
+/// `stty -F` on the node or `/proc/<pid>/fd/N` is EBUSY, and
+/// `/proc/self/fd/N` misses an `O_CLOEXEC` tty. Clear HUPCL on the live
+/// exclusive fd via termios so probe close / `crash_if` / Drop does not
+/// lower DTR. A shared-open + `stty` window races ModemManager. U2D2
+/// does not wire DTR to RESET. Do not toggle DTR/RTS from userspace.
+fn clear_hupcl_on_fd(port: &impl AsRawFd) -> io::Result<()> {
+    let fd = port.as_raw_fd();
+    let mut termios =
+        tcgetattr(fd).map_err(|e| io::Error::other(format!("dxl_hupcl_tcgetattr:{e}")))?;
+    termios.control_flags.remove(ControlFlags::HUPCL);
+    tcsetattr(fd, SetArg::TCSANOW, &termios)
+        .map_err(|e| io::Error::other(format!("dxl_hupcl_tcsetattr:{e}")))?;
+    let after =
+        tcgetattr(fd).map_err(|e| io::Error::other(format!("dxl_hupcl_tcgetattr_verify:{e}")))?;
+    if after.control_flags.contains(ControlFlags::HUPCL) {
+        return Err(io::Error::other("dxl_hupcl_still_set"));
     }
-    let _ = Command::new("/bin/stty")
-        .args(["-F", &device.to_string_lossy(), "-hupcl"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    Ok(())
 }
 
 /// Cheap TTL/RS485 adapters need DE/RE after host TX. U2D2 does this
@@ -1371,19 +1376,16 @@ fn open_xl330_serial_with(
     baud: u32,
     exclusive: bool,
 ) -> io::Result<Box<dyn SerialPort>> {
-    clear_hupcl(device);
-    // Open shared first. Exclusive first would make the post-open HUPCL
-    // clear EBUSY (node and /proc/<pid>/fd/N).
-    let mut port = serialport::new(device.to_string_lossy(), baud)
+    // Real UART takes exclusive on the first open, then clears HUPCL on
+    // that fd. PTY skips TIOCEXCL (`process::exit` leaves it on pts).
+    let take_exclusive = exclusive && !is_pty_path(device);
+    let port = serialport::new(device.to_string_lossy(), baud)
         .timeout(Duration::from_millis(150))
-        .exclusive(false)
+        .exclusive(take_exclusive)
         .open_native()
         .map_err(io::Error::other)?;
     if !is_pty_path(device) {
-        clear_hupcl(device);
-        if exclusive {
-            port.set_exclusive(true).map_err(io::Error::other)?;
-        }
+        clear_hupcl_on_fd(&port)?;
     }
     // U2D2/FTDI often drops the first packet if we ping immediately after
     // open. Discover tries each baud/id pair once; a cold miss on the real
@@ -1523,53 +1525,30 @@ fn read_id_register(port: &mut dyn SerialPort, device: &Path, id: u8) -> Option<
 mod tests {
     use super::*;
     use serialport::TTYPort;
-    use std::process::{Command, Stdio};
 
     #[test]
-    fn hupcl_clear_on_node_before_exclusive_sticks() {
+    fn hupcl_clear_on_exclusive_fd_sticks() {
         let (_master, slave) = TTYPort::pair().expect("pty pair");
-        let name = slave.name().expect("slave name");
-        drop(slave);
-        let mut port = serialport::new(&name, 9_600)
-            .timeout(Duration::from_millis(150))
-            .exclusive(false)
-            .open_native()
-            .expect("shared open");
-        let status = Command::new("/bin/stty")
-            .args(["-F", &name, "hupcl"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .expect("stty hupcl");
+        let mut slave = slave;
+        slave.set_exclusive(true).expect("take exclusive");
+        let fd = slave.as_raw_fd();
+        let mut termios = tcgetattr(fd).expect("tcgetattr before");
+        termios.control_flags.insert(ControlFlags::HUPCL);
+        tcsetattr(fd, SetArg::TCSANOW, &termios).expect("force HUPCL");
         assert!(
-            status.success(),
-            "shared open must still allow stty on node"
+            tcgetattr(fd)
+                .expect("read forced HUPCL")
+                .control_flags
+                .contains(ControlFlags::HUPCL),
+            "test must start with HUPCL set"
         );
-        let _ = Command::new("/bin/stty")
-            .args(["-F", &name, "-hupcl"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        let out = Command::new("/bin/stty")
-            .args(["-F", &name, "-a"])
-            .output()
-            .expect("stty -a");
-        let text = String::from_utf8_lossy(&out.stdout);
+        clear_hupcl_on_fd(&slave).expect("clear HUPCL on exclusive fd");
         assert!(
-            text.contains("-hupcl"),
-            "HUPCL clear before exclusive must stick: {text}"
-        );
-        port.set_exclusive(true)
-            .expect("take exclusive after HUPCL");
-        let busy = Command::new("/bin/stty")
-            .args(["-F", &name, "-a"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .expect("stty after exclusive");
-        assert!(
-            !busy.success(),
-            "stty on the node must be EBUSY after TIOCEXCL"
+            !tcgetattr(fd)
+                .expect("tcgetattr after")
+                .control_flags
+                .contains(ControlFlags::HUPCL),
+            "HUPCL must stay clear on the exclusive fd"
         );
     }
 }

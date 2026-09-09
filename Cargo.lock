@@ -868,6 +868,7 @@ dependencies = [
  "anyhow",
  "fs2",
  "hex",
+ "nix",
  "realityos-core",
  "realityos-governor",
  "realityos-kernel",

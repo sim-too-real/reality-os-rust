@@ -428,8 +428,8 @@ EOF
   # Linux asserts DTR on first open. Cheap FTDI/CP2102 wire DTR to RESET.
   # Pre-open -hupcl is not enough: the next serialport open restores
   # kernel-default HUPCL. After TIOCEXCL, stty on the node and on
-  # /proc/<pid>/fd/N is EBUSY. The driver opens shared, clears HUPCL,
-  # then takes exclusive. Campaign still clears here so a leftover
+  # /proc/<pid>/fd/N is EBUSY. The driver takes exclusive, then clears
+  # HUPCL on that fd via termios. Campaign still clears here so a leftover
   # holder close is less likely to DTR-RESET before serve (U2D2 has
   # no DTR-RESET).
   if [[ -e "$real" ]]; then
