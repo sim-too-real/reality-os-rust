@@ -228,10 +228,125 @@ fn xl330_pty_serve_hold_survives_idle_watchdog() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+#[test]
+fn xl330_pty_same_command_id_is_not_a_second_write() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder();
+    let root = metal_test_root("pty-replay");
+    bind_pty_cfg(&root, &tty);
+    let mut auth = MetalAuthority::start(&root, true).expect("start_online");
+    let hold = auth.handle(MetalRequest::propose("metal-hold", "hold"));
+    assert!(hold.ok, "hold: {hold:?}");
+    let writes = auth.physical_writes();
+    let replay = auth.handle(MetalRequest::propose("metal-hold", "hold"));
+    assert!(!replay.ok, "replay must refuse: {replay:?}");
+    assert!(
+        replay
+            .violations
+            .iter()
+            .any(|v| v.contains("replayed command_id")),
+        "ledger must see the first id: {replay:?}"
+    );
+    assert_eq!(auth.physical_writes(), writes);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 fn recover_req(id: &str) -> MetalRequest {
     let mut r = MetalRequest::propose(id, "hold");
     r.op = "recover".into();
     r
+}
+
+fn bind_pty_cfg(root: &Path, tty: &str) -> MetalConfig {
+    let mut cfg = MetalConfig::example(tty);
+    cfg.campaign_hooks = true;
+    {
+        let driver = Xl330Driver::open(cfg.clone(), root).expect("identify");
+        let measured = driver.measured();
+        cfg.expected_serial = measured.serial;
+        cfg.expected_firmware = measured.firmware_id;
+    }
+    cfg.save(root.join(CONFIG_FILE)).unwrap();
+    cfg
+}
+
+/// Campaign order: hold → firmware kill → process --restart → hold →
+/// disconnect kill → process --restart → hold. A leftover journal ESTOP or
+/// continuity refuse here aborts the XL330 run before crash-replay.
+#[test]
+fn xl330_pty_campaign_restarts_are_live_after_identity_and_disconnect() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder();
+    let root = metal_test_root("pty-campaign-restart");
+    bind_pty_cfg(&root, &tty);
+
+    let mut writes;
+    {
+        let mut auth = MetalAuthority::start(&root, true).expect("first-online");
+        let hold = auth.handle(MetalRequest::propose("pty-cr-hold", "hold"));
+        assert!(hold.ok, "baseline hold: {hold:?}");
+        writes = auth.physical_writes();
+        std::fs::write(
+            root.join("bus/hot_swap.json"),
+            r#"{"firmware_id":"xl330-m288:1190:255"}"#,
+        )
+        .unwrap();
+        let fw = auth.handle(MetalRequest::propose("pty-cr-fw", "hold"));
+        assert!(
+            !fw.ok
+                && fw
+                    .violations
+                    .iter()
+                    .any(|v| v.contains("hardware_firmware_mismatch")),
+            "firmware must kill this instance: {fw:?}"
+        );
+        assert_eq!(auth.physical_writes(), writes);
+        let rec = auth.handle(recover_req("pty-cr-fw-rec"));
+        assert!(
+            !rec.ok
+                && rec
+                    .violations
+                    .iter()
+                    .any(|v| v.contains("hardware_session_requires_online_restart")),
+            "recover after identity: {rec:?}"
+        );
+    }
+    std::fs::remove_file(root.join("bus/hot_swap.json")).unwrap();
+
+    {
+        let mut auth = MetalAuthority::start(&root, false)
+            .expect("restart after identity must be a live instance");
+        let hold = auth.handle(MetalRequest::propose("pty-cr-hold2", "hold"));
+        assert!(
+            hold.ok,
+            "campaign require_live_session after identity restart: {hold:?}"
+        );
+        writes = auth.physical_writes();
+        std::fs::write(root.join("bus/force_disconnect"), b"1").unwrap();
+        let disc = auth.handle(MetalRequest::propose("pty-cr-disc", "hold"));
+        assert!(
+            !disc.ok
+                && disc
+                    .violations
+                    .iter()
+                    .any(|v| v.contains("online_hardware_disconnected")),
+            "disconnect must kill this instance: {disc:?}"
+        );
+        assert_eq!(auth.physical_writes(), writes);
+    }
+    std::fs::remove_file(root.join("bus/force_disconnect")).unwrap();
+
+    {
+        let mut auth = MetalAuthority::start(&root, false)
+            .expect("restart after disconnect must be live for crash-replay");
+        let hold = auth.handle(MetalRequest::propose("pty-cr-hold3", "hold"));
+        assert!(
+            hold.ok,
+            "crash-replay serve must accept a hold after disconnect restart: {hold:?}"
+        );
+        assert!(auth.physical_writes() > writes);
+    }
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]

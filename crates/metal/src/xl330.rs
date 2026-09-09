@@ -19,7 +19,7 @@ use crate::config::{
     VIN_FILE,
 };
 use crate::egress::EgressLog;
-use crate::identity::{usb_identity_for_tty, MeasuredIdentity};
+use crate::identity::{is_pty_path, usb_identity_for_tty, MeasuredIdentity};
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
     instruction_ok, is_xl330_model, le_i32, le_u16, ADDR_CURRENT_LIMIT, ADDR_FIRMWARE_VERSION,
@@ -187,8 +187,12 @@ impl Xl330Driver {
             ));
         }
         let _ = std::fs::set_permissions(&self.cfg.device, std::fs::Permissions::from_mode(0o600));
+        // PTY stand-in: TIOCEXCL survives process::exit (crash_if) and the
+        // next serve gets EBUSY. Sidecar flock still serializes. Real tty
+        // keeps exclusive (TIOCEXCL+flock).
         let mut port = serialport::new(self.cfg.device.to_string_lossy(), self.cfg.baud)
             .timeout(Duration::from_millis(150))
+            .exclusive(!is_pty_path(&self.cfg.device))
             .open()
             .map_err(io::Error::other)?;
         port.write_data_terminal_ready(true).ok();

@@ -37,8 +37,10 @@ fn main() -> anyhow::Result<()> {
             other => anyhow::bail!("unknown_arg:{other}"),
         }
     }
-    if env::var("METAL_CMD_ID").is_ok() {
-        id = env::var("METAL_CMD_ID")?;
+    if let Ok(v) = env::var("METAL_CMD_ID") {
+        if !v.trim().is_empty() {
+            id = v;
+        }
     }
     match cmd.as_str() {
         "status" => {

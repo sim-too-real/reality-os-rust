@@ -37,13 +37,21 @@ if [[ ! -c "$DEVICE" && ! -c "$DEVICE_REAL" ]]; then
   echo "error: $DEVICE is not a character device; will not write a metal proof." >&2
   exit 2
 fi
+PTY_SEQUENCE_ACTIVE=0
 if [[ "$DEVICE_REAL" == /dev/pts/* ]]; then
-  echo "error: refusing PTY $DEVICE_REAL; not a physical actuator. Will not write metal_proof.json." >&2
-  exit 2
+  if [[ "${REALITYOS_METAL_PTY_SEQUENCE:-0}" != "1" ]]; then
+    echo "error: refusing PTY $DEVICE_REAL; not a physical actuator. Will not write metal_proof.json." >&2
+    exit 2
+  fi
+  echo "metal-campaign: PTY sequence only; not metal evidence; will not install docs/metal_proof.json"
+  PTY_SEQUENCE_ACTIVE=1
+  CUTOFF_TESTED=0
+  export REALITYOS_METAL_CUTOFF_TESTED=0
+  export REALITYOS_METAL_ALLOW_PTY=1
 fi
 # probe/setup enables torque; hold/nudge write goal_position. Do not touch
 # the servo until the operator has opened VIN and seen lost holding torque.
-if [[ "$CUTOFF_TESTED" != "1" ]]; then
+if [[ "$PTY_SEQUENCE_ACTIVE" != "1" && "$CUTOFF_TESTED" != "1" ]]; then
   echo "error: refuse to torque or command the XL330 before the independent VIN cutoff is operator-tested." >&2
   echo "error: open the VIN disconnect, confirm lost holding torque (USB/data may stay enumerated), then REALITYOS_METAL_CUTOFF_TESTED=1." >&2
   echo "error: that cutoff is not STO/SS1/PL/SIL unless the hardware's own documentation says it is." >&2
@@ -246,11 +254,19 @@ export REALITYOS_METAL_DEVICE="$DEVICE"
 "$SCRIPT_DIR/metal-deploy.sh"
 
 as_autonomy() {
-  sudo -u "$AUTONOMY_USER" -- env \
-    REALITYOS_METAL_DEVICE="${REALITYOS_METAL_DEVICE:-}" \
-    METAL_AUTHORITY_PID="${METAL_AUTHORITY_PID:-}" \
-    METAL_CMD_ID="${METAL_CMD_ID:-}" \
-    "$@"
+  local env_cmd=(
+    sudo -u "$AUTONOMY_USER" -- env
+    REALITYOS_METAL_DEVICE="${REALITYOS_METAL_DEVICE:-}"
+    METAL_AUTHORITY_PID="${METAL_AUTHORITY_PID:-}"
+  )
+  if [[ -n "${METAL_CMD_ID:-}" ]]; then
+    env_cmd+=(METAL_CMD_ID="$METAL_CMD_ID")
+  fi
+  # timeout(1) must wrap the sudo exec; a bash function is not a command.
+  # 20s matches the propose IPC I/O timeout. A hung call() used to stall
+  # crash-replay forever after serve survived a crash point.
+  local ipc_s="${REALITYOS_METAL_IPC_TIMEOUT_S:-20}"
+  timeout --signal=TERM --kill-after=2 "$ipc_s" "${env_cmd[@]}" "$@"
 }
 as_authority() {
   sudo -u "$AUTHORITY_USER" -- env \
@@ -258,6 +274,7 @@ as_authority() {
     REALITYOS_METAL_BAUD="${REALITYOS_METAL_BAUD:-}" \
     REALITYOS_METAL_SERVO_ID="${REALITYOS_METAL_SERVO_ID:-}" \
     REALITYOS_METAL_CAMPAIGN="${REALITYOS_METAL_CAMPAIGN:-}" \
+    REALITYOS_METAL_ALLOW_PTY="${REALITYOS_METAL_ALLOW_PTY:-}" \
     REALITYOS_HIL_CRASH="${REALITYOS_HIL_CRASH:-}" \
     "$@"
 }
@@ -292,29 +309,49 @@ resolve_metal_smoke_pid() {
 start_auth() {
   local first="$1"
   local crash="${2:-}"
-  rm -f "$ROOT/ipc.sock"
-  # Probe, crash-replay, and disconnect restart all drop exclusive before
-  # this open. Re-check the tty every time.
-  prepare_usb_serial_host "$DEVICE"
+  local attempt
   export REALITYOS_METAL_CAMPAIGN=1
   if [[ -n "$crash" ]]; then
     export REALITYOS_HIL_CRASH="$crash"
   else
     unset REALITYOS_HIL_CRASH
   fi
-  if [[ "$first" == "1" ]]; then
-    as_authority "$SMOKE" --root "$ROOT" --first-online serve \
-      >"$ROOT/authority.out" 2>"$ROOT/authority.err" &
-  else
-    as_authority "$SMOKE" --root "$ROOT" --restart serve \
-      >"$ROOT/authority.out" 2>"$ROOT/authority.err" &
-  fi
-  AUTH_PID=$!
-  for _ in $(seq 1 400); do
+  # Crash_if uses process::exit (no Drop). TIOCEXCL/flock can still be
+  # busy for a beat; retry the open instead of failing the campaign.
+  for attempt in 1 2 3 4 5; do
+    rm -f "$ROOT/ipc.sock" "$ROOT/serve.err"
+    prepare_usb_serial_host "$DEVICE"
+    if [[ "$first" == "1" ]]; then
+      as_authority "$SMOKE" --root "$ROOT" --first-online serve \
+        >"$ROOT/authority.out" 2>"$ROOT/authority.err" &
+    else
+      as_authority "$SMOKE" --root "$ROOT" --restart serve \
+        >"$ROOT/authority.out" 2>"$ROOT/authority.err" &
+    fi
+    AUTH_PID=$!
+    local _i
+    # Journal replay after many crash events can exceed 4s. The original
+    # single wait was 20s; keep that bound, but bail early if start died
+    # or wrote serve.err (EBUSY / identity refuse).
+    for _i in $(seq 1 400); do
+      if [[ -S "$ROOT/ipc.sock" ]]; then
+        break
+      fi
+      if ! kill -0 "$AUTH_PID" 2>/dev/null; then
+        break
+      fi
+      if [[ -s "$ROOT/serve.err" ]]; then
+        break
+      fi
+      sleep 0.05
+    done
     if [[ -S "$ROOT/ipc.sock" ]]; then
       break
     fi
-    sleep 0.05
+    kill "$AUTH_PID" 2>/dev/null || true
+    wait "$AUTH_PID" 2>/dev/null || true
+    "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
+    sleep 0.2
   done
   unset REALITYOS_HIL_CRASH
   SMOKE_PID="$(resolve_metal_smoke_pid "$ROOT" || echo "$AUTH_PID")"
@@ -340,9 +377,23 @@ start_auth() {
 }
 
 stop_auth() {
+  # Planned stop: ask serve to leave the loop so Drop torque-offs and
+  # releases TIOCEXCL. SIGKILL skips Drop; the next open then gets EBUSY
+  # (seen on PTY campaign restart) and a real XL330 would keep torque.
+  if [[ -n "$ROOT" ]]; then
+    : >"$ROOT/stop_serve" 2>/dev/null || true
+  fi
+  local i
+  for i in $(seq 1 50); do
+    if ! resolve_metal_smoke_pid "$ROOT" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.1
+  done
   kill "$AUTH_PID" 2>/dev/null || true
   wait "$AUTH_PID" 2>/dev/null || true
   "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
+  rm -f "$ROOT/stop_serve" "$ROOT/ipc.sock"
 }
 
 AUTH_PID=""
@@ -553,8 +604,10 @@ crash_replay() {
     exit 1
   fi
   as_autonomy "$PROP" --root "$ROOT" --id "$cid" --verb hold propose >/tmp/metal-"$cid".json || true
-  # crash_if exits the smoke child. If propose was refused first (watchdog,
-  # dead session), wait would hang and the crash/restart case is unmeasured.
+  # crash_if is process::exit on the smoke child. after_prepare / after_write /
+  # after_ack live in execute_certified_command; during_write is in the XL330
+  # driver. If act() fails first, those later points never fire — fail closed
+  # instead of `wait $AUTH_PID` hanging on a live serve (PTY campaign hang).
   local died=0
   for _ in $(seq 1 50); do
     if ! resolve_metal_smoke_pid "$ROOT" >/dev/null; then
@@ -563,14 +616,16 @@ crash_replay() {
     fi
     sleep 0.1
   done
-  wait "$AUTH_PID" 2>/dev/null || true
-  "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
   if [[ "$died" != "1" ]]; then
     echo "error: serve did not crash at $point; crash/restart was not measured" >&2
     cat /tmp/metal-"$cid".json >&2 || true
     cat "$ROOT/authority.err" >&2 || true
+    cat "$ROOT/serve.err" >&2 || true
+    stop_auth || true
     exit 1
   fi
+  wait "$AUTH_PID" 2>/dev/null || true
+  "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
   if ! start_auth 0; then
     echo "error: restart after $point crash failed" >&2
     exit 1
@@ -713,13 +768,11 @@ python3 - <<PY
 import json, sys
 r = json.load(open("$ROOT/metal_proof.json"))
 assert r["schema"] == "realityos.metal_proof/1"
-assert r["hardware_present"] is True
 assert r["unauthorized_physical_device_writes"] == 0, r
 assert r["valid_physical_device_writes"] >= 2, r
 assert r["direct_device_open_attempts"] > 0, r
 assert r["direct_device_open_successes"] == 0, r
 assert r["duplicate_writes_after_restart"] == 0, r
-assert r["cutoff_tested"] is True, r
 assert r["identity_mismatch_refusals"] > 0, r
 assert r["disconnect_refusals"] > 0, r
 assert r.get("device_capture_s") is not None, r
@@ -728,9 +781,27 @@ assert r["used_os_monotonic_clock"] is True, r
 assert r["used_hardware_driver_port"] is True, r
 assert any(c.get("name") == "valid_hold" and int(c.get("write_delta") or 0) > 0 for c in r.get("cases") or []), r
 assert any(c.get("name") == "valid_nudge" and int(c.get("write_delta") or 0) > 0 for c in r.get("cases") or []), r
-assert r["experiment_status"] == "measured_success", r
-print("metal-proof-ok status=%s writes=%s" % (r["experiment_status"], r["valid_physical_device_writes"]))
+pty_sequence = """$PTY_SEQUENCE_ACTIVE""" == "1"
+if pty_sequence:
+    assert r["cutoff_tested"] is False, r
+    assert r["experiment_status"] != "measured_success", r
+    assert r.get("hardware_present") is True
+    print("pty-sequence-ok status=%s writes=%s (not metal)" % (r["experiment_status"], r["valid_physical_device_writes"]))
+else:
+    assert r["hardware_present"] is True
+    assert r["cutoff_tested"] is True, r
+    assert r["experiment_status"] == "measured_success", r
+    print("metal-proof-ok status=%s writes=%s" % (r["experiment_status"], r["valid_physical_device_writes"]))
 PY
+if [[ "$PTY_SEQUENCE_ACTIVE" == "1" ]]; then
+  if [[ -f docs/metal_proof.json || -f "$PWD/docs/metal_proof.json" ]]; then
+    echo "error: PTY sequence must not install docs/metal_proof.json" >&2
+    exit 1
+  fi
+  echo "metal PTY sequence finished (not physical evidence)"
+  echo "pty-report: $ROOT/metal_proof.json"
+  exit 0
+fi
 # Install into the repo only after every success criterion is true.
 install -D -m 0644 "$ROOT/metal_proof.json" "$OUT"
 REPORT_SRC="$ROOT/METAL_PROOF_REPORT.md"
