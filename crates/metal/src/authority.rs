@@ -317,6 +317,15 @@ impl MetalAuthority {
         let _ = self.session.governor.heartbeat_now();
         t.ok && !self.session.governor.estop()
     }
+
+    fn pet_watchdog(&mut self) -> bool {
+        let t = self.session.governor.watchdog_tick_now();
+        t.ok && !self.session.governor.estop()
+    }
+
+    fn pet_heartbeat(&mut self) {
+        let _ = self.session.governor.heartbeat_now();
+    }
 }
 
 pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
@@ -329,15 +338,28 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
     auth.pet_supervisor();
     let listener = crate::ipc::bind_socket(root)?;
     listener.set_nonblocking(true)?;
+    // Each watchdog/heartbeat emit fsyncs journal+seal. 10 ms pets were ~400
+    // fsyncs/s and can miss the 100 ms watchdog on a bench disk.
+    let mut next_watchdog = std::time::Instant::now();
+    let mut next_heartbeat = std::time::Instant::now() + Duration::from_millis(800);
     loop {
         if root.join("stop_serve").exists() {
             break Ok(());
         }
-        auth.pet_supervisor();
+        let now = std::time::Instant::now();
+        if now >= next_watchdog {
+            let _ = auth.pet_watchdog();
+            next_watchdog = std::time::Instant::now() + Duration::from_millis(40);
+        }
+        if now >= next_heartbeat {
+            auth.pet_heartbeat();
+            next_heartbeat = std::time::Instant::now() + Duration::from_millis(800);
+        }
         let mut stream = match listener.accept() {
             Ok((s, _)) => s,
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(10));
+                let wait = next_watchdog.saturating_duration_since(std::time::Instant::now());
+                std::thread::sleep(wait.min(Duration::from_millis(20)));
                 continue;
             }
             Err(_) => continue,
