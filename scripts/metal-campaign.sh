@@ -79,10 +79,19 @@ set_usb_serial_latency() {
 UDEV_RULE=""
 prepare_usb_serial_host() {
   local dev="$1"
-  local real name rules
+  local real name rules i
   real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
   name="$(basename "$real")"
+  # Crash-replay and disconnect restart close exclusive, then reopen. Our
+  # serve may still hold the tty for a few hundred ms; ModemManager can
+  # grab it in that gap. Wait for our close, then refuse a foreign holder.
   if command -v fuser >/dev/null 2>&1 && [[ -e "$real" ]]; then
+    for i in $(seq 1 30); do
+      if ! fuser "$real" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 0.1
+    done
     if fuser "$real" >/dev/null 2>&1; then
       echo "error: $real is already open (ModemManager/brltty/another process)." >&2
       fuser -v "$real" >&2 || true
@@ -99,13 +108,15 @@ prepare_usb_serial_host() {
   esac
   if [[ -d /run/udev/rules.d ]]; then
     rules="/run/udev/rules.d/99-realityos-metal-${name}.rules"
+    if [[ ! -f "$rules" ]]; then
+      echo "metal-campaign: installing $rules (ID_MM_DEVICE_IGNORE + 0600 ${AUTHORITY_USER})"
+    fi
     cat >"$rules" <<EOF
 ACTION=="add|change", KERNEL=="${name}", ENV{ID_MM_DEVICE_IGNORE}="1", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
 EOF
     UDEV_RULE="$rules"
     udevadm control --reload 2>/dev/null || true
     udevadm trigger --action=change --sysname-match="$name" 2>/dev/null || true
-    echo "metal-campaign: installed $rules (ID_MM_DEVICE_IGNORE + 0600 ${AUTHORITY_USER})"
   fi
   set_usb_serial_latency "$dev"
 }
@@ -233,6 +244,9 @@ start_auth() {
   local first="$1"
   local crash="${2:-}"
   rm -f "$ROOT/ipc.sock"
+  # Probe, crash-replay, and disconnect restart all drop exclusive before
+  # this open. Re-check the tty every time.
+  prepare_usb_serial_host "$DEVICE"
   export REALITYOS_METAL_CAMPAIGN=1
   if [[ -n "$crash" ]]; then
     export REALITYOS_HIL_CRASH="$crash"
@@ -289,8 +303,6 @@ cleanup() {
   cleanup_usb_serial_host || true
 }
 trap cleanup EXIT
-# probe/open drops exclusive; ModemManager can grab the tty before serve.
-prepare_usb_serial_host "$DEVICE"
 start_auth 1
 if [[ -s "$ROOT/serve.err" ]]; then
   echo "error: serve.err after first bind; identity/hold would be unmeasured:" >&2
