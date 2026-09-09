@@ -1,221 +1,273 @@
-# Authority kernel — reconstruction, claims, and target architecture
+# Authority kernel — reconstruction, claims, and ONLINE capability seal
 
-Work is against `main` at the rewrite point plus this hardening. This document
-states only what source and deployment topology actually enforce.
+Work is against `main` after the typestate/journal pass, plus this capability-boundary
+pass. This document states only what source and deployment topology actually enforce.
 
-## 1. Current authority graph (from source)
-
-```text
-untrusted proposer
-  Intent / PolicyProposal (ProposalClass is typed; source string is diagnostic)
-        │
-        ▼
-RealityOs::decide
-  forbidden-tool refuse
-  see-before-act screen (manip verbs)
-  DomainPlugin::plan + certify     ← semantic TCB (physics screens)
-  Certificate + CertifiedCommand::issue   (acknowledged=false)
-        │
-        ▼
-RuntimeSession::bind_and_dispatch
-  SafeState latch
-  bind_identity (empty fields only; foreign hashes refuse)
-  ONLINE: bind actuator allow-list, bind_evidence, sign AFTER bind, acknowledge
-  SIM: optional sensor fill, acknowledge
-        │
-        ▼
-RuntimeGovernor<R>::write_driver
-  pre_actuation_check (identity, heartbeat, sensor, estop, ONLINE time rollback)
-  envelope.check_action
-  ExecuteBind (OnlineLocked sets force_online_rails)
-        │
-        ▼
-execute_certified_command          ← only with_certified_write entry
-  allow+ack, optional/forced signature, ledger.check, ledger.prepare
-  plant.act / follow_waypoints
-  ledger.ack  or  ledger.mark_unknown
-        │
-        ▼
-Plant (sealed) → HardwareBackedPlant → HardwareDriverPort::write_action
-```
-
-Two journals: driver `CommandLedger` (consumes ids) and `CertificateLedger`
-(does not). Governor events share the driver file.
-
-## 2. Remaining bypass / weaken paths (ranked)
-
-### P0 — closed or structurally reduced in this change
-
-| Path | Before | After |
-|------|--------|-------|
-| `config_mut` disables ONLINE rails after start | Public on all governors | Only `UnlockedRail` (SIM/HIL). Compile-fail on `OnlineLocked`. |
-| Public `identity` swap | Field was `pub` | Read-only `identity()`. |
-| `envelope_mut` / `set_envelope` widen ONLINE | Public | Unlocked rails only. ONLINE envelope set at construction. |
-| `plant_mut` / `ledger_mut` | Public | Unlocked rails only. |
-| `set_signing_key(None)` | Public | Unlocked rails only. ONLINE key set at `new_online`. |
-| Silent in-memory ONLINE ledger | `CommandLedger::new()` default | `start_online` requires a journal; `first_online=false` refuses missing pair. |
-| Journal deletion = empty replay | Missing file → genesis | Seal present + journal absent → `JournalDeleted`. Both missing + not first → `JournalMissing`. |
-| Journal truncation / rollback | Prefix reload as truth | Seal event_count ahead → `JournalRollback`. |
-| Journal replacement | New valid chain accepted | Prefix hash ≠ seal → `JournalReplaced`. |
-| `execute` opt-out on production plants | Bind flags honored | `production_locked` or `force_online_rails` ignore weakening. Key hash must match plant lock. |
-| Sign-then-rebind | Silent stale HMAC | Bind after sign errors; mutations clear signature; ONLINE re-signs after bind. |
-| Deserialize `acknowledged=true` | Serde restored ack | `skip_deserializing` on `acknowledged`. |
-| String “learned” as security | Dead `learned_actuator_authority` branch (always false) | Typed `ProposalClass`. No class can mint/ack/sign/execute. Dead branch removed. |
-| `HardwareDriverPort` sealed (no vendors) / `Plant` implementable | Port sealed | Port unsealed. `Plant` remains sealed. Bounds checked at egress. |
-| Waypoint shortcut on ONLINE | `follow_waypoints` skipped envelope | ONLINE rails refuse waypoints. |
-| Caller `now_s` rollback on ONLINE | Unchecked | `time_rollback` refuse + abort latch. |
-| Journal `t_s` f64 not JSON-stable | Hash mismatch on reload under fail_closed | Integer `t_ms` in records. |
-
-### P1 — still open (honest)
-
-| Path | Why it remains |
-|------|----------------|
-| Sibling crate calls `CertifiedCommand::issue` | Certifier API is in-process and public. Feature `fixtures` marks the test mint. Rust cannot stop a dependent crate from constructing an ALLOW command. ONLINE still requires session sign + rails. |
-| Sibling calls `execute_certified_command` on an *unlocked* plant | SIM/harness plants are not production-locked. That is the fixture write path. |
-| Sibling with `&mut RuntimeGovernor<OnlineLocked>` calls `write_driver` with a homemade command | Must pass session signature (key never exported as replaceable). Semantic certify is not re-checked as a capability token. |
-| Dual-delete of journal **and** seal + `first_online=true` | Looks like first boot. Operator flag is privileged, not proposer-facing. |
-| Same-filesystem seal | Tamper-evident vs the seal, not authenticated, not ransomware-resistant. |
-| `now_s` far-future / clock-domain mix | Rollback is checked; there is no trusted timestamping. |
-| Observation digest is recomputed at ingest, but samples still come from the caller | Contract: perception stack must be the acquirer. No perception implementation here. |
-| Thread-local certified-write counter | Process/thread uniqueness, not machine-wide. Reentrant `act` during the guard can write. |
-| `ActuationCommand` is unsealed | DIP for governor/plant. Homemade impls exist for tests. ONLINE rails + production key bind the production path. |
-
-### P2
-
-| Path | Notes |
-|------|-------|
-| Hash-chain canonicalization | `serde_json::Map` is sorted; still not a second preimage-resistant design. |
-| `CommandLedger::consume` without a write | Marks spent (fail-closed). No `ledger_mut` on ONLINE. |
-| `apply_journal_continuity(operator_ack=true)` skips identity mismatch | Operator privilege. |
-| Certificate public fields | Status can be constructed; production path is decide + session sign. |
-| Sequence integers chosen by caller | ONLINE monotonic vs ledger; not a global machine counter. |
-
-## 3. Exact claims the current code can honestly make
-
-1. **Rust API uniqueness of `Plant`:** only this crate can `impl Plant` (sealed trait). Compile-fail test.
-2. **Process-level certified-write uniqueness:** ONLINE/`caps.online` plants refuse `act` unless the crate-private TLS guard is entered from `execute_certified_command`.
-3. **ONLINE typestate lock:** `RuntimeGovernor<OnlineLocked>` does not provide `config_mut`, `envelope_mut`, `plant_mut`, `ledger_mut`, or `set_signing_key`. Compile-fail tests.
-4. **ONLINE start is fail-closed on rail opt-out, SIM identity, missing journal/key/actuators, and `first_online` mismatch.**
-5. **Durable consume:** prepare/ack/unknown persist to the journal+seal when constructed with `with_online_journal`. Restart will not retry a prepared/consumed/unknown id.
-6. **Narrowing:** governor/kernel modify cannot upgrade REFUSE→ALLOW or widen/reverse the issuer envelope (unit + property tests).
-7. **Proposal class cannot execute:** every `ProposalClass` returns `can_execute()==false`. Learned strings are not the boundary.
-8. **HonestyStamp** cannot construct metal / MEASURED / invent_authority.
-9. **Vendor ports** may implement `HardwareDriverPort`. They cannot implement `Plant` or enter the write guard.
-
-These are **not** machine-wide single-writer, authenticated journals, or ISO PL/SIL.
-
-## 4. Claims the code still cannot make
-
-- Physical machine-level single-writer (root or another process can open the bus).
-- Authenticated / ransomware-resistant / anti-rollback against an adversary who replaces journal **and** seal and is allowed `first_online`.
-- Trusted time, external anchoring, or firmware-rooted identity.
-- That evidence hashes prove a real sensor (they prove the session hashed *some* samples).
-- That `CertifiedCommand::issue` is unreachable from an untrusted crate in the same process.
-- Independent safety PLC / STO / SS1 / fieldbus.
-- MEASURED, metal, or ISO certification.
-
-## 5. Minimal target architecture
-
-Keep one authority kernel: typed proposal → certify → typestate bind/sign/ack → locked ONLINE governor → sealed Plant → limited driver port. Move perception, planning, WBC, ROS, agent, embodiment catalogs, and rate out of that kernel (they already are, conceptually; see `docs/TCB.md`).
-
-## 6. Proposed Rust typestate / capability design (implemented)
-
-**Runtime**
-
-- `Simulation` / `Hil` implement `UnlockedRail` (test hooks remain).
-- `OnlineLocked` implements `Rail` only.
-- `RuntimeGovernor<P, R = Simulation>` and `RuntimeSession<P, R = Simulation>`.
-
-**Command**
+## 1. Current ONLINE authority graph (from source)
 
 ```text
-UntrustedProposal (Intent / PolicyProposal)
-  → CertifiedIntent          decide()
-  → SessionBound             bind_identity
-  → EvidenceBound            bind_evidence
-  → SignedCommand            sign (after bind)
-  → AcknowledgedCommand      session only on the ONLINE path
-  → Prepared / Consumed / Unknown   ledger
+untrusted request / proposal
+    Intent / PolicyProposal
+        │
+        ▼
+RealityOs::decide                         semantic certification
+    Certificate + IssuedCommand           (private ctor; issue is pub(crate))
+        │
+        ▼
+RuntimeGovernor<OnlineLocked>::authorize_issued
+    session identity bind                 (governor-owned RuntimeIdentity)
+    evidence bind                         (governor-owned sensor hash)
+    actuator bind                         (governor-owned allow-list)
+    HMAC sign                             (governor-private key)
+    acknowledge                           (authority transition, not metadata)
+        │
+        ▼
+OnlineWrite                               unforgeable executable capability
+        │
+        ▼
+RuntimeGovernor<OnlineLocked>::write_online
+    pre_actuation_check + envelope
+    execute_certified_command
+        │
+        ▼
+sealed Plant → HardwareDriverPort
 ```
 
-SIM may `acknowledge_sim` without a signature. ONLINE must sign after evidence bind.
+SIM/HIL (`UnlockedRail`) keep `write_driver(&dyn ActuationCommand)` and may
+acknowledge via `lifecycle::acknowledge_sim` / `fixtures`. That interface is
+intentionally looser and is not the ONLINE path.
 
-**Capabilities**
+## 2. Bypass attempts against public APIs (proven from source)
 
-- Certified-write token: crate-private TLS, not a public type.
-- Production signing key: hashed into the plant at `lock_production`; execute checks the hash.
-- Session binder is the only ONLINE acknowledger/signer in the composition root.
+Attacks were reconstructed from the pre-seal surface, then re-checked after the
+redesign. “Succeeds” means a same-process dependent crate can reach
+`Plant::act` on an `OnlineLocked` governor’s plant without `RealityOs::decide`.
 
-## 7. Public API changes
+| Attack | Pre-seal | After this pass |
+|--------|----------|-----------------|
+| `Certificate::new(ALLOW, …)` | Succeeds (public) | Still public. Certificate alone is not `IssuedCommand` / `OnlineWrite`. |
+| `CertifiedCommand::issue` | **Succeeded (P0)** | Fails: `pub(crate)`. Compile-fail. |
+| Deserialize `CertifiedCommand` | Succeeds as a struct | Still possible. Cannot wrap as `IssuedCommand`. Serde cannot set `acknowledged`. |
+| Deserialize `IssuedCommand` | n/a | No `Deserialize`. |
+| `bind_identity` / `with_*` / evidence / actuator ids | **Succeeded (P0)** as prep | `bind_*` are `pub(crate)`. `with_*` still shape a `CertifiedCommand` you already hold. ONLINE authorize ignores caller actuator lists and uses governor-owned ids + hash. |
+| Read `signing_key()` | **Succeeded (P0)** | Fails: method removed. Compile-fail. |
+| `CertifiedCommand::sign` | **Succeeded (P0)** given the key | Fails: `pub(crate)`. |
+| `CertifiedCommand::acknowledge` | **Succeeded (P0)** | Fails: `pub(crate)`. Compile-fail. |
+| `write_driver(&dyn ActuationCommand)` on `OnlineLocked` | **Succeeded (P0)** | Fails: `UnlockedRail` only. Compile-fail. |
+| Homemade `impl ActuationCommand` | **Succeeded (P0)** via `write_driver` | Trait stays unsealed (DIP). ONLINE `write_online` takes `&OnlineWrite` only. Compile-fail. |
+| Construct `OnlineWrite { … }` | n/a | Fails: private field. Compile-fail. |
+| Construct `IssuedCommand { … }` | n/a | Fails: private field. Compile-fail. |
+| Bypass `RuntimeSession` and call the governor | **Succeeded (P0)** | `authorize_issued` + `write_online` is the sanctioned governor path. It still requires an `IssuedCommand` from `decide` plus governor-owned key/evidence/actuators. Session HOLD is mirrored on the governor (`tighten` only). |
+| `execute_certified_command` on the ONLINE plant | Needs `&mut Plant` | `plant_mut` is `UnlockedRail` only. Sibling cannot get the locked plant. |
+| `fixtures` feature mint | Intentional SIM | Still the test mint. Production dependents must not enable `fixtures`. |
 
-- `RuntimeGovernor.identity` is no longer a public field; use `identity()`.
-- ONLINE construction: `RuntimeGovernor::new_online`, `RuntimeSession::start_online` (journal, key, `first_online`, actuator ids).
-- `RuntimeSession::start` refuses ONLINE/HIL (use typestate constructors).
-- `GovernorConfig::online_locked()`.
-- `CommandLedger::with_online_journal`.
-- `ProposalClass` on `PolicyProposal`; `fixture` feature for test minting.
-- `HardwareDriverPort` unsealed; `Plant` still sealed.
-- `execute` `ExecuteBind.force_online_rails`.
-- `CertifiedCommand` deserialize cannot restore `acknowledged`.
-- Removed dead `assert_no_learned_actuator_authority` / never-true learned-authority abort.
+### Ranked findings
 
-Compatibility was not a goal.
+**P0 — closed in this pass**
 
-## 8. Modules that should leave the trusted core
+- Public `issue` / `sign` / `acknowledge` minting a command indistinguishable from a kernel-issued, executable ONLINE write.
+- Public export of the ONLINE HMAC secret.
+- `RuntimeGovernor<OnlineLocked>::write_driver` accepting an arbitrary `ActuationCommand`.
+- Homemade `ActuationCommand` satisfying ONLINE execution.
+- Public tuple-struct wrapping (`AcknowledgedCommand(cmd)`) as a substitute for `OnlineWrite`.
+- ONLINE safe-state unlock back to `Running`.
 
-See `docs/TCB.md`. Do not delete fixtures. Vision, embodiment, agent, ros2, rate, data, gauntlet, trajectory/control remain useful and untrusted for write uniqueness.
+**P1 — still open (honest)**
 
-## 9. Command lifecycle state machine
+- Sibling calls `execute_certified_command` on an *unlocked* SIM plant (fixture write path).
+- Dual-delete of journal **and** seal + `first_online=true` looks like first boot.
+- Same-filesystem seal is tamper-evident, not authenticated.
+- `record_sensor` still hashes caller-supplied samples.
+- Thread-local certified-write counter is process/thread uniqueness, not machine-wide.
+- Caller who *retained a copy* of the `Vec<u8>` they passed into `start_online` still has the secret. The governor no longer hands it back.
+- `CertifiedCommand::seal_online` is public and will HMAC+ack if the caller already has a key. That value is still not `OnlineWrite`; `write_online` verifies against the governor key.
 
-See `crates/reality-os/src/lifecycle.rs` and §6. Invalid order (sign then bind, ack via serde, ONLINE without evidence) is refused.
+**P2**
 
-## 10. Ledger crash / restart state machine
+- Hash-chain canonicalization is not second-preimage design.
+- `Certificate` public fields (status can be constructed; it cannot become `IssuedCommand`).
+- Sequence integers chosen by `DecideRequest` (ONLINE monotonic vs ledger only).
+
+## 3. Final authority-capability architecture
+
+```text
+untrusted request/proposal
+  → semantic certification          RealityOs::decide → IssuedCommand
+  → session identity binding        authorize_issued (governor identity)
+  → evidence binding                authorize_issued (governor sensor hash)
+  → actuator binding                authorize_issued (governor allow-list)
+  → signature                       governor-private HMAC key
+  → acknowledgement                 same transition; not a public method
+  → executable authority            OnlineWrite
+  → ONLINE Governor                 write_online(&OnlineWrite)
+  → execute                         execute_certified_command
+  → sealed Plant
+```
+
+`RuntimeGovernor<OnlineLocked>` does **not** treat a public `ActuationCommand` as
+sufficient authority.
+
+## 4. Signing-key ownership
+
+- The raw ONLINE key is stored only on `RuntimeGovernor`.
+- There is no getter. `set_signing_key` remains `UnlockedRail` only.
+- The governor needs the key to (1) seal in `authorize_issued` and (2) verify in
+  `execute_certified_command`.
+- Session no longer reads the key. It calls `authorize_issued`.
+- HMAC-SHA256 is a shared-key capability envelope, not a hardware root of trust
+  and not non-repudiation.
+
+## 5. Command / certificate construction
+
+| API | Ordinary consumer | Notes |
+|-----|-------------------|--------|
+| `Certificate::new` | public | Domain plugins. Not `IssuedCommand`. |
+| `CertifiedCommand::issue` | `pub(crate)` | Kernel + fixtures. |
+| `sign` / `acknowledge` / `bind_*` | `pub(crate)` | Lifecycle + authorize. |
+| `with_*` shaping | public | Invalidates signature. Cannot mint `IssuedCommand`. |
+| `IssuedCommand` | decide only | Private constructor. No `Deserialize`. |
+| `seal_online` | public | Needs a key; result is not `OnlineWrite`. |
+| `fixture::issue` / `fixture::acknowledge` | `fixtures` / tests | SIM/gauntlet. |
+| `narrow_certified_command` | public | Cannot upgrade refuse; returns `CertifiedCommand`. |
+
+Acknowledgement **is** an authority transition on the ONLINE path: it happens
+only inside `authorize_issued` while producing `OnlineWrite`. Serde cannot
+restore it (`skip_deserializing`).
+
+## 6. Governor ONLINE interface
+
+Public on `RuntimeGovernor<P, OnlineLocked>` (authority-relevant):
+
+- `new_online(..., signing_key, first_online, actuator_ids, now_s)`
+- `authorize_issued(IssuedCommand) -> Result<OnlineWrite, _>`
+- `write_online(&OnlineWrite, …)`
+- `latch_safe_state` — tighten only
+- Observation / recovery: `plant`, `ledger`, `config`, `identity`, `heartbeat`,
+  `record_sensor`, `watchdog_tick`, `engage_estop`, `clear_estop_requires_recovery`,
+  `apply_journal_continuity`, traces, `safe_state`
+
+Not public on ONLINE: `write_driver`, `signing_key`, `config_mut`, `plant_mut`,
+`envelope_mut`, `ledger_mut`, `set_signing_key`, `set_envelope`, `mark_sensor`.
+
+`ActuationCommand` stays unsealed as a dependency-inversion shape.
+ONLINE execution consumes `OnlineWrite` (authority), not the trait (shape).
+
+## 7. Public API changes (this pass)
+
+- `KernelDecision.command: Option<IssuedCommand>`
+- `IssuedCommand`, `OnlineWrite`
+- Removed `RuntimeGovernor::signing_key()`
+- `write_driver` moved to `UnlockedRail`
+- `new_online` requires `actuator_ids`
+- `CertifiedCommand::{issue,sign,acknowledge,bind_*}` are crate-private
+- Lifecycle tuple fields are private
+- SIM `bind_and_dispatch` still takes `CertifiedCommand`
+- ONLINE `dispatch_issued` takes `IssuedCommand`
+- `HardwareControlBridge::dispatch` takes `IssuedCommand`
+- Minimal GitHub Actions workflow (fmt / clippy / test)
+
+Compatibility was not a goal. SIM/HIL/gauntlet fixture paths remain.
+
+## 8. Compile-fail / adversarial tests
+
+1. Cannot read the ONLINE signing key — `online_no_signing_key.rs`
+2. Cannot produce `OnlineWrite` / `IssuedCommand` — private-ctor UI tests
+3. Cannot `acknowledge()` into ONLINE executability — `command_acknowledge_is_private.rs`
+4. Cannot `write_driver` / `write_online(&dyn ActuationCommand)` on ONLINE
+5. Cannot `Certificate(ALLOW) + issue + sign` bypass `decide` — `cannot_bypass_decide.rs`
+6. SIM/HIL/gauntlet fixtures still run
+7. Valid ONLINE path is exactly one actuation — governor + session tests
+8. Restart/replay still holds — `online_dispatch_signs_after_bind_and_survives_restart`
+
+## 9. Claims now justified (do not promote)
+
+See `CLAIM_LEDGER.md` for the level of each claim.
+
+This pass justifies, at **Rust type/API** and **same-process** level only:
+
+- No public same-process sequence fabricates semantic authorization and reaches
+  ONLINE actuation on `RuntimeGovernor<OnlineLocked>`.
+- ONLINE signing secret is not readable back from the governor.
+- ONLINE execution requires an `OnlineWrite` produced from an `IssuedCommand`.
+
+## 10. Remaining gaps
+
+Not provided by this patch (and not claimed):
+
+- Exclusive bus ownership
+- Process isolation
+- Hardware root of trust
+- Authenticated journal storage
+- Independent safety / STO / SS1 / PL / SIL
+- Metal / MEASURED validation
+- Trusted time
+- Perception authenticity (`record_sensor` hashes caller samples)
+- Branch-protection / merge policy (a workflow file is not GitHub rules)
+
+## 11. CI / repository integrity
+
+`.github/workflows/authority.yml` runs:
+
+```text
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --all-targets
+```
+
+That is required CI **if** the workflow is enabled on the default branch. It does
+not enforce merge policy. Requiring this check on `main`, forbidding skip, and
+restricting who can dismiss it are **operational** GitHub settings, not repository
+code.
+
+## 12. Another Rust architecture pass?
+
+**No.** The software authority boundary is ready for HIL and deployment-topology
+work (OS bus exclusivity, independent safety channel, seal media the autonomy
+process cannot rewrite). Do not add another capability layer.
+
+The software is **not** enough to put energy on a robot.
+
+## 13. Modules that should leave the trusted core
+
+See `docs/TCB.md`. Do not delete fixtures.
+
+## 14. Ledger crash / restart
 
 See `docs/models/consume_write.tla` and `crates/plant/src/consume.rs`.
 
 | Crash point | Persisted | Restart |
 |-------------|-----------|---------|
 | Before prepare | unseen | May retry (no physical write) |
-| After prepare, before write | prepared | Must **not** retry (id spent; plant untouched) |
-| After write, before ack | prepared (or unknown if marked) | Must **not** retry (outcome may have occurred) |
+| After prepare, before write | prepared | Must **not** retry |
+| After write, before ack | prepared (or unknown) | Must **not** retry |
 | After ack | consumed | Must **not** retry |
 
-Missing journal (not first): refuse start. Deleted journal (seal remains): refuse. Truncation: rollback. New chain: replaced. Corrupt/partial line: unreadable, fail-closed. In-memory ledger is SIM-only.
+**Trust model for cryptography:** HMAC-SHA256 is a shared-key capability envelope
+(the governor holds the key). It is not non-repudiation and not Ed25519.
+Journal SHA-256 chain is tamper-**evidence** given a stored tip (the seal), not
+authenticity against an adversary who writes both files.
 
-**Trust model for cryptography:** HMAC-SHA256 is a shared-key capability envelope (session/governor holds the key). It is not non-repudiation and not Ed25519. Asymmetric signatures would not fix “who holds the process key.” Journal SHA-256 chain is tamper-**evidence** given a stored tip (the seal), not authenticity against an adversary who writes both files.
-
-Separated: tamper evidence (chain+seal), authenticity (not provided), anti-rollback (seal vs prefix; not WORM), trusted time (not provided), external anchoring (not provided), retention (not provided).
-
-## 11. Provenance model
+## 15. Provenance model
 
 | Class | Who constructs | May certify | May bind | May sign | May execute |
 |-------|----------------|-------------|----------|----------|-------------|
 | `UntrustedLearned` | agent / VLA | no | no | no | no |
 | `ExternalDeterministic` | external planner | no | no | no | no |
 | `Operator` | CLI / language intent | no | no | no | no |
-| Certifier | `RealityOs::decide` | yes | no | no | no |
-| Session binder | `RuntimeSession` | no | yes | ONLINE yes | no |
-| Signer | session after bind | no | no | yes | no |
-| Execution authority | `write_driver` → execute | no | no | no | yes |
+| Certifier | `RealityOs::decide` | yes → `IssuedCommand` | no | no | no |
+| ONLINE governor | `authorize_issued` | no | yes | yes | no |
+| Execution authority | `OnlineWrite` → `write_online` | no | no | no | yes |
 
 Source strings (`grok`, `vla`, `policy`) are notes. They are not a security boundary.
 
-## 12. Hardware-driver extension boundary
-
-- `Plant` sealed; certified-write private; `HardwareBackedPlant<P>` is the production wrapper.
-- `HardwareDriverPort` is implementable by vendor crates.
-- A port cannot certify, acknowledge, widen policy, or mint the write token.
-- `write_action` on a port **you own** is transport ownership. Exclusive `/dev` or EtherCAT master is an OS property.
-- Dimension and hard action bounds are checked again in `check_hard_action_bounds` immediately before egress.
-
-## 13. ONLINE deployment topology
+## 16. ONLINE deployment topology
 
 ```text
 untrusted autonomy process     (agent, VLA, ROS talker)
         │ messages only
         ▼
 semantic execution authority   (this kernel, one process)
-        │ certified write only
+        │ OnlineWrite only
         ▼
 hardware-driver process/lib    (HardwareDriverPort impl)
         │
@@ -232,52 +284,12 @@ safety controller              (NAMED HOLE — independent PLC/STO)
 drive → physical energy
 ```
 
-**Machine-wide single-writer** requires: exactly one process may open the actuator bus; udev/ACL/cgroup enforce it; no root/debug tool on the same node during operation; an independent safety controller can remove energy. Rust privacy does not provide this. If root can `open()` the device, the software guarantee is only process-local.
-
-## 14. Verification plan
-
-| Method | Used? | Why |
-|--------|-------|-----|
-| Compile-fail (trybuild) | yes | `impl Plant`, `with_certified_write`, ONLINE `config_mut`/`plant_mut`/`envelope_mut`/`ledger_mut`/`set_signing_key` |
-| proptest | yes | narrowing never widens; non-finite never writes |
-| Crash/restart + journal tests | yes | deletion, rollback, prepare not retryable, ONLINE restart |
-| TLA+ | yes, one model | consume/write + crash (`docs/models/consume_write.tla`) |
-| Kani | no | would re-prove `may_retry` / envelope predicates already covered by tests; no CI harness |
-| Loom | no | no lock-free concurrency in the kernel |
-| cargo-fuzz | later | useful for serde/journal parsers; not added for appearance |
-
-## 15. Concrete implementation sequence (done / remaining)
-
-1. Reconstruct path from source — done.
-2. Typestate rails + freeze ONLINE config — done.
-3. Durable journal+seal + `first_online` — done.
-4. Sign-after-bind + typed provenance + unseal port — done.
-5. Adversarial tests + TLA+ model — done.
-6. Remaining P1: capability token on `issue`, separate seal media, trusted time, OS device exclusive open.
-
-## 16. Tests that must pass before any real actuator is connected
-
-- Workspace `cargo test --workspace --all-targets`
-- Compile-fail suite (plant + governor)
-- `clippy -D warnings`, `fmt --check`
-- ONLINE: no rail opt-out; journal required; restart does not replay
-- Journal missing/deleted/rollback/replaced fail closed
-- Unknown outcome not retryable
-- Production lock refuses unsigned / wrong key
-- External-style port cannot `impl Plant` and cannot `act` without the guard
-- Narrowing / non-finite properties
-- Gauntlet matrices still pass (SIM fixtures)
-
-Do **not** connect energy until deployment topology in §13 is true on the machine.
+**Machine-wide single-writer** requires OS exclusivity plus an independent safety
+controller. Rust privacy does not provide this.
 
 ## 17. Judgment: one-robot hardware experiment?
 
-**No.** The architecture is now a *small, auditable authority kernel* whose process-level guarantees can be stated precisely and tested adversarially. It is **not** strong enough to justify energizing a real actuator:
-
-- Machine-wide single-writer is unproven.
-- Fieldbus / safety PLC are named holes.
-- Journal+seal is not authenticated storage.
-- Evidence is still caller-supplied samples plus a recomputed hash.
-- Semantic certification is still in-process and sibling-callable.
-
-Use the kernel as the last software gate in SIM/HIL, with an independent hardware safety channel, exclusive bus ownership, and a stored seal on media the autonomy process cannot rewrite, before any one-robot powered experiment.
+**No.** The same-process software authority boundary is now typestate-complete
+enough to stop expanding Rust architecture. It is **not** strong enough to
+energize a real actuator. Use it as the last software gate in SIM/HIL after
+deployment topology in §16 is true on the machine.

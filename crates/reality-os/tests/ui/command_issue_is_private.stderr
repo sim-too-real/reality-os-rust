@@ -1,0 +1,16 @@
+error[E0624]: associated function `issue` is private
+ --> tests/ui/command_issue_is_private.rs:6:31
+  |
+6 |       let _ = CertifiedCommand::issue("c", 1, 0.0, 10.0, cert, vec![0.1]);
+  |                                 ^^^^^ private associated function
+  |
+ ::: src/command.rs
+  |
+  | /     pub(crate) fn issue(
+  | |         command_id: impl Into<String>,
+  | |         sequence: i64,
+  | |         now_s: f64,
+... |
+  | |         allowed_action: Vec<f64>,
+  | |     ) -> KernelResult<Self> {
+  | |___________________________- private associated function defined here

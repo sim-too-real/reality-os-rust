@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use realityos_core::{lifecycle, CertifiedCommand};
+use realityos_core::{lifecycle, CertifiedCommand, IssuedCommand};
 use realityos_governor::{
     DriverEnvelopePack, Hil, OnlineLocked, Rail, RuntimeGovernor, RuntimeIdentity, RuntimeTrace,
-    SafeState, Simulation,
+    SafeState, Simulation, UnlockedRail,
 };
 use realityos_kernel::{
     CalibrationId, DesignContentHash, FirmwareId, ReleaseHash, SerialOrAsBuilt,
@@ -61,7 +61,6 @@ pub struct RuntimeSession<P: Plant, R: Rail = Simulation> {
     acknowledged_ids: std::collections::HashSet<String>,
     safe_state: SafeState,
     last_sensor_hash: Option<String>,
-    authorized_actuator_ids: Vec<String>,
 }
 
 impl RuntimeSession<SimPlant, Simulation> {
@@ -113,7 +112,6 @@ impl<P: Plant> RuntimeSession<P, Simulation> {
             acknowledged_ids: std::collections::HashSet::new(),
             safe_state: SafeState::Running,
             last_sensor_hash: None,
-            authorized_actuator_ids: args.actuator_ids,
         })
     }
 }
@@ -137,7 +135,6 @@ impl<P: Plant> RuntimeSession<P, Hil> {
             acknowledged_ids: std::collections::HashSet::new(),
             safe_state: SafeState::Running,
             last_sensor_hash: None,
-            authorized_actuator_ids: args.actuator_ids,
         })
     }
 }
@@ -199,9 +196,16 @@ impl<P: Plant> RuntimeSession<P, OnlineLocked> {
                 "incomplete_online_runtime_identity".into(),
             ));
         }
-        let governor =
-            RuntimeGovernor::new_online(identity, plant, journal, key, args.first_online, now_s)
-                .map_err(|e| SessionStartError(e.0))?;
+        let governor = RuntimeGovernor::new_online(
+            identity,
+            plant,
+            journal,
+            key,
+            args.first_online,
+            args.actuator_ids.clone(),
+            now_s,
+        )
+        .map_err(|e| SessionStartError(e.0))?;
         Ok(Self {
             mode: RuntimeMode::Online,
             governor,
@@ -209,7 +213,6 @@ impl<P: Plant> RuntimeSession<P, OnlineLocked> {
             acknowledged_ids: std::collections::HashSet::new(),
             safe_state: SafeState::Running,
             last_sensor_hash: None,
-            authorized_actuator_ids: args.actuator_ids,
         })
     }
 }
@@ -232,9 +235,106 @@ fn identity_from_args(args: &StartArgs) -> Result<RuntimeIdentity, SessionStartE
     })
 }
 
+impl<P: Plant, R: UnlockedRail> RuntimeSession<P, R> {
+    pub fn bind_and_dispatch(
+        &mut self,
+        command: CertifiedCommand,
+        params: &ActionParams,
+        now_s: f64,
+    ) -> DispatchResult {
+        if self.safe_state.blocks_actuation() {
+            return DispatchResult::refused(
+                self.mode,
+                vec![format!(
+                    "dispatch_safe_state_latched:{}",
+                    self.safe_state.as_str()
+                )],
+            );
+        }
+        let bound = match lifecycle::CertifiedIntent::from_command(command).bind_identity(
+            self.governor.identity().release_hash.as_str(),
+            self.governor.identity().design_str(),
+            self.governor.identity().calibration_id_str(),
+        ) {
+            Ok(c) => c,
+            Err(errs) => return DispatchResult::refused(self.mode, errs),
+        };
+
+        let mut cmd = bound.into_command();
+        if let Some(h) = &self.last_sensor_hash {
+            if cmd.sensor_packet_hash().is_empty() {
+                cmd = cmd.with_sensor_packet_hash(h.clone());
+            } else if cmd.sensor_packet_hash() != *h {
+                return DispatchResult::refused(
+                    self.mode,
+                    vec!["online_refuses_forged_sensor_packet_hash".into()],
+                );
+            }
+        }
+        let command = lifecycle::CertifiedIntent::from_command(cmd)
+            .acknowledge_sim()
+            .into_command();
+        self.acknowledged_ids
+            .insert(command.command_id().to_string());
+        self.last_sequence = command.sequence_value().max(self.last_sequence);
+        let _ = self.governor.watchdog_tick(now_s);
+        let trace = self.governor.write_driver(&command, params, now_s);
+        DispatchResult {
+            ok: trace.ok,
+            executed: trace.ok,
+            mode: self.mode,
+            violations: trace.violations.clone(),
+            trace: Some(trace),
+            realized: None,
+            metal: false,
+        }
+    }
+}
+
+impl<P: Plant> RuntimeSession<P, OnlineLocked> {
+    pub fn dispatch_issued(
+        &mut self,
+        command: IssuedCommand,
+        params: &ActionParams,
+        now_s: f64,
+    ) -> DispatchResult {
+        if self.safe_state.blocks_actuation() {
+            return DispatchResult::refused(
+                self.mode,
+                vec![format!(
+                    "dispatch_safe_state_latched:{}",
+                    self.safe_state.as_str()
+                )],
+            );
+        }
+        let write = match self.governor.authorize_issued(command) {
+            Ok(w) => w,
+            Err(errs) => return DispatchResult::refused(self.mode, errs),
+        };
+        self.acknowledged_ids.insert(write.command_id().to_string());
+        self.last_sequence = write.as_command().sequence_value().max(self.last_sequence);
+        let _ = self.governor.watchdog_tick(now_s);
+        let trace = self.governor.write_online(&write, params, now_s);
+        DispatchResult {
+            ok: trace.ok,
+            executed: trace.ok,
+            mode: self.mode,
+            violations: trace.violations.clone(),
+            trace: Some(trace),
+            realized: None,
+            metal: false,
+        }
+    }
+}
+
 impl<P: Plant, R: Rail> RuntimeSession<P, R> {
     pub fn latch_safe_state(&mut self, state: SafeState, _reason: &str) {
-        self.safe_state = state;
+        if R::ONLINE_LOCKED {
+            self.safe_state = self.safe_state.tighten(state);
+        } else {
+            self.safe_state = state;
+        }
+        self.governor.latch_safe_state(state);
     }
 
     pub fn last_sensor_hash(&self) -> Option<&str> {
@@ -273,89 +373,6 @@ impl<P: Plant, R: Rail> RuntimeSession<P, R> {
         )?;
         self.last_sensor_hash = Some(hash.clone());
         Ok(hash)
-    }
-
-    pub fn bind_and_dispatch(
-        &mut self,
-        command: CertifiedCommand,
-        params: &ActionParams,
-        now_s: f64,
-    ) -> DispatchResult {
-        if self.safe_state.blocks_actuation() {
-            return DispatchResult::refused(
-                self.mode,
-                vec![format!(
-                    "dispatch_safe_state_latched:{}",
-                    self.safe_state.as_str()
-                )],
-            );
-        }
-        let bound = match lifecycle::CertifiedIntent::from_issued(command).bind_identity(
-            self.governor.identity().release_hash.as_str(),
-            self.governor.identity().design_str(),
-            self.governor.identity().calibration_id_str(),
-        ) {
-            Ok(c) => c,
-            Err(errs) => return DispatchResult::refused(self.mode, errs),
-        };
-
-        let command = if R::ONLINE_LOCKED {
-            let mut cmd = bound.0;
-            if cmd.actuator_ids().is_empty() {
-                cmd = cmd.with_actuator_ids(self.authorized_actuator_ids.clone());
-            } else if !cmd
-                .actuator_ids()
-                .iter()
-                .all(|id| self.authorized_actuator_ids.iter().any(|a| a == id))
-            {
-                return DispatchResult::refused(self.mode, vec!["foreign_actuator_ids".into()]);
-            }
-            let Some(h) = &self.last_sensor_hash else {
-                return DispatchResult::refused(
-                    self.mode,
-                    vec!["online_requires_sensor_hash".into()],
-                );
-            };
-            let evidence = match cmd.bind_evidence(h) {
-                Ok(c) => c,
-                Err(errs) => return DispatchResult::refused(self.mode, errs),
-            };
-            let Some(key) = self.governor.signing_key() else {
-                return DispatchResult::refused(
-                    self.mode,
-                    vec!["online_signing_key_missing".into()],
-                );
-            };
-            let signed = lifecycle::EvidenceBound(evidence).sign(key);
-            signed.acknowledge().into_command()
-        } else {
-            let mut cmd = bound.0;
-            if let Some(h) = &self.last_sensor_hash {
-                if cmd.sensor_packet_hash().is_empty() {
-                    cmd = cmd.with_sensor_packet_hash(h.clone());
-                } else if cmd.sensor_packet_hash() != *h {
-                    return DispatchResult::refused(
-                        self.mode,
-                        vec!["online_refuses_forged_sensor_packet_hash".into()],
-                    );
-                }
-            }
-            cmd.acknowledge()
-        };
-        self.acknowledged_ids
-            .insert(command.command_id().to_string());
-        self.last_sequence = command.sequence_value().max(self.last_sequence);
-        let _ = self.governor.watchdog_tick(now_s);
-        let trace = self.governor.write_driver(&command, params, now_s);
-        DispatchResult {
-            ok: trace.ok,
-            executed: trace.ok,
-            mode: self.mode,
-            violations: trace.violations.clone(),
-            trace: Some(trace),
-            realized: None,
-            metal: false,
-        }
     }
 
     pub fn refuse_bare_action(&self, _action: &[f64]) -> DispatchResult {

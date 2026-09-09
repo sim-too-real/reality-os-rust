@@ -1,0 +1,5 @@
+error[E0451]: field `command` of struct `IssuedCommand` is private
+ --> tests/ui/issued_command_no_constructor.rs:4:21
+  |
+4 |     IssuedCommand { command: cmd }
+  |                     ^^^^^^^ private field

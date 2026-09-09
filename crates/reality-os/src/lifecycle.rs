@@ -1,32 +1,38 @@
 //! Compiler-visible command stages. Signing happens after identity/evidence bind.
 //!
 //! UntrustedProposal (Intent / PolicyProposal)
-//!   → CertifiedIntent (`CertifiedCommand` from decide, unacked)
+//!   → IssuedCommand (`RealityOs::decide` only)
+//!   → CertifiedIntent
 //!   → SessionBound
 //!   → EvidenceBound
 //!   → Signed
-//!   → Acknowledged
+//!   → Acknowledged          (SIM lifecycle / fixture)
+//!   → OnlineWrite           (ONLINE governor capability; not this module)
 //!   → Prepared / Consumed / Unknown  (plant ledger)
 
-use crate::command::CertifiedCommand;
+use crate::command::{CertifiedCommand, IssuedCommand};
 
 #[derive(Debug, Clone)]
-pub struct CertifiedIntent(pub CertifiedCommand);
+pub struct CertifiedIntent(CertifiedCommand);
 
 #[derive(Debug, Clone)]
-pub struct SessionBound(pub CertifiedCommand);
+pub struct SessionBound(CertifiedCommand);
 
 #[derive(Debug, Clone)]
-pub struct EvidenceBound(pub CertifiedCommand);
+pub struct EvidenceBound(CertifiedCommand);
 
 #[derive(Debug, Clone)]
-pub struct SignedCommand(pub CertifiedCommand);
+pub struct SignedCommand(CertifiedCommand);
 
 #[derive(Debug, Clone)]
-pub struct AcknowledgedCommand(pub CertifiedCommand);
+pub struct AcknowledgedCommand(CertifiedCommand);
 
 impl CertifiedIntent {
-    pub fn from_issued(cmd: CertifiedCommand) -> Self {
+    pub fn from_issued(cmd: IssuedCommand) -> Self {
+        Self(cmd.into_command())
+    }
+
+    pub fn from_command(cmd: CertifiedCommand) -> Self {
         Self(cmd)
     }
 
@@ -42,6 +48,11 @@ impl CertifiedIntent {
             calibration_id,
         )?))
     }
+
+    /// SIM-only. ONLINE acknowledgement is an `OnlineWrite` transition.
+    pub fn acknowledge_sim(self) -> AcknowledgedCommand {
+        AcknowledgedCommand(self.0.acknowledge())
+    }
 }
 
 impl SessionBound {
@@ -49,9 +60,13 @@ impl SessionBound {
         Ok(EvidenceBound(self.0.bind_evidence(expected_hash)?))
     }
 
-    /// SIM-only shortcut. ONLINE must sign after evidence bind.
+    /// SIM-only shortcut. ONLINE acknowledgement is an `OnlineWrite` transition.
     pub fn acknowledge_sim(self) -> AcknowledgedCommand {
         AcknowledgedCommand(self.0.acknowledge())
+    }
+
+    pub fn into_command(self) -> CertifiedCommand {
+        self.0
     }
 }
 

@@ -1,0 +1,5 @@
+error[E0599]: no method named `signing_key` found for reference `&RuntimeGovernor<SimPlant, OnlineLocked>` in the current scope
+ --> tests/ui/online_no_signing_key.rs:5:15
+  |
+5 |     let _ = g.signing_key();
+  |               ^^^^^^^^^^^ private field, not a method

@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/online_write_rejects_actuation_command.rs:8:28
+  |
+8 |     let _ = g.write_online(cmd, &ActionParams::empty(), 1.0);
+  |               ------------ ^^^ expected `&OnlineWrite`, found `&dyn ActuationCommand`
+  |               |
+  |               arguments to this method are incorrect
+  |
+  = note: expected reference `&OnlineWrite`
+             found reference `&dyn ActuationCommand`
+note: method defined here
+ --> src/governor.rs
+  |
+  |     pub fn write_online(
+  |            ^^^^^^^^^^^^

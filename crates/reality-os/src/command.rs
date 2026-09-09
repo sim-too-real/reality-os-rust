@@ -61,7 +61,7 @@ pub struct CertifiedCommand {
 }
 
 impl CertifiedCommand {
-    pub fn issue(
+    pub(crate) fn issue(
         command_id: impl Into<String>,
         sequence: i64,
         now_s: f64,
@@ -185,7 +185,7 @@ impl CertifiedCommand {
         self
     }
 
-    pub fn sign(mut self, key: &[u8]) -> Self {
+    pub(crate) fn sign(mut self, key: &[u8]) -> Self {
         let hash = realityos_plant::command_payload_hash(&self);
         self.payload_hash = hash.clone();
         self.signature = realityos_plant::sign_payload(key, &hash);
@@ -197,13 +197,13 @@ impl CertifiedCommand {
         self
     }
 
-    pub fn acknowledge(mut self) -> Self {
+    pub(crate) fn acknowledge(mut self) -> Self {
         self.acknowledged = true;
         self
     }
 
     /// Bind empty identity fields only. Never overwrite a foreign hash.
-    pub fn bind_identity(
+    pub(crate) fn bind_identity(
         mut self,
         release_hash: &str,
         as_built: &str,
@@ -248,7 +248,7 @@ impl CertifiedCommand {
         Ok(self)
     }
 
-    pub fn bind_evidence(mut self, expected_hash: &str) -> Result<Self, Vec<String>> {
+    pub(crate) fn bind_evidence(mut self, expected_hash: &str) -> Result<Self, Vec<String>> {
         if expected_hash.is_empty() {
             return Err(vec!["missing_expected_sensor_packet_hash".into()]);
         }
@@ -263,6 +263,102 @@ impl CertifiedCommand {
             self.invalidate_signature();
         }
         Ok(self)
+    }
+
+    /// HMAC-sign and acknowledge. Not an ONLINE execution capability.
+    /// `RuntimeGovernor<OnlineLocked>` wraps the result in `OnlineWrite`.
+    pub fn seal_online(self, key: &[u8]) -> Result<Self, Vec<String>> {
+        if key.is_empty() {
+            return Err(vec!["online_signing_key_missing".into()]);
+        }
+        if self.acknowledged {
+            return Err(vec!["cannot_seal_acknowledged_command".into()]);
+        }
+        Ok(self.sign(key).acknowledge())
+    }
+}
+
+/// Kernel-issued, unsigned command. Only [`crate::RealityOs::decide`] mints this
+/// for ordinary consumers. Not an execution capability.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct IssuedCommand {
+    command: CertifiedCommand,
+}
+
+impl IssuedCommand {
+    pub(crate) fn from_certified(command: CertifiedCommand) -> Option<Self> {
+        if command.is_acknowledged() || !command.signature().is_empty() {
+            return None;
+        }
+        if !command.certificate().allowed() {
+            return None;
+        }
+        Some(Self { command })
+    }
+
+    pub fn command_id(&self) -> &str {
+        self.command.command_id()
+    }
+
+    pub fn sequence_value(&self) -> i64 {
+        self.command.sequence_value()
+    }
+
+    pub fn is_acknowledged(&self) -> bool {
+        self.command.is_acknowledged()
+    }
+
+    pub fn as_command(&self) -> &CertifiedCommand {
+        &self.command
+    }
+
+    pub fn into_command(self) -> CertifiedCommand {
+        self.command
+    }
+
+    /// Bind governor-owned identity, evidence, and actuator ids.
+    /// Still unsigned. The ONLINE governor then seals with its private key.
+    pub fn bind_online(
+        self,
+        release_hash: &str,
+        as_built: &str,
+        calibration_id: &str,
+        evidence_hash: &str,
+        actuator_ids: Vec<String>,
+    ) -> Result<CertifiedCommand, Vec<String>> {
+        if evidence_hash.is_empty() {
+            return Err(vec!["online_requires_sensor_hash".into()]);
+        }
+        if actuator_ids.is_empty() {
+            return Err(vec!["online_requires_actuator_ids".into()]);
+        }
+        if self.command.is_acknowledged() {
+            return Err(vec!["issued_command_already_acknowledged".into()]);
+        }
+        if !self.command.signature().is_empty() {
+            return Err(vec!["issued_command_already_signed".into()]);
+        }
+        let cmd = self
+            .command
+            .bind_identity(release_hash, as_built, calibration_id)?;
+        let cmd = cmd.bind_evidence(evidence_hash)?;
+        if cmd.actuator_ids().is_empty() {
+            Ok(cmd.with_actuator_ids(actuator_ids))
+        } else if !cmd
+            .actuator_ids()
+            .iter()
+            .all(|id| actuator_ids.iter().any(|a| a == id))
+        {
+            Err(vec!["foreign_actuator_ids".into()])
+        } else {
+            Ok(cmd)
+        }
+    }
+}
+
+impl From<IssuedCommand> for CertifiedCommand {
+    fn from(issued: IssuedCommand) -> Self {
+        issued.into_command()
     }
 }
 
@@ -516,5 +612,9 @@ pub mod fixture {
             certificate,
             allowed_action,
         )
+    }
+
+    pub fn acknowledge(command: CertifiedCommand) -> CertifiedCommand {
+        command.acknowledge()
     }
 }

@@ -20,7 +20,7 @@ pub const SCHEMA: &str = "realityos.session/1";
 #[cfg(test)]
 mod tests {
     use super::*;
-    use realityos_core::{Certificate, CertifiedCommand, Intent, RealityOs, WorldView};
+    use realityos_core::{fixture, Certificate, Intent, RealityOs, WorldView};
     use realityos_governor::OnlineLocked;
     use realityos_kernel::DecisionStatus;
     use realityos_plant::{ActionParams, Plant, SimPlant};
@@ -79,7 +79,7 @@ mod tests {
             10.0,
         ));
         assert_eq!(d.status, DecisionStatus::Allow);
-        let cmd = d.command.unwrap();
+        let cmd = d.command.unwrap().into_command();
         let out = sess.bind_and_dispatch(cmd, &ActionParams::empty(), 10.0);
         assert!(out.ok, "{:?}", out.violations);
         assert_eq!(sess.governor.plant().write_count(), 1);
@@ -92,7 +92,7 @@ mod tests {
             RuntimeSession::start(StartArgs::simulation("rel-sim-bb"), plant, 1.0).unwrap();
         sess.governor.mark_sensor(1.0, None);
         let cert = Certificate::new(DecisionStatus::Refuse, "no");
-        let cmd = CertifiedCommand::issue("x", 1, 1.0, 30.0, cert, vec![0.1]).unwrap();
+        let cmd = fixture::issue("x", 1, 1.0, 30.0, cert, vec![0.1]).unwrap();
         let out = sess.bind_and_dispatch(cmd, &ActionParams::empty(), 1.0);
         assert!(!out.ok);
         assert_eq!(sess.governor.plant().write_count(), 0);
@@ -105,7 +105,7 @@ mod tests {
             RuntimeSession::start(StartArgs::simulation("rel-sim-cc"), plant, 1.0).unwrap();
         sess.latch_safe_state(realityos_governor::SafeState::Hold, "test");
         let cert = Certificate::new(DecisionStatus::Allow, "ok");
-        let cmd = CertifiedCommand::issue("x", 1, 1.0, 30.0, cert, vec![0.1]).unwrap();
+        let cmd = fixture::issue("x", 1, 1.0, 30.0, cert, vec![0.1]).unwrap();
         let out = sess.bind_and_dispatch(cmd, &ActionParams::empty(), 1.0);
         assert!(out.violations.iter().any(|v| v.contains("safe_state")));
     }
@@ -200,7 +200,7 @@ mod tests {
             10.0,
         ));
         let cmd = d.command.unwrap();
-        let out = sess.bind_and_dispatch(cmd.clone(), &ActionParams::empty(), 10.0);
+        let out = sess.dispatch_issued(cmd.clone(), &ActionParams::empty(), 10.0);
         assert!(out.ok, "{:?}", out.violations);
         assert_eq!(sess.governor.plant().write_count(), 1);
         drop(sess);
@@ -213,7 +213,7 @@ mod tests {
         sess2
             .ingest_sensor(&[("q0".into(), 0.0)], Some(11.0), 11.0)
             .unwrap();
-        let out2 = sess2.bind_and_dispatch(cmd, &ActionParams::empty(), 11.0);
+        let out2 = sess2.dispatch_issued(cmd, &ActionParams::empty(), 11.0);
         assert!(!out2.ok);
         assert!(
             out2.violations
@@ -223,6 +223,54 @@ mod tests {
             out2.violations
         );
         assert_eq!(sess2.governor.plant().write_count(), 0);
+    }
+
+    #[test]
+    fn online_hold_cannot_return_to_running() {
+        let dir = std::env::temp_dir().join(format!(
+            "realityos-online-hold-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let journal = dir.join("driver.jsonl");
+        let mut plant = SimPlant::new("p", 1, 10.0);
+        plant.go_online();
+        let mut args = StartArgs::simulation("rel-online-hold");
+        args.release_class = "MFG_CANDIDATE".into();
+        args.serial_or_as_built = "SN-1".into();
+        args.firmware_id = "FW-1".into();
+        args.calibration_id = "cal-1".into();
+        args.design_content_hash = "des1".into();
+        args.journal_path = Some(journal);
+        args.signing_key = Some(b"online-session-key".to_vec());
+        args.first_online = true;
+        args.actuator_ids = vec!["joint-0".into()];
+        let mut sess =
+            RuntimeSession::<SimPlant, OnlineLocked>::start_online(args, plant, 10.0).unwrap();
+        sess.latch_safe_state(realityos_governor::SafeState::Hold, "test");
+        sess.latch_safe_state(realityos_governor::SafeState::Running, "forged");
+        sess.ingest_sensor(&[("q0".into(), 0.0)], Some(10.0), 10.0)
+            .unwrap();
+        let mut ros = RealityOs::new();
+        let d = ros.decide(realityos_core::DecideRequest::new(
+            Intent::language("hold", "hold"),
+            WorldView {
+                tau_max: vec![5.0],
+                ..WorldView::default()
+            },
+            10.0,
+        ));
+        let out = sess.dispatch_issued(d.command.unwrap(), &ActionParams::empty(), 10.0);
+        assert!(!out.ok);
+        assert!(
+            out.violations.iter().any(|v| v.contains("safe_state")),
+            "{:?}",
+            out.violations
+        );
+        assert_eq!(sess.governor.plant().write_count(), 0);
     }
 
     #[test]

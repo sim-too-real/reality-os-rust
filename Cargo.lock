@@ -717,6 +717,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
+ "trybuild",
 ]
 
 [[package]]
@@ -765,6 +766,7 @@ name = "realityos-governor"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "realityos-core",
  "realityos-kernel",
  "realityos-plant",
  "serde",

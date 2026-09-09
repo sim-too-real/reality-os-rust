@@ -15,7 +15,7 @@ pub mod trace;
 
 pub use envelope::{per_joint_clip, DriverEnvelopePack};
 pub use gate::{admit_from_parts, GovernorGateRequest, GovernorGateVerdict};
-pub use governor::{GovernorConfig, OnlineInitError, RuntimeGovernor};
+pub use governor::{GovernorConfig, OnlineInitError, OnlineWrite, RuntimeGovernor};
 pub use identity::RuntimeIdentity;
 pub use latch::{EstopLatch, SafeState, SafeStateLatch};
 pub use rail::{Hil, OnlineLocked, Rail, Simulation, UnlockedRail};
@@ -121,6 +121,7 @@ mod tests {
             journal,
             b"test-signing-key-32bytes-minimum".to_vec(),
             true,
+            vec!["a0".into()],
             1.0,
         )
         .expect("online governor");
@@ -131,5 +132,87 @@ mod tests {
         assert!(c.require_online_identity);
         assert!(c.require_sensor_before_write);
         assert!(g.plant().production_locked());
+    }
+
+    fn online_identity() -> RuntimeIdentity {
+        RuntimeIdentity {
+            release_hash: ReleaseHash::new("rel1").unwrap(),
+            design_content_hash: Some(DesignContentHash::new("des1").unwrap()),
+            serial_or_as_built: Some(SerialOrAsBuilt::new("SN-1").unwrap()),
+            firmware_id: Some(FirmwareId::new("FW-1").unwrap()),
+            calibration_id: Some(CalibrationId::new("cal-1").unwrap()),
+        }
+    }
+
+    fn temp_journal(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "realityos-gov-cap-{tag}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join("driver.jsonl")
+    }
+
+    #[test]
+    fn online_valid_path_is_exactly_one_actuation() {
+        use realityos_core::{DecideRequest, Intent, RealityOs, WorldView};
+        use realityos_plant::ActionParams;
+
+        let mut plant = SimPlant::new("p", 1, 1.0);
+        plant.go_online();
+        let mut g = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            online_identity(),
+            plant,
+            temp_journal("one"),
+            b"online-cap-key".to_vec(),
+            true,
+            vec!["joint-0".into()],
+            10.0,
+        )
+        .unwrap();
+        g.record_sensor(&[("q0".into(), 0.0)], 10.0, 1, "frame", "s")
+            .unwrap();
+        let mut ros = RealityOs::new();
+        let d = ros.decide(DecideRequest::new(
+            Intent::language("hold", "hold"),
+            WorldView {
+                tau_max: vec![5.0],
+                ..WorldView::default()
+            },
+            10.0,
+        ));
+        let issued = d.command.expect("allow");
+        let write = g.authorize_issued(issued).expect("authorize");
+        let t = g.write_online(&write, &ActionParams::empty(), 10.0);
+        assert!(t.ok, "{:?}", t.violations);
+        assert_eq!(g.plant().write_count(), 1);
+        let t2 = g.write_online(&write, &ActionParams::empty(), 10.1);
+        assert!(!t2.ok);
+        assert_eq!(g.plant().write_count(), 1);
+    }
+
+    #[test]
+    fn online_safe_state_cannot_return_to_running() {
+        let mut plant = SimPlant::new("p", 1, 1.0);
+        plant.go_online();
+        let mut g = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            online_identity(),
+            plant,
+            temp_journal("hold"),
+            b"online-cap-key".to_vec(),
+            true,
+            vec!["joint-0".into()],
+            10.0,
+        )
+        .unwrap();
+        g.latch_safe_state(SafeState::Hold);
+        assert_eq!(g.safe_state(), SafeState::Hold);
+        g.latch_safe_state(SafeState::Running);
+        assert_eq!(g.safe_state(), SafeState::Hold);
+        g.latch_safe_state(SafeState::Fault);
+        assert_eq!(g.safe_state(), SafeState::Fault);
     }
 }

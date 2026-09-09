@@ -13,11 +13,11 @@ ROS 2, Isaac ROS, Apex.OS, NVIDIA Halos, and QNX are middleware, perception, or 
 ```
 intent / VLA caption
         ↓  proposal only
-   Reality OS.decide   → Certificate
-        ↓  CertifiedCommand
-   RuntimeSession.bind_and_dispatch
-        ↓  identity + ack
-   RuntimeGovernor.write_driver
+   Reality OS.decide   → IssuedCommand
+        ↓  ONLINE authorize (identity/evidence/actuators/sign/ack)
+   OnlineWrite
+        ↓
+   RuntimeGovernor.write_online     (SIM/HIL: write_driver)
         ↓  ledger + envelope + e-stop
    plant.act            (SIM today)
 ```

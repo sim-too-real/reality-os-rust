@@ -96,7 +96,7 @@ fn allow_cmd(
     .unwrap()
     .with_identity(release, "", cal);
     if ack {
-        c.acknowledge()
+        realityos_core::fixture::acknowledge(c)
     } else {
         c
     }
@@ -158,21 +158,22 @@ pub fn governor_matrix() -> Vec<CaseResult> {
                         );
                     }
                     Fault::RefuseCert => {
-                        cmd = realityos_core::fixture::issue(
-                            "g-1",
-                            1,
-                            now,
-                            30.0,
-                            Certificate::new(DecisionStatus::Refuse, "gauntlet"),
-                            action.clone(),
-                        )
-                        .unwrap()
-                        .with_identity(
-                            sess.governor.identity().release_hash.as_str(),
-                            "",
-                            sess.governor.identity().calibration_id_str(),
-                        )
-                        .acknowledge();
+                        cmd = realityos_core::fixture::acknowledge(
+                            realityos_core::fixture::issue(
+                                "g-1",
+                                1,
+                                now,
+                                30.0,
+                                Certificate::new(DecisionStatus::Refuse, "gauntlet"),
+                                action.clone(),
+                            )
+                            .unwrap()
+                            .with_identity(
+                                sess.governor.identity().release_hash.as_str(),
+                                "",
+                                sess.governor.identity().calibration_id_str(),
+                            ),
+                        );
                     }
                     Fault::Envelope => {
                         action = vec![1e6; n];
