@@ -260,6 +260,10 @@ impl Xl330Driver {
         }
         // EEPROM writes can NAK the next instruction if we immediately continue.
         std::thread::sleep(Duration::from_millis(50));
+        // Torque-on here (watchdog not running yet) so the first certified
+        // write is a single goal_position xfer, not torque_on + goal.
+        self.write_reg(ADDR_TORQUE_ENABLE, &[1], "setup_torque_on", None, false)?;
+        self.torque_enabled = true;
         Ok(())
     }
 
