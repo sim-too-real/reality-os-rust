@@ -319,3 +319,59 @@ fn xl330_pty_disconnect_overlay_kills_session_via_verify() {
     assert_eq!(auth.physical_writes(), writes);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn xl330_pty_bus_timeout_requires_online_restart() {
+    let _serial = pty_serial();
+    let (guard, tty) = spawn_responder();
+    let root = std::env::temp_dir().join(format!(
+        "realityos-metal-pty-busloss-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let mut cfg = MetalConfig::example(&tty);
+    {
+        let driver = Xl330Driver::open(cfg.clone(), &root).expect("identify");
+        let measured = driver.measured();
+        cfg.expected_serial = measured.serial;
+        cfg.expected_firmware = measured.firmware_id;
+    }
+    cfg.save(root.join(CONFIG_FILE)).unwrap();
+    let mut auth = MetalAuthority::start(&root, true).expect("start_online");
+    let hold = auth.handle(MetalRequest::propose("pty-bus-hold", "hold"));
+    assert!(hold.ok, "hold refused: {hold:?}");
+    let writes = auth.physical_writes();
+    drop(guard);
+    std::thread::sleep(Duration::from_millis(50));
+    let lost = auth.handle(MetalRequest::propose("pty-bus-lost", "hold"));
+    assert!(!lost.ok, "dead bus must refuse: {lost:?}");
+    assert!(
+        lost.violations
+            .iter()
+            .any(|v| v.contains("online_hardware_disconnected")
+                || v.contains("dxl_io")
+                || v.contains("hardware_session_requires_online_restart")),
+        "I/O loss must be measured, not a vacuous miss: {lost:?}"
+    );
+    assert!(
+        !lost
+            .violations
+            .iter()
+            .any(|v| v.contains("software_watchdog_miss")),
+        "{lost:?}"
+    );
+    assert_eq!(auth.physical_writes(), writes);
+    let rec = auth.handle(recover_req("pty-bus-rec"));
+    assert!(!rec.ok, "recover after bus loss must refuse: {rec:?}");
+    assert!(
+        rec.violations
+            .iter()
+            .any(|v| v.contains("hardware_session_requires_online_restart")),
+        "recover must not resurrect after live I/O loss: {rec:?}"
+    );
+    let again = auth.handle(MetalRequest::propose("pty-bus-again", "hold"));
+    assert!(!again.ok, "{again:?}");
+    assert_eq!(auth.physical_writes(), writes);
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -294,8 +294,9 @@ impl Xl330Driver {
     fn refresh_identity(&mut self) {
         let mut id = self.measured().hardware_identity(&self.cfg);
         if self.campaign_disconnected() {
+            // Identity overlay only. Keep the serial path up so propose
+            // reaches verify_live_hardware instead of failing acquire first.
             id.connected = false;
-            self.connected = false;
         }
         if let Some(overlay) = self.campaign_hot_swap() {
             if let Some(s) = overlay.get("serial").and_then(|v| v.as_str()) {
@@ -311,9 +312,8 @@ impl Xl330Driver {
                 id.design_content_hash = s.to_string();
             }
         }
-        if !self.cfg.device.exists() {
+        if !self.cfg.device.exists() || !self.bus_up() {
             id.connected = false;
-            self.connected = false;
         }
         self.last_identity = id;
     }
@@ -534,7 +534,7 @@ impl Xl330Driver {
 impl HardwareDriverPort for Xl330Driver {
     fn probe_identity(&self) -> HardwareIdentity {
         let mut id = self.last_identity.clone();
-        if self.campaign_disconnected() || !self.cfg.device.exists() {
+        if self.campaign_disconnected() || !self.cfg.device.exists() || !self.bus_up() {
             id.connected = false;
         }
         if let Some(overlay) = self.campaign_hot_swap() {

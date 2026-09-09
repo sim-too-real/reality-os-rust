@@ -20,6 +20,10 @@ pub struct MetalAuthority {
     root: PathBuf,
     cfg: MetalConfig,
     next_sequence: i64,
+    /// Live I/O loss is detected on acquire, before write-time verify.
+    /// Latch here so recover cannot resurrect the instance (kernel
+    /// `hardware_session_dead` is only set from verify_live_hardware).
+    bus_lost: bool,
 }
 
 impl MetalAuthority {
@@ -80,6 +84,7 @@ impl MetalAuthority {
             root,
             cfg,
             next_sequence,
+            bus_lost: false,
         })
     }
 
@@ -132,6 +137,9 @@ impl MetalAuthority {
     }
 
     fn ingest_sensor(&mut self) -> MetalResponse {
+        if self.bus_lost {
+            return self.refuse_bus_lost();
+        }
         match self.session.acquire_sensor() {
             Ok(_) => {
                 let mut r = self.ok("sensor");
@@ -140,11 +148,14 @@ impl MetalAuthority {
                 self.persist_freshness(r.device_capture_s, r.authority_receive_s);
                 r
             }
-            Err(e) => self.refuse("observe", "refuse", vec![e]),
+            Err(e) => self.note_acquire_err("observe", e),
         }
     }
 
     fn recover(&mut self) -> MetalResponse {
+        if self.bus_lost {
+            return self.refuse_bus_lost();
+        }
         self.pet_heartbeat();
         let t = self
             .session
@@ -196,8 +207,11 @@ impl MetalAuthority {
         // handle() already ticked the watchdog. Extra heartbeat/watchdog emits
         // here are 4–8 fsyncs and can miss the 100 ms window before the serial
         // write. dispatch_issued ticks again immediately before write_online.
+        if self.bus_lost {
+            return self.refuse_bus_lost();
+        }
         if let Err(e) = self.session.acquire_sensor() {
-            return self.refuse("authorize", "refuse", vec![e]);
+            return self.note_acquire_err("authorize", e);
         }
         // Sensor I/O sits between handle's tick and dispatch. A 40 ms live
         // read is inside the miss window; refresh so dispatch does not inherit
@@ -313,6 +327,42 @@ impl MetalAuthority {
             clock: "OsMonotonicClock".into(),
             ..MetalResponse::default()
         }
+    }
+
+    fn is_bus_loss(err: &str) -> bool {
+        let e = err.to_ascii_lowercase();
+        e.contains("driver not connected")
+            || e.contains("dxl_io")
+            || e.contains("metal_live_io_deadline")
+            || e.contains("metal_serial_closed")
+    }
+
+    fn refuse_bus_lost(&self) -> MetalResponse {
+        self.refuse(
+            "authorize",
+            "refuse",
+            vec![
+                "hardware_session_requires_online_restart".into(),
+                "online_hardware_disconnected".into(),
+            ],
+        )
+    }
+
+    fn note_acquire_err(&mut self, stage: &str, e: String) -> MetalResponse {
+        if Self::is_bus_loss(&e) {
+            self.bus_lost = true;
+            let _ = self.session.governor.engage_estop_now(e.as_str());
+            return self.refuse(
+                stage,
+                "refuse",
+                vec![
+                    e,
+                    "hardware_session_requires_online_restart".into(),
+                    "online_hardware_disconnected".into(),
+                ],
+            );
+        }
+        self.refuse(stage, "refuse", vec![e])
     }
 
     /// ONLINE software watchdog is 50 ms (miss at 100 ms). One journal+seal
