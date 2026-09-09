@@ -145,8 +145,8 @@ fn xl330_pty_start_online_hold_is_not_a_metal_proof() {
         "first hold must not flood journal+seal fsyncs: added={added}"
     );
     assert!(
-        wd_added <= 3,
-        "propose ticks watchdog at handle + dispatch + post-write refresh, got {wd_added}"
+        wd_added <= 4,
+        "propose ticks watchdog at handle + after-acquire + dispatch + post-write, got {wd_added}"
     );
     assert_eq!(resp.clock, "OsMonotonicClock");
     let repo_proof = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/metal_proof.json");

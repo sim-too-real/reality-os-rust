@@ -206,7 +206,10 @@ impl MetalAuthority {
         if let Err(e) = self.session.acquire_sensor() {
             return self.refuse("authorize", "refuse", vec![e]);
         }
-        if self.session.governor.estop() {
+        // Sensor I/O sits between handle's tick and dispatch. A 40 ms live
+        // read is inside the miss window; refresh so dispatch does not inherit
+        // that gap. If acquire itself exceeded 100 ms, this tick latches.
+        if !self.pet_watchdog() {
             return self.refuse(
                 "egress",
                 "refuse",
