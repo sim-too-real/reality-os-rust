@@ -232,45 +232,32 @@ find_tty_by_usb_port() {
   return 1
 }
 
-stabilize_metal_device() {
+# Recorded USB serial/port must match this node. A living ttyUSB0 after
+# crash close / CH340 re-enum can be a different adapter on the same bench.
+usb_device_matches_recorded() {
   local dev="$1"
-  local real name p
-  real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
-  name="$(basename "$real")"
-  case "$name" in
-    ttyUSB*|ttyACM*|ttyCH341*) ;;
-    *)
-      echo "$dev"
-      return 0
-      ;;
-  esac
-  if [[ ! -e "$real" ]]; then
-    if [[ -n "${METAL_USB_SERIAL:-}" ]]; then
-      p="$(find_tty_by_usb_serial "$METAL_USB_SERIAL" || true)"
-      if [[ -n "$p" ]]; then
-        echo "metal-campaign: $real vanished after udev; continuing on $p" >&2
-        echo "$p"
-        return 0
-      fi
-    fi
-    if [[ -n "${METAL_USB_PORT:-}" ]]; then
-      p="$(find_tty_by_usb_port "$METAL_USB_PORT" || true)"
-      if [[ -n "$p" ]]; then
-        echo "metal-campaign: $real vanished after udev; continuing on $p (USB port $METAL_USB_PORT)" >&2
-        echo "$p"
-        return 0
-      fi
-    fi
-    echo "$dev"
-    return 0
+  local got
+  [[ -e "$dev" ]] || return 1
+  if [[ -n "${METAL_USB_SERIAL:-}" ]]; then
+    got="$(usb_sysfs_value "$dev" serial || true)"
+    [[ "$got" == "$METAL_USB_SERIAL" ]]
+    return
   fi
+  if [[ -n "${METAL_USB_PORT:-}" ]]; then
+    got="$(usb_sysfs_port_key "$dev" || true)"
+    [[ "$got" == "$METAL_USB_PORT" ]]
+    return
+  fi
+  return 0
+}
+
+stable_usb_symlink_for() {
+  local real="$1"
+  local p
   if [[ -d /dev/serial/by-id ]]; then
     for p in /dev/serial/by-id/*; do
       [[ -e "$p" ]] || continue
       if [[ "$(readlink -f "$p" 2>/dev/null || true)" == "$real" ]]; then
-        if [[ "$p" != "$dev" ]]; then
-          echo "metal-campaign: using stable $p (udev can rename $name)" >&2
-        fi
         echo "$p"
         return 0
       fi
@@ -282,15 +269,99 @@ stabilize_metal_device() {
     for p in /dev/serial/by-path/*; do
       [[ -e "$p" ]] || continue
       if [[ "$(readlink -f "$p" 2>/dev/null || true)" == "$real" ]]; then
-        if [[ "$p" != "$dev" ]]; then
-          echo "metal-campaign: using stable $p (no by-id serial; udev can rename $name)" >&2
-        fi
         echo "$p"
         return 0
       fi
     done
   fi
   echo "$real"
+}
+
+# Echo a live path whose USB identity matches the recorded adapter, or
+# fail if only a vanished / recycled name is left.
+resolve_recorded_usb_tty() {
+  local dev="$1"
+  local real name p chosen
+  real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
+  name="$(basename "$real")"
+  if [[ -e "$real" ]] && usb_device_matches_recorded "$real"; then
+    chosen="$(stable_usb_symlink_for "$real")"
+    if [[ "$chosen" != "$dev" ]]; then
+      echo "metal-campaign: using stable $chosen (udev can rename $name)" >&2
+    fi
+    echo "$chosen"
+    return 0
+  fi
+  if [[ -n "${METAL_USB_SERIAL:-}" ]]; then
+    p="$(find_tty_by_usb_serial "$METAL_USB_SERIAL" || true)"
+    if [[ -n "$p" ]]; then
+      echo "metal-campaign: $real is missing or a different adapter; continuing on $p" >&2
+      echo "$p"
+      return 0
+    fi
+  fi
+  if [[ -n "${METAL_USB_PORT:-}" ]]; then
+    p="$(find_tty_by_usb_port "$METAL_USB_PORT" || true)"
+    if [[ -n "$p" ]]; then
+      echo "metal-campaign: $real is missing or a different adapter; continuing on $p (USB port $METAL_USB_PORT)" >&2
+      echo "$p"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# First contact after plug-in / udev add: the tty node can exist before
+# idVendor is visible. Recording an empty port then binding tty name+rdev
+# makes the later usb:vid:pid:devpath serve identity miss.
+wait_usb_sysfs_identity() {
+  local dev="$1"
+  local real name i
+  real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
+  name="$(basename "$real")"
+  case "$name" in
+    ttyUSB*|ttyACM*|ttyCH341*) ;;
+    *) return 0 ;;
+  esac
+  for i in $(seq 1 40); do
+    if [[ -e "$real" ]] && usb_sysfs_value "$real" idVendor >/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "warning: USB sysfs idVendor never appeared for $real; identity may fall back to tty name+rdev" >&2
+  return 1
+}
+
+stabilize_metal_device() {
+  local dev="$1"
+  local real name i p
+  real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
+  name="$(basename "$real")"
+  case "$name" in
+    ttyUSB*|ttyACM*|ttyCH341*) ;;
+    *)
+      echo "$dev"
+      return 0
+      ;;
+  esac
+  if p="$(resolve_recorded_usb_tty "$dev")"; then
+    echo "$p"
+    return 0
+  fi
+  # crash_if / CH340 close can drop the USB device for 1–3 s. Five
+  # immediate serve retries lose that race and reopen a recycled ttyUSB0.
+  if [[ -n "${METAL_USB_SERIAL:-}" || -n "${METAL_USB_PORT:-}" ]]; then
+    for i in $(seq 1 40); do
+      sleep 0.1
+      if p="$(resolve_recorded_usb_tty "$dev")"; then
+        echo "$p"
+        return 0
+      fi
+    done
+    echo "warning: USB-UART $dev did not reappear with the recorded identity after 4s" >&2
+  fi
+  echo "$dev"
 }
 
 # ModemManager/brltty grab ttyUSB on typical Ubuntu benches. Between probe
@@ -385,6 +456,8 @@ prepare_usb_serial_host() {
       return 0
       ;;
   esac
+  wait_usb_sysfs_identity "$dev" || true
+  real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
   if [[ -z "${METAL_USB_SERIAL:-}" ]]; then
     METAL_USB_SERIAL="$(usb_sysfs_value "$real" serial || true)"
   fi
@@ -632,6 +705,8 @@ start_auth() {
   fi
   # Crash_if uses process::exit (no Drop). TIOCEXCL/flock can still be
   # busy for a beat; retry the open instead of failing the campaign.
+  # prepare_usb_serial_host → stabilize waits up to 4 s for a CH340
+  # re-enum and refuses a recycled ttyUSB0 whose USB identity drifted.
   for attempt in 1 2 3 4 5; do
     rm -f "$ROOT/ipc.sock" "$ROOT/serve.err"
     # After crash_if / process::exit the USB-serial node can still look

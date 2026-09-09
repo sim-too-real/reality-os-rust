@@ -264,23 +264,37 @@ pub fn find_tty_for_expected_serial(expected_serial: &str, servo_id: u8) -> Opti
         .find(|p| adapter_serial_for_tty(p, servo_id) == want)
 }
 
-/// Prefer an existing env/config path, then the path still in metal.json, then
-/// a USB-UART whose measured serial matches the bound identity. CH340/CP2102
-/// often have no USB serial; udev `change` can rename `ttyUSB0` → `ttyUSB1`
-/// and a stale `KERNEL==ttyUSB0` path misses the servo.
+/// Prefer a USB-UART whose measured adapter serial matches the bind, then an
+/// existing env/config path, then `metal.json`. CH340/CP2102 often have no
+/// USB serial; udev `change` can rename `ttyUSB0` → `ttyUSB1`. A living
+/// preferred path is not enough: after crash close / USB re-enum the old
+/// name can be a *different* adapter on the same bench. Opening that node
+/// would identify-fail (or command the wrong UART if identity fell back to
+/// tty name+rdev). When `expected_serial` is known, keep a path only if its
+/// measured adapter serial matches.
 pub fn pick_live_device(
     preferred: PathBuf,
     fallback: PathBuf,
     expected_serial: &str,
     servo_id: u8,
 ) -> PathBuf {
+    let want = expected_serial.trim();
+    if !want.is_empty() {
+        if preferred.exists() && adapter_serial_for_tty(&preferred, servo_id) == want {
+            return preferred;
+        }
+        if fallback.exists() && adapter_serial_for_tty(&fallback, servo_id) == want {
+            return fallback;
+        }
+        return find_tty_for_expected_serial(want, servo_id).unwrap_or(preferred);
+    }
     if preferred.exists() {
         return preferred;
     }
     if fallback.exists() {
         return fallback;
     }
-    find_tty_for_expected_serial(expected_serial, servo_id).unwrap_or(preferred)
+    preferred
 }
 
 #[cfg(test)]
@@ -377,6 +391,44 @@ mod tests {
                 PathBuf::from("/dev/missing-metal-tty"),
                 PathBuf::from("/dev/null"),
                 "",
+                1
+            ),
+            PathBuf::from("/dev/null")
+        );
+    }
+
+    #[test]
+    fn pick_live_device_skips_living_preferred_with_wrong_adapter_serial() {
+        let expected = adapter_serial_for_tty(Path::new("/dev/zero"), 1);
+        assert!(
+            expected.starts_with("tty:zero:"),
+            "char-device rdev must be measurable: {expected}"
+        );
+        assert_ne!(
+            adapter_serial_for_tty(Path::new("/dev/null"), 1),
+            expected,
+            "null and zero must not share an identity"
+        );
+        assert_eq!(
+            pick_live_device(
+                PathBuf::from("/dev/null"),
+                PathBuf::from("/dev/zero"),
+                &expected,
+                1
+            ),
+            PathBuf::from("/dev/zero")
+        );
+    }
+
+    #[test]
+    fn pick_live_device_keeps_preferred_when_adapter_serial_matches() {
+        let expected = adapter_serial_for_tty(Path::new("/dev/null"), 1);
+        assert!(!expected.is_empty());
+        assert_eq!(
+            pick_live_device(
+                PathBuf::from("/dev/null"),
+                PathBuf::from("/dev/zero"),
+                &expected,
                 1
             ),
             PathBuf::from("/dev/null")
