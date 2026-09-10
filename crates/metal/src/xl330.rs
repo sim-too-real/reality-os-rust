@@ -294,7 +294,20 @@ impl Xl330Driver {
                 format!("metal_device_missing:{}", self.cfg.device.display()),
             ));
         }
-        let _ = std::fs::set_permissions(&self.cfg.device, std::fs::Permissions::from_mode(0o600));
+        // A no-op chmod still emits udev change on typical Ubuntu — the
+        // same class as campaign chown resetting FTDI latency_timer to
+        // 16 ms before the first live hold. Skip when already 0600.
+        {
+            let mode = std::fs::metadata(&self.cfg.device)
+                .map(|m| m.permissions().mode() & 0o777)
+                .unwrap_or(0);
+            if mode != 0o600 {
+                let _ = std::fs::set_permissions(
+                    &self.cfg.device,
+                    std::fs::Permissions::from_mode(0o600),
+                );
+            }
+        }
         // PTY stand-in: TIOCEXCL survives process::exit (crash_if) and the
         // next serve gets EBUSY. Sidecar flock still serializes. Real tty
         // keeps exclusive (TIOCEXCL+flock).
@@ -1415,9 +1428,10 @@ fn sniff_servo_ids(device: &Path, baud: u32) -> io::Result<Vec<u8>> {
     if !device.exists() {
         return Ok(Vec::new());
     }
-    // Broadcast sniff must not take TIOCEXCL; probe would steal exclusive
-    // from the next serve open.
-    let mut port = match open_xl330_serial_with(device, baud, false) {
+    // Real UART takes exclusive so ModemManager cannot AT-probe during
+    // the 500 ms open-settle. Drop before a second open (Secondary ID
+    // check). PTY stays shared (`process::exit` can leave TIOCEXCL).
+    let mut port = match open_xl330_serial_with(device, baud, !is_pty_path(device)) {
         Ok(p) => p,
         Err(_) => return Ok(Vec::new()),
     };
@@ -1441,6 +1455,7 @@ fn sniff_servo_ids(device: &Path, baud: u32) -> io::Result<Vec<u8>> {
         }
     }
     let ids = unique_status_ids(&acc);
+    drop(port);
     if ids.len() > 1 {
         if let Some(primary) = primary_if_secondary_pair(device, baud, &ids) {
             return Ok(vec![primary]);
@@ -1462,7 +1477,7 @@ fn primary_if_secondary_pair(device: &Path, baud: u32, ids: &[u8]) -> Option<u8>
     if ids.len() != 2 {
         return None;
     }
-    let mut port = open_xl330_serial_with(device, baud, false).ok()?;
+    let mut port = open_xl330_serial_with(device, baud, !is_pty_path(device)).ok()?;
     for &id in ids {
         poke_srl_all(&mut *port, device, id);
     }

@@ -198,42 +198,57 @@ if [[ -z "$ROOT" || "$ROOT" == "/" || "$ROOT" == "/tmp" || "$ROOT" == "/var" ]];
 fi
 # FTDI/U2D2 defaults latency_timer to 16 ms. Two waits miss the 40 ms live
 # I/O deadline and latch the software watchdog on the first real USB-UART.
+usb_tty_latency_timer_path() {
+  local name="$1" timer
+  for timer in \
+    "/sys/bus/usb-serial/devices/${name}/latency_timer" \
+    "/sys/class/tty/${name}/device/latency_timer"; do
+    if [[ -e "$timer" ]]; then
+      echo "$timer"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# CH340/ch341 often has no latency_timer (ok). FTDI/U2D2 must read 1.
+usb_tty_latency_ok() {
+  local dev="$1" name timer got
+  name="$(basename "$(readlink -f "$dev" 2>/dev/null || echo "$dev")")"
+  timer="$(usb_tty_latency_timer_path "$name" || true)"
+  [[ -z "$timer" ]] && return 0
+  got="$(tr -d '[:space:]' <"$timer" 2>/dev/null || true)"
+  [[ "$got" == "1" ]]
+}
+
 set_usb_serial_latency() {
   local dev="$1"
-  local real name timer found=0 got
+  local real name timer got
   real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
   name="$(basename "$real")"
   case "$name" in
     ttyUSB*|ttyACM*|ttyCH341*) ;;
     *) return 0 ;;
   esac
-  for timer in \
-    "/sys/bus/usb-serial/devices/${name}/latency_timer" \
-    "/sys/class/tty/${name}/device/latency_timer"; do
-    [[ -e "$timer" ]] || continue
-    found=1
+  if usb_tty_latency_ok "$real"; then
+    return 0
+  fi
+  timer="$(usb_tty_latency_timer_path "$name" || true)"
+  if [[ -z "$timer" ]]; then
+    return 0
+  fi
+  if echo 1 >"$timer" 2>/dev/null; then
     got="$(tr -d '[:space:]' <"$timer" 2>/dev/null || true)"
-    # A no-op sysfs write can still emit udev change (same class as
-    # chown). Settle used to rewrite 1 immediately before probe.
     if [[ "$got" == "1" ]]; then
+      echo "metal-campaign: set $timer=1 (USB-UART default 16 ms can miss the 40 ms live deadline)"
       return 0
     fi
-    if echo 1 >"$timer" 2>/dev/null; then
-      got="$(tr -d '[:space:]' <"$timer" 2>/dev/null || true)"
-      if [[ "$got" == "1" ]]; then
-        echo "metal-campaign: set $timer=1 (USB-UART default 16 ms can miss the 40 ms live deadline)"
-        return 0
-      fi
-    fi
-  done
+  fi
   # CH340/ch341 often has no latency_timer; skip. FTDI/U2D2 always has
   # the file at 16 ms — a write that does not stick used to continue
   # and miss the 40 ms live deadline on the first hold.
-  if [[ "$found" == "1" ]]; then
-    echo "error: USB-UART latency_timer exists but is not 1 after write; default 16 ms misses the 40 ms live deadline" >&2
-    return 1
-  fi
-  return 0
+  echo "error: USB-UART latency_timer exists but is not 1 after write; default 16 ms misses the 40 ms live deadline" >&2
+  return 1
 }
 
 # Ubuntu usbcore autosuspend is often 2 s. An idle gap between campaign
@@ -242,31 +257,46 @@ set_usb_serial_latency() {
 # A write without read-back used to continue on `auto` (same class as
 # latency_timer). Stop at the UART device (idVendor+idProduct); do not
 # climb to a hub and treat that as success.
+usb_tty_uart_power_node() {
+  local name="$1" node
+  node="$(readlink -f "/sys/class/tty/${name}/device" 2>/dev/null || true)"
+  while [[ -n "$node" && "$node" != / && "$node" != /sys ]]; do
+    if [[ -f "$node/idVendor" ]]; then
+      if [[ -f "$node/idProduct" && -f "$node/power/control" ]]; then
+        echo "$node"
+        return 0
+      fi
+      return 1
+    fi
+    node="$(dirname "$node")"
+  done
+  return 1
+}
+
+usb_tty_power_ok() {
+  local dev="$1" name uart got
+  name="$(basename "$(readlink -f "$dev" 2>/dev/null || echo "$dev")")"
+  uart="$(usb_tty_uart_power_node "$name" || true)"
+  [[ -n "$uart" ]] || return 1
+  got="$(tr -d '[:space:]' <"$uart/power/control" 2>/dev/null || true)"
+  [[ "$got" == "on" ]]
+}
+
 disable_usb_autosuspend() {
   local dev="$1"
-  local real name node uart="" got
+  local real name uart="" got
   real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
   name="$(basename "$real")"
   case "$name" in
     ttyUSB*|ttyACM*|ttyCH341*) ;;
     *) return 0 ;;
   esac
-  node="$(readlink -f "/sys/class/tty/${name}/device" 2>/dev/null || true)"
-  while [[ -n "$node" && "$node" != / && "$node" != /sys ]]; do
-    if [[ -f "$node/idVendor" ]]; then
-      if [[ -f "$node/idProduct" ]]; then
-        uart="$node"
-      fi
-      break
-    fi
-    node="$(dirname "$node")"
-  done
+  uart="$(usb_tty_uart_power_node "$name" || true)"
   if [[ -z "$uart" || ! -f "$uart/power/control" ]]; then
     echo "error: USB-UART $dev has no UART-device power/control; refuse default autosuspend" >&2
     return 1
   fi
-  got="$(tr -d '[:space:]' <"$uart/power/control" 2>/dev/null || true)"
-  if [[ "$got" == "on" ]]; then
+  if usb_tty_power_ok "$real"; then
     return 0
   fi
   echo on >"$uart/power/control" 2>/dev/null || true
@@ -822,10 +852,25 @@ settle_usb_tty_after_host_writes() {
     set_usb_serial_latency "$DEVICE" || return 1
     disable_usb_autosuspend "$DEVICE" || return 1
     real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
-    if [[ "$already" == "1" ]] && usb_tty_owner_mode_ok "$real"; then
+    if [[ "$already" == "1" ]] \
+      && usb_tty_owner_mode_ok "$real" \
+      && usb_tty_latency_ok "$real" \
+      && usb_tty_power_ok "$real"; then
       break
     fi
   done
+  if command -v udevadm >/dev/null 2>&1; then
+    udevadm settle --timeout=2 >/dev/null 2>&1 || true
+  else
+    sleep 0.2
+  fi
+  rematched="$(stabilize_metal_device "$DEVICE")" || return 1
+  if [[ -n "$rematched" && "$rematched" != "$DEVICE" ]]; then
+    echo "metal-campaign: rematched $DEVICE -> $rematched after final host-write settle" >&2
+    DEVICE="$rematched"
+    export REALITYOS_METAL_DEVICE="$DEVICE"
+    sync_metal_device_config || return 1
+  fi
   real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
   if ! refuse_shared_usb_tty "$real"; then
     return 1
@@ -836,6 +881,16 @@ settle_usb_tty_after_host_writes() {
   fi
   if ! usb_tty_owner_mode_ok "$real"; then
     echo "error: $DEVICE is not $AUTHORITY_USER 0600 after host-write settle" >&2
+    return 1
+  fi
+  # Last claim/latency/power write can still be in flight when the loop
+  # hits its cap. Do not open probe/serve on a 16 ms / auto node.
+  if ! usb_tty_latency_ok "$real"; then
+    echo "error: $DEVICE latency_timer drifted after host-write settle; default 16 ms misses the 40 ms live deadline" >&2
+    return 1
+  fi
+  if ! usb_tty_power_ok "$real"; then
+    echo "error: $DEVICE power/control drifted after host-write settle; autosuspend can miss the 40 ms live deadline" >&2
     return 1
   fi
 }
@@ -924,16 +979,9 @@ prepare_usb_serial_host() {
   if [[ -e "$real" ]]; then
     claim_usb_tty "$real" || return 1
   fi
-  # Linux asserts DTR on first open. Cheap FTDI/CP2102 wire DTR to RESET.
-  # Pre-open -hupcl is not enough: the next serialport open restores
-  # kernel-default HUPCL. After TIOCEXCL, stty on the node and on
-  # /proc/<pid>/fd/N is EBUSY. The driver takes exclusive, then clears
-  # HUPCL on that fd via termios. Campaign still clears here so a leftover
-  # holder close is less likely to DTR-RESET before serve (U2D2 has
-  # no DTR-RESET).
-  if [[ -e "$real" ]]; then
-    /bin/stty -F "$real" -hupcl >/dev/null 2>&1 || true
-  fi
+  # Do not stty -F here. That open asserts DTR (servo RESET on cheap
+  # FTDI/CP2102) and a fresh serialport session restores kernel-default
+  # HUPCL anyway. The driver takes exclusive, then clears HUPCL on that fd.
   set_usb_serial_latency "$DEVICE" || return 1
   disable_usb_autosuspend "$DEVICE" || return 1
   # Claim / latency / power can emit udev change. Do not hand that
