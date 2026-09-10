@@ -245,7 +245,7 @@ fn in_cage(pos: i32, min: i32, max: i32) -> bool {
 fn motion_toward_goal(present_before: i32, present_after: i32, goal: i32) -> bool {
     let need = goal - present_before;
     let got = present_after - present_before;
-    need != 0 && got.signum() == need.signum() && got.abs() > HOLD_STILL_MAX_ABS_TICKS
+    need != 0 && got.signum() == need.signum() && i64::from(got.abs()) > HOLD_STILL_MAX_ABS_TICKS
 }
 
 fn certified_command_ok(c: &CaseRecord) -> bool {
@@ -308,10 +308,10 @@ fn pwm_cap_configured_and_read_back(meta: &ProofMeta) -> bool {
 }
 
 fn absolute_cage_active(meta: &ProofMeta) -> bool {
-    match (meta.experiment_min, meta.experiment_max) {
-        (Some(min), Some(max)) if min <= max => true,
-        _ => false,
-    }
+    matches!(
+        (meta.experiment_min, meta.experiment_max),
+        (Some(min), Some(max)) if min <= max
+    )
 }
 
 fn post_tx_pre_status_no_retransmit(cases: &[CaseRecord]) -> bool {
@@ -449,6 +449,29 @@ impl MetalProof {
         let not_pty_stand_in = !identity_looks_like_pty_stand_in(&meta.real_device_identity);
         let cutoff_attested = meta.cutoff_operator_attested || meta.cutoff_tested;
         let cutoff_live = meta.cutoff_live_observed;
+        let pwm_ok = pwm_cap_configured_and_read_back(&meta);
+        let cage_ok = absolute_cage_active(&meta);
+        let post_tx_ok = post_tx_pre_status_no_retransmit(&cases);
+        let crash_tx_ok = crash_restarts_have_zero_serial_tx(&cases);
+        let unauth_ack = unauthorized_ack_delta(&cases);
+        let measured_success = a.unauthorized_physical_writes == 0
+            && unauth_ack == 0
+            && has_hold
+            && has_nudge
+            && pwm_ok
+            && cage_ok
+            && post_tx_ok
+            && crash_tx_ok
+            && meta.direct_device_open_successes == 0
+            && meta.direct_device_open_attempts > 0
+            && cutoff_live
+            && a.duplicate_writes_after_restart + meta.duplicate_writes_after_restart == 0
+            && a.identity_mismatch_refusals > 0
+            && a.disconnect_refusals > 0
+            && freshness_measured
+            && not_pty_stand_in
+            && meta.used_os_monotonic_clock
+            && meta.used_hardware_driver_port;
         Ok(Self {
             schema: PROOF_SCHEMA.into(),
             hardware_model: meta.hardware_model,
@@ -484,25 +507,7 @@ impl MetalProof {
             device_capture_s: meta.device_capture_s,
             authority_receive_s: meta.authority_receive_s,
             freshness_threshold_s: meta.freshness_threshold_s,
-            experiment_status: if a.unauthorized_physical_writes == 0
-                && unauthorized_ack_delta(&cases) == 0
-                && has_hold
-                && has_nudge
-                && pwm_cap_configured_and_read_back(&meta)
-                && absolute_cage_active(&meta)
-                && post_tx_pre_status_no_retransmit(&cases)
-                && crash_restarts_have_zero_serial_tx(&cases)
-                && meta.direct_device_open_successes == 0
-                && meta.direct_device_open_attempts > 0
-                && cutoff_live
-                && a.duplicate_writes_after_restart + meta.duplicate_writes_after_restart == 0
-                && a.identity_mismatch_refusals > 0
-                && a.disconnect_refusals > 0
-                && freshness_measured
-                && not_pty_stand_in
-                && meta.used_os_monotonic_clock
-                && meta.used_hardware_driver_port
-            {
+            experiment_status: if measured_success {
                 "measured_success".into()
             } else {
                 "measured_incomplete_or_failed".into()
