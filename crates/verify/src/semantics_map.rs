@@ -267,4 +267,23 @@ mod tests {
         }));
         assert!(m.joints.iter().all(|j| j.axis.provenance == Provenance::Unknown));
     }
+
+    #[test]
+    fn spatial_arm4_is_not_a_planar_clone() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(crate::corpus::bundled_robots_root().join("spatial_arm4"))
+            .unwrap();
+        let (_i, man) = crate::runner::load_and_normalize(&b, &[], 0).unwrap();
+        assert_eq!(man.nu, 4);
+        let axes: Vec<String> = man.joints.iter().map(|j| j.name.clone()).collect();
+        assert_eq!(axes.len(), 4);
+        let m = embodiment_from_manifest(&b, &man);
+        let g = realityos_semantics::capability::derive_capabilities(&m, None);
+        assert_eq!(
+            g.get(realityos_semantics::capability::CapName::FixedBaseManipulation).status,
+            realityos_semantics::capability::CapStatus::Supported
+        );
+    }
 }
