@@ -93,15 +93,44 @@ usb_tty_owner_mode_ok() {
   [[ "$got_uid" == "$want_uid" && "$mode" == "0600" ]]
 }
 
-claim_usb_tty() {
+# Live /dev/ttyUSB* (or ACM/CH341) after resolving by-id / by-path.
+# A dangling /dev/serial/by-id symlink used to make basename look like
+# usb-FTDI_... so claim/latency/settle treated the node as PTY/GPIO and
+# skipped latency_timer=1 — first hold then missed the 40 ms deadline.
+usb_serial_resolved_real() {
   local dev="$1"
   local real name
-  real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
-  name="$(basename "$real")"
+  real="$(readlink -f "$dev" 2>/dev/null || true)"
+  name="$(basename "${real:-}")"
   case "$name" in
-    ttyUSB*|ttyACM*|ttyCH341*) ;;
-    *) return 0 ;;
+    ttyUSB* | ttyACM* | ttyCH341*)
+      echo "$real"
+      return 0
+      ;;
   esac
+  return 1
+}
+
+# Campaign DEVICE that must stay on the USB fail-closed path even when
+# the current string is a udev symlink, not ttyUSB0.
+usb_serial_must_resolve() {
+  local dev="$1"
+  case "$dev" in
+    /dev/serial/by-id/* | /dev/serial/by-path/*) return 0 ;;
+  esac
+  [[ -n "${METAL_USB_SERIAL:-}" || -n "${METAL_USB_PORT:-}" ]]
+}
+
+claim_usb_tty() {
+  local dev="$1"
+  local real
+  if ! real="$(usb_serial_resolved_real "$dev")"; then
+    if usb_serial_must_resolve "$dev"; then
+      echo "error: $dev did not resolve to a live USB-serial tty; refuse to skip owner/mode claim" >&2
+      return 1
+    fi
+    return 0
+  fi
   if [[ ! -e "$real" ]]; then
     echo "error: USB-UART $dev vanished before owner/mode claim" >&2
     return 1
@@ -224,12 +253,14 @@ usb_tty_latency_ok() {
 set_usb_serial_latency() {
   local dev="$1"
   local real name timer got
-  real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
+  if ! real="$(usb_serial_resolved_real "$dev")"; then
+    if usb_serial_must_resolve "$dev"; then
+      echo "error: $dev did not resolve to a live USB-serial tty; refuse to skip latency_timer=1" >&2
+      return 1
+    fi
+    return 0
+  fi
   name="$(basename "$real")"
-  case "$name" in
-    ttyUSB*|ttyACM*|ttyCH341*) ;;
-    *) return 0 ;;
-  esac
   if usb_tty_latency_ok "$real"; then
     return 0
   fi
@@ -285,12 +316,14 @@ usb_tty_power_ok() {
 disable_usb_autosuspend() {
   local dev="$1"
   local real name uart="" got
-  real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
+  if ! real="$(usb_serial_resolved_real "$dev")"; then
+    if usb_serial_must_resolve "$dev"; then
+      echo "error: $dev did not resolve to a live USB-serial tty; refuse to skip power/control=on" >&2
+      return 1
+    fi
+    return 0
+  fi
   name="$(basename "$real")"
-  case "$name" in
-    ttyUSB*|ttyACM*|ttyCH341*) ;;
-    *) return 0 ;;
-  esac
   uart="$(usb_tty_uart_power_node "$name" || true)"
   if [[ -z "$uart" || ! -f "$uart/power/control" ]]; then
     echo "error: USB-UART $dev has no UART-device power/control; refuse default autosuspend" >&2
@@ -809,11 +842,32 @@ ensure_usb_tty_mm_ignored() {
 # only if owner drifted, re-apply latency/power, then refuse holders.
 settle_usb_tty_after_host_writes() {
   local i rematched real already
-  real="$(readlink -f "${DEVICE:-}" 2>/dev/null || echo "${DEVICE:-}")"
-  case "$(basename "$real")" in
-    ttyUSB* | ttyACM* | ttyCH341*) ;;
-    *) return 0 ;;
-  esac
+  # by-id / by-path is the usual FTDI/U2D2 DEVICE after stabilize.
+  # A udev change can leave that symlink dangling; basename is then
+  # usb-FTDI_... and the old skip treated it as PTY/GPIO.
+  if usb_serial_must_resolve "${DEVICE:-}"; then
+    rematched="$(stabilize_metal_device "$DEVICE")" || return 1
+    if [[ -z "$rematched" ]]; then
+      echo "error: empty USB-UART path while rematching a udev symlink before settle" >&2
+      return 1
+    fi
+    if [[ "$rematched" != "$DEVICE" ]]; then
+      echo "metal-campaign: rematched $DEVICE -> $rematched before host-write settle" >&2
+      DEVICE="$rematched"
+      export REALITYOS_METAL_DEVICE="$DEVICE"
+      sync_metal_device_config || return 1
+    fi
+    if ! real="$(usb_serial_resolved_real "$DEVICE")"; then
+      echo "error: $DEVICE is a USB-serial campaign node but readlink is not ttyUSB*/ttyACM*/ttyCH341*; refuse to skip latency/power fail-closed" >&2
+      return 1
+    fi
+  else
+    real="$(readlink -f "${DEVICE:-}" 2>/dev/null || echo "${DEVICE:-}")"
+    case "$(basename "$real")" in
+      ttyUSB* | ttyACM* | ttyCH341*) ;;
+      *) return 0 ;;
+    esac
+  fi
   for i in 1 2 3; do
     if command -v udevadm >/dev/null 2>&1; then
       udevadm settle --timeout=2 >/dev/null 2>&1 || true
@@ -831,7 +885,10 @@ settle_usb_tty_after_host_writes() {
       export REALITYOS_METAL_DEVICE="$DEVICE"
       sync_metal_device_config || return 1
     fi
-    real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
+    if ! real="$(usb_serial_resolved_real "$DEVICE")"; then
+      echo "error: USB-UART $DEVICE did not resolve to a live tty after host-write udev settle" >&2
+      return 1
+    fi
     if [[ ! -e "$real" ]]; then
       echo "error: USB-UART $DEVICE vanished after host-write udev settle" >&2
       return 1
@@ -851,7 +908,10 @@ settle_usb_tty_after_host_writes() {
     claim_usb_tty "$real" || return 1
     set_usb_serial_latency "$DEVICE" || return 1
     disable_usb_autosuspend "$DEVICE" || return 1
-    real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
+    if ! real="$(usb_serial_resolved_real "$DEVICE")"; then
+      echo "error: USB-UART $DEVICE did not resolve to a live tty after claim/latency/power" >&2
+      return 1
+    fi
     if [[ "$already" == "1" ]] \
       && usb_tty_owner_mode_ok "$real" \
       && usb_tty_latency_ok "$real" \
@@ -871,7 +931,10 @@ settle_usb_tty_after_host_writes() {
     export REALITYOS_METAL_DEVICE="$DEVICE"
     sync_metal_device_config || return 1
   fi
-  real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
+  if ! real="$(usb_serial_resolved_real "$DEVICE")"; then
+    echo "error: $DEVICE did not resolve to a live USB-serial tty after final host-write settle; refuse to skip latency/power" >&2
+    return 1
+  fi
   if ! refuse_shared_usb_tty "$real"; then
     return 1
   fi
@@ -903,12 +966,26 @@ settle_usb_tty_after_host_writes() {
 # ignored (set -e is disabled in `if`) and the first hold ran at 16 ms.
 reassert_usb_tty_after_serve_open() {
   local rematched real
-  real="$(readlink -f "${DEVICE:-}" 2>/dev/null || echo "${DEVICE:-}")"
-  case "$(basename "$real")" in
-    ttyUSB* | ttyACM* | ttyCH341*) ;;
-    *) return 0 ;;
-  esac
-  [[ -e "$real" ]] || return 0
+  if usb_serial_must_resolve "${DEVICE:-}"; then
+    rematched="$(stabilize_metal_device "$DEVICE")" || return 1
+    if [[ -n "$rematched" && "$rematched" != "$DEVICE" ]]; then
+      echo "metal-campaign: rematched $DEVICE -> $rematched before serve-open reassert" >&2
+      DEVICE="$rematched"
+      export REALITYOS_METAL_DEVICE="$DEVICE"
+      sync_metal_device_config || return 1
+    fi
+    if ! real="$(usb_serial_resolved_real "$DEVICE")"; then
+      echo "error: $DEVICE is a USB-serial campaign node but readlink is not ttyUSB*/ttyACM*/ttyCH341* after serve open; refuse to skip latency/power" >&2
+      return 1
+    fi
+  else
+    real="$(readlink -f "${DEVICE:-}" 2>/dev/null || echo "${DEVICE:-}")"
+    case "$(basename "$real")" in
+      ttyUSB* | ttyACM* | ttyCH341*) ;;
+      *) return 0 ;;
+    esac
+    [[ -e "$real" ]] || return 0
+  fi
   claim_usb_tty "$real" || return 1
   set_usb_serial_latency "$DEVICE" || return 1
   disable_usb_autosuspend "$DEVICE" || return 1
@@ -924,7 +1001,10 @@ reassert_usb_tty_after_serve_open() {
     export REALITYOS_METAL_DEVICE="$DEVICE"
     sync_metal_device_config || return 1
   fi
-  real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
+  if ! real="$(usb_serial_resolved_real "$DEVICE")"; then
+    echo "error: $DEVICE did not resolve to a live USB-serial tty after serve-open rematch; refuse to skip latency/power" >&2
+    return 1
+  fi
   set_usb_serial_latency "$DEVICE" || return 1
   disable_usb_autosuspend "$DEVICE" || return 1
   if command -v udevadm >/dev/null 2>&1; then
@@ -959,13 +1039,32 @@ prepare_usb_serial_host() {
   if ! refuse_shared_usb_tty "$real"; then
     return 1
   fi
-  case "$name" in
-    ttyUSB*|ttyACM*|ttyCH341*) ;;
-    *)
-      set_usb_serial_latency "$dev" || return 1
-      return 0
-      ;;
-  esac
+  if usb_serial_must_resolve "$dev"; then
+    if ! DEVICE="$(stabilize_metal_device "$dev")"; then
+      echo "error: refusing unresolved USB-serial symlink $dev; bound adapter is not on a live tty" >&2
+      return 1
+    fi
+    if [[ -z "$DEVICE" ]]; then
+      echo "error: stabilize_metal_device returned an empty path for $dev" >&2
+      return 1
+    fi
+    if ! real="$(usb_serial_resolved_real "$DEVICE")"; then
+      echo "error: $DEVICE did not resolve to a live USB-serial tty; refuse to skip udev/latency/power" >&2
+      return 1
+    fi
+    name="$(basename "$real")"
+    # Later wait/lock/stabilize must not reuse the incoming dangling
+    # by-id string and overwrite this live tty.
+    dev="$DEVICE"
+  else
+    case "$name" in
+      ttyUSB*|ttyACM*|ttyCH341*) ;;
+      *)
+        set_usb_serial_latency "$dev" || return 1
+        return 0
+        ;;
+    esac
+  fi
   # First prepare: the tty node can exist before idVendor. Recording
   # a tty name+rdev identity then serving usb:vid:pid:devpath is a
   # serial mismatch before hold. Crash-replay already has a recorded
