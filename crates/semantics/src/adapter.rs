@@ -1,7 +1,6 @@
 use crate::capability::{CapName, CapStatus, CapabilityGraph};
-use crate::embodiment::{EmbodimentModel, FrameKind, Joint, JointKind};
+use crate::embodiment::{EmbodimentModel, Joint};
 use crate::observation::ObservationFrame;
-use crate::provenance::Provenanced;
 use crate::skill::{SkillContract, SkillName, SkillRefuse};
 use crate::world::WorldState;
 
@@ -80,8 +79,7 @@ impl ControlAdapter for ChainIkPositionPdAdapter {
 
         let q = solve_ik(&joints, &link_offsets, &ee_offset, target)?;
 
-        let mut joint_q: std::collections::HashMap<String, f64> =
-            std::collections::HashMap::new();
+        let mut joint_q: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
         for (joint, qi) in joints.iter().zip(q.iter()) {
             joint_q.insert(joint.name.clone(), *qi);
         }
@@ -165,14 +163,41 @@ fn resolve_ee_offset(model: &EmbodimentModel, ee: &str) -> Result<[f64; 3], Skil
     frame.translation.value.ok_or(SkillRefuse::Unsupported)
 }
 
-fn solve_ik(
+fn ik_seed_candidates(joints: &[Joint]) -> Vec<Vec<f64>> {
+    let n = joints.len();
+    let mut primary = vec![0.0; n];
+    for (i, joint) in joints.iter().enumerate().take(n) {
+        primary[i] = match (joint.q_min.value, joint.q_max.value) {
+            (Some(min), Some(max)) if min.is_finite() && max.is_finite() => (min + max) * 0.5,
+            _ => {
+                if i == 0 {
+                    0.0
+                } else {
+                    0.4
+                }
+            }
+        };
+    }
+
+    let mut seeds = vec![primary];
+    for k in 1..=2u32 {
+        let mut s = vec![0.0; n];
+        for s_i in s.iter_mut().skip(1) {
+            *s_i = 0.4 * f64::from(k);
+        }
+        seeds.push(s);
+    }
+    seeds
+}
+
+fn solve_ik_from_seed(
     joints: &[Joint],
     link_offsets: &[[f64; 3]],
     ee_offset: &[f64; 3],
     target: [f64; 3],
-) -> Result<Vec<f64>, SkillRefuse> {
+    mut q: Vec<f64>,
+) -> Result<(Vec<f64>, f64), SkillRefuse> {
     let n = joints.len();
-    let mut q = vec![0.0; n];
 
     for _ in 0..IK_MAX_ITERS {
         let fk = forward_kinematics(joints, link_offsets, ee_offset, &q)?;
@@ -198,7 +223,29 @@ fn solve_ik(
         return Err(SkillRefuse::Unreachable);
     }
 
-    Ok(q)
+    Ok((q, norm3(sub3(target, fk.ee))))
+}
+
+fn solve_ik(
+    joints: &[Joint],
+    link_offsets: &[[f64; 3]],
+    ee_offset: &[f64; 3],
+    target: [f64; 3],
+) -> Result<Vec<f64>, SkillRefuse> {
+    let mut best: Option<(Vec<f64>, f64)> = None;
+
+    for seed in ik_seed_candidates(joints) {
+        match solve_ik_from_seed(joints, link_offsets, ee_offset, target, seed) {
+            Ok((q, err)) if q.iter().all(|v| v.is_finite()) => {
+                if best.as_ref().map(|(_, e)| err < *e).unwrap_or(true) {
+                    best = Some((q, err));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    best.map(|(q, _)| q).ok_or(SkillRefuse::Unreachable)
 }
 
 struct FkState {
@@ -214,22 +261,18 @@ fn forward_kinematics(
     q: &[f64],
 ) -> Result<FkState, SkillRefuse> {
     let mut pos = [0.0, 0.0, 0.0];
-    let mut rot = [
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-    ];
+    let mut rot = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
     let mut joint_origins = Vec::with_capacity(joints.len());
     let mut axes_world = Vec::with_capacity(joints.len());
 
     for (joint, offset) in joints.iter().zip(link_offsets.iter()) {
+        pos = add3(pos, mat_vec_mul(&rot, *offset));
         joint_origins.push(pos);
         let axis_local = joint.axis.value.ok_or(SkillRefuse::Unreachable)?;
         let axis_w = mat_vec_mul(&rot, axis_local);
         axes_world.push(normalize3(axis_w));
         let qi = q[joint_origins.len() - 1];
         rot = mat_mul(&rot, rotation_matrix(axis_local, qi));
-        pos = add3(pos, mat_vec_mul(&rot, *offset));
     }
 
     let ee = add3(pos, mat_vec_mul(&rot, *ee_offset));
@@ -240,6 +283,7 @@ fn forward_kinematics(
     })
 }
 
+#[allow(clippy::needless_range_loop)]
 fn jacobian(fk: &FkState, n: usize) -> Vec<Vec<f64>> {
     let mut j = vec![vec![0.0; n], vec![0.0; n], vec![0.0; n]];
     for i in 0..n {
@@ -255,15 +299,13 @@ fn jacobian(fk: &FkState, n: usize) -> Vec<Vec<f64>> {
 fn damped_least_squares(j: &[Vec<f64>], err: &[f64; 3], damp: f64) -> Vec<f64> {
     let n = j[0].len();
     let mut jjt = [[0.0; 3]; 3];
-    for r in 0..3 {
+    for (r, row) in jjt.iter_mut().enumerate() {
         for c in 0..3 {
-            for k in 0..n {
-                jjt[r][c] += j[r][k] * j[c][k];
-            }
+            row[c] = (0..n).map(|k| j[r][k] * j[c][k]).sum();
         }
     }
-    for i in 0..3 {
-        jjt[i][i] += damp * damp;
+    for (i, row) in jjt.iter_mut().enumerate() {
+        row[i] += damp * damp;
     }
     let rhs = [
         dot_row_j(j, err, 0),
@@ -272,8 +314,8 @@ fn damped_least_squares(j: &[Vec<f64>], err: &[f64; 3], damp: f64) -> Vec<f64> {
     ];
     let y = solve3x3(jjt, rhs);
     let mut dq = vec![0.0; n];
-    for k in 0..n {
-        dq[k] = j[0][k] * y[0] + j[1][k] * y[1] + j[2][k] * y[2];
+    for (k, dq_k) in dq.iter_mut().enumerate().take(n) {
+        *dq_k = j[0][k] * y[0] + j[1][k] * y[1] + j[2][k] * y[2];
     }
     dq
 }
@@ -383,8 +425,9 @@ fn solve3x3(a: [[f64; 3]; 3], b: [f64; 3]) -> [f64; 3] {
     mat_vec_mul(&inv, b)
 }
 
+#[cfg(test)]
 pub(crate) fn synth_planar_two_link() -> EmbodimentModel {
-    use crate::embodiment::{Actuator, Body, EndEffector, Joint, ModelFrame};
+    use crate::embodiment::{Actuator, Body, EndEffector, FrameKind, Joint, JointKind, ModelFrame};
     use crate::provenance::Provenanced;
 
     const L1: f64 = 0.15;
@@ -517,6 +560,35 @@ mod tests {
         assert_eq!(out.control_mode, "position");
         assert_eq!(out.action.len(), m.actuators.len());
         assert!(out.action.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn stretched_planar_chain_ik_nonzero_from_bent_seed() {
+        let m = synth_planar_two_link();
+        let caps = derive_capabilities(&m, None);
+        let world = WorldState::empty("e0", 1.0).with_target(
+            "ee",
+            [0.15, 0.12, 0.0],
+            5.0,
+            "e0",
+            1.0,
+            Provenance::UserDeclared,
+        );
+        let obs = ObservationFrame {
+            frame_id: "f".into(),
+            transform_epoch: "e0".into(),
+            observations: vec![],
+            as_of_s: 1.0,
+        };
+        let out = ChainIkPositionPdAdapter
+            .compile(&SkillContract::reach(), &m, &caps, &world, &obs)
+            .unwrap();
+        assert!(out.action.iter().all(|x| x.is_finite()));
+        assert!(
+            out.action.iter().any(|x| x.abs() > 1e-6),
+            "expected non-zero joint action, got {:?}",
+            out.action
+        );
     }
 
     #[test]

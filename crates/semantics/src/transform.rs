@@ -88,7 +88,8 @@ mod tests {
     #[test]
     fn refuses_to_mix_calibration_epochs() {
         let mut g = TransformGraph::new("e0");
-        g.insert(TransformEdge::identity("world", "base", "e0", 1.0)).unwrap();
+        g.insert(TransformEdge::identity("world", "base", "e0", 1.0))
+            .unwrap();
         let err = g
             .insert(TransformEdge::identity("base", "ee", "e1", 1.0))
             .unwrap_err();

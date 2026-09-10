@@ -20,6 +20,7 @@ use realityos_semantics::provenance::{Provenance, Provenanced};
 use realityos_semantics::reach::compile_reach;
 use realityos_semantics::skill::SkillRefuse;
 use realityos_semantics::world::WorldState;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -30,7 +31,7 @@ const INSPECT_SOURCE: &str = "verify.inspect";
 const HORIZON_S: f64 = 0.5;
 const CONTROL_HZ: f64 = 50.0;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FoundationReachReport {
     pub robot_id: String,
     pub model_hash: String,
@@ -61,17 +62,13 @@ pub fn run_foundation_reach(
     let (mut inst, manifest) = load_and_normalize(bundle, &[], seed)?;
     let inspect = inst.inspect.clone();
     let mut model = embodiment_from_manifest(bundle, &manifest);
-    fill_from_inspect(&mut model, &inspect);
     let mut caps = derive_capabilities(&model, None);
 
-    let mut initial = inst
-        .step(0)
-        .map_err(|e| e.to_string())
-        .and_then(|st| {
-            st.get("state")
-                .ok_or_else(|| "missing initial state".into())
-                .map(|s| VerifierTruth::from_mujoco_state(s))
-        })?;
+    let initial = inst.step(0).map_err(|e| e.to_string()).and_then(|st| {
+        st.get("state")
+            .ok_or_else(|| "missing initial state".into())
+            .map(VerifierTruth::from_mujoco_state)
+    })?;
 
     let epoch = model.calibration_epoch.clone();
     let model_hash = model.model_hash.clone();
@@ -101,26 +98,16 @@ pub fn run_foundation_reach(
         hash,
         now_s,
         freshness_s,
-        &mut inst,
-        &manifest,
-        target,
     );
 
     let base = base_report(&model, seed);
-    let (ctrl, init_qpos) = match compile {
+    let ctrl = match compile {
         Err(refuse) => {
             checkin_worker(inst);
             return Ok(error_report(base, refuse_string(refuse)));
         }
-        Ok((ctrl, init_qpos)) => (ctrl, init_qpos),
+        Ok(ctrl) => ctrl,
     };
-
-    if let Some(qpos) = init_qpos {
-        let st = inst
-            .reset(Some(&qpos), None)
-            .map_err(|e| e.to_string())?;
-        initial = VerifierTruth::from_mujoco_state(st.get("state").unwrap_or(&st));
-    }
 
     let shared = Arc::new(SharedMujoco {
         inst: Mutex::new(inst),
@@ -130,12 +117,8 @@ pub fn run_foundation_reach(
     });
     let port = SharedSimPort::new(shared.clone());
     let max_a = manifest.tau_max().into_iter().fold(1.0, f64::max);
-    let plant = HardwareBackedPlant::new(
-        port,
-        &manifest.robot_id,
-        manifest.nu.max(1) as usize,
-        max_a,
-    );
+    let plant =
+        HardwareBackedPlant::new(port, &manifest.robot_id, manifest.nu.max(1) as usize, max_a);
     let journal = std::env::temp_dir().join(format!(
         "realityos-foundation-reach-{}-{}.jsonl",
         manifest.robot_id,
@@ -158,12 +141,7 @@ pub fn run_foundation_reach(
         target,
         now_s,
     );
-    let proposal = action_proposal_from_ctrl(
-        &policy_obs,
-        &ctrl,
-        now_s,
-        auth.command_lifetime_s,
-    );
+    let proposal = action_proposal_from_ctrl(&policy_obs, &ctrl, now_s, auth.command_lifetime_s);
     let task = TaskSpec::Reach {
         end_effector: "ee".into(),
         target,
@@ -244,19 +222,14 @@ pub fn run_foundation_reach_missing_target(
 ) -> Result<FoundationReachReport, String> {
     let seed = 0u64;
     let (mut inst, manifest) = load_and_normalize(bundle, &[], seed)?;
-    let inspect = inst.inspect.clone();
-    let mut model = embodiment_from_manifest(bundle, &manifest);
-    fill_from_inspect(&mut model, &inspect);
+    let model = embodiment_from_manifest(bundle, &manifest);
     let caps = derive_capabilities(&model, None);
 
-    let initial = inst
-        .step(0)
-        .map_err(|e| e.to_string())
-        .and_then(|st| {
-            st.get("state")
-                .ok_or_else(|| "missing initial state".into())
-                .map(|s| json_f64_vec(&s["qpos"]))
-        })?;
+    let initial = inst.step(0).map_err(|e| e.to_string()).and_then(|st| {
+        st.get("state")
+            .ok_or_else(|| "missing initial state".into())
+            .map(|s| json_f64_vec(&s["qpos"]))
+    })?;
 
     let epoch = model.calibration_epoch.clone();
     let now_s = 10.0;
@@ -289,12 +262,8 @@ fn try_compile_reach(
     hash: &str,
     now_s: f64,
     freshness_s: f64,
-    inst: &mut crate::mujoco_exec::MujocoInstance,
-    manifest: &RobotManifest,
-    world_target: [f64; 3],
-) -> Result<(CompiledCtrl, Option<Vec<f64>>), SkillRefuse> {
-    *caps = derive_capabilities(model, None);
-    let compiled = match compile_reach(
+) -> Result<CompiledCtrl, SkillRefuse> {
+    match compile_reach(
         model,
         caps,
         world,
@@ -304,7 +273,7 @@ fn try_compile_reach(
         freshness_s,
         &ChainIkPositionPdAdapter,
     ) {
-        Ok(ctrl) => Ok((ctrl, None::<Vec<f64>>)),
+        Ok(ctrl) => Ok(ctrl),
         Err(SkillRefuse::Unreachable) => {
             fill_from_inspect(model, inspect);
             *caps = derive_capabilities(model, None);
@@ -318,67 +287,9 @@ fn try_compile_reach(
                 freshness_s,
                 &ChainIkPositionPdAdapter,
             )
-            .map(|ctrl| (ctrl, None))
         }
         Err(e) => Err(e),
-    };
-    match compiled {
-        Ok((ctrl, _)) => {
-            if let Ok((mj_ctrl, qpos)) = mujoco_fallback_ctrl(inst, manifest, world_target, &ctrl) {
-                return Ok((mj_ctrl, Some(qpos)));
-            }
-            if ctrl_needs_fallback(&ctrl) {
-                Err(SkillRefuse::Unreachable)
-            } else {
-                Ok((ctrl, None))
-            }
-        }
-        Err(SkillRefuse::Unreachable) => mujoco_fallback_ctrl(
-            inst,
-            manifest,
-            world_target,
-            &CompiledCtrl {
-                action: vec![],
-                control_mode: "position".into(),
-                adapter_id: ADAPTER_ID.into(),
-                adapter_version: "1".into(),
-            },
-        )
-        .map(|(ctrl, qpos)| (ctrl, Some(qpos))),
-        Err(e) => Err(e),
     }
-}
-
-fn ctrl_needs_fallback(ctrl: &CompiledCtrl) -> bool {
-    ctrl.action.is_empty() || ctrl.action.iter().all(|a| a.abs() < 1e-9)
-}
-
-fn mujoco_fallback_ctrl(
-    inst: &mut crate::mujoco_exec::MujocoInstance,
-    manifest: &RobotManifest,
-    target: [f64; 3],
-    template: &CompiledCtrl,
-) -> Result<(CompiledCtrl, Vec<f64>), SkillRefuse> {
-    let ee = manifest
-        .end_effector_name()
-        .unwrap_or_else(|| "ee".into());
-    let (qpos, err) = inst
-        .solve_ik(&ee, target)
-        .map_err(|_| SkillRefuse::Unreachable)?;
-    if err >= 0.02 {
-        return Err(SkillRefuse::Unreachable);
-    }
-    let mut action = manifest.actuator_qpos(&qpos);
-    action.resize(manifest.nu.max(1) as usize, 0.0);
-    Ok((
-        CompiledCtrl {
-            action,
-            control_mode: template.control_mode.clone(),
-            adapter_id: template.adapter_id.clone(),
-            adapter_version: template.adapter_version.clone(),
-        },
-        qpos,
-    ))
 }
 
 fn fill_from_inspect(model: &mut EmbodimentModel, inspect: &Value) {
@@ -398,12 +309,13 @@ fn fill_from_inspect(model: &mut EmbodimentModel, inspect: &Value) {
         let frame_name = format!("link_{}", joint.name);
         let pos = body_pos.get(&joint.child_body).copied();
         if let Some(pos) = pos {
-            if let Some(frame) = model.frames.iter_mut().find(|f| {
-                f.name == frame_name && f.parent_body == joint.parent_body
-            }) {
+            if let Some(frame) = model
+                .frames
+                .iter_mut()
+                .find(|f| f.name == frame_name && f.parent_body == joint.parent_body)
+            {
                 if frame.translation.value.is_none() {
-                    frame.translation =
-                        Provenanced::simulator_derived(pos, INSPECT_SOURCE, 0.0);
+                    frame.translation = Provenanced::simulator_derived(pos, INSPECT_SOURCE, 0.0);
                 }
             } else {
                 model.frames.push(ModelFrame {
@@ -478,18 +390,10 @@ fn vec3_from_json(v: &Value) -> Option<[f64; 3]> {
     if arr.len() < 3 {
         return None;
     }
-    Some([
-        arr[0].as_f64()?,
-        arr[1].as_f64()?,
-        arr[2].as_f64()?,
-    ])
+    Some([arr[0].as_f64()?, arr[1].as_f64()?, arr[2].as_f64()?])
 }
 
-fn fk_frame_target(
-    truth: &VerifierTruth,
-    manifest: &RobotManifest,
-    target: [f64; 3],
-) -> [f64; 3] {
+fn fk_frame_target(truth: &VerifierTruth, manifest: &RobotManifest, target: [f64; 3]) -> [f64; 3] {
     let base_name = manifest
         .derived
         .end_effector_joint_chains
@@ -652,19 +556,10 @@ mod tests {
             return;
         }
         for id in ["planar_arm", "spatial_arm4"] {
-            let b =
-                RobotBundle::load(crate::corpus::bundled_robots_root().join(id)).unwrap();
-            let r = run_foundation_reach(
-                &b,
-                [0.22, 0.0, 0.12],
-                0.20,
-                10.0,
-                0.25,
-                None,
-                false,
-                false,
-            )
-            .unwrap();
+            let b = RobotBundle::load(crate::corpus::bundled_robots_root().join(id)).unwrap();
+            let r =
+                run_foundation_reach(&b, [0.22, 0.0, 0.12], 0.20, 10.0, 0.25, None, false, false)
+                    .unwrap();
             assert_eq!(r.skill, "REACH");
             assert_eq!(r.adapter_id, "chain_ik_position_pd");
             assert!(!r.metal);
@@ -672,12 +567,7 @@ mod tests {
             assert_eq!(r.adaptation, "CONFIGURED");
             assert!(r.skill_refuse.is_none(), "{id} {:?}", r.skill_refuse);
             assert!(r.ctrl_writes > 0, "{id}");
-            assert!(
-                r.task_success,
-                "{id} must reach under privileged verifier (refuse={:?} writes={})",
-                r.skill_refuse,
-                r.ctrl_writes
-            );
+            assert!(r.task_success, "{id} must reach under privileged verifier");
         }
     }
 
@@ -698,17 +588,53 @@ mod tests {
             return;
         }
         let b = RobotBundle::load(crate::corpus::robot_dir("planar_arm")).unwrap();
+        let r = run_foundation_reach(&b, [0.22, 0.0, 0.12], 0.20, 10.0, 0.25, None, false, true)
+            .unwrap();
+        assert_eq!(r.replay_write_delta, Some(0));
+    }
+
+    #[test]
+    fn wrong_hash_zero_writes() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(crate::corpus::robot_dir("planar_arm")).unwrap();
         let r = run_foundation_reach(
             &b,
             [0.22, 0.0, 0.12],
             0.20,
             10.0,
             0.25,
-            None,
+            Some("deadbeef"),
             false,
-            true,
+            false,
         )
         .unwrap();
-        assert_eq!(r.replay_write_delta, Some(0));
+        assert_eq!(r.ctrl_writes, 0);
+        assert!(r.skill_refuse.is_some());
+    }
+
+    #[test]
+    fn stale_zero_writes() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(crate::corpus::robot_dir("planar_arm")).unwrap();
+        let r = run_foundation_reach(&b, [0.22, 0.0, 0.12], 0.20, 10.0, 0.25, None, true, false)
+            .unwrap();
+        assert_eq!(r.ctrl_writes, 0);
+    }
+
+    #[test]
+    fn held_out_first_evaluation_is_recorded() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(crate::held_out::held_out_bundle()).unwrap();
+        let r = run_foundation_reach(&b, [0.20, 0.0, 0.12], 0.25, 10.0, 0.25, None, false, false)
+            .unwrap();
+        assert_eq!(r.adaptation, "CONFIGURED");
+        assert!(!r.metal);
+        assert!(!r.model_hash.is_empty());
     }
 }

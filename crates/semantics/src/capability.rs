@@ -1,5 +1,4 @@
-use crate::embodiment::{Actuator, BaseKind, EmbodimentModel, EndEffector, Gripper, Joint, JointKind};
-use crate::provenance::Provenanced;
+use crate::embodiment::{Actuator, BaseKind, EmbodimentModel, Joint, JointKind};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -91,9 +90,10 @@ fn node(
 }
 
 pub fn derive_capabilities(model: &EmbodimentModel, qualify_ok: Option<bool>) -> CapabilityGraph {
-    let has_position = model.actuators.iter().any(|a| {
-        a.control_mode == "position" && actuator_on_1dof_hinge_or_slide(model, a)
-    });
+    let has_position = model
+        .actuators
+        .iter()
+        .any(|a| a.control_mode == "position" && actuator_on_1dof_hinge_or_slide(model, a));
 
     let joint_position_status = if has_position {
         if qualify_ok == Some(true) {
@@ -140,7 +140,10 @@ pub fn derive_capabilities(model: &EmbodimentModel, qualify_ok: Option<bool>) ->
     let has_ee = !model.end_effectors.is_empty();
     let cartesian_status = if !has_ee {
         CapStatus::Unsupported
-    } else if matches!(joint_position_status, CapStatus::Supported | CapStatus::Proven) {
+    } else if matches!(
+        joint_position_status,
+        CapStatus::Supported | CapStatus::Proven
+    ) {
         CapStatus::PartiallySupported
     } else {
         CapStatus::Unsupported
@@ -165,9 +168,10 @@ pub fn derive_capabilities(model: &EmbodimentModel, qualify_ok: Option<bool>) ->
         CapStatus::NotApplicable
     };
 
-    let has_valid_gripper = model.grippers.iter().any(|g| {
-        !g.actuator.is_empty() && g.opening_range.value.is_some()
-    });
+    let has_valid_gripper = model
+        .grippers
+        .iter()
+        .any(|g| !g.actuator.is_empty() && g.opening_range.value.is_some());
     let gripper_status = if has_valid_gripper {
         CapStatus::Supported
     } else {
@@ -217,7 +221,13 @@ pub fn derive_capabilities(model: &EmbodimentModel, qualify_ok: Option<bool>) ->
         node(CapName::MobileBase, mobile_status, vec![], vec![], None),
         node(CapName::FloatingBase, floating_status, vec![], vec![], None),
         node(CapName::Grasping, gripper_status, vec![], vec![], None),
-        node(CapName::ParallelGripper, gripper_status, vec![], vec![], None),
+        node(
+            CapName::ParallelGripper,
+            gripper_status,
+            vec![],
+            vec![],
+            None,
+        ),
     ];
 
     CapabilityGraph { nodes }
@@ -226,6 +236,8 @@ pub fn derive_capabilities(model: &EmbodimentModel, qualify_ok: Option<bool>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::embodiment::{EndEffector, Gripper};
+    use crate::provenance::Provenanced;
 
     fn synth_joint(name: &str) -> Joint {
         Joint {
@@ -286,7 +298,10 @@ mod tests {
             g.get(CapName::CartesianPositionControl).status,
             CapStatus::PartiallySupported
         );
-        assert_eq!(g.get(CapName::FloatingBase).status, CapStatus::NotApplicable);
+        assert_eq!(
+            g.get(CapName::FloatingBase).status,
+            CapStatus::NotApplicable
+        );
         assert_eq!(g.get(CapName::Grasping).status, CapStatus::Unsupported);
     }
 
@@ -296,7 +311,10 @@ mod tests {
         let g = derive_capabilities(&m, None);
         let n = g.get(CapName::JointEffortControl);
         assert_eq!(n.status, CapStatus::Unverified);
-        assert_eq!(n.unsupported_reason.as_deref(), Some("effort_bound_unknown"));
+        assert_eq!(
+            n.unsupported_reason.as_deref(),
+            Some("effort_bound_unknown")
+        );
     }
 
     #[test]

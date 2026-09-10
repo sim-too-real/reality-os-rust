@@ -20,11 +20,7 @@ pub fn embodiment_from_manifest(bundle: &RobotBundle, manifest: &RobotManifest) 
     );
     model.base = map_base(manifest.derived.base_type);
     model.metal = false;
-    model.bodies = manifest
-        .bodies
-        .iter()
-        .map(|b| map_body(b))
-        .collect();
+    model.bodies = manifest.bodies.iter().map(map_body).collect();
     model.joints = manifest.joints.iter().map(map_joint).collect();
     model.actuators = manifest.actuators.iter().map(map_actuator).collect();
     model.frames = map_ee_frames(bundle, manifest);
@@ -262,10 +258,14 @@ mod tests {
         assert!(!m.metal);
         assert_eq!(m.robot_id, "planar_arm");
         assert!(m.end_effectors.iter().any(|e| e.name == "ee"));
-        assert!(m.bodies.iter().any(|b| {
-            b.mass_kg.provenance != Provenance::HardwareMeasured
-        }));
-        assert!(m.joints.iter().all(|j| j.axis.provenance == Provenance::Unknown));
+        assert!(m
+            .bodies
+            .iter()
+            .any(|b| { b.mass_kg.provenance != Provenance::HardwareMeasured }));
+        assert!(m
+            .joints
+            .iter()
+            .all(|j| j.axis.provenance == Provenance::Unknown));
     }
 
     #[test]
@@ -273,8 +273,8 @@ mod tests {
         if !ensure_mujoco_or_skip() {
             return;
         }
-        let b = RobotBundle::load(crate::corpus::bundled_robots_root().join("spatial_arm4"))
-            .unwrap();
+        let b =
+            RobotBundle::load(crate::corpus::bundled_robots_root().join("spatial_arm4")).unwrap();
         let (_i, man) = crate::runner::load_and_normalize(&b, &[], 0).unwrap();
         assert_eq!(man.nu, 4);
         let axes: Vec<String> = man.joints.iter().map(|j| j.name.clone()).collect();
@@ -282,7 +282,8 @@ mod tests {
         let m = embodiment_from_manifest(&b, &man);
         let g = realityos_semantics::capability::derive_capabilities(&m, None);
         assert_eq!(
-            g.get(realityos_semantics::capability::CapName::FixedBaseManipulation).status,
+            g.get(realityos_semantics::capability::CapName::FixedBaseManipulation)
+                .status,
             realityos_semantics::capability::CapStatus::Supported
         );
     }
