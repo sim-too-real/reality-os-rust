@@ -346,8 +346,9 @@ resolve_recorded_usb_tty() {
 }
 
 # First contact after plug-in / udev add: the tty node can exist before
-# idVendor is visible. Recording an empty port then binding tty name+rdev
-# makes the later usb:vid:pid:devpath serve identity miss.
+# USB attributes. idVendor alone is not enough — Rust identity stops
+# only at idVendor+idProduct. A UART node with vid and no pid used to
+# let the walk climb to a parent hub and inherit that serial.
 wait_usb_sysfs_identity() {
   local dev="$1"
   local real name i
@@ -358,12 +359,14 @@ wait_usb_sysfs_identity() {
     *) return 0 ;;
   esac
   for i in $(seq 1 40); do
-    if [[ -e "$real" ]] && usb_sysfs_value "$real" idVendor >/dev/null; then
+    if [[ -e "$real" ]] \
+      && usb_sysfs_value "$real" idVendor >/dev/null \
+      && usb_sysfs_value "$real" idProduct >/dev/null; then
       return 0
     fi
     sleep 0.1
   done
-  echo "warning: USB sysfs idVendor never appeared for $real; identity may fall back to tty name+rdev" >&2
+  echo "warning: USB sysfs idVendor+idProduct never appeared on the UART device for $real; identity may inherit a parent hub or fall back to tty name+rdev" >&2
   return 1
 }
 
@@ -497,7 +500,7 @@ prepare_usb_serial_host() {
   # serial/port and may see a 1–3 s CH340 drop; that path rematches.
   if [[ -z "${METAL_USB_SERIAL:-}" && -z "${METAL_USB_PORT:-}" ]]; then
     if ! wait_usb_sysfs_identity "$dev"; then
-      echo "error: USB sysfs idVendor never appeared for $dev; refuse to bind a tty-name identity that will miss when sysfs shows up" >&2
+      echo "error: USB sysfs idVendor+idProduct never appeared on the UART device for $dev; refuse to bind a tty-name or parent-hub identity" >&2
       return 1
     fi
   else

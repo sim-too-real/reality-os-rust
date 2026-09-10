@@ -395,7 +395,7 @@ pub fn default_unresolved() -> Vec<String> {
         "campaign installs docs/metal_proof.json relative to the script's repo, not the caller's working directory; sudo /path/scripts/metal-campaign.sh from another cwd used to write ~/docs after a live run".into(),
         "campaign runs as root with umask 0077; proof_meta.json and the cases file are chmod 0644 and chowned to the authority UID so report can read them. A hardened root umask used to abort mint after the physical run".into(),
         "campaign finds metal binaries in the script repo when REALITYOS_METAL_BIN=$PWD/target/debug points at the caller's cwd; sudo /path/scripts/metal-campaign.sh from another cwd used to exit 2 before probe".into(),
-        "first USB prepare fails closed if sysfs idVendor never appears; continuing used to bind a tty-name identity that missed when usb:vid:pid:devpath showed up".into(),
+        "first USB prepare fails closed until the UART sysfs node has idVendor+idProduct; idVendor alone used to let the walk climb to a parent hub serial, or bind a tty-name identity that missed when usb:vid:pid:devpath showed up".into(),
         "no STO/SS1/PLC/SIL/ISO is provided or claimed".into(),
     ]
 }
