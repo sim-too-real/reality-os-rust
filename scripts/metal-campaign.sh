@@ -100,21 +100,34 @@ fi
 # I/O deadline and latch the software watchdog on the first real USB-UART.
 set_usb_serial_latency() {
   local dev="$1"
-  local real name timer
+  local real name timer found=0 got
   real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
   name="$(basename "$real")"
-    case "$name" in
+  case "$name" in
     ttyUSB*|ttyACM*|ttyCH341*) ;;
     *) return 0 ;;
   esac
   for timer in \
     "/sys/bus/usb-serial/devices/${name}/latency_timer" \
     "/sys/class/tty/${name}/device/latency_timer"; do
-    if [[ -e "$timer" ]] && echo 1 >"$timer" 2>/dev/null; then
-      echo "metal-campaign: set $timer=1 (USB-UART default 16 ms can miss the 40 ms live deadline)"
-      return 0
+    [[ -e "$timer" ]] || continue
+    found=1
+    if echo 1 >"$timer" 2>/dev/null; then
+      got="$(tr -d '[:space:]' <"$timer" 2>/dev/null || true)"
+      if [[ "$got" == "1" ]]; then
+        echo "metal-campaign: set $timer=1 (USB-UART default 16 ms can miss the 40 ms live deadline)"
+        return 0
+      fi
     fi
   done
+  # CH340/ch341 often has no latency_timer; skip. FTDI/U2D2 always has
+  # the file at 16 ms — a write that does not stick used to continue
+  # and miss the 40 ms live deadline on the first hold.
+  if [[ "$found" == "1" ]]; then
+    echo "error: USB-UART latency_timer exists but is not 1 after write; default 16 ms misses the 40 ms live deadline" >&2
+    return 1
+  fi
+  return 0
 }
 
 # Ubuntu usbcore autosuspend is often 2 s. An idle gap between campaign
