@@ -9,6 +9,7 @@ pub mod driver;
 pub mod evidence;
 pub mod families;
 pub mod format;
+pub mod held_out;
 pub mod honesty;
 pub mod mujoco_exec;
 pub mod normalize;
