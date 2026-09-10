@@ -491,7 +491,18 @@ prepare_usb_serial_host() {
       return 0
       ;;
   esac
-  wait_usb_sysfs_identity "$dev" || true
+  # First prepare: the tty node can exist before idVendor. Recording
+  # a tty name+rdev identity then serving usb:vid:pid:devpath is a
+  # serial mismatch before hold. Crash-replay already has a recorded
+  # serial/port and may see a 1–3 s CH340 drop; that path rematches.
+  if [[ -z "${METAL_USB_SERIAL:-}" && -z "${METAL_USB_PORT:-}" ]]; then
+    if ! wait_usb_sysfs_identity "$dev"; then
+      echo "error: USB sysfs idVendor never appeared for $dev; refuse to bind a tty-name identity that will miss when sysfs shows up" >&2
+      return 1
+    fi
+  else
+    wait_usb_sysfs_identity "$dev" || true
+  fi
   real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
   if [[ -z "${METAL_USB_SERIAL:-}" ]]; then
     METAL_USB_SERIAL="$(usb_sysfs_value "$real" serial || true)"
