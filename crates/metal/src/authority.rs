@@ -10,7 +10,7 @@ use realityos_session::{RuntimeMode, RuntimeSession, StartArgs};
 use crate::config::{
     MetalConfig, CONFIG_FILE, FRESHNESS_FILE, GOAL_FILE, JOURNAL, PRESENT_FILE, SIGNING_KEY_FILE,
 };
-use crate::egress::{recorded_acks, recorded_writes};
+use crate::egress::{recorded_acks, recorded_egress_attempts, recorded_serial_tx, recorded_writes};
 use crate::ipc::{MetalRequest, MetalResponse};
 use crate::xl330::Xl330Driver;
 
@@ -120,6 +120,14 @@ impl MetalAuthority {
         recorded_writes(self.root.join(crate::config::BUS_DIR))
     }
 
+    pub fn command_egress_attempts(&self) -> u64 {
+        recorded_egress_attempts(self.root.join(crate::config::BUS_DIR))
+    }
+
+    pub fn serial_tx_completed(&self) -> u64 {
+        recorded_serial_tx(self.root.join(crate::config::BUS_DIR))
+    }
+
     pub fn device_acks(&self) -> u64 {
         recorded_acks(self.root.join(crate::config::BUS_DIR))
     }
@@ -216,6 +224,8 @@ impl MetalAuthority {
             "acquisition": "authority acquire_sensor on propose/sensor; autonomy cannot ingest",
             "vin_0.1v": vin,
             "firmware_id_latched": self.cfg.expected_firmware,
+            "max_pwm_limit_raw": self.cfg.max_pwm_limit_raw,
+            "max_total_excursion_ticks": self.cfg.max_total_excursion_ticks,
         });
         let _ = std::fs::write(
             self.root.join(crate::config::BUS_DIR).join(FRESHNESS_FILE),
@@ -282,10 +292,8 @@ impl MetalAuthority {
         };
         let cid = issued.command_id().to_string();
         let out = self.session.dispatch_issued(issued, &ActionParams::empty());
-        // prepare/consume/emit fsync after the dispatch tick. Refresh now so
-        // the next propose (nudge) does not inherit that gap. A miss here
-        // cannot be caught up.
-        let _ = self.pet_watchdog();
+        // Do not restamp the watchdog after prepare/consume/emit fsync.
+        // A real >configured-interval stall must remain visible.
         self.persist_freshness(
             Some(self.session.governor.last_device_capture_s()),
             Some(self.session.governor.authority_now_s()),
@@ -305,6 +313,8 @@ impl MetalAuthority {
             },
             violations: out.violations,
             physical_writes: self.physical_writes(),
+            command_egress_attempts: self.command_egress_attempts(),
+            serial_tx_completed: self.serial_tx_completed(),
             device_acks: self.device_acks(),
             command_id: cid,
             metal: !crate::identity::is_pty_path(&self.cfg.device),
@@ -336,6 +346,8 @@ impl MetalAuthority {
             status: status.into(),
             violations,
             physical_writes: self.physical_writes(),
+            command_egress_attempts: self.command_egress_attempts(),
+            serial_tx_completed: self.serial_tx_completed(),
             device_acks: self.device_acks(),
             metal: !crate::identity::is_pty_path(&self.cfg.device),
             clock: "OsMonotonicClock".into(),
@@ -350,6 +362,8 @@ impl MetalAuthority {
             stage: stage.into(),
             status: "ok".into(),
             physical_writes: self.physical_writes(),
+            command_egress_attempts: self.command_egress_attempts(),
+            serial_tx_completed: self.serial_tx_completed(),
             device_acks: self.device_acks(),
             metal: !crate::identity::is_pty_path(&self.cfg.device),
             clock: "OsMonotonicClock".into(),
@@ -393,8 +407,9 @@ impl MetalAuthority {
         self.refuse(stage, "refuse", vec![e])
     }
 
-    /// ONLINE software watchdog is 50 ms (miss at 100 ms). One journal+seal
-    /// fsync pair. A gap >100 ms cannot be caught up.
+    /// ONLINE software watchdog is 50 ms (miss at 100 ms). Successful pets
+    /// are in-memory only. A gap >100 ms cannot be caught up and is still
+    /// durably recorded as ESTOP. Not an independent hardware watchdog.
     ///
     /// Identity/disconnect ESTOP is not a watchdog miss. Folding `estop()`
     /// into this tick made recover-after-identity return
@@ -440,12 +455,11 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
     }
     let listener = crate::ipc::bind_socket(root)?;
     listener.set_nonblocking(true)?;
-    // Each watchdog/heartbeat emit fsyncs journal+seal. 10 ms pets of both
-    // were ~400 fsyncs/s and can miss the 100 ms watchdog on a bench disk.
+    // Successful watchdog pets are in-memory only. Heartbeat still fsyncs
+    // journal+seal. Do not restamp the watchdog after that persist.
     // Accept waiting IPC before the idle heartbeat (heartbeat+handle in one
     // iteration was software_watchdog_miss with an empty serve.err). Do not
-    // pet again on accept: handle() pets, and an extra fsync before acquire
-    // is what failed two-uid PTY hold on 0700e23 (sensor ok, write missed).
+    // pet again on accept: handle() pets.
     let mut next_watchdog = std::time::Instant::now() + Duration::from_millis(40);
     let mut next_heartbeat = std::time::Instant::now() + Duration::from_millis(800);
     loop {
@@ -468,13 +482,8 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
                 if now >= next_heartbeat {
                     next_heartbeat = std::time::Instant::now() + Duration::from_millis(800);
                     auth.pet_heartbeat();
-                    if let Err(v) = auth.pet_watchdog() {
-                        let _ = std::fs::write(
-                            root.join("serve.err"),
-                            format!("software_watchdog_miss_after_heartbeat:{}\n", v.join(",")),
-                        );
-                    }
-                    next_watchdog = std::time::Instant::now() + Duration::from_millis(40);
+                    // No post-persist watchdog restamp: heartbeat fsync time
+                    // remains visible to the next pet.
                 }
                 let wait = next_watchdog.saturating_duration_since(std::time::Instant::now());
                 std::thread::sleep(wait.min(Duration::from_millis(20)));
@@ -526,6 +535,8 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
                         status: "refuse".into(),
                         violations: vec![format!("bad_request:{e}")],
                         physical_writes: auth.physical_writes(),
+                        command_egress_attempts: auth.command_egress_attempts(),
+                        serial_tx_completed: auth.serial_tx_completed(),
                         device_acks: auth.device_acks(),
                         metal: !crate::identity::is_pty_path(&auth.cfg.device),
                         clock: "OsMonotonicClock".into(),

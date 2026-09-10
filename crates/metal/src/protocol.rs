@@ -43,16 +43,35 @@ pub const FACTORY_MOVING_THRESHOLD: u32 = 10;
 pub const ADDR_MAX_VOLTAGE_LIMIT: u16 = 32;
 pub const ADDR_MIN_VOLTAGE_LIMIT: u16 = 34;
 /// EEPROM. Unit 0.113%. Factory 885. Wizard 0 produces no PWM output.
+/// PWM Limit is the maximum PWM output used across operating modes.
+/// It is an output/PWM cap, not a certified torque limit.
 pub const ADDR_PWM_LIMIT: u16 = 36;
 pub const FACTORY_PWM_LIMIT: u16 = 885;
+/// XL330 e-Manual allowed PWM Limit raw range (inclusive).
+pub const XL330_PWM_LIMIT_MAX: u16 = 885;
+/// Robotis unit: 1 raw ≈ 0.113% of full PWM output. 885 * 0.113 ≈ 100%.
+pub const XL330_PWM_LIMIT_UNIT_PERCENT: f64 = 0.113;
+/// Conservative first-bench default (~22.6%). Not factory 885.
+/// If this cannot move an unloaded horn, the experiment is incomplete
+/// until an operator raises `max_pwm_limit_raw` explicitly.
+pub const CONSERVATIVE_PWM_LIMIT: u16 = 200;
 /// Below this, a 32-tick no-load step will not move present.
+/// Diagnostic only — never used to auto-escalate PWM Limit to factory.
 pub const MIN_PWM_LIMIT: u16 = 80;
 pub const ADDR_CURRENT_LIMIT: u16 = 38;
+/// XL330 Position Control legal present/goal window.
+pub const XL330_POSITION_MODE_MIN: i32 = 0;
+pub const XL330_POSITION_MODE_MAX: i32 = 4095;
 /// EEPROM. Unit ≈ 0.229 rpm. 0 or 1 makes a 32-tick nudge still Moving=0 at the old present.
 pub const ADDR_VELOCITY_LIMIT: u16 = 44;
 /// EEPROM. Factory max 4095 / min 0. Wizard can shrink this window.
 pub const ADDR_MAX_POSITION_LIMIT: u16 = 48;
 pub const ADDR_MIN_POSITION_LIMIT: u16 = 52;
+
+/// Raw PWM Limit → documented percentage (not a certified torque figure).
+pub fn pwm_limit_percent(raw: u16) -> f64 {
+    f64::from(raw) * XL330_PWM_LIMIT_UNIT_PERCENT
+}
 pub const ADDR_TORQUE_ENABLE: u16 = 64;
 /// RAM. 0 = no status except PING (Wizard); 2 = all instructions (factory).
 pub const ADDR_STATUS_RETURN_LEVEL: u16 = 68;
@@ -473,5 +492,13 @@ mod tests {
         assert!(!instruction_ok(STATUS_ALERT | 0x01));
         let reboot = encode_reboot(1);
         assert_eq!(reboot[7], INST_REBOOT);
+    }
+
+    #[test]
+    fn pwm_limit_raw_to_percent_is_documented_unit() {
+        assert!((pwm_limit_percent(885) - 99.999).abs() < 0.02);
+        assert!((pwm_limit_percent(200) - 22.6).abs() < 0.01);
+        assert_eq!(XL330_PWM_LIMIT_MAX, FACTORY_PWM_LIMIT);
+        assert_eq!(CONSERVATIVE_PWM_LIMIT, 200);
     }
 }

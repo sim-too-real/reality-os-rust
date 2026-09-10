@@ -161,9 +161,93 @@ mod tests {
         );
         assert!(
             g.watchdog_age_s() < 0.05,
-            "watchdog_tick_now stamps after persist, got {}",
+            "successful watchdog pet stamps in memory immediately, got {}",
             g.watchdog_age_s()
         );
+    }
+
+    #[test]
+    fn successful_watchdog_pets_do_not_journal_and_do_not_hide_a_gap() {
+        let id = online_identity();
+        let plant = online_plant(&id);
+        let journal = temp_journal("wd-nodurable");
+        let clock = FakeClock::arc(1.0);
+        let mut g = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            id,
+            plant,
+            &journal,
+            b"test-signing-key-32bytes-minimum".to_vec(),
+            true,
+            vec!["a0".into()],
+            clock.clone(),
+        )
+        .expect("online");
+        let events_after_start = g.ledger().events().len();
+        for _ in 0..20 {
+            let t = g.watchdog_tick_now();
+            assert!(t.ok && !g.estop(), "{t:?}");
+        }
+        assert_eq!(
+            g.ledger().events().len(),
+            events_after_start,
+            "successful pets must not append journal+seal events"
+        );
+
+        realityos_plant::set_test_journal_write_delay_ms(40);
+        let before_heartbeat = g.ledger().events().len();
+        let hb = g.heartbeat_now();
+        realityos_plant::set_test_journal_write_delay_ms(0);
+        assert!(hb.ok, "{hb:?}");
+        assert!(
+            g.ledger().events().len() > before_heartbeat,
+            "heartbeat remains a durable transition"
+        );
+
+        // Last pet was at 1.0. A later stall is a clock jump, not a
+        // post-persist restamp that would hide the gap.
+        clock.set(1.15);
+        let miss = g.watchdog_tick_now();
+        assert!(!miss.ok, "a 150 ms gap must still miss: {miss:?}");
+        assert!(
+            miss.violations
+                .iter()
+                .any(|v| v.contains("software_watchdog_miss")),
+            "{miss:?}"
+        );
+        let _ = std::fs::remove_file(&journal);
+        let _ = std::fs::remove_file(format!("{}.authority-seal", journal.display()));
+    }
+
+    #[test]
+    fn slow_journal_write_does_not_force_watchdog_journaling() {
+        let id = online_identity();
+        let plant = online_plant(&id);
+        let journal = temp_journal("wd-slow");
+        let clock = test_clock(2.0);
+        let mut g = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            id,
+            plant,
+            &journal,
+            b"test-signing-key-32bytes-minimum".to_vec(),
+            true,
+            vec!["a0".into()],
+            clock,
+        )
+        .expect("online");
+        realityos_plant::set_test_journal_write_delay_ms(50);
+        let n0 = g.ledger().events().len();
+        let start = std::time::Instant::now();
+        for _ in 0..10 {
+            assert!(g.watchdog_tick_now().ok);
+        }
+        let pet_elapsed = start.elapsed();
+        realityos_plant::set_test_journal_write_delay_ms(0);
+        assert_eq!(g.ledger().events().len(), n0);
+        assert!(
+            pet_elapsed < std::time::Duration::from_millis(80),
+            "in-memory pets must not pay the 50 ms journal delay each, elapsed={pet_elapsed:?}"
+        );
+        let _ = std::fs::remove_file(&journal);
     }
 
     fn online_identity() -> RuntimeIdentity {

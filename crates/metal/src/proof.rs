@@ -29,6 +29,29 @@ pub struct CaseRecord {
     pub journal_result: String,
     pub proposal: String,
     pub unauthorized_write: bool,
+    /// Command-egress attempts. Not a physical device write.
+    #[serde(default)]
+    pub egress_attempt_delta: u64,
+    #[serde(default)]
+    pub serial_tx_before: u64,
+    #[serde(default)]
+    pub serial_tx_after: u64,
+    /// Certified command frames that passed write_all+flush. Not setup/sensor.
+    #[serde(default)]
+    pub serial_tx_delta: u64,
+    #[serde(default)]
+    pub device_ack_delta: u64,
+    #[serde(default)]
+    pub unauthorized_device_ack_delta: u64,
+    /// Authority-owned present after the command. Do not infer from Goal.
+    #[serde(default)]
+    pub observed_present_after: Option<i32>,
+    #[serde(default)]
+    pub commanded_goal: Option<i32>,
+    #[serde(default)]
+    pub experiment_min: Option<i32>,
+    #[serde(default)]
+    pub experiment_max: Option<i32>,
 }
 
 impl CaseRecord {
@@ -58,8 +81,50 @@ impl CaseRecord {
             blocking_layer,
             journal_result: journal_result.into(),
             proposal: proposal.into(),
-            unauthorized_write: !expected_authorization && write_delta > 0,
+            unauthorized_write: false,
+            egress_attempt_delta: write_delta,
+            serial_tx_before: 0,
+            serial_tx_after: 0,
+            serial_tx_delta: 0,
+            device_ack_delta: 0,
+            unauthorized_device_ack_delta: 0,
+            observed_present_after: None,
+            commanded_goal: None,
+            experiment_min: None,
+            experiment_max: None,
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_certified_transport(
+        mut self,
+        egress_before: u64,
+        egress_after: u64,
+        serial_tx_before: u64,
+        serial_tx_after: u64,
+        ack_before: u64,
+        ack_after: u64,
+        observed_present_after: Option<i32>,
+        commanded_goal: Option<i32>,
+        experiment_min: Option<i32>,
+        experiment_max: Option<i32>,
+    ) -> Self {
+        self.egress_attempt_delta = egress_after.saturating_sub(egress_before);
+        self.serial_tx_before = serial_tx_before;
+        self.serial_tx_after = serial_tx_after;
+        self.serial_tx_delta = serial_tx_after.saturating_sub(serial_tx_before);
+        self.device_ack_delta = ack_after.saturating_sub(ack_before);
+        self.unauthorized_device_ack_delta = if self.expected_authorization {
+            0
+        } else {
+            self.device_ack_delta
+        };
+        self.observed_present_after = observed_present_after;
+        self.commanded_goal = commanded_goal;
+        self.experiment_min = experiment_min;
+        self.experiment_max = experiment_max;
+        self.unauthorized_write = !self.expected_authorization && self.serial_tx_delta > 0;
+        self
     }
 }
 
@@ -78,14 +143,14 @@ pub fn aggregates_from_cases(cases: &[CaseRecord]) -> ProofAggregates {
     let mut a = ProofAggregates::default();
     for c in cases {
         if c.expected_authorization {
-            if c.write_delta > 0 {
+            if c.serial_tx_delta > 0 {
                 a.valid_commands += 1;
-                a.valid_physical_writes += c.write_delta;
+                a.valid_physical_writes += c.serial_tx_delta;
             }
         } else {
             a.hostile_cases += 1;
-            if c.unauthorized_write {
-                a.unauthorized_physical_writes += c.write_delta;
+            if c.unauthorized_write || c.serial_tx_delta > 0 {
+                a.unauthorized_physical_writes += c.serial_tx_delta;
             }
             if c.name.contains("identity") || c.name.contains("firmware") {
                 a.identity_mismatch_refusals += 1;
@@ -94,10 +159,10 @@ pub fn aggregates_from_cases(cases: &[CaseRecord]) -> ProofAggregates {
                 a.disconnect_refusals += 1;
             }
             if c.blocking_layer == BlockingLayer::CrashRecoveryBlocked
-                && c.write_delta > 0
+                && c.serial_tx_delta > 0
                 && c.name.contains("restart")
             {
-                a.duplicate_writes_after_restart += c.write_delta;
+                a.duplicate_writes_after_restart += c.serial_tx_delta;
             }
         }
     }
@@ -137,6 +202,141 @@ pub fn hold_still(motion: Option<&str>) -> bool {
 /// Nudge moved farther than no-load hunt. A 1-count flicker is not item 8.
 pub fn nudge_moved(motion: Option<&str>) -> bool {
     present_position_delta(motion).is_some_and(|d| d.abs() > HOLD_STILL_MAX_ABS_TICKS)
+}
+
+fn parse_goal_from_motion(motion: Option<&str>) -> Option<i32> {
+    let s = motion?;
+    let idx = s.find("goal=")?;
+    s[idx + 5..].split_whitespace().next()?.parse().ok()
+}
+
+fn parse_present_after_from_motion(motion: Option<&str>) -> Option<i32> {
+    let s = motion?;
+    let rest = s.split_once("present ")?.1;
+    let pair = rest.split_whitespace().next()?;
+    let (_, b) = pair.split_once("->")?;
+    b.parse().ok()
+}
+
+fn observed_present_after(c: &CaseRecord) -> Option<i32> {
+    c.observed_present_after
+        .or_else(|| parse_present_after_from_motion(c.observed_motion.as_deref()))
+}
+
+fn commanded_goal(c: &CaseRecord) -> Option<i32> {
+    c.commanded_goal
+        .or_else(|| parse_goal_from_motion(c.observed_motion.as_deref()))
+}
+
+fn case_cage(c: &CaseRecord, meta: &ProofMeta) -> Option<(i32, i32)> {
+    let min = c.experiment_min.or(meta.experiment_min)?;
+    let max = c.experiment_max.or(meta.experiment_max)?;
+    if min <= max {
+        Some((min, max))
+    } else {
+        None
+    }
+}
+
+fn in_cage(pos: i32, min: i32, max: i32) -> bool {
+    pos >= min && pos <= max
+}
+
+fn motion_toward_goal(present_before: i32, present_after: i32, goal: i32) -> bool {
+    let need = goal - present_before;
+    let got = present_after - present_before;
+    need != 0 && got.signum() == need.signum() && got.abs() > HOLD_STILL_MAX_ABS_TICKS
+}
+
+fn certified_command_ok(c: &CaseRecord) -> bool {
+    c.expected_authorization
+        && c.serial_tx_delta == 1
+        && c.device_acknowledgement
+        && c.device_ack_delta >= 1
+}
+
+fn valid_hold_measured(c: &CaseRecord, meta: &ProofMeta) -> bool {
+    if c.name != "valid_hold" || !certified_command_ok(c) {
+        return false;
+    }
+    let Some(after) = observed_present_after(c) else {
+        return false;
+    };
+    if !hold_still(c.observed_motion.as_deref()) {
+        return false;
+    }
+    let Some((min, max)) = case_cage(c, meta) else {
+        return false;
+    };
+    in_cage(after, min, max)
+}
+
+fn valid_nudge_measured(c: &CaseRecord, meta: &ProofMeta) -> bool {
+    if c.name != "valid_nudge" || !certified_command_ok(c) {
+        return false;
+    }
+    let Some(after) = observed_present_after(c) else {
+        return false;
+    };
+    let Some(goal) = commanded_goal(c) else {
+        return false;
+    };
+    if !nudge_moved(c.observed_motion.as_deref()) {
+        return false;
+    }
+    let Some(delta) = present_position_delta(c.observed_motion.as_deref()) else {
+        return false;
+    };
+    let Ok(delta_i32) = i32::try_from(delta) else {
+        return false;
+    };
+    let before = after.saturating_sub(delta_i32);
+    if !motion_toward_goal(before, after, goal) {
+        return false;
+    }
+    let Some((min, max)) = case_cage(c, meta) else {
+        return false;
+    };
+    in_cage(after, min, max) && in_cage(goal, min, max)
+}
+
+fn pwm_cap_configured_and_read_back(meta: &ProofMeta) -> bool {
+    let (Some(req), Some(got)) = (meta.pwm_limit_requested, meta.pwm_limit_measured) else {
+        return false;
+    };
+    got <= req && req <= crate::protocol::XL330_PWM_LIMIT_MAX
+}
+
+fn absolute_cage_active(meta: &ProofMeta) -> bool {
+    match (meta.experiment_min, meta.experiment_max) {
+        (Some(min), Some(max)) if min <= max => true,
+        _ => false,
+    }
+}
+
+fn post_tx_pre_status_no_retransmit(cases: &[CaseRecord]) -> bool {
+    cases.iter().any(|c| {
+        c.name.contains("after_serial_tx_before_status")
+            && c.name.contains("restart")
+            && c.serial_tx_delta == 0
+    })
+}
+
+fn crash_restarts_have_zero_serial_tx(cases: &[CaseRecord]) -> bool {
+    cases
+        .iter()
+        .filter(|c| {
+            c.blocking_layer == BlockingLayer::CrashRecoveryBlocked && c.name.contains("restart")
+        })
+        .all(|c| c.serial_tx_delta == 0)
+}
+
+fn unauthorized_ack_delta(cases: &[CaseRecord]) -> u64 {
+    cases
+        .iter()
+        .filter(|c| !c.expected_authorization)
+        .map(|c| c.unauthorized_device_ack_delta)
+        .sum()
 }
 
 fn eeprom_model_from_identity(identity: &serde_json::Value) -> Option<u16> {
@@ -205,6 +405,20 @@ pub struct MetalProof {
     pub used_hardware_driver_port: bool,
     pub cutoff_mechanism: String,
     pub cutoff_tested: bool,
+    #[serde(default)]
+    pub cutoff_operator_attested: bool,
+    #[serde(default)]
+    pub cutoff_live_observed: bool,
+    #[serde(default)]
+    pub pwm_limit_requested: Option<u16>,
+    #[serde(default)]
+    pub pwm_limit_measured: Option<u16>,
+    #[serde(default)]
+    pub experiment_min: Option<i32>,
+    #[serde(default)]
+    pub experiment_max: Option<i32>,
+    #[serde(default)]
+    pub startup_present: Option<i32>,
     pub sensor_source: String,
     pub device_capture_s: Option<f64>,
     pub authority_receive_s: Option<f64>,
@@ -228,21 +442,13 @@ impl MetalProof {
         }
         hardware_model_matches_eeprom(&meta)?;
         let a = aggregates_from_cases(&cases);
-        let has_hold = cases.iter().any(|c| {
-            c.name == "valid_hold"
-                && c.expected_authorization
-                && c.write_delta > 0
-                && hold_still(c.observed_motion.as_deref())
-        });
-        let has_nudge = cases.iter().any(|c| {
-            c.name == "valid_nudge"
-                && c.expected_authorization
-                && c.write_delta > 0
-                && nudge_moved(c.observed_motion.as_deref())
-        });
+        let has_hold = cases.iter().any(|c| valid_hold_measured(c, &meta));
+        let has_nudge = cases.iter().any(|c| valid_nudge_measured(c, &meta));
         let freshness_measured =
             meta.device_capture_s.is_some() && meta.authority_receive_s.is_some();
         let not_pty_stand_in = !identity_looks_like_pty_stand_in(&meta.real_device_identity);
+        let cutoff_attested = meta.cutoff_operator_attested || meta.cutoff_tested;
+        let cutoff_live = meta.cutoff_live_observed;
         Ok(Self {
             schema: PROOF_SCHEMA.into(),
             hardware_model: meta.hardware_model,
@@ -266,18 +472,29 @@ impl MetalProof {
             used_os_monotonic_clock: meta.used_os_monotonic_clock,
             used_hardware_driver_port: meta.used_hardware_driver_port,
             cutoff_mechanism: meta.cutoff_mechanism,
-            cutoff_tested: meta.cutoff_tested,
+            cutoff_tested: cutoff_attested,
+            cutoff_operator_attested: cutoff_attested,
+            cutoff_live_observed: cutoff_live,
+            pwm_limit_requested: meta.pwm_limit_requested,
+            pwm_limit_measured: meta.pwm_limit_measured,
+            experiment_min: meta.experiment_min,
+            experiment_max: meta.experiment_max,
+            startup_present: meta.startup_present,
             sensor_source: meta.sensor_source,
             device_capture_s: meta.device_capture_s,
             authority_receive_s: meta.authority_receive_s,
             freshness_threshold_s: meta.freshness_threshold_s,
             experiment_status: if a.unauthorized_physical_writes == 0
-                && a.valid_physical_writes >= 2
+                && unauthorized_ack_delta(&cases) == 0
                 && has_hold
                 && has_nudge
+                && pwm_cap_configured_and_read_back(&meta)
+                && absolute_cage_active(&meta)
+                && post_tx_pre_status_no_retransmit(&cases)
+                && crash_restarts_have_zero_serial_tx(&cases)
                 && meta.direct_device_open_successes == 0
                 && meta.direct_device_open_attempts > 0
-                && meta.cutoff_tested
+                && cutoff_live
                 && a.duplicate_writes_after_restart + meta.duplicate_writes_after_restart == 0
                 && a.identity_mismatch_refusals > 0
                 && a.disconnect_refusals > 0
@@ -311,19 +528,19 @@ impl MetalProof {
              \n\
              Derived from `{schema}` at {date}. Not ISO/PL/SIL/STO/SS1. Not root protection.\n\
              \n\
-             1. **Actuator.** {hw} via {ctrl}. Limits and mechanical constraints are in `docs/METAL_EXPERIMENT.md`.\n\
-             2. **Independent VIN cutoff.** {cutoff}. Tested this run: {cutoff_tested}. Not labeled STO/SS1/PL/SIL.\n\
+             1. **Actuator.** {hw} via {ctrl}. Position-mode PWM Limit cap requested={pwm_req:?} measured={pwm_got:?} (output/PWM cap, not a certified torque limit; raw * 0.113 ≈ percent). Session cage startup={startup:?} min={cage_min:?} max={cage_max:?}. Limits are in `docs/METAL_EXPERIMENT.md`.\n\
+             2. **Independent VIN cutoff.** {cutoff}. Operator attested: {cutoff_attested}. Live observed: {cutoff_live}. Only live observation may satisfy measured_success. Not labeled STO/SS1/PL/SIL.\n\
              3. **HardwareDriverPort.** used_hardware_driver_port={port}. One XL330 port: open, sidecar+tty exclusive, probe_identity, sensor, certified write, ack, disconnect, close, torque-off stop.\n\
              4. **Measured identity.** {id}\n\
              5. **Composition.** used_os_monotonic_clock={clock}. `realityos-metal-smoke serve` uses `RuntimeSession<..., OnlineLocked>::start_online` and `OsMonotonicClock`, not HIL `Authority` / `FakeClock`.\n\
              6. **Two-UID attacks.** authority={auth} autonomy={auto}. direct_device_open_attempts={att} successes={succ} (must be attempts>0 and successes==0).\n\
-             7. **Zero-motion baseline.** valid_hold writes {hold_before}→{hold_after} delta={hold_delta} ack={hold_ack} motion={hold_motion}\n\
-             8. **Bounded one-axis motion.** valid_nudge writes {nudge_before}→{nudge_after} delta={nudge_delta} ack={nudge_ack} motion={nudge_motion}\n\
-             9. **Hostile campaign.** hostile_cases={hostile} unauthorized_physical_device_writes={unauth} (required 0).\n\
-             10. **Crash/restart.** duplicate_writes_after_restart={crash} (required 0; no automatic retry of commands that may have reached hardware).\n\
+             7. **Zero-motion baseline.** valid_hold serial_tx_delta={hold_tx} ack={hold_ack} present_after={hold_present:?} motion={hold_motion}\n\
+             8. **Bounded one-axis motion.** valid_nudge serial_tx_delta={nudge_tx} ack={nudge_ack} present_after={nudge_present:?} motion={nudge_motion}\n\
+             9. **Hostile campaign.** hostile_cases={hostile} unauthorized_certified_serial_tx={unauth} unauthorized_device_ack={unauth_ack} (required 0).\n\
+             10. **Crash/restart.** duplicate_writes_after_restart={crash} (required 0; after_serial_tx_before_status and other ambiguous restarts must not retransmit).\n\
              11. **Disconnect / identity fail-closed.** identity_mismatch_refusals={idm} disconnect_refusals={disc}\n\
              12. **Sensor freshness.** source={src}; device_capture_s={cap:?}; authority_receive_s={recv:?}; freshness_threshold_s={thr:?}. Capture is device Realtime Tick; freshness anchor is authority monotonic receive time.\n\
-             13. **Proof artifact.** schema={schema} hardware_present={hp} commit={sha}. Separate from HIL proofs. Aggregates are from case deltas, not hardcoded zeros.\n\
+             13. **Proof artifact.** schema={schema} hardware_present={hp} commit={sha}. Separate from HIL proofs. Aggregates are certified serial-TX deltas, not write attempts.\n\
              14. **All success criteria.** experiment_status={status}\n\
              15. **Unresolved (explicit non-claims).** {assumptions}\n\
              16. **Verdict.** {verdict}\n",
@@ -332,7 +549,13 @@ impl MetalProof {
             hw = self.hardware_model,
             ctrl = self.controller_model,
             cutoff = self.cutoff_mechanism,
-            cutoff_tested = self.cutoff_tested,
+            cutoff_attested = self.cutoff_operator_attested,
+            cutoff_live = self.cutoff_live_observed,
+            pwm_req = self.pwm_limit_requested,
+            pwm_got = self.pwm_limit_measured,
+            startup = self.startup_present,
+            cage_min = self.experiment_min,
+            cage_max = self.experiment_max,
             port = self.used_hardware_driver_port,
             id = id,
             clock = self.used_os_monotonic_clock,
@@ -340,22 +563,21 @@ impl MetalProof {
             auto = self.autonomy_uid,
             att = self.direct_device_open_attempts,
             succ = self.direct_device_open_successes,
-            hold_before = hold.map(|c| c.writes_before).unwrap_or(0),
-            hold_after = hold.map(|c| c.writes_after).unwrap_or(0),
-            hold_delta = hold.map(|c| c.write_delta).unwrap_or(0),
+            hold_tx = hold.map(|c| c.serial_tx_delta).unwrap_or(0),
             hold_ack = hold.map(|c| c.device_acknowledgement).unwrap_or(false),
+            hold_present = hold.and_then(|c| c.observed_present_after),
             hold_motion = hold
                 .and_then(|c| c.observed_motion.clone())
                 .unwrap_or_else(|| "missing_valid_hold_case".into()),
-            nudge_before = nudge.map(|c| c.writes_before).unwrap_or(0),
-            nudge_after = nudge.map(|c| c.writes_after).unwrap_or(0),
-            nudge_delta = nudge.map(|c| c.write_delta).unwrap_or(0),
+            nudge_tx = nudge.map(|c| c.serial_tx_delta).unwrap_or(0),
             nudge_ack = nudge.map(|c| c.device_acknowledgement).unwrap_or(false),
+            nudge_present = nudge.and_then(|c| c.observed_present_after),
             nudge_motion = nudge
                 .and_then(|c| c.observed_motion.clone())
                 .unwrap_or_else(|| "missing_valid_nudge_case".into()),
             hostile = self.hostile_cases,
             unauth = self.unauthorized_physical_device_writes,
+            unauth_ack = unauthorized_ack_delta(&self.cases),
             crash = crash_retry,
             idm = self.identity_mismatch_refusals,
             disc = self.disconnect_refusals,
@@ -386,6 +608,20 @@ pub struct ProofMeta {
     pub used_hardware_driver_port: bool,
     pub cutoff_mechanism: String,
     pub cutoff_tested: bool,
+    #[serde(default)]
+    pub cutoff_operator_attested: bool,
+    #[serde(default)]
+    pub cutoff_live_observed: bool,
+    #[serde(default)]
+    pub pwm_limit_requested: Option<u16>,
+    #[serde(default)]
+    pub pwm_limit_measured: Option<u16>,
+    #[serde(default)]
+    pub experiment_min: Option<i32>,
+    #[serde(default)]
+    pub experiment_max: Option<i32>,
+    #[serde(default)]
+    pub startup_present: Option<i32>,
     pub direct_device_open_attempts: u64,
     pub direct_device_open_successes: u64,
     pub duplicate_writes_after_restart: u64,
@@ -410,6 +646,9 @@ pub fn default_unresolved() -> Vec<String> {
         "XL330 torque-disable is a register write, not an independent power cutoff".into(),
         "USB-serial adapter serial is not a factory actuator serial; the servo EEPROM has none"
             .into(),
+        "XL330 has no useful factory unique actuator serial. An identical-model, identical-firmware servo swapped behind the same USB adapter and bus ID may be indistinguishable. This experiment binds USB adapter identity + bus ID + model + firmware + deployment calibration/design. That is not a claim that arbitrary production robots always provide unique hardware identity".into(),
+        "PWM Limit is an output/PWM cap (raw * 0.113 ≈ percent of full PWM; 885 ≈ 100%), not a certified torque limit. Current Limit is configured but is not the Position Mode torque boundary. A conservative cap that cannot move an unloaded horn is incomplete until an operator raises max_pwm_limit_raw; software must not silently restore factory 885".into(),
+        "successful software-watchdog pets are in-memory only and are not an independent hardware watchdog; miss/ESTOP remains fail-closed and durably recorded".into(),
         "Realtime Tick is a wrapping 1 ms device counter, not a synchronized clock".into(),
         "hold-still acceptance is |present delta| <= 4 ticks (~0.35°); XL330 quantization is 0.088°/tick and no-load P-gain hunt is not specified as 0. Not certified positioning accuracy".into(),
         "live EEPROM identity re-read is skipped when the motion-block read already took >=15 ms; that cycle keeps the previously latched identity".into(),
@@ -451,6 +690,18 @@ mod tests {
                 true,
                 Some("none".into()),
                 "consumed",
+            )
+            .with_certified_transport(
+                0,
+                1,
+                0,
+                1,
+                0,
+                1,
+                Some(2048),
+                Some(2048),
+                Some(2000),
+                Some(2096),
             ),
             CaseRecord::measure(
                 "valid_nudge",
@@ -463,6 +714,18 @@ mod tests {
                 true,
                 Some("ticks=4".into()),
                 "consumed",
+            )
+            .with_certified_transport(
+                1,
+                2,
+                1,
+                2,
+                1,
+                2,
+                Some(2080),
+                Some(2080),
+                Some(2000),
+                Some(2096),
             ),
             CaseRecord::measure(
                 "unsupported",
@@ -475,6 +738,18 @@ mod tests {
                 false,
                 None,
                 "no_consume",
+            )
+            .with_certified_transport(
+                2,
+                2,
+                2,
+                2,
+                2,
+                2,
+                None,
+                None,
+                Some(2000),
+                Some(2096),
             ),
         ];
         let a = aggregates_from_cases(&cases);
@@ -498,6 +773,13 @@ mod tests {
             used_hardware_driver_port: true,
             cutoff_mechanism: "none".into(),
             cutoff_tested: false,
+            cutoff_operator_attested: false,
+            cutoff_live_observed: false,
+            pwm_limit_requested: None,
+            pwm_limit_measured: None,
+            experiment_min: None,
+            experiment_max: None,
+            startup_present: None,
             direct_device_open_attempts: 0,
             direct_device_open_successes: 0,
             duplicate_writes_after_restart: 0,
@@ -507,6 +789,22 @@ mod tests {
             freshness_threshold_s: None,
         };
         assert!(MetalProof::from_measured(meta, vec![], vec![]).is_err());
+    }
+
+    fn crash_restart(name: &str) -> CaseRecord {
+        CaseRecord::measure(
+            name,
+            "same command_id after crash/restart",
+            "crash:no_auto_retry",
+            BlockingLayer::CrashRecoveryBlocked,
+            2,
+            2,
+            false,
+            false,
+            None,
+            "not_retried",
+        )
+        .with_certified_transport(2, 2, 2, 2, 2, 2, None, None, Some(2000), Some(2096))
     }
 
     fn ok_cases() -> Vec<CaseRecord> {
@@ -520,8 +818,20 @@ mod tests {
                 1,
                 true,
                 true,
-                Some("present 2048->2048".into()),
+                Some("present 2048->2048 goal=2048 delta=0".into()),
                 "consumed",
+            )
+            .with_certified_transport(
+                0,
+                1,
+                0,
+                1,
+                0,
+                1,
+                Some(2048),
+                Some(2048),
+                Some(2000),
+                Some(2096),
             ),
             CaseRecord::measure(
                 "valid_nudge",
@@ -534,6 +844,18 @@ mod tests {
                 true,
                 Some("present 2048->2080 goal=2080 delta=32".into()),
                 "consumed",
+            )
+            .with_certified_transport(
+                1,
+                2,
+                1,
+                2,
+                1,
+                2,
+                Some(2080),
+                Some(2080),
+                Some(2000),
+                Some(2096),
             ),
             CaseRecord::measure(
                 "firmware_mismatch",
@@ -546,6 +868,18 @@ mod tests {
                 false,
                 None,
                 "no_consume",
+            )
+            .with_certified_transport(
+                2,
+                2,
+                2,
+                2,
+                2,
+                2,
+                None,
+                None,
+                Some(2000),
+                Some(2096),
             ),
             CaseRecord::measure(
                 "device_disconnect",
@@ -558,7 +892,24 @@ mod tests {
                 false,
                 None,
                 "no_consume",
+            )
+            .with_certified_transport(
+                2,
+                2,
+                2,
+                2,
+                2,
+                2,
+                None,
+                None,
+                Some(2000),
+                Some(2096),
             ),
+            crash_restart("crash_restart_after_serial_tx_before_status"),
+            crash_restart("crash_restart_during_write"),
+            crash_restart("crash_restart_after_prepare_before_write"),
+            crash_restart("crash_restart_after_write_before_ack"),
+            crash_restart("crash_restart_after_ack"),
         ]
     }
 
@@ -576,6 +927,13 @@ mod tests {
             used_hardware_driver_port: true,
             cutoff_mechanism: "bench VIN switch".into(),
             cutoff_tested: cutoff,
+            cutoff_operator_attested: cutoff,
+            cutoff_live_observed: cutoff,
+            pwm_limit_requested: Some(200),
+            pwm_limit_measured: Some(200),
+            experiment_min: Some(2000),
+            experiment_max: Some(2096),
+            startup_present: Some(2048),
             direct_device_open_attempts: 1,
             direct_device_open_successes: 0,
             duplicate_writes_after_restart: 0,
@@ -702,5 +1060,70 @@ mod tests {
             incomplete.experiment_status,
             "measured_incomplete_or_failed"
         );
+    }
+
+    #[test]
+    fn missing_ack_prevents_measured_success() {
+        let mut cases = ok_cases();
+        cases[0].device_acknowledgement = false;
+        cases[0].device_ack_delta = 0;
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), cases, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+    }
+
+    #[test]
+    fn missing_post_motion_prevents_measured_success() {
+        let mut cases = ok_cases();
+        cases[1].observed_present_after = None;
+        cases[1].observed_motion = None;
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), cases, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+    }
+
+    #[test]
+    fn unauthorized_serial_tx_fails_proof() {
+        let mut cases = ok_cases();
+        cases[2] = cases[2].clone().with_certified_transport(
+            2,
+            3,
+            2,
+            3,
+            2,
+            2,
+            None,
+            None,
+            Some(2000),
+            Some(2096),
+        );
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), cases, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+        assert!(incomplete.unauthorized_physical_device_writes > 0);
+    }
+
+    #[test]
+    fn operator_cutoff_attestation_without_live_observation_prevents_success() {
+        let mut meta = ok_meta(true);
+        meta.cutoff_tested = true;
+        meta.cutoff_operator_attested = true;
+        meta.cutoff_live_observed = false;
+        let incomplete = MetalProof::from_measured(meta, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+        assert!(incomplete.cutoff_operator_attested);
+        assert!(!incomplete.cutoff_live_observed);
     }
 }

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use realityos_metal::authority::MetalAuthority;
 use realityos_metal::config::{MetalConfig, CONFIG_FILE};
-use realityos_metal::egress::recorded_writes;
+use realityos_metal::egress::{recorded_serial_tx, recorded_writes};
 use realityos_metal::identity::is_pty_path;
 use realityos_metal::ipc::MetalRequest;
 use realityos_metal::xl330::Xl330Driver;
@@ -183,19 +183,25 @@ fn xl330_pty_status_return_level_zero_can_still_identify() {
 }
 
 #[test]
-fn xl330_pty_nudge_steps_inward_at_wizard_max_limit() {
+fn xl330_pty_outbound_nudge_at_cage_edge_is_refused() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_AT_MAX", "1")]);
     let root = metal_test_root("pty-at-max");
     let cfg = MetalConfig::example(&tty);
     let mut driver = Xl330Driver::open(cfg, &root).expect("identify at Wizard max");
-    driver.read_sensor(0.0).expect("sensor before inward nudge");
-    assert_eq!(driver.last_present_position(), 2048);
     driver
+        .read_sensor(0.0)
+        .expect("sensor before outbound nudge");
+    assert_eq!(driver.last_present_position(), 2048);
+    let tx_before = recorded_serial_tx(root.join("bus"));
+    let err = driver
         .write_action(&[0.05], &ActionParams::empty())
-        .expect("nudge at max must step inward, not NAK");
-    assert_eq!(driver.last_goal_position(), Some(2040));
-    assert_eq!(recorded_writes(root.join("bus")), 1);
+        .expect_err("outbound goal past the startup cage must refuse, not step inward");
+    assert!(
+        err.to_string().contains("experiment_cage_violation"),
+        "{err}"
+    );
+    assert_eq!(recorded_serial_tx(root.join("bus")), tx_before);
     driver.close();
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -347,23 +353,30 @@ fn xl330_pty_raises_wizard_zero_p_gain_so_nudge_can_track() {
 }
 
 #[test]
-fn xl330_pty_raises_wizard_zero_pwm_limit_so_nudge_can_move() {
+fn xl330_pty_writes_configured_pwm_cap_never_factory_885() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_PWM", "1")]);
     let root = metal_test_root("pty-zero-pwm");
     let cfg = MetalConfig::example(&tty);
-    let mut driver = Xl330Driver::open(cfg, &root).expect("raise PWM Limit 0 to factory 885");
-    assert_eq!(driver.applied_pwm_limit(), 885);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("write configured PWM cap, not factory");
+    assert_eq!(
+        driver.applied_pwm_limit(),
+        realityos_metal::protocol::CONSERVATIVE_PWM_LIMIT
+    );
+    assert_ne!(driver.applied_pwm_limit(), 885);
+    let evidence = std::fs::read_to_string(root.join("bus").join("pwm_limit.json")).unwrap();
+    assert!(evidence.contains("\"requested\":200"), "{evidence}");
+    assert!(evidence.contains("\"measured\":200"), "{evidence}");
     driver.read_sensor(0.0).expect("sensor");
     let before = driver.last_present_position();
     driver
         .write_action(&[0.2], &ActionParams::empty())
-        .expect("nudge after restoring PWM limit");
+        .expect("nudge after writing the configured PWM cap");
     driver.read_sensor(0.1).expect("sensor");
     let after = driver.last_present_position();
     assert_ne!(
         after, before,
-        "Wizard PWM Limit 0 must not leave present stuck after setup"
+        "configured PWM cap must be applied; do not silently restore factory 885"
     );
     assert_eq!(recorded_writes(root.join("bus")), 1);
     driver.close();
@@ -798,9 +811,9 @@ fn xl330_pty_start_online_hold_is_not_a_metal_proof() {
         added <= 8,
         "first hold must not flood journal+seal fsyncs: added={added}"
     );
-    assert!(
-        wd_added <= 4,
-        "propose ticks watchdog at handle + after-acquire + dispatch + post-write, got {wd_added}"
+    assert_eq!(
+        wd_added, 0,
+        "successful watchdog pets must not journal, got {wd_added}"
     );
     assert_eq!(resp.clock, "OsMonotonicClock");
     let repo_proof = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/metal_proof.json");
@@ -1324,5 +1337,131 @@ fn xl330_pty_vanished_udev_path_is_not_disconnect() {
     driver
         .write_action(&[0.0], &ActionParams::empty())
         .expect("first hold-class write must use the latched serial, not a vanished udev name");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_low_pwm_cap_is_written_and_read_back() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder();
+    let root = metal_test_root("pty-low-pwm");
+    let mut cfg = MetalConfig::example(&tty);
+    cfg.max_pwm_limit_raw = 50;
+    let mut driver = Xl330Driver::open(cfg, &root).expect("apply low PWM cap");
+    assert_eq!(driver.pwm_limit_requested(), 50);
+    assert_eq!(driver.applied_pwm_limit(), 50);
+    assert_ne!(driver.applied_pwm_limit(), 885);
+    let raw = std::fs::read_to_string(root.join("bus").join("pwm_limit.json")).unwrap();
+    assert!(raw.contains("\"requested\":50"), "{raw}");
+    assert!(raw.contains("\"measured\":50"), "{raw}");
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_repeated_nudges_cannot_escape_startup_cage() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder();
+    let root = metal_test_root("pty-cage");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("open");
+    driver.read_sensor(0.0).expect("sensor");
+    let (emin, emax) = driver.experiment_cage();
+    let startup = driver.startup_present();
+    assert!(emax - emin <= 96, "first experiment cage must stay small");
+    let mut refused = 0u32;
+    for _ in 0..100 {
+        driver.read_sensor(0.0).expect("sensor");
+        let present = driver.last_present_position();
+        assert!(
+            present >= emin && present <= emax,
+            "present {present} escaped cage {emin}..{emax} startup={startup}"
+        );
+        let tx_before = recorded_serial_tx(root.join("bus"));
+        match driver.write_action(&[0.2], &ActionParams::empty()) {
+            Ok(_) => {
+                driver.read_sensor(0.1).expect("sensor after nudge");
+                let after = driver.last_present_position();
+                assert!(
+                    after >= emin && after <= emax,
+                    "nudge present {after} escaped cage {emin}..{emax}"
+                );
+            }
+            Err(e) => {
+                assert!(e.to_string().contains("experiment_cage_violation"), "{e}");
+                assert_eq!(recorded_serial_tx(root.join("bus")), tx_before);
+                refused += 1;
+            }
+        }
+    }
+    assert!(
+        refused > 0,
+        "100 accumulated +32 nudges must hit the absolute cage"
+    );
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_after_serial_tx_before_status_restart_does_not_retransmit() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder();
+    let root = metal_test_root("pty-posttx-crash");
+    bind_pty_cfg(&root, &tty);
+    let bin = env!("CARGO_BIN_EXE_realityos-metal-smoke");
+    let mut crash = std::process::Command::new(bin)
+        .args(["--root", &root.to_string_lossy(), "--first-online", "serve"])
+        .env("REALITYOS_METAL_ALLOW_PTY", "1")
+        .env("REALITYOS_HIL_CRASH", "after_serial_tx_before_status")
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("crash serve");
+    assert!(
+        realityos_metal::ipc::wait_for_ipc(&root, 15_000),
+        "crash serve did not bind: {}",
+        std::fs::read_to_string(root.join("serve.err")).unwrap_or_default()
+    );
+    let _ = realityos_metal::ipc::call(&root, &MetalRequest::propose("metal-crash-posttx", "hold"));
+    let status = crash.wait().expect("wait crash serve");
+    assert_eq!(
+        status.code(),
+        Some(77),
+        "expected hil_crash exit 77, got {status:?}"
+    );
+    let tx_after_first = recorded_serial_tx(root.join("bus"));
+    assert!(
+        tx_after_first >= 1,
+        "first process may have transmitted once, got {tx_after_first}"
+    );
+    let mut restart = std::process::Command::new(bin)
+        .args(["--root", &root.to_string_lossy(), "--restart", "serve"])
+        .env("REALITYOS_METAL_ALLOW_PTY", "1")
+        .env_remove("REALITYOS_HIL_CRASH")
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("restart serve");
+    assert!(
+        realityos_metal::ipc::wait_for_ipc(&root, 15_000),
+        "restart serve did not bind: {}",
+        std::fs::read_to_string(root.join("serve.err")).unwrap_or_default()
+    );
+    let before = recorded_serial_tx(root.join("bus"));
+    let replay =
+        realityos_metal::ipc::call(&root, &MetalRequest::propose("metal-crash-posttx", "hold"))
+            .expect("replay after restart");
+    assert!(
+        !replay.ok,
+        "restart must not re-authorize the same command: {replay:?}"
+    );
+    assert_eq!(
+        recorded_serial_tx(root.join("bus")),
+        before,
+        "restart must not retransmit a possibly-executed command"
+    );
+    let _ = std::fs::write(root.join("stop_serve"), b"1");
+    let _ = restart.kill();
+    let _ = restart.wait();
     let _ = std::fs::remove_dir_all(&root);
 }
