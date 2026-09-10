@@ -47,16 +47,23 @@ impl MeasuredIdentity {
         connected: bool,
     ) -> Self {
         let node = device_node_identity(&cfg.device);
-        let serial = match (
-            usb_serial.as_deref(),
-            usb_fallback.as_deref(),
-            node.as_deref(),
-        ) {
+        let dest_id = usb_fallback
+            .as_deref()
+            .filter(|f| !f.trim().is_empty())
+            .map(|f| format!("{f}:id{}", cfg.servo_id));
+        let mut serial = match (usb_serial.as_deref(), dest_id.as_deref(), node.as_deref()) {
             (Some(s), _, _) if !s.trim().is_empty() => format!("{s}:id{}", cfg.servo_id),
-            (_, Some(f), _) if !f.trim().is_empty() => format!("{f}:id{}", cfg.servo_id),
+            (_, Some(d), _) => d.to_string(),
             (_, _, Some(n)) if !n.trim().is_empty() => format!("{n}:id{}", cfg.servo_id),
             _ => String::new(),
         };
+        // dest-only probe bind must stay dest after iSerial appears.
+        // Rust prefers serial for a new bind; serve would otherwise miss.
+        if let Some(d) = dest_id.as_deref() {
+            if cfg.expected_serial.trim() == d {
+                serial = d.to_string();
+            }
+        }
         let model_name = match model {
             XL330_M288_MODEL => "xl330-m288",
             XL330_M077_MODEL => "xl330-m077",
@@ -133,6 +140,29 @@ impl MeasuredIdentity {
             },
             actuator_ids: vec![self.actuator_id.clone()],
         }
+    }
+
+    /// Preferred serial plus dest fallback. A dest-only bind must still
+    /// match this UART after FTDI/U2D2 iSerial appears.
+    pub fn adapter_aliases(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(s) = self.usb_serial.as_deref() {
+            if !s.trim().is_empty() {
+                out.push(format!("{s}:id{}", self.servo_id));
+            }
+        }
+        if !self.serial.is_empty() && !out.contains(&self.serial) {
+            out.push(self.serial.clone());
+        }
+        if let Some(f) = self.usb_fallback.as_deref() {
+            if !f.trim().is_empty() {
+                let dest = format!("{f}:id{}", self.servo_id);
+                if !out.contains(&dest) {
+                    out.push(dest);
+                }
+            }
+        }
+        out
     }
 }
 
@@ -253,10 +283,18 @@ pub fn iter_usb_uart_candidates() -> Vec<PathBuf> {
 
 /// Adapter+servo-id serial string for a live tty. Model/firmware are not used.
 pub fn adapter_serial_for_tty(tty: &Path, servo_id: u8) -> String {
+    adapter_identity_aliases(tty, servo_id)
+        .into_iter()
+        .next()
+        .unwrap_or_default()
+}
+
+/// Preferred serial plus dest fallback for a live tty.
+pub fn adapter_identity_aliases(tty: &Path, servo_id: u8) -> Vec<String> {
     let (usb, fb) = usb_identity_for_tty(tty);
     let mut cfg = MetalConfig::example(tty);
     cfg.servo_id = servo_id;
-    MeasuredIdentity::from_hardware(&cfg, usb, fb, 0, 0, false).serial
+    MeasuredIdentity::from_hardware(&cfg, usb, fb, 0, 0, false).adapter_aliases()
 }
 
 /// Find a live USB-UART whose measured adapter serial matches `probe` bind.
@@ -267,7 +305,7 @@ pub fn find_tty_for_expected_serial(expected_serial: &str, servo_id: u8) -> Opti
     }
     iter_usb_uart_candidates()
         .into_iter()
-        .find(|p| adapter_serial_for_tty(p, servo_id) == want)
+        .find(|p| adapter_serial_matches(p, want, servo_id))
 }
 
 /// Sentinel when the bound adapter is gone. `serve` must not open a living
@@ -292,10 +330,10 @@ pub fn pick_live_device(
 ) -> PathBuf {
     let want = expected_serial.trim();
     if !want.is_empty() {
-        if preferred.exists() && adapter_serial_for_tty(&preferred, servo_id) == want {
+        if preferred.exists() && adapter_serial_matches(&preferred, want, servo_id) {
             return preferred;
         }
-        if fallback.exists() && adapter_serial_for_tty(&fallback, servo_id) == want {
+        if fallback.exists() && adapter_serial_matches(&fallback, want, servo_id) {
             return fallback;
         }
         if let Some(found) = find_tty_for_expected_serial(want, servo_id) {
@@ -321,7 +359,11 @@ pub fn pick_live_device(
 /// USB-adapter serial on this node, before any servo open / torque-on.
 pub fn adapter_serial_matches(device: &Path, expected_serial: &str, servo_id: u8) -> bool {
     let want = expected_serial.trim();
-    !want.is_empty() && device.exists() && adapter_serial_for_tty(device, servo_id) == want
+    !want.is_empty()
+        && device.exists()
+        && adapter_identity_aliases(device, servo_id)
+            .iter()
+            .any(|s| s == want)
 }
 
 #[cfg(test)]
@@ -621,5 +663,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(serial, None, "vid without pid must not inherit hub serial");
         assert_eq!(fallback, None);
+    }
+
+    #[test]
+    fn dest_only_bind_still_matches_after_iserial_appears() {
+        let dest = "usb:0403:6001:1.2:id1";
+        let mut cfg = MetalConfig::example(PathBuf::from("/dev/ttyUSB0"));
+        let fresh = MeasuredIdentity::from_hardware(
+            &cfg,
+            Some("FT123456".into()),
+            Some("usb:0403:6001:1.2".into()),
+            1190,
+            46,
+            true,
+        );
+        assert_eq!(fresh.serial, "FT123456:id1");
+        assert!(fresh.adapter_aliases().contains(&dest.into()));
+        cfg.expected_serial = dest.into();
+        let bound = MeasuredIdentity::from_hardware(
+            &cfg,
+            Some("FT123456".into()),
+            Some("usb:0403:6001:1.2".into()),
+            1190,
+            46,
+            true,
+        );
+        assert_eq!(
+            bound.serial, dest,
+            "serve must keep the dest-only probe bind"
+        );
+        assert!(bound.adapter_aliases().contains(&"FT123456:id1".into()));
     }
 }
