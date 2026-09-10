@@ -262,9 +262,10 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
 
     /// Authority seconds since the last software-watchdog stamp.
     ///
-    /// The stamp is taken at the start of the tick, so this includes that
-    /// tick's journal+seal persist time. Idle serve must use this, not a
-    /// wall Instant schedule, when deciding whether the next tick is due.
+    /// Successful pets stamp in memory at check time. They do not move the
+    /// stamp after durable work, so a real >configured-interval stall stays
+    /// visible when execution resumes. This is not an independent hardware
+    /// watchdog.
     pub fn watchdog_age_s(&self) -> f64 {
         let now = self.clock.monotonic_now().secs();
         if !now.is_finite() {
@@ -302,22 +303,21 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
             return self.engage_estop_at("software_watchdog_miss", now_s);
         }
         self.last_watchdog_s = now_s;
-        self.emit(RuntimeTrace::new(true, "watchdog_tick", now_s))
+        let t = RuntimeTrace::new(true, "watchdog_tick", now_s);
+        self.traces.push(t.clone());
+        t
     }
 
     /// Software supervisor using the authority clock. Not an independent hardware watchdog.
     ///
-    /// After a successful tick, the stamp is the time *after* journal+seal
-    /// persist. Persist latency is not a missed period (same exception as
-    /// [`Self::new_online`] start). A gap >100 ms with no successful tick
-    /// still latches and cannot be caught up. Caller-time [`Self::watchdog_tick`]
-    /// (HIL) is unchanged.
+    /// Successful normal pets update monotonic state in memory only. They do
+    /// not fsync journal+seal. Miss/ESTOP and other major transitions still
+    /// emit durably. The stamp is the check time, not a time moved after
+    /// synchronous durable work, so a real >configured-interval stall remains
+    /// visible when execution resumes. Caller-time [`Self::watchdog_tick`]
+    /// (HIL) uses the same in-memory success path.
     pub fn watchdog_tick_now(&mut self) -> RuntimeTrace {
-        let t = self.watchdog_tick_at(self.clock.monotonic_now().secs());
-        if t.ok && !self.estop() {
-            self.last_watchdog_s = self.clock.monotonic_now().secs();
-        }
-        t
+        self.watchdog_tick_at(self.clock.monotonic_now().secs())
     }
 
     fn emit(&mut self, t: RuntimeTrace) -> RuntimeTrace {
@@ -862,10 +862,9 @@ impl<P: Plant> RuntimeGovernor<P, OnlineLocked> {
         g.validated = Some(validated);
         g.authorized_actuator_ids = actuator_ids;
         g.envelope = Some(env);
-        // Each emit fsyncs journal+seal. Stamping heartbeat and watchdog with
-        // one pre-emit time makes the next watchdog_tick_now see persist
-        // latency as a miss (software_watchdog_miss_before_bind on GHA).
-        // Heartbeat first, then watchdog_tick_now (stamps after persist).
+        // Heartbeat is a durable start transition. The first watchdog pet
+        // is in-memory so start persist latency is not a 100 ms miss, and
+        // later pets do not restamp after fsync.
         g.heartbeat_at(g.clock.monotonic_now().secs());
         let _ = g.watchdog_tick_now();
         let now_s = g.clock.monotonic_now().secs();

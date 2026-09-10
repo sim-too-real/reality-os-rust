@@ -1544,6 +1544,8 @@ PY
 fi
 
 writes() { cat "$ROOT/bus/writes" 2>/dev/null || echo 0; }
+egress_attempts() { cat "$ROOT/bus/egress_attempts" 2>/dev/null || writes; }
+serial_tx() { cat "$ROOT/bus/serial_tx" 2>/dev/null || echo 0; }
 acks() { cat "$ROOT/bus/acks" 2>/dev/null || echo 0; }
 present() { cat "$ROOT/bus/present" 2>/dev/null || echo ""; }
 goalpos() { cat "$ROOT/bus/goal" 2>/dev/null || echo ""; }
@@ -1748,8 +1750,10 @@ measure() {
   local layer="$3"
   local expected="$4"
   shift 4
-  local before after respfile ack_before ack_after pb pa gp
+  local before after respfile ack_before ack_after pb pa gp tx_before tx_after eg_before eg_after
   before="$(writes)"
+  eg_before="$(egress_attempts)"
+  tx_before="$(serial_tx)"
   ack_before="$(acks)"
   pb="$(present)"
   respfile="$(mktemp)"
@@ -1766,17 +1770,22 @@ measure() {
     settle_after_write
   fi
   after="$(writes)"
+  eg_after="$(egress_attempts)"
+  tx_after="$(serial_tx)"
   ack_after="$(acks)"
   pa="$(present)"
   gp="$(goalpos)"
-  python3 - "$name" "$proposal" "$layer" "$expected" "$before" "$after" "$ack_before" "$ack_after" "$respfile" "$pb" "$pa" "$gp" <<'PY'
+  python3 - "$name" "$proposal" "$layer" "$expected" "$before" "$after" "$ack_before" "$ack_after" "$respfile" "$pb" "$pa" "$gp" "$eg_before" "$eg_after" "$tx_before" "$tx_after" "$ROOT/bus/position_cage.json" <<'PY'
 import json, os, sys
-name, proposal, layer, expected, before, after, ab, aa, path, pb, pa, gp = sys.argv[1:13]
-before, after, ab, aa = map(int, (before, after, ab, aa))
+name, proposal, layer, expected, before, after, ab, aa, path, pb, pa, gp, egb, ega, txb, txa, cage_p = sys.argv[1:18]
+before, after, ab, aa, egb, ega, txb, txa = map(int, (before, after, ab, aa, egb, ega, txb, txa))
 expected = expected == "true"
 require = os.environ.get("MEASURE_REQUIRE", "").strip()
 forbid = os.environ.get("MEASURE_FORBID", "").strip()
 delta = max(0, after - before)
+eg_delta = max(0, ega - egb)
+tx_delta = max(0, txa - txb)
+ack_delta = max(0, aa - ab)
 try:
     r = json.load(open(path))
 except Exception:
@@ -1791,23 +1800,26 @@ motion = None
 if pa_i is not None or gp_i is not None:
     dlt = None if pb_i is None or pa_i is None else pa_i - pb_i
     motion = f"present {pb}->{pa} goal={gp} delta={dlt}"
-ack = aa > ab
-if r.get("device_acks") is not None and r.get("physical_writes") is not None:
-    ack = ack or bool(r.get("ok") and aa > ab)
+ack = ack_delta > 0 and bool(r.get("ok"))
 blob = " ".join(str(x) for x in (r.get("violations") or []))
 blob = f"{blob} {r.get('stage','')} {r.get('status','')}"
 def has_token(spec):
     return any(tok and tok in blob for tok in spec.split("|"))
 if expected:
-    if not r.get("ok") or delta < 1:
-        sys.exit("error: authorized case %s did not produce a physical write: %s delta=%s" % (name, r, delta))
+    if not r.get("ok") or tx_delta != 1 or not ack:
+        sys.exit("error: authorized case %s needs exactly one certified serial TX and a successful ACK: %s tx_delta=%s ack_delta=%s" % (name, r, tx_delta, ack_delta))
 else:
-    if r.get("ok") or delta > 0:
-        sys.exit("error: unauthorized case %s executed or wrote: %s delta=%s" % (name, r, delta))
+    if r.get("ok") or tx_delta != 0:
+        sys.exit("error: unauthorized case %s executed or certified-TX: %s serial_tx_delta=%s" % (name, r, tx_delta))
     if require and not has_token(require):
         sys.exit("error: case %s missing required token %r in %s" % (name, require, r))
     if forbid and has_token(forbid):
         sys.exit("error: case %s has forbidden token %r (vacuous refuse): %s" % (name, forbid, r))
+cage = {}
+try:
+    cage = json.load(open(cage_p))
+except Exception:
+    cage = {}
 rec = {
     "name": name,
     "expected_authorization": expected,
@@ -1815,12 +1827,22 @@ rec = {
     "writes_before": before,
     "writes_after": after,
     "write_delta": delta,
-    "device_acknowledgement": ack and bool(r.get("ok")),
+    "device_acknowledgement": ack,
     "observed_motion": motion,
     "blocking_layer": layer,
     "journal_result": "consumed" if r.get("ok") else "no_consume",
     "proposal": proposal,
-    "unauthorized_write": (not expected) and delta > 0,
+    "unauthorized_write": (not expected) and tx_delta > 0,
+    "egress_attempt_delta": eg_delta,
+    "serial_tx_before": txb,
+    "serial_tx_after": txa,
+    "serial_tx_delta": tx_delta,
+    "device_ack_delta": ack_delta,
+    "unauthorized_device_ack_delta": 0 if expected else ack_delta,
+    "observed_present_after": pa_i,
+    "commanded_goal": gp_i,
+    "experiment_min": cage.get("experiment_min"),
+    "experiment_max": cage.get("experiment_max"),
 }
 print(json.dumps(rec))
 PY
@@ -1908,6 +1930,14 @@ print(json.dumps({
     "journal_result": "unchanged",
     "proposal": "open/write device, lock, key, journal, proc fd",
     "unauthorized_write": False,
+    "egress_attempt_delta": 0,
+    "serial_tx_before": before,
+    "serial_tx_after": before,
+    "serial_tx_delta": 0,
+    "device_ack_delta": 0,
+    "unauthorized_device_ack_delta": 0,
+    "observed_present_after": None,
+    "commanded_goal": None,
 }))
 PY
 )"
@@ -1924,8 +1954,10 @@ crash_replay() {
   as_autonomy "$PROP" --root "$ROOT" --id "$cid" --verb hold propose >/tmp/metal-"$cid".json || true
   # crash_if is process::exit on the smoke child. after_prepare / after_write /
   # after_ack live in execute_certified_command; during_write is in the XL330
-  # driver. If act() fails first, those later points never fire — fail closed
-  # instead of `wait $AUTH_PID` hanging on a live serve (PTY campaign hang).
+  # driver *before* transport; after_serial_tx_before_status is after
+  # write_all+flush and before the Status Packet. If act() fails first, those
+  # later points never fire — fail closed instead of `wait $AUTH_PID` hanging
+  # on a live serve (PTY campaign hang).
   local died=0
   for _ in $(seq 1 50); do
     if ! resolve_metal_smoke_pid "$ROOT" >/dev/null; then
@@ -1949,14 +1981,14 @@ crash_replay() {
     exit 1
   fi
   local before after
-  before="$(writes)"
+  before="$(serial_tx)"
   as_autonomy env METAL_CMD_ID="$cid" "$PROP" --root "$ROOT" replay >/tmp/metal-"$cid"-replay.json || true
-  after="$(writes)"
+  after="$(serial_tx)"
   rec="$(python3 - <<PY
 import json, sys
 before=int("$before"); after=int("$after")
 if after > before:
-    sys.exit("error: crash/restart $point retried a command that may have reached hardware (%s→%s)" % (before, after))
+    sys.exit("error: crash/restart $point retransmitted a command that may have reached hardware (serial_tx %s→%s)" % (before, after))
 print(json.dumps({
     "name": "crash_restart_${point}",
     "expected_authorization": False,
@@ -1970,6 +2002,14 @@ print(json.dumps({
     "journal_result": "not_retried",
     "proposal": "same command_id after $point crash/restart",
     "unauthorized_write": after>before,
+    "egress_attempt_delta": 0,
+    "serial_tx_before": before,
+    "serial_tx_after": after,
+    "serial_tx_delta": max(0, after-before),
+    "device_ack_delta": 0,
+    "unauthorized_device_ack_delta": 0,
+    "observed_present_after": None,
+    "commanded_goal": None,
 }))
 PY
 )"
@@ -1996,6 +2036,7 @@ PY
 
 add_case "$(crash_replay after_prepare_before_write metal-crash-prep)"
 add_case "$(crash_replay during_write metal-crash-during)"
+add_case "$(crash_replay after_serial_tx_before_status metal-crash-posttx)"
 add_case "$(crash_replay after_write_before_ack metal-crash-ack)"
 add_case "$(crash_replay after_ack metal-crash-afterack)"
 
@@ -2018,6 +2059,14 @@ print(json.dumps({
     "journal_result": "unchanged",
     "proposal": "physical VIN disconnect (not STO/SS1/PL/SIL)",
     "unauthorized_write": False,
+    "egress_attempt_delta": 0,
+    "serial_tx_before": before,
+    "serial_tx_after": before,
+    "serial_tx_delta": 0,
+    "device_ack_delta": 0,
+    "unauthorized_device_ack_delta": 0,
+    "observed_present_after": None,
+    "commanded_goal": None,
 }))
 PY
 )"
@@ -2043,6 +2092,7 @@ if [[ "${REALITYOS_METAL_CUTOFF_LIVE:-0}" == "1" ]]; then
     exit 1
   fi
   export REALITYOS_METAL_CUTOFF_TESTED=1
+  export REALITYOS_METAL_CUTOFF_LIVE_OBSERVED=1
   CUTOFF_TESTED=1
   add_case "$(MEASURE_REQUIRE='dxl_io|driver not connected|online_hardware_disconnected|metal_live_io_deadline' MEASURE_FORBID=software_watchdog_miss measure vin_cutoff_live 'propose after VIN open' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-cutoff "$PROP" --root "$ROOT" propose-id)"
 fi
@@ -2061,9 +2111,11 @@ python3 - \
   "$AUTHORITY_USER" \
   "$AUTONOMY_USER" \
   "$DATE" \
+  "$ROOT/bus/pwm_limit.json" \
+  "$ROOT/bus/position_cage.json" \
   <<'PY'
 import json, os, sys
-probe_p, measured_p, fresh_p, out_p, commit, auth, auto, date = sys.argv[1:9]
+probe_p, measured_p, fresh_p, out_p, commit, auth, auto, date, pwm_p, cage_p = sys.argv[1:11]
 p = json.load(open(probe_p))
 try:
     measured = json.load(open(measured_p))
@@ -2098,7 +2150,16 @@ elif serial.startswith("usb:"):
     controller = "Dynamixel Protocol 2.0 USB-UART (measured usb vid:pid:bus:devpath)"
 else:
     controller = "Dynamixel Protocol 2.0 USB-UART (measured adapter serial)"
-cutoff = os.environ.get("REALITYOS_METAL_CUTOFF_TESTED","0") == "1"
+cutoff_attested = os.environ.get("REALITYOS_METAL_CUTOFF_TESTED","0") == "1"
+cutoff_live = os.environ.get("REALITYOS_METAL_CUTOFF_LIVE_OBSERVED","0") == "1"
+try:
+    pwm = json.load(open(pwm_p))
+except Exception:
+    pwm = {}
+try:
+    cage = json.load(open(cage_p))
+except Exception:
+    cage = {}
 meta = {
   "hardware_model": hardware_model,
   "controller_model": controller,
@@ -2110,8 +2171,15 @@ meta = {
   "hardware_present": True,
   "used_os_monotonic_clock": True,
   "used_hardware_driver_port": True,
-  "cutoff_mechanism": "bench PSU switch or SPST on servo 5V VIN, independent of Reality OS",
-  "cutoff_tested": cutoff,
+  "cutoff_mechanism": "bench PSU switch or SPST on servo 5V VIN, independent of Reality OS (not STO/SS1/PL/SIL)",
+  "cutoff_tested": cutoff_attested,
+  "cutoff_operator_attested": cutoff_attested,
+  "cutoff_live_observed": cutoff_live,
+  "pwm_limit_requested": pwm.get("requested"),
+  "pwm_limit_measured": pwm.get("measured"),
+  "experiment_min": cage.get("experiment_min"),
+  "experiment_max": cage.get("experiment_max"),
+  "startup_present": cage.get("startup_present"),
   "direct_device_open_attempts": int(p.get("direct_device_open_attempts") or 0),
   "direct_device_open_successes": int(p.get("direct_device_open_successes") or 0),
   "duplicate_writes_after_restart": 0,
@@ -2141,40 +2209,47 @@ assert r.get("device_capture_s") is not None, r
 assert r.get("authority_receive_s") is not None, r
 assert r["used_os_monotonic_clock"] is True, r
 assert r["used_hardware_driver_port"] is True, r
-assert any(c.get("name") == "valid_hold" and int(c.get("write_delta") or 0) > 0 for c in r.get("cases") or []), r
-assert any(c.get("name") == "valid_nudge" and int(c.get("write_delta") or 0) > 0 for c in r.get("cases") or []), r
-def present_delta(name):
-    c = next((x for x in (r.get("cases") or []) if x.get("name") == name), None)
+def case(name):
+    return next((x for x in (r.get("cases") or []) if x.get("name") == name), None)
+hold = case("valid_hold")
+nudge = case("valid_nudge")
+assert hold and int(hold.get("serial_tx_delta") or 0) == 1 and hold.get("device_acknowledgement"), r
+assert nudge and int(nudge.get("serial_tx_delta") or 0) == 1 and nudge.get("device_acknowledgement"), r
+assert all(int(c.get("serial_tx_delta") or 0) == 0 for c in (r.get("cases") or []) if not c.get("expected_authorization")), r
+assert all(int(c.get("unauthorized_device_ack_delta") or 0) == 0 for c in (r.get("cases") or []) if not c.get("expected_authorization")), r
+assert any(c.get("name") == "crash_restart_after_serial_tx_before_status" and int(c.get("serial_tx_delta") or 0) == 0 for c in r.get("cases") or []), r
+def present_delta(c):
     import re
     m = re.search(r"delta=([-\d]+|None)", (c or {}).get("observed_motion") or "")
     if not m or m.group(1) == "None":
         return None
     return int(m.group(1))
-# Same band as crates/metal/src/proof.rs HOLD_STILL_MAX_ABS_TICKS.
 HOLD_STILL_MAX_ABS_TICKS = 4
-hd = present_delta("valid_hold")
-nd = present_delta("valid_nudge")
-assert hd is not None and abs(hd) <= HOLD_STILL_MAX_ABS_TICKS, (
-    "valid_hold must keep present inside the no-load hunt band",
+hd = present_delta(hold)
+nd = present_delta(nudge)
+assert hold.get("observed_present_after") is not None and hd is not None and abs(hd) <= HOLD_STILL_MAX_ABS_TICKS, (
+    "valid_hold must keep present inside the no-load hunt band with a post-command sample",
     hd,
     r,
 )
-assert nd is not None and abs(nd) > HOLD_STILL_MAX_ABS_TICKS, (
+assert nudge.get("observed_present_after") is not None and nd is not None and abs(nd) > HOLD_STILL_MAX_ABS_TICKS, (
     "valid_nudge must move present farther than no-load hunt, not only write a goal",
     nd,
     r,
 )
 pty_sequence = """$PTY_SEQUENCE_ACTIVE""" == "1"
 if pty_sequence:
-    assert r["cutoff_tested"] is False, r
+    assert r.get("cutoff_live_observed") is False, r
     assert r["experiment_status"] != "measured_success", r
     assert r.get("hardware_present") is True
-    print("pty-sequence-ok status=%s writes=%s (not metal)" % (r["experiment_status"], r["valid_physical_device_writes"]))
+    print("pty-sequence-ok status=%s serial_tx=%s (not metal)" % (r["experiment_status"], r["valid_physical_device_writes"]))
 else:
     assert r["hardware_present"] is True
-    assert r["cutoff_tested"] is True, r
+    if not r.get("cutoff_live_observed"):
+        assert r["experiment_status"] != "measured_success", r
+        raise SystemExit("error: live independent VIN cutoff was not observed; REALITYOS_METAL_CUTOFF_TESTED is operator attestation only and cannot mint measured_success")
     assert r["experiment_status"] == "measured_success", r
-    print("metal-proof-ok status=%s writes=%s" % (r["experiment_status"], r["valid_physical_device_writes"]))
+    print("metal-proof-ok status=%s serial_tx=%s" % (r["experiment_status"], r["valid_physical_device_writes"]))
 PY
 if [[ "$PTY_SEQUENCE_ACTIVE" == "1" ]]; then
   if [[ -f "$REPO/docs/metal_proof.json" || -f "$PWD/docs/metal_proof.json" ]]; then

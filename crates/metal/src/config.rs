@@ -39,7 +39,17 @@ pub struct MetalConfig {
     /// Maximum authorized goal step, in XL330 position ticks.
     #[serde(default = "default_delta_ticks")]
     pub max_position_delta_ticks: i32,
+    /// Session absolute cage around startup Present Position (ticks).
+    /// Per-command delta is insufficient: repeated valid nudges accumulate.
+    #[serde(default = "default_total_excursion_ticks")]
+    pub max_total_excursion_ticks: i32,
+    /// Position-mode PWM Limit(36) cap. Raw 0..=885; percent ≈ raw * 0.113.
+    /// Output/PWM cap, not a certified torque limit. Current Limit is not
+    /// the Position Mode torque boundary.
+    #[serde(default = "default_max_pwm_limit_raw")]
+    pub max_pwm_limit_raw: u16,
     /// EEPROM current limit (XL330 unit ≈ 1 mA). Keep well below stall.
+    /// Configured, but not the Position Mode output/torque boundary.
     #[serde(default = "default_current_limit")]
     pub current_limit_milli: u16,
     /// Reality OS actuator envelope (not a device unit).
@@ -67,6 +77,13 @@ fn default_profile_accel() -> u32 {
 fn default_delta_ticks() -> i32 {
     32
 }
+/// First experiment: one 32-tick nudge fits; 100 accumulated nudges cannot.
+fn default_total_excursion_ticks() -> i32 {
+    48
+}
+fn default_max_pwm_limit_raw() -> u16 {
+    crate::protocol::CONSERVATIVE_PWM_LIMIT
+}
 fn default_current_limit() -> u16 {
     200
 }
@@ -90,6 +107,8 @@ impl MetalConfig {
             max_profile_velocity: 20,
             max_profile_acceleration: 10,
             max_position_delta_ticks: 32,
+            max_total_excursion_ticks: 48,
+            max_pwm_limit_raw: crate::protocol::CONSERVATIVE_PWM_LIMIT,
             current_limit_milli: 200,
             tau_max: 0.2,
             freshness_threshold_s: 2.0,
@@ -159,6 +178,8 @@ impl MetalConfig {
             "max_profile_velocity": self.max_profile_velocity,
             "max_profile_acceleration": self.max_profile_acceleration,
             "max_position_delta_ticks": self.max_position_delta_ticks,
+            "max_total_excursion_ticks": self.max_total_excursion_ticks,
+            "max_pwm_limit_raw": self.max_pwm_limit_raw,
             "current_limit_milli": self.current_limit_milli,
             "tau_max": self.tau_max,
         });
@@ -173,6 +194,24 @@ impl MetalConfig {
 
     pub fn expected_ready(&self) -> bool {
         !self.expected_serial.trim().is_empty() && !self.expected_firmware.trim().is_empty()
+    }
+
+    /// Fail closed on PWM/cage values outside XL330 legal ranges.
+    pub fn validate_xl330_limits(&self) -> Result<(), String> {
+        if self.max_pwm_limit_raw > crate::protocol::XL330_PWM_LIMIT_MAX {
+            return Err(format!(
+                "metal_pwm_limit_raw_out_of_range:{} max={}",
+                self.max_pwm_limit_raw,
+                crate::protocol::XL330_PWM_LIMIT_MAX
+            ));
+        }
+        if self.max_total_excursion_ticks < 0 {
+            return Err(format!(
+                "metal_max_total_excursion_ticks_negative:{}",
+                self.max_total_excursion_ticks
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -195,9 +234,15 @@ pub const SIGNING_KEY_FILE: &str = "signing.key";
 pub const JOURNAL: &str = "driver.jsonl";
 pub const IPC_SOCK: &str = "ipc.sock";
 pub const BUS_DIR: &str = "bus";
+/// Certified-command egress attempts (not a physical device write).
 pub const WRITES_FILE: &str = "writes";
+pub const EGRESS_ATTEMPTS_FILE: &str = "egress_attempts";
+/// Certified command frames that passed write_all+flush. Not setup/sensor.
+pub const SERIAL_TX_FILE: &str = "serial_tx";
 pub const ACKS_FILE: &str = "acks";
 pub const EGRESS_LOG: &str = "egress.jsonl";
+pub const PWM_EVIDENCE_FILE: &str = "pwm_limit.json";
+pub const CAGE_EVIDENCE_FILE: &str = "position_cage.json";
 pub const LOCK_FILE: &str = "actuator.lock";
 pub const PRESENT_FILE: &str = "present";
 pub const GOAL_FILE: &str = "goal";
@@ -433,5 +478,24 @@ mod tests {
         cfg.apply_bus_hints(Some(0), Some(254));
         assert_eq!(cfg.baud, 1_000_000);
         assert_eq!(cfg.servo_id, 0);
+    }
+
+    #[test]
+    fn design_hash_includes_pwm_cap_and_position_cage() {
+        let mut a = MetalConfig::example("/dev/ttyUSB0");
+        let h1 = a.design_content_hash();
+        a.max_pwm_limit_raw = 199;
+        assert_ne!(h1, a.design_content_hash());
+        a.max_pwm_limit_raw = crate::protocol::CONSERVATIVE_PWM_LIMIT;
+        a.max_total_excursion_ticks = 16;
+        assert_ne!(h1, a.design_content_hash());
+    }
+
+    #[test]
+    fn pwm_cap_rejects_raw_above_xl330_range() {
+        let mut cfg = MetalConfig::example("/dev/ttyUSB0");
+        cfg.max_pwm_limit_raw = 886;
+        let err = cfg.validate_xl330_limits().unwrap_err();
+        assert!(err.contains("metal_pwm_limit_raw_out_of_range"), "{err}");
     }
 }

@@ -49,6 +49,10 @@ pub struct MetalResponse {
     pub status: String,
     pub violations: Vec<String>,
     pub physical_writes: u64,
+    #[serde(default)]
+    pub command_egress_attempts: u64,
+    #[serde(default)]
+    pub serial_tx_completed: u64,
     pub device_acks: u64,
     pub command_id: String,
     pub metal: bool,

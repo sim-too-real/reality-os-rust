@@ -18,8 +18,9 @@ use realityos_plant::{
 use serialport::SerialPort;
 
 use crate::config::{
-    candidate_bauds, candidate_servo_ids, discover_baud_attempts, MetalConfig, BUS_DIR, GOAL_FILE,
-    LOCK_FILE, MOVING_FILE, PRESENT_FILE, VIN_FILE,
+    candidate_bauds, candidate_servo_ids, discover_baud_attempts, MetalConfig, BUS_DIR,
+    CAGE_EVIDENCE_FILE, GOAL_FILE, LOCK_FILE, MOVING_FILE, PRESENT_FILE, PWM_EVIDENCE_FILE,
+    VIN_FILE,
 };
 use crate::egress::EgressLog;
 use crate::identity::{
@@ -28,8 +29,8 @@ use crate::identity::{
 };
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
-    instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, unique_status_ids, ProtocolError,
-    ADDR_BUS_WATCHDOG, ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE, ADDR_FEEDFORWARD_1ST,
+    instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, pwm_limit_percent, unique_status_ids,
+    ProtocolError, ADDR_BUS_WATCHDOG, ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE, ADDR_FEEDFORWARD_1ST,
     ADDR_FEEDFORWARD_2ND, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR,
     ADDR_HOMING_OFFSET, ADDR_ID, ADDR_MAX_POSITION_LIMIT, ADDR_MAX_VOLTAGE_LIMIT,
     ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER, ADDR_MOVING,
@@ -38,9 +39,9 @@ use crate::protocol::{
     ADDR_PWM_LIMIT, ADDR_REALTIME_TICK, ADDR_SECONDARY_ID, ADDR_STATUS_RETURN_LEVEL,
     ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN,
     BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN,
-    FACTORY_PWM_LIMIT, FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN,
-    MIN_PWM_LIMIT, MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION,
-    PROTOCOL_TYPE_2, SECONDARY_ID_DISABLED, STATUS_RETURN_ALL,
+    FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN, MIN_VELOCITY_I_GAIN,
+    MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION, PROTOCOL_TYPE_2, SECONDARY_ID_DISABLED,
+    STATUS_RETURN_ALL, XL330_POSITION_MODE_MAX, XL330_POSITION_MODE_MIN, XL330_PWM_LIMIT_MAX,
 };
 
 pub struct Xl330Driver {
@@ -75,6 +76,12 @@ pub struct Xl330Driver {
     last_hw_error: u8,
     min_position: i32,
     max_position: i32,
+    startup_present: i32,
+    experiment_min: i32,
+    experiment_max: i32,
+    eeprom_min_saved: Option<i32>,
+    eeprom_max_saved: Option<i32>,
+    pwm_limit_requested: u16,
     velocity_limit: u32,
     drive_mode: u8,
     position_p_gain: u16,
@@ -139,8 +146,14 @@ impl Xl330Driver {
             torque_enabled: false,
             live_io: false,
             last_hw_error: 0,
-            min_position: 0,
-            max_position: 4095,
+            min_position: XL330_POSITION_MODE_MIN,
+            max_position: XL330_POSITION_MODE_MAX,
+            startup_present: 0,
+            experiment_min: XL330_POSITION_MODE_MIN,
+            experiment_max: XL330_POSITION_MODE_MAX,
+            eeprom_min_saved: None,
+            eeprom_max_saved: None,
+            pwm_limit_requested: 0,
             velocity_limit: 0,
             drive_mode: 0,
             position_p_gain: 0,
@@ -282,6 +295,18 @@ impl Xl330Driver {
 
     pub fn applied_pwm_limit(&self) -> u16 {
         self.pwm_limit
+    }
+
+    pub fn pwm_limit_requested(&self) -> u16 {
+        self.pwm_limit_requested
+    }
+
+    pub fn experiment_cage(&self) -> (i32, i32) {
+        (self.experiment_min, self.experiment_max)
+    }
+
+    pub fn startup_present(&self) -> i32 {
+        self.startup_present
     }
 
     pub fn applied_homing_offset(&self) -> i32 {
@@ -495,6 +520,9 @@ impl Xl330Driver {
     }
 
     fn apply_bench_limits(&mut self) -> PlantResult<()> {
+        self.cfg
+            .validate_xl330_limits()
+            .map_err(PlantError::refused)?;
         // Current limit / operating mode are EEPROM; only write with torque off, and only if needed.
         self.write_reg(ADDR_TORQUE_ENABLE, &[0], "setup_torque_off", None, false)?;
         self.torque_enabled = false;
@@ -715,22 +743,7 @@ impl Xl330Driver {
             )?;
             self.velocity_i_gain = FACTORY_VELOCITY_I_GAIN;
         }
-        let got_pwm = self
-            .read_reg(ADDR_PWM_LIMIT, 2)
-            .ok()
-            .and_then(|b| le_u16(&b))
-            .unwrap_or(0);
-        self.pwm_limit = got_pwm;
-        if got_pwm < MIN_PWM_LIMIT {
-            self.write_reg(
-                ADDR_PWM_LIMIT,
-                &FACTORY_PWM_LIMIT.to_le_bytes(),
-                "setup_pwm_limit",
-                None,
-                false,
-            )?;
-            self.pwm_limit = FACTORY_PWM_LIMIT;
-        }
+        self.apply_pwm_output_cap()?;
         let ff2 = self
             .read_reg(ADDR_FEEDFORWARD_2ND, 2)
             .ok()
@@ -849,6 +862,7 @@ impl Xl330Driver {
                 self.min_position, self.max_position, self.homing_offset
             )));
         }
+        self.establish_startup_cage(present)?;
         self.last_present = present;
         self.write_reg(
             ADDR_GOAL_POSITION,
@@ -927,7 +941,7 @@ impl Xl330Driver {
             }
         };
         if after != self.last_present {
-            if after < self.min_position || after > self.max_position {
+            if after < self.experiment_min || after > self.experiment_max {
                 let _ = self.write_reg(
                     ADDR_TORQUE_ENABLE,
                     &[0],
@@ -937,8 +951,8 @@ impl Xl330Driver {
                 );
                 self.torque_enabled = false;
                 return Err(PlantError::refused(format!(
-                    "dxl_present_outside_wizard_limits_after_torque:present={after}:min={}:max={}",
-                    self.min_position, self.max_position
+                    "dxl_present_outside_experiment_cage_after_torque:present={after}:min={}:max={}",
+                    self.experiment_min, self.experiment_max
                 )));
             }
             self.write_reg(
@@ -991,6 +1005,164 @@ impl Xl330Driver {
         self.min_position = min;
         self.max_position = max;
         Ok(())
+    }
+
+    fn apply_pwm_output_cap(&mut self) -> PlantResult<()> {
+        let want = self.cfg.max_pwm_limit_raw;
+        if want > XL330_PWM_LIMIT_MAX {
+            return Err(PlantError::refused(format!(
+                "metal_pwm_limit_raw_out_of_range:{want} max={XL330_PWM_LIMIT_MAX}"
+            )));
+        }
+        self.pwm_limit_requested = want;
+        let got = self
+            .read_reg(ADDR_PWM_LIMIT, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        if got != Some(want) {
+            self.write_reg(
+                ADDR_PWM_LIMIT,
+                &want.to_le_bytes(),
+                "setup_pwm_limit_cap",
+                None,
+                false,
+            )?;
+        }
+        let measured = self
+            .read_reg(ADDR_PWM_LIMIT, 2)
+            .ok()
+            .and_then(|b| le_u16(&b))
+            .ok_or_else(|| PlantError::refused("metal_pwm_limit_readback_unverified"))?;
+        if measured > want {
+            return Err(PlantError::refused(format!(
+                "metal_pwm_limit_readback_exceeds_cap:requested={want} measured={measured}"
+            )));
+        }
+        if measured == crate::protocol::FACTORY_PWM_LIMIT
+            && want < crate::protocol::FACTORY_PWM_LIMIT
+        {
+            return Err(PlantError::refused(format!(
+                "metal_pwm_limit_silently_restored_factory:requested={want} measured={measured}"
+            )));
+        }
+        self.pwm_limit = measured;
+        self.persist_pwm_evidence();
+        Ok(())
+    }
+
+    fn establish_startup_cage(&mut self, present: i32) -> PlantResult<()> {
+        let excursion = self.cfg.max_total_excursion_ticks;
+        if excursion < 0 {
+            return Err(PlantError::refused(format!(
+                "metal_max_total_excursion_ticks_negative:{excursion}"
+            )));
+        }
+        let legal_min = XL330_POSITION_MODE_MIN.max(self.min_position);
+        let legal_max = XL330_POSITION_MODE_MAX.min(self.max_position);
+        let experiment_min = present.saturating_sub(excursion).max(legal_min);
+        let experiment_max = present.saturating_add(excursion).min(legal_max);
+        if experiment_min > experiment_max {
+            return Err(PlantError::refused(format!(
+                "metal_experiment_cage_empty:present={present}:min={experiment_min}:max={experiment_max}"
+            )));
+        }
+        self.startup_present = present;
+        self.experiment_min = experiment_min;
+        self.experiment_max = experiment_max;
+        self.eeprom_min_saved = Some(self.min_position);
+        self.eeprom_max_saved = Some(self.max_position);
+        if self.min_position != experiment_min {
+            self.write_reg(
+                ADDR_MIN_POSITION_LIMIT,
+                &experiment_min.to_le_bytes(),
+                "setup_experiment_min_position",
+                None,
+                false,
+            )?;
+        }
+        if self.max_position != experiment_max {
+            self.write_reg(
+                ADDR_MAX_POSITION_LIMIT,
+                &experiment_max.to_le_bytes(),
+                "setup_experiment_max_position",
+                None,
+                false,
+            )?;
+        }
+        let got_min = self
+            .read_reg(ADDR_MIN_POSITION_LIMIT, 4)
+            .ok()
+            .and_then(|b| le_i32(&b))
+            .ok_or_else(|| PlantError::refused("metal_experiment_min_readback_unverified"))?;
+        let got_max = self
+            .read_reg(ADDR_MAX_POSITION_LIMIT, 4)
+            .ok()
+            .and_then(|b| le_i32(&b))
+            .ok_or_else(|| PlantError::refused("metal_experiment_max_readback_unverified"))?;
+        if got_min != experiment_min || got_max != experiment_max {
+            return Err(PlantError::refused(format!(
+                "metal_experiment_cage_readback_mismatch:want={experiment_min}..{experiment_max} got={got_min}..{got_max}"
+            )));
+        }
+        self.min_position = experiment_min;
+        self.max_position = experiment_max;
+        self.persist_cage_evidence();
+        Ok(())
+    }
+
+    fn persist_pwm_evidence(&self) {
+        let v = serde_json::json!({
+            "requested": self.pwm_limit_requested,
+            "measured": self.pwm_limit,
+            "percent_requested": pwm_limit_percent(self.pwm_limit_requested),
+            "percent_measured": pwm_limit_percent(self.pwm_limit),
+            "unit": "raw * 0.113 = percent of full PWM output; 885 ≈ 100%",
+            "role": "output_pwm_cap_not_certified_torque_limit",
+            "current_limit_milli_configured": self.cfg.current_limit_milli,
+            "current_limit_is_not_position_mode_torque_boundary": true,
+        });
+        let _ = std::fs::write(self.bus.join(PWM_EVIDENCE_FILE), v.to_string());
+    }
+
+    fn persist_cage_evidence(&self) {
+        let v = serde_json::json!({
+            "startup_present": self.startup_present,
+            "experiment_min": self.experiment_min,
+            "experiment_max": self.experiment_max,
+            "max_total_excursion_ticks": self.cfg.max_total_excursion_ticks,
+            "eeprom_previous_min": self.eeprom_min_saved,
+            "eeprom_previous_max": self.eeprom_max_saved,
+            "eeprom_applied": true,
+            "legal_position_mode": [XL330_POSITION_MODE_MIN, XL330_POSITION_MODE_MAX],
+        });
+        let _ = std::fs::write(self.bus.join(CAGE_EVIDENCE_FILE), v.to_string());
+    }
+
+    fn restore_eeprom_position_limits(&mut self) {
+        let (Some(min), Some(max)) = (self.eeprom_min_saved, self.eeprom_max_saved) else {
+            return;
+        };
+        if min == self.min_position && max == self.max_position {
+            return;
+        }
+        let _ = self.write_reg(ADDR_TORQUE_ENABLE, &[0], "teardown_torque_off", None, false);
+        self.torque_enabled = false;
+        let _ = self.write_reg(
+            ADDR_MIN_POSITION_LIMIT,
+            &min.to_le_bytes(),
+            "teardown_restore_min_position",
+            None,
+            false,
+        );
+        let _ = self.write_reg(
+            ADDR_MAX_POSITION_LIMIT,
+            &max.to_le_bytes(),
+            "teardown_restore_max_position",
+            None,
+            false,
+        );
+        self.min_position = min;
+        self.max_position = max;
     }
 
     fn enter_live_io(&mut self) {
@@ -1103,11 +1275,7 @@ impl Xl330Driver {
         Err(last)
     }
 
-    fn xfer_once(
-        &mut self,
-        request: &[u8],
-        expect_status: bool,
-    ) -> io::Result<crate::protocol::StatusPacket> {
+    fn send_frame(&mut self, request: &[u8]) -> io::Result<()> {
         let port = self
             .port
             .as_mut()
@@ -1116,10 +1284,27 @@ impl Xl330Driver {
             .map_err(io::Error::other)?;
         port.write_all(request).map_err(io::Error::other)?;
         port.flush().map_err(io::Error::other)?;
+        Ok(())
+    }
+
+    fn xfer_once(
+        &mut self,
+        request: &[u8],
+        expect_status: bool,
+    ) -> io::Result<crate::protocol::StatusPacket> {
+        self.send_frame(request)?;
+        self.recv_status(expect_status)
+    }
+
+    fn recv_status(&mut self, expect_status: bool) -> io::Result<crate::protocol::StatusPacket> {
         half_duplex_turnaround(&self.cfg.device);
         if !expect_status {
             return Err(io::Error::other("metal_no_status_expected"));
         }
+        let port = self
+            .port
+            .as_mut()
+            .ok_or_else(|| io::Error::other("metal_serial_closed"))?;
         let mut acc = Vec::new();
         let mut tmp = [0u8; 64];
         // Setup may wait through several 150 ms timeouts. Live I/O has a 40 ms
@@ -1188,9 +1373,23 @@ impl Xl330Driver {
             self.egress
                 .record_attempt(instruction, addr, data.len(), goal)
                 .map_err(|e| PlantError::refused(format!("egress_log:{e}")))?;
+            // Before transport. Distinguished from after_serial_tx_before_status.
             realityos_plant::hil_faults::crash_if("during_write");
         }
-        match self.xfer(&frame, true) {
+        if let Err(e) = self.send_frame(&frame) {
+            self.connected = false;
+            if count_command_egress {
+                let _ = self.egress.record_ack(false, 0xFF, None);
+            }
+            return Err(PlantError::refused(format!("dxl_io:{e}")));
+        }
+        if count_command_egress {
+            self.egress
+                .record_serial_tx(instruction, addr)
+                .map_err(|e| PlantError::refused(format!("egress_log:{e}")))?;
+            realityos_plant::hil_faults::crash_if("after_serial_tx_before_status");
+        }
+        match self.recv_status(true) {
             Ok(st) => {
                 let ok = instruction_ok(st.error);
                 if count_command_egress {
@@ -1270,42 +1469,33 @@ impl Xl330Driver {
         Ok((pos, vel, cur, volt, tick))
     }
 
-    /// Authorized action[0]==0 → hold present. Non-zero → one bounded tick step.
-    fn goal_from_action(&self, action: &[f64]) -> i32 {
+    fn ticks_from_action(&self, action: &[f64]) -> i32 {
         let a0 = action.first().copied().unwrap_or(0.0);
         if !a0.is_finite() || a0.abs() < 1e-12 {
-            return self.last_present;
+            return 0;
         }
         let scale = if self.cfg.tau_max.abs() < 1e-12 {
             0.0
         } else {
             f64::from(self.cfg.max_position_delta_ticks) / self.cfg.tau_max.abs()
         };
-        let ticks = (a0 * scale).round().clamp(
+        (a0 * scale).round().clamp(
             f64::from(-self.cfg.max_position_delta_ticks),
             f64::from(self.cfg.max_position_delta_ticks),
-        ) as i32;
-        // Hold also clamps: Wizard can leave present outside the EEPROM window
-        // only after a limit change; writing that present would NAK.
+        ) as i32
+    }
+
+    /// Intended goal before cage refuse. Does not clamp outbound steps inward.
+    fn intended_goal(&self, action: &[f64]) -> i32 {
+        let ticks = self.ticks_from_action(action);
         if ticks == 0 {
-            return self
-                .last_present
-                .clamp(self.min_position, self.max_position);
+            return self.last_present;
         }
-        let goal = self
-            .last_present
-            .saturating_add(ticks)
-            .clamp(self.min_position, self.max_position);
-        if goal == self.last_present {
-            let inward = self
-                .last_present
-                .saturating_sub(ticks)
-                .clamp(self.min_position, self.max_position);
-            if inward != self.last_present {
-                return inward;
-            }
-        }
-        goal
+        self.last_present.saturating_add(ticks)
+    }
+
+    fn in_experiment_cage(&self, pos: i32) -> bool {
+        pos >= self.experiment_min && pos <= self.experiment_max
     }
 
     /// Test-only: udev can dangle by-id / rename ttyUSB0 while the exclusive
@@ -1390,7 +1580,19 @@ impl HardwareDriverPort for Xl330Driver {
         }
         // propose() already acquired sensors. Extra register pokes here would
         // exceed the 100 ms software-watchdog miss on a USB-UART bench.
-        let goal = self.goal_from_action(action);
+        let goal = self.intended_goal(action);
+        if !self.in_experiment_cage(goal) {
+            return Err(PlantError::refused(format!(
+                "experiment_cage_violation:goal={goal}:min={}:max={}",
+                self.experiment_min, self.experiment_max
+            )));
+        }
+        if !self.in_experiment_cage(self.last_present) {
+            return Err(PlantError::refused(format!(
+                "experiment_cage_violation:present={}:min={}:max={}",
+                self.last_present, self.experiment_min, self.experiment_max
+            )));
+        }
         if !self.torque_enabled {
             self.write_reg(ADDR_TORQUE_ENABLE, &[1], "torque_on", None, false)?;
             self.torque_enabled = true;
@@ -1441,6 +1643,9 @@ impl HardwareDriverPort for Xl330Driver {
         if self.bus_up() && self.torque_enabled {
             let _ = self.write_reg(ADDR_TORQUE_ENABLE, &[0], "close_torque_off", None, false);
             self.torque_enabled = false;
+        }
+        if self.bus_up() {
+            self.restore_eeprom_position_limits();
         }
         self.port = None;
         self.connected = false;

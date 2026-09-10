@@ -1,10 +1,12 @@
 //! Driver-owned replay / monotonic journal. Same hash chain as Python CommandLedger.
 //! Decision attestation is a *second* chain — do not collapse them.
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions, Permissions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -19,6 +21,16 @@ use crate::error::{PlantError, PlantResult};
 
 const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 const SEAL_SCHEMA: &str = "realityos.ledger_seal/1";
+
+thread_local! {
+    static TEST_JOURNAL_WRITE_DELAY_MS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Test-only: delay each durable journal write on this thread.
+/// Used to prove successful watchdog pets do not fsync.
+pub fn set_test_journal_write_delay_ms(ms: u64) {
+    TEST_JOURNAL_WRITE_DELAY_MS.with(|c| c.set(ms.min(2000)));
+}
 
 fn restrict_owner_rw(path: &Path) {
     #[cfg(unix)]
@@ -325,6 +337,10 @@ impl CommandLedger {
     fn write_record(&mut self, mut body: Map<String, Value>) -> PlantResult<Value> {
         if self.unreadable && self.fail_closed {
             return Err(PlantError::JournalUnreadable("journal_unreadable".into()));
+        }
+        let delay_ms = TEST_JOURNAL_WRITE_DELAY_MS.with(Cell::get);
+        if delay_ms > 0 {
+            std::thread::sleep(Duration::from_millis(delay_ms));
         }
         // Integer millis — f64 unix seconds do not JSON-round-trip, which
         // breaks the hash chain under fail_closed ONLINE journals.

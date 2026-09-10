@@ -31,7 +31,7 @@ pub use error::{PlantError, PlantResult};
 pub use execute::{execute_certified_command, ExecuteResult};
 pub use fieldbus::{FieldbusKind, FieldbusLink, LinkState};
 pub use harness::SimulatedHardwarePort;
-pub use ledger::{CommandLedger, ContinuityState};
+pub use ledger::{set_test_journal_write_delay_ms, CommandLedger, ContinuityState};
 pub use safety_protocol::{SafeTransition, SafetyFrame};
 pub use signing::{
     action_within_issuer_envelope, command_payload_hash, sign_payload, signature_violations,
