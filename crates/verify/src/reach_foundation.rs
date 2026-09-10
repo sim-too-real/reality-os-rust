@@ -61,10 +61,9 @@ pub fn run_foundation_reach(
     let (mut inst, manifest) = load_and_normalize(bundle, &[], seed)?;
     let inspect = inst.inspect.clone();
     let mut model = embodiment_from_manifest(bundle, &manifest);
-    fill_from_inspect(&mut model, &inspect);
     let mut caps = derive_capabilities(&model, None);
 
-    let mut initial = inst
+    let initial = inst
         .step(0)
         .map_err(|e| e.to_string())
         .and_then(|st| {
@@ -101,26 +100,16 @@ pub fn run_foundation_reach(
         hash,
         now_s,
         freshness_s,
-        &mut inst,
-        &manifest,
-        target,
     );
 
     let base = base_report(&model, seed);
-    let (ctrl, init_qpos) = match compile {
+    let ctrl = match compile {
         Err(refuse) => {
             checkin_worker(inst);
             return Ok(error_report(base, refuse_string(refuse)));
         }
-        Ok((ctrl, init_qpos)) => (ctrl, init_qpos),
+        Ok(ctrl) => ctrl,
     };
-
-    if let Some(qpos) = init_qpos {
-        let st = inst
-            .reset(Some(&qpos), None)
-            .map_err(|e| e.to_string())?;
-        initial = VerifierTruth::from_mujoco_state(st.get("state").unwrap_or(&st));
-    }
 
     let shared = Arc::new(SharedMujoco {
         inst: Mutex::new(inst),
@@ -244,9 +233,7 @@ pub fn run_foundation_reach_missing_target(
 ) -> Result<FoundationReachReport, String> {
     let seed = 0u64;
     let (mut inst, manifest) = load_and_normalize(bundle, &[], seed)?;
-    let inspect = inst.inspect.clone();
-    let mut model = embodiment_from_manifest(bundle, &manifest);
-    fill_from_inspect(&mut model, &inspect);
+    let model = embodiment_from_manifest(bundle, &manifest);
     let caps = derive_capabilities(&model, None);
 
     let initial = inst
@@ -289,12 +276,8 @@ fn try_compile_reach(
     hash: &str,
     now_s: f64,
     freshness_s: f64,
-    inst: &mut crate::mujoco_exec::MujocoInstance,
-    manifest: &RobotManifest,
-    world_target: [f64; 3],
-) -> Result<(CompiledCtrl, Option<Vec<f64>>), SkillRefuse> {
-    *caps = derive_capabilities(model, None);
-    let compiled = match compile_reach(
+) -> Result<CompiledCtrl, SkillRefuse> {
+    match compile_reach(
         model,
         caps,
         world,
@@ -304,7 +287,7 @@ fn try_compile_reach(
         freshness_s,
         &ChainIkPositionPdAdapter,
     ) {
-        Ok(ctrl) => Ok((ctrl, None::<Vec<f64>>)),
+        Ok(ctrl) => Ok(ctrl),
         Err(SkillRefuse::Unreachable) => {
             fill_from_inspect(model, inspect);
             *caps = derive_capabilities(model, None);
@@ -318,67 +301,9 @@ fn try_compile_reach(
                 freshness_s,
                 &ChainIkPositionPdAdapter,
             )
-            .map(|ctrl| (ctrl, None))
         }
         Err(e) => Err(e),
-    };
-    match compiled {
-        Ok((ctrl, _)) => {
-            if let Ok((mj_ctrl, qpos)) = mujoco_fallback_ctrl(inst, manifest, world_target, &ctrl) {
-                return Ok((mj_ctrl, Some(qpos)));
-            }
-            if ctrl_needs_fallback(&ctrl) {
-                Err(SkillRefuse::Unreachable)
-            } else {
-                Ok((ctrl, None))
-            }
-        }
-        Err(SkillRefuse::Unreachable) => mujoco_fallback_ctrl(
-            inst,
-            manifest,
-            world_target,
-            &CompiledCtrl {
-                action: vec![],
-                control_mode: "position".into(),
-                adapter_id: ADAPTER_ID.into(),
-                adapter_version: "1".into(),
-            },
-        )
-        .map(|(ctrl, qpos)| (ctrl, Some(qpos))),
-        Err(e) => Err(e),
     }
-}
-
-fn ctrl_needs_fallback(ctrl: &CompiledCtrl) -> bool {
-    ctrl.action.is_empty() || ctrl.action.iter().all(|a| a.abs() < 1e-9)
-}
-
-fn mujoco_fallback_ctrl(
-    inst: &mut crate::mujoco_exec::MujocoInstance,
-    manifest: &RobotManifest,
-    target: [f64; 3],
-    template: &CompiledCtrl,
-) -> Result<(CompiledCtrl, Vec<f64>), SkillRefuse> {
-    let ee = manifest
-        .end_effector_name()
-        .unwrap_or_else(|| "ee".into());
-    let (qpos, err) = inst
-        .solve_ik(&ee, target)
-        .map_err(|_| SkillRefuse::Unreachable)?;
-    if err >= 0.02 {
-        return Err(SkillRefuse::Unreachable);
-    }
-    let mut action = manifest.actuator_qpos(&qpos);
-    action.resize(manifest.nu.max(1) as usize, 0.0);
-    Ok((
-        CompiledCtrl {
-            action,
-            control_mode: template.control_mode.clone(),
-            adapter_id: template.adapter_id.clone(),
-            adapter_version: template.adapter_version.clone(),
-        },
-        qpos,
-    ))
 }
 
 fn fill_from_inspect(model: &mut EmbodimentModel, inspect: &Value) {
@@ -672,12 +597,7 @@ mod tests {
             assert_eq!(r.adaptation, "CONFIGURED");
             assert!(r.skill_refuse.is_none(), "{id} {:?}", r.skill_refuse);
             assert!(r.ctrl_writes > 0, "{id}");
-            assert!(
-                r.task_success,
-                "{id} must reach under privileged verifier (refuse={:?} writes={})",
-                r.skill_refuse,
-                r.ctrl_writes
-            );
+            assert!(r.task_success, "{id} must reach under privileged verifier");
         }
     }
 
