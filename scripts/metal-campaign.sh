@@ -643,10 +643,11 @@ as_authority() {
 as_authority "$SMOKE" --root "$ROOT" --device "$DEVICE" init
 as_authority "$SMOKE" --root "$ROOT" --device "$DEVICE" probe
 as_authority "$SMOKE" --root "$ROOT" bind-measured
-# Probe wrote the working baud/id. The docs example
-# REALITYOS_METAL_BAUD=1000000 is a probe hint; a factory XL330 is
-# 57 600. Serve must not reopen at the hint (campaign used to pass
-# the env through and apply_process_env clobbered metal.json).
+# Probe wrote the working baud/id. REALITYOS_METAL_BAUD is a probe
+# hint (2/3/4 Mbps only). A factory XL330 is 57 600; 1 Mbps is already
+# in the automatic scan after that. Serve must not reopen at the hint
+# (campaign used to pass the env through and apply_process_env
+# clobbered metal.json).
 if [[ -f "$ROOT/metal.json" ]]; then
   eval "$(python3 - "$ROOT/metal.json" <<'PY'
 import json, sys

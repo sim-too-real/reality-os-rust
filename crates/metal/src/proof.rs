@@ -389,7 +389,7 @@ pub fn default_unresolved() -> Vec<String> {
         "an XL330 already in Wizard RC-PWM / S.BUS / iBUS mode at boot cannot be identified over Protocol 2.0".into(),
         "a USB-UART with no adapter serial (typical CH340/CP2102) is rebound by vid:pid:devpath / by-path, not KERNEL==ttyUSB0 or a parent hub serial; a living stale ttyUSB0 after re-enum is not kept if its measured serial drifted; campaign waits up to 4s then fails closed instead of handing the stale name to serve; two adapters on the same USB port path are indistinguishable".into(),
         "REALITYOS_METAL_BAUD / SERVO_ID are probe hints; serve keeps the pair probe wrote into metal.json (a 1 Mbps hint on a factory 57600 XL330 used to fail identify)".into(),
-        "2 / 3 / 4 Mbps join the probe scan only when hinted; an automatic scan can wedge CH340/CP2102 so a cold miss at 57600 never recovers".into(),
+        "2 / 3 / 4 Mbps join the probe scan only when hinted, and never ahead of factory 57600 / 115200 / 1 Mbps; a 1 Mbps docs hint or a mistaken 2/3/4 Mbps Wizard hint used to open that rate twice before 57600 and could wedge CH340 so the factory servo was never found".into(),
         "serve measures the USB-adapter serial before open; a recycled living ttyUSB0 whose serial drifted must not reach torque-on".into(),
         "campaign proof-meta reads measured/os-probe/freshness from files; interpolating JSON into python '''...''' dies on an apostrophe in a USB serial".into(),
         "campaign installs docs/metal_proof.json relative to the script's repo, not the caller's working directory; sudo /path/scripts/metal-campaign.sh from another cwd used to write ~/docs after a live run".into(),

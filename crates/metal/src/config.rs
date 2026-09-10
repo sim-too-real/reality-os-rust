@@ -104,8 +104,8 @@ impl MetalConfig {
     }
 
     /// udev rematch after bind. Must not clobber the discovered baud/id:
-    /// the docs example `REALITYOS_METAL_BAUD=1000000` is a probe hint;
-    /// a factory XL330 is 57 600, and serve used to reopen at 1 Mbps.
+    /// `REALITYOS_METAL_BAUD` is a probe hint (2/3/4 Mbps); a factory
+    /// XL330 is 57 600, and serve used to reopen at a 1 Mbps docs hint.
     pub fn apply_device_env(&mut self) {
         self.apply_device_path(std::env::var("REALITYOS_METAL_DEVICE").ok().as_deref());
     }
@@ -214,30 +214,50 @@ pub fn candidate_bauds(configured: u32, extra: Option<u32>) -> Vec<u32> {
             out.push(b);
         }
     };
-    push(&mut out, configured);
-    if let Some(b) = extra {
-        push(&mut out, b);
-    }
+    // Factory/common rates first. The docs example used to export
+    // REALITYOS_METAL_BAUD=1000000; that put 1 Mbps (twice, via the
+    // cold-ping retry) ahead of 57 600. A mistaken 2/3/4 Mbps Wizard
+    // hint did the same. Either open can wedge a CH340 so the factory
+    // servo is never found. 1 Mbps stays in the automatic scan; it
+    // just cannot lead. Hinted 2/3/4 Mbps still join, after 1 Mbps.
     for b in CANDIDATE_BAUDS.iter().copied().filter(|b| *b != 9_600) {
         push(&mut out, b);
     }
-    if out.iter().any(|b| FAST_WIZARD_BAUDS.contains(b)) {
+    let mut hints = Vec::new();
+    if configured > 0 {
+        hints.push(configured);
+    }
+    if let Some(b) = extra.filter(|b| *b > 0) {
+        hints.push(b);
+    }
+    if hints.iter().any(|b| FAST_WIZARD_BAUDS.contains(b)) {
         for b in FAST_WIZARD_BAUDS {
             push(&mut out, *b);
         }
     }
-    if out.iter().any(|b| HIGH_WIZARD_BAUDS.contains(b)) {
+    if hints.iter().any(|b| HIGH_WIZARD_BAUDS.contains(b)) {
         for b in HIGH_WIZARD_BAUDS {
             push(&mut out, *b);
+        }
+    }
+    for b in hints {
+        if b != 9_600
+            && !CANDIDATE_BAUDS.contains(&b)
+            && !FAST_WIZARD_BAUDS.contains(&b)
+            && !HIGH_WIZARD_BAUDS.contains(&b)
+        {
+            push(&mut out, b);
         }
     }
     push(&mut out, 9_600);
     out
 }
 
-/// Repeat the first baud immediately. U2D2/FTDI often drop a cold first
-/// ping; the after-scan retry used to run only after 2 Mbps had already
-/// opened (and could wedge) a CH340.
+/// Repeat the first baud immediately. That first rate is factory 57 600
+/// (`candidate_bauds` does not let a 1 Mbps docs hint or a 2/3/4 Mbps
+/// Wizard hint lead). U2D2/FTDI often drop a cold first ping; the
+/// after-scan retry used to run only after 2 Mbps had already opened
+/// (and could wedge) a CH340.
 pub fn discover_baud_attempts(bauds: &[u32]) -> Vec<u32> {
     let mut out = Vec::new();
     for (i, b) in bauds.iter().copied().enumerate() {
@@ -264,11 +284,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn candidate_bauds_keep_configured_first_and_dedup() {
+    fn candidate_bauds_keep_factory_first_and_dedup() {
         let b = candidate_bauds(1_000_000, Some(57_600));
-        assert_eq!(b[0], 1_000_000);
+        assert_eq!(b[0], 57_600, "a 1 Mbps docs hint must not lead the scan");
         assert_eq!(b.iter().filter(|x| **x == 1_000_000).count(), 1);
-        assert!(b.contains(&57_600));
         assert!(b.contains(&115_200));
         assert!(
             !b.contains(&2_000_000),
@@ -281,6 +300,34 @@ mod tests {
         assert!(!b.contains(&4_000_000));
         assert!(b.contains(&9_600));
         assert_eq!(*b.last().unwrap(), 9_600);
+    }
+
+    #[test]
+    fn factory_baud_stays_first_when_hint_is_one_or_two_megabit() {
+        let one = candidate_bauds(1_000_000, Some(1_000_000));
+        assert_eq!(one[0], 57_600);
+        let attempts = discover_baud_attempts(&one);
+        assert_eq!(attempts[0], 57_600);
+        assert_eq!(attempts[1], 57_600);
+        assert!(attempts[2..].contains(&1_000_000));
+        assert!(!attempts.contains(&2_000_000));
+
+        let two = candidate_bauds(2_000_000, None);
+        assert_eq!(two[0], 57_600);
+        assert!(two.contains(&2_000_000));
+        let one_pos = two.iter().position(|&x| x == 1_000_000).unwrap();
+        let two_pos = two.iter().position(|&x| x == 2_000_000).unwrap();
+        assert!(
+            one_pos < two_pos,
+            "must finish factory/1 Mbps before a 2 Mbps hint that can wedge CH340"
+        );
+
+        let four = candidate_bauds(4_000_000, None);
+        assert_eq!(four[0], 57_600);
+        assert!(four.contains(&3_000_000) && four.contains(&4_000_000));
+        let one_m = four.iter().position(|&x| x == 1_000_000).unwrap();
+        let four_m = four.iter().position(|&x| x == 4_000_000).unwrap();
+        assert!(one_m < four_m);
     }
 
     #[test]
