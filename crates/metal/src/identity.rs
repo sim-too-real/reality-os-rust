@@ -1,12 +1,12 @@
 //! Hardware vs deployment identity. Do not silently treat one as the other.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use realityos_plant::HardwareIdentity;
 use serde::{Deserialize, Serialize};
 
 use crate::config::MetalConfig;
-use crate::protocol::{is_xl330_model, XL330_M077_MODEL, XL330_M288_MODEL};
+use crate::protocol::{is_xl330_model, xl330_model_slug};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -46,22 +46,48 @@ impl MeasuredIdentity {
         firmware_version: u8,
         connected: bool,
     ) -> Self {
-        let node = device_node_identity(&cfg.device);
-        let serial = match (
-            usb_serial.as_deref(),
-            usb_fallback.as_deref(),
-            node.as_deref(),
-        ) {
+        Self::from_adapter(
+            cfg,
+            usb_serial,
+            usb_fallback,
+            device_node_identity(&cfg.device),
+            model,
+            firmware_version,
+            connected,
+        )
+    }
+
+    /// Same as [`Self::from_hardware`], but use a previously measured tty
+    /// node instead of `cfg.device`. After serve open, udev can dangle
+    /// `/dev/serial/by-id` or rename `ttyUSB0`; re-statting that name
+    /// blanks serial and aborts the first hold as identity mismatch.
+    pub fn from_adapter(
+        cfg: &MetalConfig,
+        usb_serial: Option<String>,
+        usb_fallback: Option<String>,
+        node: Option<String>,
+        model: u16,
+        firmware_version: u8,
+        connected: bool,
+    ) -> Self {
+        let dest_id = usb_fallback
+            .as_deref()
+            .filter(|f| !f.trim().is_empty())
+            .map(|f| format!("{f}:id{}", cfg.servo_id));
+        let mut serial = match (usb_serial.as_deref(), dest_id.as_deref(), node.as_deref()) {
             (Some(s), _, _) if !s.trim().is_empty() => format!("{s}:id{}", cfg.servo_id),
-            (_, Some(f), _) if !f.trim().is_empty() => format!("{f}:id{}", cfg.servo_id),
+            (_, Some(d), _) => d.to_string(),
             (_, _, Some(n)) if !n.trim().is_empty() => format!("{n}:id{}", cfg.servo_id),
             _ => String::new(),
         };
-        let model_name = match model {
-            XL330_M288_MODEL => "xl330-m288",
-            XL330_M077_MODEL => "xl330-m077",
-            _ => "unknown",
-        };
+        // dest-only probe bind must stay dest after iSerial appears.
+        // Rust prefers serial for a new bind; serve would otherwise miss.
+        if let Some(d) = dest_id.as_deref() {
+            if cfg.expected_serial.trim() == d {
+                serial = d.to_string();
+            }
+        }
+        let model_name = xl330_model_slug(model).unwrap_or("unknown");
         let firmware_id = if model == 0 {
             String::new()
         } else {
@@ -73,7 +99,7 @@ impl MeasuredIdentity {
                 field: "serial".into(),
                 value: serial.clone(),
                 source: IdentitySource::MeasuredFromHardware,
-                note: "XL330 EEPROM has no factory serial. Preference: USB adapter serial, then USB vid:pid:devpath, then measured tty name+rdev (UART/GPIO adapters). Plus the servo bus ID.".into(),
+                note: "XL330 EEPROM has no factory serial. Preference: USB adapter serial, then USB vid:pid:bus:devpath, then measured tty name+rdev (UART/GPIO adapters). Plus the servo bus ID.".into(),
             },
             IdentityField {
                 field: "firmware_id".into(),
@@ -118,7 +144,10 @@ impl MeasuredIdentity {
     }
 
     pub fn hardware_identity(&self, cfg: &MetalConfig) -> HardwareIdentity {
-        let pty = is_pty_path(&cfg.device);
+        self.hardware_identity_class(cfg, is_pty_path(&cfg.device))
+    }
+
+    pub fn hardware_identity_class(&self, cfg: &MetalConfig, pty: bool) -> HardwareIdentity {
         HardwareIdentity {
             serial: self.serial.clone(),
             firmware_id: self.firmware_id.clone(),
@@ -133,6 +162,29 @@ impl MeasuredIdentity {
             },
             actuator_ids: vec![self.actuator_id.clone()],
         }
+    }
+
+    /// Preferred serial plus dest fallback. A dest-only bind must still
+    /// match this UART after FTDI/U2D2 iSerial appears.
+    pub fn adapter_aliases(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(s) = self.usb_serial.as_deref() {
+            if !s.trim().is_empty() {
+                out.push(format!("{s}:id{}", self.servo_id));
+            }
+        }
+        if !self.serial.is_empty() && !out.contains(&self.serial) {
+            out.push(self.serial.clone());
+        }
+        if let Some(f) = self.usb_fallback.as_deref() {
+            if !f.trim().is_empty() {
+                let dest = format!("{f}:id{}", self.servo_id);
+                if !out.contains(&dest) {
+                    out.push(dest);
+                }
+            }
+        }
+        out
     }
 }
 
@@ -155,40 +207,55 @@ pub fn is_pty_path(tty: &Path) -> bool {
     canon.starts_with("/dev/pts") || tty_sysfs_name(&canon).is_some_and(|n| n.starts_with("pts"))
 }
 
-/// Walk sysfs for a USB serial, then a vendor:product:devpath fallback.
+/// Walk sysfs for a USB serial, then a vendor:product:bus:devpath fallback.
 pub fn usb_identity_for_tty(tty: &Path) -> (Option<String>, Option<String>) {
     let Some(name) = tty_sysfs_name(tty) else {
         return (None, None);
     };
-    let class = Path::new("/sys/class/tty").join(name);
-    let mut serial = None;
-    let mut fallback = None;
-    let mut cur = class.join("device");
+    usb_identity_from_sysfs_node(&Path::new("/sys/class/tty").join(name).join("device"))
+}
+
+/// Stop at the first node with idVendor+idProduct (the USB device).
+/// A CH340/CP2102 with an empty serial must not inherit a parent hub serial:
+/// `ATTRS{serial}==<hub>` would udev-match every tty on that hub, and
+/// `find_tty_for_expected_serial` could rebind the wrong node after rename.
+pub(crate) fn usb_identity_from_sysfs_node(start: &Path) -> (Option<String>, Option<String>) {
+    let mut cur = start.to_path_buf();
     for _ in 0..8 {
-        if serial.is_none() {
-            if let Ok(s) = std::fs::read_to_string(cur.join("serial")) {
-                let s = s.trim().to_string();
-                if !s.is_empty() {
-                    serial = Some(s);
-                }
-            }
-        }
-        if fallback.is_none() {
-            let vid = std::fs::read_to_string(cur.join("idVendor"))
+        let vid = std::fs::read_to_string(cur.join("idVendor"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let pid = std::fs::read_to_string(cur.join("idProduct"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        if vid.is_some() {
+            let (Some(v), Some(p)) = (vid, pid) else {
+                // idVendor without idProduct: do not climb to a parent hub.
+                return (None, None);
+            };
+            let serial = std::fs::read_to_string(cur.join("serial"))
                 .ok()
-                .map(|s| s.trim().to_string());
-            let pid = std::fs::read_to_string(cur.join("idProduct"))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let dest = std::fs::read_to_string(cur.join("devpath"))
                 .ok()
-                .map(|s| s.trim().to_string());
-            let devpath = std::fs::read_to_string(cur.join("devpath"))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let bus = std::fs::read_to_string(cur.join("busnum"))
                 .ok()
-                .map(|s| s.trim().to_string());
-            if let (Some(v), Some(p)) = (vid, pid) {
-                fallback = Some(format!(
-                    "usb:{v}:{p}:{}",
-                    devpath.unwrap_or_else(|| "nodevpath".into())
-                ));
-            }
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            // Do not invent nodevpath or bus 0: probe would bind a
+            // placeholder and serve would miss when the real dest appeared.
+            // busnum distinguishes two empty-serial CH340s that share dest
+            // (both "1") on different USB controllers.
+            let fallback = match (bus.as_deref(), dest.as_deref()) {
+                (Some(b), Some(d)) => Some(format!("usb:{v}:{p}:{b}:{d}")),
+                _ => None,
+            };
+            return (serial, fallback);
         }
         match std::fs::canonicalize(&cur) {
             Ok(p) => {
@@ -198,13 +265,184 @@ pub fn usb_identity_for_tty(tty: &Path) -> (Option<String>, Option<String>) {
                     break;
                 }
             }
-            Err(_) => break,
+            Err(_) => {
+                if let Some(parent) = cur.parent() {
+                    cur = parent.to_path_buf();
+                } else {
+                    break;
+                }
+            }
         }
         if cur == Path::new("/") {
             break;
         }
     }
-    (serial, fallback)
+    (None, None)
+}
+
+/// USB-UART nodes that may replace a vanished `ttyUSB*` after udev rename.
+pub fn iter_usb_uart_candidates() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for dir in ["/dev/serial/by-id", "/dev/serial/by-path"] {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.exists() {
+                out.push(p);
+            }
+        }
+    }
+    if let Ok(rd) = std::fs::read_dir("/dev") {
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("ttyUSB")
+                || name.starts_with("ttyACM")
+                || name.starts_with("ttyCH341")
+            {
+                let p = e.path();
+                if p.exists() {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Adapter+servo-id serial string for a live tty. Model/firmware are not used.
+pub fn adapter_serial_for_tty(tty: &Path, servo_id: u8) -> String {
+    adapter_identity_aliases(tty, servo_id)
+        .into_iter()
+        .next()
+        .unwrap_or_default()
+}
+
+/// Preferred serial plus dest fallback for a live tty.
+pub fn adapter_identity_aliases(tty: &Path, servo_id: u8) -> Vec<String> {
+    let (usb, fb) = usb_identity_for_tty(tty);
+    let mut cfg = MetalConfig::example(tty);
+    cfg.servo_id = servo_id;
+    MeasuredIdentity::from_hardware(&cfg, usb, fb, 0, 0, false).adapter_aliases()
+}
+
+/// Find a live USB-UART whose measured adapter serial matches `probe` bind.
+pub fn find_tty_for_expected_serial(expected_serial: &str, servo_id: u8) -> Option<PathBuf> {
+    let want = expected_serial.trim();
+    if want.is_empty() {
+        return None;
+    }
+    iter_usb_uart_candidates()
+        .into_iter()
+        .find(|p| adapter_serial_matches(p, want, servo_id))
+}
+
+/// Sentinel when the bound adapter is gone. `serve` must not open a living
+/// recycled `ttyUSB0` — `Xl330Driver::open` applies torque before the
+/// post-open identity compare.
+pub const MISSING_ADAPTER_PATH: &str = "/dev/realityos-metal-missing-adapter";
+
+/// Prefer a USB-UART whose measured adapter serial matches the bind, then an
+/// existing env/config path, then `metal.json`. CH340/CP2102 often have no
+/// USB serial; udev `change` can rename `ttyUSB0` → `ttyUSB1`. A living
+/// preferred path is not enough: after crash close / USB re-enum the old
+/// name can be a *different* adapter on the same bench. Opening that node
+/// would identify-fail (or command the wrong UART if identity fell back to
+/// tty name+rdev). When `expected_serial` is known, keep a path only if its
+/// measured adapter serial matches. If the bound adapter is gone, return a
+/// missing path instead of a living preferred whose serial drifted.
+pub fn pick_live_device(
+    preferred: PathBuf,
+    fallback: PathBuf,
+    expected_serial: &str,
+    servo_id: u8,
+) -> PathBuf {
+    let want = expected_serial.trim();
+    if !want.is_empty() {
+        if preferred.exists() && adapter_serial_matches(&preferred, want, servo_id) {
+            return preferred;
+        }
+        if fallback.exists() && adapter_serial_matches(&fallback, want, servo_id) {
+            return fallback;
+        }
+        if let Some(found) = find_tty_for_expected_serial(want, servo_id) {
+            return found;
+        }
+        if !preferred.exists() {
+            return preferred;
+        }
+        if !fallback.exists() {
+            return fallback;
+        }
+        return PathBuf::from(MISSING_ADAPTER_PATH);
+    }
+    if preferred.exists() {
+        return preferred;
+    }
+    if fallback.exists() {
+        return fallback;
+    }
+    preferred
+}
+
+/// Probe discover latches adapter aliases from the live node, then rematches
+/// if a later udev change dangles `/dev/serial/by-id` (the same 1–3 s window
+/// that used to skip campaign latency/crash-replay rematch). `serve` already
+/// does this via [`pick_live_device`] after `bind-measured`. Probe runs
+/// before that bind, so it cannot use `expected_serial`.
+pub fn rematch_discover_device(
+    preferred: PathBuf,
+    latched_aliases: &[String],
+    servo_id: u8,
+) -> PathBuf {
+    if latched_aliases.is_empty() {
+        return preferred;
+    }
+    if preferred.exists()
+        && latched_aliases
+            .iter()
+            .any(|alias| adapter_serial_matches(&preferred, alias, servo_id))
+    {
+        return preferred;
+    }
+    for alias in latched_aliases {
+        if let Some(found) = find_tty_for_expected_serial(alias, servo_id) {
+            return found;
+        }
+    }
+    PathBuf::from(MISSING_ADAPTER_PATH)
+}
+
+/// USB-adapter serial on this node, before any servo open / torque-on.
+pub fn adapter_serial_matches(device: &Path, expected_serial: &str, servo_id: u8) -> bool {
+    let want = expected_serial.trim();
+    !want.is_empty()
+        && device.exists()
+        && adapter_identity_aliases(device, servo_id)
+            .iter()
+            .any(|s| s == want)
+}
+
+/// Same UART after open if the live node still shares an alias with the
+/// pre-open latch (or the dest-only / iSerial bind). Exact
+/// `expected_serial` alone false-refuses FTDI when iSerial flaps empty
+/// after the first exclusive open and only dest remains.
+pub fn adapter_still_same_as_latched(
+    device: &Path,
+    expected_serial: &str,
+    latched_aliases: &[String],
+    servo_id: u8,
+) -> bool {
+    if !device.exists() {
+        return true;
+    }
+    if adapter_serial_matches(device, expected_serial, servo_id) {
+        return true;
+    }
+    let now = adapter_identity_aliases(device, servo_id);
+    now.iter().any(|a| latched_aliases.iter().any(|b| a == b))
 }
 
 #[cfg(test)]
@@ -213,9 +451,93 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn adapter_still_same_when_iserial_flaps_to_dest() {
+        let dest = "usb:0403:6014:1:1.0:id1";
+        let latched = vec!["FT123:id1".into(), dest.to_string()];
+        assert!(
+            adapter_still_same_as_latched(
+                Path::new("/dev/missing-after-open"),
+                "FT123:id1",
+                &latched,
+                1
+            ),
+            "vanished path keeps the pre-open latch"
+        );
+        let cfg = MetalConfig::example(PathBuf::from("/dev/null"));
+        let dest_only = MeasuredIdentity::from_adapter(
+            &cfg,
+            None,
+            Some("usb:0403:6014:1:1.0".into()),
+            None,
+            0,
+            0,
+            false,
+        );
+        assert!(dest_only.adapter_aliases().contains(&dest.to_string()));
+        assert!(
+            dest_only
+                .adapter_aliases()
+                .iter()
+                .any(|a| latched.iter().any(|b| a == b)),
+            "dest-only after iSerial flap still overlaps the FTDI latch"
+        );
+        let other = MeasuredIdentity::from_adapter(
+            &cfg,
+            Some("OTHER".into()),
+            Some("usb:1a86:7523:2:1.0".into()),
+            None,
+            0,
+            0,
+            false,
+        );
+        assert!(
+            !other
+                .adapter_aliases()
+                .iter()
+                .any(|a| latched.iter().any(|b| a == b)),
+            "a recycled UART must not overlap the bound latch"
+        );
+    }
+
+    #[test]
+    fn vanished_path_without_latch_blanks_serial() {
+        let cfg = MetalConfig::example(PathBuf::from("/dev/realityos-metal-vanished-udev-name"));
+        let m = MeasuredIdentity::from_hardware(&cfg, None, None, 1200, 46, true);
+        assert!(m.serial.is_empty());
+        assert!(!m.connected);
+    }
+
+    #[test]
+    fn latched_adapter_identity_survives_vanished_path() {
+        let cfg = MetalConfig::example(PathBuf::from("/dev/realityos-metal-vanished-udev-name"));
+        let usb = MeasuredIdentity::from_adapter(
+            &cfg,
+            Some("FT123".into()),
+            Some("usb:0403:6014:1:1.0".into()),
+            None,
+            1200,
+            46,
+            true,
+        );
+        assert_eq!(usb.serial, "FT123:id1");
+        assert!(usb.connected);
+        let node = MeasuredIdentity::from_adapter(
+            &cfg,
+            None,
+            None,
+            Some("tty:ttyUSB0:bc0".into()),
+            1200,
+            46,
+            true,
+        );
+        assert_eq!(node.serial, "tty:ttyUSB0:bc0:id1");
+        assert!(node.connected);
+    }
+
+    #[test]
     fn empty_usb_identity_is_not_invented() {
         let cfg = MetalConfig::example(PathBuf::from("/dev/missing"));
-        let m = MeasuredIdentity::from_hardware(&cfg, None, None, 1190, 46, true);
+        let m = MeasuredIdentity::from_hardware(&cfg, None, None, 1200, 46, true);
         assert!(m.serial.is_empty());
         assert!(!m.connected);
         assert!(device_node_identity(Path::new("/dev/missing")).is_none());
@@ -238,11 +560,22 @@ mod tests {
     }
 
     #[test]
+    fn robotis_m288_is_1200_and_m077_is_1190() {
+        let cfg = MetalConfig::example(PathBuf::from("/dev/ttyUSB0"));
+        let m288 =
+            MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1200, 46, true);
+        let m077 =
+            MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1190, 46, true);
+        assert_eq!(m288.firmware_id, "xl330-m288:1200:46");
+        assert_eq!(m077.firmware_id, "xl330-m077:1190:46");
+    }
+
+    #[test]
     fn usb_serial_plus_id_is_measured() {
         let cfg = MetalConfig::example(PathBuf::from("/dev/ttyUSB0"));
-        let m = MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1190, 46, true);
+        let m = MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1200, 46, true);
         assert_eq!(m.serial, "FT123:id1");
-        assert_eq!(m.firmware_id, "xl330-m288:1190:46");
+        assert_eq!(m.firmware_id, "xl330-m288:1200:46");
         assert!(m.connected);
     }
 
@@ -250,10 +583,10 @@ mod tests {
     fn firmware_zero_is_not_the_measured_firmware() {
         let cfg = MetalConfig::example(PathBuf::from("/dev/ttyUSB0"));
         let measured =
-            MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1190, 46, true);
+            MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1200, 46, true);
         let after_sensor_clobber =
-            MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1190, 0, true);
-        assert_eq!(measured.firmware_id, "xl330-m288:1190:46");
+            MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1200, 0, true);
+        assert_eq!(measured.firmware_id, "xl330-m288:1200:46");
         assert_ne!(measured.firmware_id, after_sensor_clobber.firmware_id);
     }
 
@@ -262,7 +595,7 @@ mod tests {
         let cfg = MetalConfig::example(PathBuf::from("/dev/zero"));
         let node = device_node_identity(&cfg.device).expect("/dev/zero is a char device");
         assert!(node.starts_with("tty:zero:"), "{node}");
-        let m = MeasuredIdentity::from_hardware(&cfg, None, None, 1190, 46, true);
+        let m = MeasuredIdentity::from_hardware(&cfg, None, None, 1200, 46, true);
         assert!(m.serial.starts_with("tty:zero:"));
         assert!(m.serial.ends_with(":id1"));
         assert!(m.connected);
@@ -279,5 +612,366 @@ mod tests {
             tty_sysfs_name(Path::new("/dev/ttyUSB0")).as_deref(),
             Some("ttyUSB0")
         );
+    }
+
+    #[test]
+    fn pick_live_device_keeps_existing_preferred() {
+        assert_eq!(
+            pick_live_device(
+                PathBuf::from("/dev/null"),
+                PathBuf::from("/dev/zero"),
+                "",
+                1
+            ),
+            PathBuf::from("/dev/null")
+        );
+    }
+
+    #[test]
+    fn pick_live_device_falls_back_when_preferred_vanished() {
+        assert_eq!(
+            pick_live_device(
+                PathBuf::from("/dev/missing-metal-tty"),
+                PathBuf::from("/dev/null"),
+                "",
+                1
+            ),
+            PathBuf::from("/dev/null")
+        );
+    }
+
+    #[test]
+    fn pick_live_device_skips_living_preferred_with_wrong_adapter_serial() {
+        let expected = adapter_serial_for_tty(Path::new("/dev/zero"), 1);
+        assert!(
+            expected.starts_with("tty:zero:"),
+            "char-device rdev must be measurable: {expected}"
+        );
+        assert_ne!(
+            adapter_serial_for_tty(Path::new("/dev/null"), 1),
+            expected,
+            "null and zero must not share an identity"
+        );
+        assert_eq!(
+            pick_live_device(
+                PathBuf::from("/dev/null"),
+                PathBuf::from("/dev/zero"),
+                &expected,
+                1
+            ),
+            PathBuf::from("/dev/zero")
+        );
+    }
+
+    #[test]
+    fn pick_live_device_keeps_preferred_when_adapter_serial_matches() {
+        let expected = adapter_serial_for_tty(Path::new("/dev/null"), 1);
+        assert!(!expected.is_empty());
+        assert_eq!(
+            pick_live_device(
+                PathBuf::from("/dev/null"),
+                PathBuf::from("/dev/zero"),
+                &expected,
+                1
+            ),
+            PathBuf::from("/dev/null")
+        );
+    }
+
+    #[test]
+    fn pick_live_device_refuses_living_wrong_adapter_when_bound_is_gone() {
+        let expected = "usb:dead:beef:missing:id1";
+        let got = pick_live_device(
+            PathBuf::from("/dev/null"),
+            PathBuf::from("/dev/zero"),
+            expected,
+            1,
+        );
+        assert_ne!(got, PathBuf::from("/dev/null"));
+        assert_ne!(got, PathBuf::from("/dev/zero"));
+        assert!(!got.exists() || adapter_serial_for_tty(&got, 1) == expected);
+        assert_eq!(got, PathBuf::from(MISSING_ADAPTER_PATH));
+    }
+
+    #[test]
+    fn rematch_discover_keeps_preferred_when_alias_matches() {
+        let preferred = PathBuf::from("/dev/null");
+        let aliases = adapter_identity_aliases(&preferred, 1);
+        assert!(!aliases.is_empty());
+        assert_eq!(
+            rematch_discover_device(preferred.clone(), &aliases, 1),
+            preferred
+        );
+    }
+
+    #[test]
+    fn rematch_discover_vanished_non_usb_alias_is_sentinel() {
+        // find_tty_for_expected_serial only walks USB-UART nodes. A vanished
+        // GPIO/PTY fallback must not invent a different char device.
+        let aliases = adapter_identity_aliases(Path::new("/dev/zero"), 1);
+        assert!(aliases.iter().any(|a| a.starts_with("tty:zero:")));
+        assert_eq!(
+            rematch_discover_device(PathBuf::from("/dev/missing-metal-tty"), &aliases, 1),
+            PathBuf::from(MISSING_ADAPTER_PATH)
+        );
+    }
+
+    #[test]
+    fn rematch_discover_refuses_living_wrong_adapter() {
+        let aliases = adapter_identity_aliases(Path::new("/dev/zero"), 1);
+        let got = rematch_discover_device(PathBuf::from("/dev/null"), &aliases, 1);
+        assert_ne!(got, PathBuf::from("/dev/null"));
+        assert_eq!(got, PathBuf::from(MISSING_ADAPTER_PATH));
+    }
+
+    #[test]
+    fn rematch_discover_empty_aliases_keep_preferred() {
+        assert_eq!(
+            rematch_discover_device(PathBuf::from("/dev/missing-metal-tty"), &[], 1),
+            PathBuf::from("/dev/missing-metal-tty")
+        );
+    }
+
+    #[test]
+    fn rematch_discover_missing_bound_adapter_is_sentinel() {
+        let got = rematch_discover_device(
+            PathBuf::from("/dev/missing-metal-tty"),
+            &["usb:dead:beef:missing:id1".into()],
+            1,
+        );
+        assert_eq!(got, PathBuf::from(MISSING_ADAPTER_PATH));
+    }
+
+    #[test]
+    fn adapter_serial_matches_requires_live_node() {
+        let expected = adapter_serial_for_tty(Path::new("/dev/null"), 1);
+        assert!(adapter_serial_matches(Path::new("/dev/null"), &expected, 1));
+        assert!(!adapter_serial_matches(
+            Path::new("/dev/zero"),
+            &expected,
+            1
+        ));
+        assert!(!adapter_serial_matches(
+            Path::new("/dev/missing-metal-tty"),
+            &expected,
+            1
+        ));
+    }
+
+    #[test]
+    fn find_tty_for_expected_serial_none_on_empty_or_unknown() {
+        assert!(find_tty_for_expected_serial("", 1).is_none());
+        assert!(find_tty_for_expected_serial("no-such-adapter:id1", 1).is_none());
+    }
+
+    fn write_attr(dir: &Path, name: &str, value: &str) {
+        std::fs::create_dir_all(dir).expect("sysfs dir");
+        std::fs::write(dir.join(name), value).expect("sysfs attr");
+    }
+
+    #[test]
+    fn usb_identity_stops_at_uart_device_not_parent_hub_serial() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "realityos-metal-usb-id-{}-{stamp}",
+            std::process::id()
+        ));
+        let hub = root.join("hub");
+        let uart = hub.join("1-1.3");
+        let iface = uart.join("1-1.3:1.0");
+        write_attr(&hub, "idVendor", "1d6b\n");
+        write_attr(&hub, "idProduct", "0002\n");
+        write_attr(&hub, "serial", "HUBSERIAL\n");
+        write_attr(&uart, "idVendor", "1a86\n");
+        write_attr(&uart, "idProduct", "7523\n");
+        write_attr(&uart, "devpath", "1.3\n");
+        write_attr(&uart, "busnum", "1\n");
+        std::fs::create_dir_all(&iface).expect("iface");
+        let (serial, fallback) = usb_identity_from_sysfs_node(&iface);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(serial, None, "CH340 must not inherit hub serial");
+        assert_eq!(fallback.as_deref(), Some("usb:1a86:7523:1:1.3"));
+    }
+
+    #[test]
+    fn usb_identity_uses_serial_on_the_uart_device() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "realityos-metal-usb-id-ftdi-{}-{stamp}",
+            std::process::id()
+        ));
+        let uart = root.join("1-1.2");
+        let iface = uart.join("1-1.2:1.0");
+        write_attr(&uart, "idVendor", "0403\n");
+        write_attr(&uart, "idProduct", "6001\n");
+        write_attr(&uart, "devpath", "1.2\n");
+        write_attr(&uart, "busnum", "1\n");
+        write_attr(&uart, "serial", "FT123456\n");
+        std::fs::create_dir_all(&iface).expect("iface");
+        let (serial, fallback) = usb_identity_from_sysfs_node(&iface);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(serial.as_deref(), Some("FT123456"));
+        assert_eq!(fallback.as_deref(), Some("usb:0403:6001:1:1.2"));
+    }
+
+    #[test]
+    fn usb_identity_does_not_invent_nodevpath_when_dest_missing() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "realityos-metal-usb-id-nodest-{}-{stamp}",
+            std::process::id()
+        ));
+        let uart = root.join("1-1.4");
+        let iface = uart.join("1-1.4:1.0");
+        write_attr(&uart, "idVendor", "1a86\n");
+        write_attr(&uart, "idProduct", "7523\n");
+        write_attr(&uart, "serial", "\n");
+        std::fs::create_dir_all(&iface).expect("iface");
+        let (serial, fallback) = usb_identity_from_sysfs_node(&iface);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(serial, None, "empty CH340 serial file is not an identity");
+        assert_eq!(fallback, None, "missing dest must not become nodevpath");
+    }
+
+    #[test]
+    fn usb_identity_does_not_invent_bus_when_busnum_missing() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "realityos-metal-usb-id-nobus-{}-{stamp}",
+            std::process::id()
+        ));
+        let uart = root.join("1-1.4");
+        let iface = uart.join("1-1.4:1.0");
+        write_attr(&uart, "idVendor", "1a86\n");
+        write_attr(&uart, "idProduct", "7523\n");
+        write_attr(&uart, "devpath", "1.4\n");
+        std::fs::create_dir_all(&iface).expect("iface");
+        let (serial, fallback) = usb_identity_from_sysfs_node(&iface);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(serial, None);
+        assert_eq!(fallback, None, "dest without busnum must not invent bus 0");
+    }
+
+    #[test]
+    fn usb_identity_keeps_uart_serial_when_dest_missing() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "realityos-metal-usb-id-serial-nodest-{}-{stamp}",
+            std::process::id()
+        ));
+        let uart = root.join("1-1.5");
+        let iface = uart.join("1-1.5:1.0");
+        write_attr(&uart, "idVendor", "0403\n");
+        write_attr(&uart, "idProduct", "6001\n");
+        write_attr(&uart, "serial", "FT123456\n");
+        std::fs::create_dir_all(&iface).expect("iface");
+        let (serial, fallback) = usb_identity_from_sysfs_node(&iface);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(serial.as_deref(), Some("FT123456"));
+        assert_eq!(fallback, None);
+    }
+
+    #[test]
+    fn usb_identity_does_not_climb_to_hub_when_uart_vid_lacks_pid() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "realityos-metal-usb-id-nopid-{}-{stamp}",
+            std::process::id()
+        ));
+        let hub = root.join("hub");
+        let uart = hub.join("1-1.6");
+        let iface = uart.join("1-1.6:1.0");
+        write_attr(&hub, "idVendor", "1d6b\n");
+        write_attr(&hub, "idProduct", "0002\n");
+        write_attr(&hub, "serial", "HUBSERIAL\n");
+        write_attr(&hub, "devpath", "0\n");
+        write_attr(&uart, "idVendor", "1a86\n");
+        std::fs::create_dir_all(&iface).expect("iface");
+        let (serial, fallback) = usb_identity_from_sysfs_node(&iface);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(serial, None, "vid without pid must not inherit hub serial");
+        assert_eq!(fallback, None);
+    }
+
+    #[test]
+    fn dest_only_bind_still_matches_after_iserial_appears() {
+        let dest = "usb:0403:6001:1:1.2:id1";
+        let mut cfg = MetalConfig::example(PathBuf::from("/dev/ttyUSB0"));
+        let fresh = MeasuredIdentity::from_hardware(
+            &cfg,
+            Some("FT123456".into()),
+            Some("usb:0403:6001:1:1.2".into()),
+            1200,
+            46,
+            true,
+        );
+        assert_eq!(fresh.serial, "FT123456:id1");
+        assert!(fresh.adapter_aliases().contains(&dest.into()));
+        cfg.expected_serial = dest.into();
+        let bound = MeasuredIdentity::from_hardware(
+            &cfg,
+            Some("FT123456".into()),
+            Some("usb:0403:6001:1:1.2".into()),
+            1200,
+            46,
+            true,
+        );
+        assert_eq!(
+            bound.serial, dest,
+            "serve must keep the dest-only probe bind"
+        );
+        assert!(bound.adapter_aliases().contains(&"FT123456:id1".into()));
+    }
+
+    #[test]
+    fn usb_identity_includes_busnum_so_two_ch340s_do_not_collide() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "realityos-metal-usb-id-bus-{}-{stamp}",
+            std::process::id()
+        ));
+        let a = root.join("bus1").join("1-1");
+        let b = root.join("bus2").join("2-1");
+        let a_iface = a.join("1-1:1.0");
+        let b_iface = b.join("2-1:1.0");
+        write_attr(&a, "idVendor", "1a86\n");
+        write_attr(&a, "idProduct", "7523\n");
+        write_attr(&a, "devpath", "1\n");
+        write_attr(&a, "busnum", "1\n");
+        write_attr(&b, "idVendor", "1a86\n");
+        write_attr(&b, "idProduct", "7523\n");
+        write_attr(&b, "devpath", "1\n");
+        write_attr(&b, "busnum", "2\n");
+        std::fs::create_dir_all(&a_iface).expect("iface a");
+        std::fs::create_dir_all(&b_iface).expect("iface b");
+        let (sa, fa) = usb_identity_from_sysfs_node(&a_iface);
+        let (sb, fb) = usb_identity_from_sysfs_node(&b_iface);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(sa, None);
+        assert_eq!(sb, None);
+        assert_eq!(fa.as_deref(), Some("usb:1a86:7523:1:1"));
+        assert_eq!(fb.as_deref(), Some("usb:1a86:7523:2:1"));
+        assert_ne!(fa, fb, "same dest on two buses must not share identity");
     }
 }

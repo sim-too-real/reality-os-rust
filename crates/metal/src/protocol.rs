@@ -6,20 +6,76 @@ pub const HEADER: [u8; 4] = [0xFF, 0xFF, 0xFD, 0x00];
 pub const INST_PING: u8 = 0x01;
 pub const INST_READ: u8 = 0x02;
 pub const INST_WRITE: u8 = 0x03;
+pub const INST_REBOOT: u8 = 0x08;
 pub const INST_STATUS: u8 = 0x55;
+/// Protocol 2.0 broadcast. Status replies carry the servo's own ID.
+pub const BROADCAST_ID: u8 = 254;
+/// Protocol 2.0 bit 7: Hardware Error Status is latched. The instruction still completed.
+pub const STATUS_ALERT: u8 = 0x80;
 
-pub const XL330_M288_MODEL: u16 = 1190;
-pub const XL330_M077_MODEL: u16 = 1200;
+/// Robotis e-Manual / Dynamixel2Arduino `actuator.h`.
+pub const XL330_M077_MODEL: u16 = 1190;
+pub const XL330_M288_MODEL: u16 = 1200;
 
 pub const ADDR_MODEL_NUMBER: u16 = 0;
 pub const ADDR_FIRMWARE_VERSION: u16 = 6;
 pub const ADDR_ID: u16 = 7;
+/// EEPROM. Bit2=1 is time-based profile (Wizard); 0 = velocity-based.
+pub const ADDR_DRIVE_MODE: u16 = 10;
+pub const DRIVE_MODE_VELOCITY_BASED: u8 = 0;
 /// EEPROM. 3 = position control (factory XL330 default).
 pub const ADDR_OPERATING_MODE: u16 = 11;
 pub const OPERATING_MODE_POSITION: u8 = 3;
+/// EEPROM. 255 = disabled. Wizard can make one servo answer a second ID.
+pub const ADDR_SECONDARY_ID: u16 = 12;
+pub const SECONDARY_ID_DISABLED: u8 = 255;
+/// EEPROM. 2 = Protocol 2.0 (factory). Wizard 20/21/22 is S.BUS / iBUS / RC-PWM
+/// (auto torque-on if that RC signal is seen at boot).
+pub const ADDR_PROTOCOL_TYPE: u16 = 13;
+pub const PROTOCOL_TYPE_2: u8 = 2;
+/// EEPROM. Signed. Wizard "zero the horn" shifts Present outside 0–4095.
+pub const ADDR_HOMING_OFFSET: u16 = 20;
+/// EEPROM. Unit ≈ 0.229 rpm. Moving=1 only while |Present Velocity| > this.
+/// Factory 10. Wizard ≥ profile velocity keeps Moving=0 for the whole nudge.
+pub const ADDR_MOVING_THRESHOLD: u16 = 24;
+pub const FACTORY_MOVING_THRESHOLD: u32 = 10;
+/// EEPROM. Unit 0.1 V. Factory XL330 max 70 / min 35.
+pub const ADDR_MAX_VOLTAGE_LIMIT: u16 = 32;
+pub const ADDR_MIN_VOLTAGE_LIMIT: u16 = 34;
+/// EEPROM. Unit 0.113%. Factory 885. Wizard 0 produces no PWM output.
+pub const ADDR_PWM_LIMIT: u16 = 36;
+pub const FACTORY_PWM_LIMIT: u16 = 885;
+/// Below this, a 32-tick no-load step will not move present.
+pub const MIN_PWM_LIMIT: u16 = 80;
 pub const ADDR_CURRENT_LIMIT: u16 = 38;
+/// EEPROM. Unit ≈ 0.229 rpm. 0 or 1 makes a 32-tick nudge still Moving=0 at the old present.
+pub const ADDR_VELOCITY_LIMIT: u16 = 44;
+/// EEPROM. Factory max 4095 / min 0. Wizard can shrink this window.
+pub const ADDR_MAX_POSITION_LIMIT: u16 = 48;
+pub const ADDR_MIN_POSITION_LIMIT: u16 = 52;
 pub const ADDR_TORQUE_ENABLE: u16 = 64;
+/// RAM. 0 = no status except PING (Wizard); 2 = all instructions (factory).
+pub const ADDR_STATUS_RETURN_LEVEL: u16 = 68;
+pub const STATUS_RETURN_ALL: u8 = 2;
 pub const ADDR_HARDWARE_ERROR: u16 = 70;
+/// RAM. Factory 1600. Wizard 0 leaves profile following with a dead I-term.
+pub const ADDR_VELOCITY_I_GAIN: u16 = 76;
+pub const FACTORY_VELOCITY_I_GAIN: u16 = 1600;
+pub const MIN_VELOCITY_I_GAIN: u16 = 200;
+/// RAM. Factory 100. Wizard 0 means the profile velocity loop does not track.
+pub const ADDR_VELOCITY_P_GAIN: u16 = 78;
+pub const FACTORY_VELOCITY_P_GAIN: u16 = 100;
+pub const MIN_VELOCITY_P_GAIN: u16 = 20;
+/// RAM. Factory 400. Wizard 0 means the servo never tracks a goal.
+pub const ADDR_POSITION_P_GAIN: u16 = 84;
+/// RAM. Factory 0. Wizard feedforward makes a 32-tick goal overshoot.
+pub const ADDR_FEEDFORWARD_2ND: u16 = 88;
+pub const ADDR_FEEDFORWARD_1ST: u16 = 90;
+pub const FACTORY_POSITION_P_GAIN: u16 = 400;
+/// Below this, a 32-tick nudge will not finish before the campaign Moving wait.
+pub const MIN_POSITION_P_GAIN: u16 = 80;
+/// RAM. Unit 20 ms. 0 = off; 0xFF (-1) = tripped (goal registers read-only).
+pub const ADDR_BUS_WATCHDOG: u16 = 98;
 pub const ADDR_PROFILE_ACCEL: u16 = 108;
 pub const ADDR_PROFILE_VELOCITY: u16 = 112;
 pub const ADDR_GOAL_POSITION: u16 = 116;
@@ -28,6 +84,9 @@ pub const ADDR_PRESENT_VELOCITY: u16 = 128;
 pub const ADDR_PRESENT_POSITION: u16 = 132;
 pub const ADDR_PRESENT_VOLTAGE: u16 = 144;
 pub const ADDR_REALTIME_TICK: u16 = 120;
+/// RAM. 1 while |Present Velocity| > Moving Threshold (addr 24). That is
+/// not "arrived": accel below the threshold leaves Moving=0 at the old present.
+pub const ADDR_MOVING: u16 = 122;
 
 const CRC_TABLE: [u16; 256] = [
     0x0000, 0x8005, 0x800F, 0x000A, 0x801B, 0x001E, 0x0014, 0x8011, 0x8033, 0x0036, 0x003C, 0x8039,
@@ -94,7 +153,26 @@ pub fn crc16(data: &[u8]) -> u16 {
 }
 
 pub fn is_xl330_model(model: u16) -> bool {
-    model == XL330_M288_MODEL || model == XL330_M077_MODEL
+    xl330_model_slug(model).is_some()
+}
+
+/// EEPROM model number → product slug used in measured `firmware_id`.
+pub fn xl330_model_slug(model: u16) -> Option<&'static str> {
+    match model {
+        XL330_M288_MODEL => Some("xl330-m288"),
+        XL330_M077_MODEL => Some("xl330-m077"),
+        _ => None,
+    }
+}
+
+/// EEPROM model number → proof `hardware_model`. Swapping these names
+/// would mint a successful metal proof that names the wrong actuator.
+pub fn xl330_hardware_model(model: u16) -> Option<&'static str> {
+    match model {
+        XL330_M288_MODEL => Some("XL330-M288-T"),
+        XL330_M077_MODEL => Some("XL330-M077-T"),
+        _ => None,
+    }
 }
 
 pub fn encode_packet(id: u8, inst: u8, params: &[u8]) -> Vec<u8> {
@@ -112,6 +190,15 @@ pub fn encode_packet(id: u8, inst: u8, params: &[u8]) -> Vec<u8> {
 
 pub fn encode_ping(id: u8) -> Vec<u8> {
     encode_packet(id, INST_PING, &[])
+}
+
+pub fn encode_reboot(id: u8) -> Vec<u8> {
+    encode_packet(id, INST_REBOOT, &[])
+}
+
+/// Instruction completed. `STATUS_ALERT` is leftover hardware-error state, not a NAK.
+pub fn instruction_ok(error: u8) -> bool {
+    error & !STATUS_ALERT == 0
 }
 
 pub fn encode_read(id: u8, addr: u16, len: u16) -> Vec<u8> {
@@ -183,6 +270,31 @@ pub fn decode_status_scan(buf: &[u8]) -> Result<StatusPacket, ProtocolError> {
     Err(last_err)
 }
 
+/// Unique servo IDs from every status frame in `buf`. Broadcast sniff uses
+/// this so a second XL330 on the drop is not commanded by accident.
+pub fn unique_status_ids(buf: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut search = 0;
+    while search < buf.len() {
+        let Some(rel) = find_header(&buf[search..]) else {
+            break;
+        };
+        let start = search + rel;
+        match decode_status(&buf[start..]) {
+            Ok(st) => {
+                // Protocol 2.0 ID 0 is valid (Wizard). Only 254 is broadcast.
+                if st.id != BROADCAST_ID && !out.contains(&st.id) {
+                    out.push(st.id);
+                }
+                search = start + 4;
+            }
+            Err(ProtocolError::Truncated) | Err(ProtocolError::TooShort) => break,
+            Err(_) => search = start + 1,
+        }
+    }
+    out
+}
+
 /// Stuff after CRC (Robotis): insert 0xFD after 0xFF 0xFF 0xFD except in the header.
 fn stuff(unstuffed: &[u8]) -> Vec<u8> {
     if unstuffed.len() < 4 {
@@ -240,6 +352,15 @@ pub fn le_u16(b: &[u8]) -> Option<u16> {
     Some(u16::from_le_bytes([*b.first()?, *b.get(1)?]))
 }
 
+pub fn le_u32(b: &[u8]) -> Option<u32> {
+    Some(u32::from_le_bytes([
+        *b.first()?,
+        *b.get(1)?,
+        *b.get(2)?,
+        *b.get(3)?,
+    ]))
+}
+
 pub fn le_i32(b: &[u8]) -> Option<i32> {
     Some(i32::from_le_bytes([
         *b.first()?,
@@ -256,6 +377,8 @@ mod tests {
     #[test]
     fn ping_roundtrip_crc() {
         let pkt = encode_ping(1);
+        assert_eq!(pkt.len(), 10);
+        assert_eq!(encode_ping(BROADCAST_ID).len(), 10);
         assert_eq!(&pkt[0..4], &HEADER);
         assert_eq!(pkt[4], 1);
         let destuffed = destuff(&pkt).unwrap();
@@ -305,6 +428,32 @@ mod tests {
     }
 
     #[test]
+    fn robotis_xl330_model_numbers_match_emanual() {
+        // Dynamixel2Arduino actuator.h and Robotis e-Manual:
+        // XL330-M077-T model number 1190, XL330-M288-T model number 1200.
+        // A swapped map would mint docs/metal_proof.json as M077 on the
+        // chosen M288 bench.
+        assert_eq!(XL330_M077_MODEL, 1190);
+        assert_eq!(XL330_M288_MODEL, 1200);
+        assert_eq!(xl330_hardware_model(1200), Some("XL330-M288-T"));
+        assert_eq!(xl330_hardware_model(1190), Some("XL330-M077-T"));
+        assert_eq!(xl330_model_slug(1200), Some("xl330-m288"));
+        assert_eq!(xl330_model_slug(1190), Some("xl330-m077"));
+        assert_eq!(xl330_hardware_model(1030), None);
+    }
+
+    #[test]
+    fn unique_status_ids_collects_two_servos() {
+        let a = encode_packet(1, INST_STATUS, &[0]);
+        let b = encode_packet(7, INST_STATUS, &[0]);
+        let mut both = a;
+        both.extend_from_slice(&b);
+        assert_eq!(unique_status_ids(&both), vec![1, 7]);
+        let zero = encode_packet(0, INST_STATUS, &[0]);
+        assert_eq!(unique_status_ids(&zero), vec![0]);
+    }
+
+    #[test]
     fn status_scan_skips_request_echo() {
         let request = encode_ping(1);
         let status = encode_packet(1, INST_STATUS, &[0]);
@@ -314,5 +463,15 @@ mod tests {
         assert_eq!(got.id, 1);
         assert_eq!(got.error, 0);
         assert!(decode_status(&both).is_err());
+    }
+
+    #[test]
+    fn alert_bit_is_not_an_instruction_fault() {
+        assert!(instruction_ok(0));
+        assert!(instruction_ok(STATUS_ALERT));
+        assert!(!instruction_ok(0x01));
+        assert!(!instruction_ok(STATUS_ALERT | 0x01));
+        let reboot = encode_reboot(1);
+        assert_eq!(reboot[7], INST_REBOOT);
     }
 }

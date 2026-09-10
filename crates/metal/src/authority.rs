@@ -20,18 +20,50 @@ pub struct MetalAuthority {
     root: PathBuf,
     cfg: MetalConfig,
     next_sequence: i64,
+    /// Live I/O loss is detected on acquire, before write-time verify.
+    /// Latch here so recover cannot resurrect the instance (kernel
+    /// `hardware_session_dead` is only set from verify_live_hardware).
+    bus_lost: bool,
 }
 
 impl MetalAuthority {
     pub fn start(root: impl AsRef<Path>, first_online: bool) -> anyhow::Result<Self> {
         let root = root.as_ref().to_path_buf();
         std::fs::create_dir_all(&root)?;
-        let cfg = MetalConfig::load(root.join(CONFIG_FILE))?;
+        let cfg_path = root.join(CONFIG_FILE);
+        let mut cfg = MetalConfig::load(&cfg_path)?;
         if !cfg.expected_ready() {
             anyhow::bail!("metal_expected_identity_missing:run_probe_then_bind_measured");
         }
+        let json_device = cfg.device.clone();
+        // Device only: baud/id in metal.json are the pair probe measured.
+        cfg.apply_device_env();
+        let live = crate::identity::pick_live_device(
+            cfg.device.clone(),
+            json_device.clone(),
+            &cfg.expected_serial,
+            cfg.servo_id,
+        );
+        if live != json_device {
+            cfg.device = live;
+            cfg.save(&cfg_path)?;
+        } else {
+            cfg.device = live;
+        }
         if !cfg.device.exists() {
             anyhow::bail!("metal_device_missing:{}", cfg.device.display());
+        }
+        // Measure the USB-adapter serial before open(). `open` applies
+        // bench limits and torque-on; a recycled ttyUSB0 that is a
+        // different UART would command the wrong actuator first.
+        if !crate::identity::adapter_serial_matches(&cfg.device, &cfg.expected_serial, cfg.servo_id)
+        {
+            anyhow::bail!(
+                "metal_adapter_serial_mismatch:expected={} actual={} device={}",
+                cfg.expected_serial,
+                crate::identity::adapter_serial_for_tty(&cfg.device, cfg.servo_id),
+                cfg.device.display()
+            );
         }
         let key = load_or_create_key(&root)?;
         let driver = Xl330Driver::open(cfg.clone(), &root)?;
@@ -80,6 +112,7 @@ impl MetalAuthority {
             root,
             cfg,
             next_sequence,
+            bus_lost: false,
         })
     }
 
@@ -94,15 +127,8 @@ impl MetalAuthority {
     pub fn handle(&mut self, req: MetalRequest) -> MetalResponse {
         // Watchdog only: a heartbeat emit is another journal+seal fsync pair.
         // Heartbeat stale is 2 s; idle serve already heartbeats ~every 800 ms.
-        if !self.pet_watchdog() {
-            return self.refuse(
-                "egress",
-                "refuse",
-                vec![
-                    "estop_engaged".into(),
-                    "abort_latched:software_watchdog_miss".into(),
-                ],
-            );
+        if let Err(v) = self.pet_watchdog() {
+            return self.refuse("egress", "refuse", v);
         }
         if req.injects_sensor_evidence() {
             return self.refuse(
@@ -139,6 +165,9 @@ impl MetalAuthority {
     }
 
     fn ingest_sensor(&mut self) -> MetalResponse {
+        if self.bus_lost {
+            return self.refuse_bus_lost();
+        }
         match self.session.acquire_sensor() {
             Ok(_) => {
                 let mut r = self.ok("sensor");
@@ -147,11 +176,14 @@ impl MetalAuthority {
                 self.persist_freshness(r.device_capture_s, r.authority_receive_s);
                 r
             }
-            Err(e) => self.refuse("observe", "refuse", vec![e]),
+            Err(e) => self.note_acquire_err("observe", e),
         }
     }
 
     fn recover(&mut self) -> MetalResponse {
+        if self.bus_lost {
+            return self.refuse_bus_lost();
+        }
         self.pet_heartbeat();
         let t = self
             .session
@@ -203,18 +235,17 @@ impl MetalAuthority {
         // handle() already ticked the watchdog. Extra heartbeat/watchdog emits
         // here are 4–8 fsyncs and can miss the 100 ms window before the serial
         // write. dispatch_issued ticks again immediately before write_online.
-        if let Err(e) = self.session.acquire_sensor() {
-            return self.refuse("authorize", "refuse", vec![e]);
+        if self.bus_lost {
+            return self.refuse_bus_lost();
         }
-        if self.session.governor.estop() {
-            return self.refuse(
-                "egress",
-                "refuse",
-                vec![
-                    "estop_engaged".into(),
-                    "abort_latched:software_watchdog_miss".into(),
-                ],
-            );
+        if let Err(e) = self.session.acquire_sensor() {
+            return self.note_acquire_err("authorize", e);
+        }
+        // Sensor I/O sits between handle's tick and dispatch. A 40 ms live
+        // read is inside the miss window; refresh so dispatch does not inherit
+        // that gap. If acquire itself exceeded 100 ms, this tick latches.
+        if let Err(v) = self.pet_watchdog() {
+            return self.refuse("egress", "refuse", v);
         }
         self.next_sequence = self.next_sequence.saturating_add(1);
         let now = self.session.governor.authority_now_s();
@@ -326,11 +357,61 @@ impl MetalAuthority {
         }
     }
 
+    fn is_bus_loss(err: &str) -> bool {
+        let e = err.to_ascii_lowercase();
+        e.contains("driver not connected")
+            || e.contains("dxl_io")
+            || e.contains("metal_live_io_deadline")
+            || e.contains("metal_serial_closed")
+    }
+
+    fn refuse_bus_lost(&self) -> MetalResponse {
+        self.refuse(
+            "authorize",
+            "refuse",
+            vec![
+                "hardware_session_requires_online_restart".into(),
+                "online_hardware_disconnected".into(),
+            ],
+        )
+    }
+
+    fn note_acquire_err(&mut self, stage: &str, e: String) -> MetalResponse {
+        if Self::is_bus_loss(&e) {
+            self.bus_lost = true;
+            let _ = self.session.governor.engage_estop_now(e.as_str());
+            return self.refuse(
+                stage,
+                "refuse",
+                vec![
+                    e,
+                    "hardware_session_requires_online_restart".into(),
+                    "online_hardware_disconnected".into(),
+                ],
+            );
+        }
+        self.refuse(stage, "refuse", vec![e])
+    }
+
     /// ONLINE software watchdog is 50 ms (miss at 100 ms). One journal+seal
     /// fsync pair. A gap >100 ms cannot be caught up.
-    fn pet_watchdog(&mut self) -> bool {
+    ///
+    /// Identity/disconnect ESTOP is not a watchdog miss. Folding `estop()`
+    /// into this tick made recover-after-identity return
+    /// `software_watchdog_miss` and left `hardware_session_requires_online_restart`
+    /// unmeasured. A real miss still returns `t.ok == false` and cannot be
+    /// caught up.
+    fn pet_watchdog(&mut self) -> Result<(), Vec<String>> {
         let t = self.session.governor.watchdog_tick_now();
-        t.ok && !self.session.governor.estop()
+        if t.ok {
+            return Ok(());
+        }
+        let mut v = t.violations;
+        if v.is_empty() {
+            v.push("estop_engaged".into());
+            v.push("abort_latched:software_watchdog_miss".into());
+        }
+        Err(v)
     }
 
     fn pet_heartbeat(&mut self) {
@@ -351,9 +432,9 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
     };
     // new_online already ticked; one watchdog pet covers bind without a
     // heartbeat fsync. Schedule the next idle pet from *before* emit so a
-    // slow journal fsync cannot push the following gap past 100 ms.
-    if !auth.pet_watchdog() {
-        let msg = "software_watchdog_miss_before_bind";
+    // slow journal fsync cannot push the following Instant gap past 100 ms.
+    if let Err(v) = auth.pet_watchdog() {
+        let msg = format!("software_watchdog_miss_before_bind:{}", v.join(","));
         let _ = std::fs::write(root.join("serve.err"), format!("{msg}\n"));
         anyhow::bail!("{msg}");
     }
@@ -361,26 +442,40 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
     listener.set_nonblocking(true)?;
     // Each watchdog/heartbeat emit fsyncs journal+seal. 10 ms pets of both
     // were ~400 fsyncs/s and can miss the 100 ms watchdog on a bench disk.
+    // Accept waiting IPC before the idle heartbeat (heartbeat+handle in one
+    // iteration was software_watchdog_miss with an empty serve.err). Do not
+    // pet again on accept: handle() pets, and an extra fsync before acquire
+    // is what failed two-uid PTY hold on 0700e23 (sensor ok, write missed).
     let mut next_watchdog = std::time::Instant::now() + Duration::from_millis(40);
     let mut next_heartbeat = std::time::Instant::now() + Duration::from_millis(800);
     loop {
         if root.join("stop_serve").exists() {
             break Ok(());
         }
-        let now = std::time::Instant::now();
-        if now >= next_watchdog {
-            next_watchdog = now + Duration::from_millis(40);
-            if !auth.pet_watchdog() {
-                let _ = std::fs::write(root.join("serve.err"), "software_watchdog_miss_idle\n");
-            }
-        }
-        if now >= next_heartbeat {
-            next_heartbeat = now + Duration::from_millis(800);
-            auth.pet_heartbeat();
-        }
         let mut stream = match listener.accept() {
             Ok((s, _)) => s,
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                let now = std::time::Instant::now();
+                if now >= next_watchdog {
+                    next_watchdog = std::time::Instant::now() + Duration::from_millis(40);
+                    if let Err(v) = auth.pet_watchdog() {
+                        let _ = std::fs::write(
+                            root.join("serve.err"),
+                            format!("software_watchdog_miss_idle:{}\n", v.join(",")),
+                        );
+                    }
+                }
+                if now >= next_heartbeat {
+                    next_heartbeat = std::time::Instant::now() + Duration::from_millis(800);
+                    auth.pet_heartbeat();
+                    if let Err(v) = auth.pet_watchdog() {
+                        let _ = std::fs::write(
+                            root.join("serve.err"),
+                            format!("software_watchdog_miss_after_heartbeat:{}\n", v.join(",")),
+                        );
+                    }
+                    next_watchdog = std::time::Instant::now() + Duration::from_millis(40);
+                }
                 let wait = next_watchdog.saturating_duration_since(std::time::Instant::now());
                 std::thread::sleep(wait.min(Duration::from_millis(20)));
                 continue;
@@ -388,9 +483,34 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
             Err(_) => continue,
         };
         stream.set_nonblocking(false)?;
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(25)));
         let mut line = String::new();
-        if BufReader::new(&stream).read_line(&mut line).is_err() {
-            continue;
+        {
+            let mut reader = BufReader::new(&stream);
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => break,
+                    Err(e)
+                        if e.kind() == ErrorKind::TimedOut || e.kind() == ErrorKind::WouldBlock =>
+                    {
+                        if let Err(v) = auth.pet_watchdog() {
+                            let _ = std::fs::write(
+                                root.join("serve.err"),
+                                format!("software_watchdog_miss_before_handle:{}\n", v.join(",")),
+                            );
+                            line.clear();
+                            break;
+                        }
+                        next_watchdog = std::time::Instant::now() + Duration::from_millis(40);
+                    }
+                    Err(_) => {
+                        line.clear();
+                        break;
+                    }
+                }
+            }
         }
         if line.trim().is_empty() {
             continue;
@@ -427,6 +547,9 @@ pub fn serve_forever(root: &Path, first_online: bool) -> anyhow::Result<()> {
             continue;
         }
         let resp = auth.handle(req);
+        // handle() pets. Push idle Instant out so the next WouldBlock does
+        // not add another journal+seal before the following propose.
+        next_watchdog = std::time::Instant::now() + Duration::from_millis(40);
         crate::ipc::write_response(&mut stream, &resp);
     }
 }

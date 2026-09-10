@@ -104,6 +104,83 @@ pub fn aggregates_from_cases(cases: &[CaseRecord]) -> ProofAggregates {
     a
 }
 
+/// Experiment acceptance for a no-load XL330 hold, in position ticks.
+///
+/// XL330 resolution is 4096 ticks/rev (0.088°). Robotis does not specify
+/// zero-count hold. Under factory Position P Gain 400 a parked horn still
+/// hunts a few counts. 4 ticks ≈ 0.35°, well below the certified 32-tick
+/// (~2.8°) nudge. Not a datasheet accuracy spec and not certified.
+pub const HOLD_STILL_MAX_ABS_TICKS: i64 = 4;
+
+/// Device present delta from campaign `observed_motion`.
+/// Prefers `delta=N`; otherwise `present A->B`.
+pub fn present_position_delta(motion: Option<&str>) -> Option<i64> {
+    let s = motion?;
+    if let Some(idx) = s.find("delta=") {
+        let tok = s[idx + 6..].split_whitespace().next()?;
+        if tok == "None" {
+            return None;
+        }
+        return tok.parse().ok();
+    }
+    let rest = s.split_once("present ")?.1;
+    let pair = rest.split_whitespace().next()?;
+    let (a, b) = pair.split_once("->")?;
+    Some(b.parse::<i64>().ok()? - a.parse::<i64>().ok()?)
+}
+
+/// Hold stayed inside the no-load hunt band. Missing present is not a hold.
+pub fn hold_still(motion: Option<&str>) -> bool {
+    present_position_delta(motion).is_some_and(|d| d.abs() <= HOLD_STILL_MAX_ABS_TICKS)
+}
+
+/// Nudge moved farther than no-load hunt. A 1-count flicker is not item 8.
+pub fn nudge_moved(motion: Option<&str>) -> bool {
+    present_position_delta(motion).is_some_and(|d| d.abs() > HOLD_STILL_MAX_ABS_TICKS)
+}
+
+fn eeprom_model_from_identity(identity: &serde_json::Value) -> Option<u16> {
+    for key in ["/measured/model", "/model"] {
+        if let Some(n) = identity
+            .pointer(key)
+            .and_then(|v| v.as_u64())
+            .and_then(|n| u16::try_from(n).ok())
+            .filter(|n| *n != 0)
+        {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// Refuse a swapped 1190/1200 product name. Unit fixtures without an
+/// EEPROM model number skip this check; a live measured.json always has one.
+fn hardware_model_matches_eeprom(meta: &ProofMeta) -> Result<(), String> {
+    let Some(n) = eeprom_model_from_identity(&meta.real_device_identity) else {
+        return Ok(());
+    };
+    match crate::protocol::xl330_hardware_model(n) {
+        Some(want) if meta.hardware_model == want => Ok(()),
+        Some(want) => Err(format!(
+            "metal_proof_hardware_model_mismatch:label={} eeprom={n} want={want}",
+            meta.hardware_model
+        )),
+        None => Err(format!("metal_proof_unknown_xl330_model:{n}")),
+    }
+}
+
+fn identity_looks_like_pty_stand_in(id: &serde_json::Value) -> bool {
+    let status = id
+        .pointer("/hardware_identity/evidence_status")
+        .and_then(|v| v.as_str())
+        .or_else(|| id.get("evidence_status").and_then(|v| v.as_str()));
+    let metal = id
+        .pointer("/hardware_identity/metal")
+        .and_then(|v| v.as_bool())
+        .or_else(|| id.get("metal").and_then(|v| v.as_bool()));
+    status == Some("PTY_STAND_IN_NOT_METAL") || metal == Some(false)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetalProof {
     pub schema: String,
@@ -149,7 +226,23 @@ impl MetalProof {
         if cases.is_empty() {
             return Err("metal_proof_requires_measured_cases".into());
         }
+        hardware_model_matches_eeprom(&meta)?;
         let a = aggregates_from_cases(&cases);
+        let has_hold = cases.iter().any(|c| {
+            c.name == "valid_hold"
+                && c.expected_authorization
+                && c.write_delta > 0
+                && hold_still(c.observed_motion.as_deref())
+        });
+        let has_nudge = cases.iter().any(|c| {
+            c.name == "valid_nudge"
+                && c.expected_authorization
+                && c.write_delta > 0
+                && nudge_moved(c.observed_motion.as_deref())
+        });
+        let freshness_measured =
+            meta.device_capture_s.is_some() && meta.authority_receive_s.is_some();
+        let not_pty_stand_in = !identity_looks_like_pty_stand_in(&meta.real_device_identity);
         Ok(Self {
             schema: PROOF_SCHEMA.into(),
             hardware_model: meta.hardware_model,
@@ -180,10 +273,18 @@ impl MetalProof {
             freshness_threshold_s: meta.freshness_threshold_s,
             experiment_status: if a.unauthorized_physical_writes == 0
                 && a.valid_physical_writes >= 2
+                && has_hold
+                && has_nudge
                 && meta.direct_device_open_successes == 0
                 && meta.direct_device_open_attempts > 0
                 && meta.cutoff_tested
                 && a.duplicate_writes_after_restart + meta.duplicate_writes_after_restart == 0
+                && a.identity_mismatch_refusals > 0
+                && a.disconnect_refusals > 0
+                && freshness_measured
+                && not_pty_stand_in
+                && meta.used_os_monotonic_clock
+                && meta.used_hardware_driver_port
             {
                 "measured_success".into()
             } else {
@@ -310,6 +411,24 @@ pub fn default_unresolved() -> Vec<String> {
         "USB-serial adapter serial is not a factory actuator serial; the servo EEPROM has none"
             .into(),
         "Realtime Tick is a wrapping 1 ms device counter, not a synchronized clock".into(),
+        "hold-still acceptance is |present delta| <= 4 ticks (~0.35°); XL330 quantization is 0.088°/tick and no-load P-gain hunt is not specified as 0. Not certified positioning accuracy".into(),
+        "live EEPROM identity re-read is skipped when the motion-block read already took >=15 ms; that cycle keeps the previously latched identity".into(),
+        "identity CRC/NAK after a good motion sample keeps the previous latched identity for that cycle".into(),
+        "a half-duplex TTL/RS485 adapter that needs more than 1.5 ms after host TX, or more than 500 ms after DTR-RESET, is still a first-contact hole".into(),
+        "probe rematches a dangling USB-serial by-id from aliases latched before the first open and the campaign points probe at the live ttyUSB so a 0750 plugdev by-id dir cannot hide the node from authority; a udev rename that also changes the adapter serial still fail-closes".into(),
+        "HUPCL is cleared on the live exclusive fd via termios after open; stty after TIOCEXCL is EBUSY on the node and on /proc/<pid>/fd/N, /proc/self/fd/N misses an O_CLOEXEC tty, and a fresh USB-serial session restores kernel-default HUPCL so a pre-open stty is lost".into(),
+        "campaign settle treats present inside the hold-still band of the written goal as arrived; Moving=0 alone is not arrived (accel below Moving Threshold)".into(),
+        "an XL330 already in Wizard RC-PWM / S.BUS / iBUS mode at boot cannot be identified over Protocol 2.0".into(),
+        "a USB-UART with no adapter serial (typical CH340/CP2102) is rebound by vid:pid:bus:devpath / by-path, not KERNEL==ttyUSB0 or a parent hub serial; a living stale ttyUSB0 after re-enum is not kept if its measured serial drifted; campaign waits up to 4s then fails closed instead of handing the stale name to serve; two empty-serial adapters that share dest on different buses used to collide (both usb:vid:pid:1); the same bus+dest is still one port".into(),
+        "REALITYOS_METAL_BAUD / SERVO_ID are probe hints; serve keeps the pair probe wrote into metal.json (a 1 Mbps hint on a factory 57600 XL330 used to fail identify)".into(),
+        "2 / 3 / 4 Mbps join the probe scan only when hinted, and never ahead of factory 57600 / 115200 / 1 Mbps; a 1 Mbps docs hint or a mistaken 2/3/4 Mbps Wizard hint used to open that rate twice before 57600 and could wedge CH340 so the factory servo was never found".into(),
+        "serve measures the USB-adapter serial before open; a recycled living ttyUSB0 whose serial drifted must not reach torque-on".into(),
+        "campaign proof-meta reads measured/os-probe/freshness from files; interpolating JSON into python '''...''' dies on an apostrophe in a USB serial".into(),
+        "campaign installs docs/metal_proof.json relative to the script's repo, not the caller's working directory; sudo /path/scripts/metal-campaign.sh from another cwd used to write ~/docs after a live run".into(),
+        "campaign runs as root with umask 0077; proof_meta.json and the cases file are chmod 0644 and chowned to the authority UID so report can read them. A hardened root umask used to abort mint after the physical run".into(),
+        "campaign finds metal binaries in the script repo when REALITYOS_METAL_BIN=$PWD/target/debug points at the caller's cwd; sudo /path/scripts/metal-campaign.sh from another cwd used to exit 2 before probe".into(),
+        "first USB prepare fails closed until the UART sysfs node has a non-empty USB serial or busnum:devpath:vid:pid, then waits briefly for iSerial and locks that identity; a dest-only bind still matches after iSerial appears. An empty CH340 serial file, a parent hub serial, inventing 0:nodevpath, waiting for idVendor alone, or preferring a late FTDI serial after a dest-only bind used to miss before hold. FTDI/U2D2 latency_timer must read back 1 after write; a silent failed set used to keep 16 ms and miss the 40 ms live deadline on the first hold. USB power/control on the UART device must read back on after write; a silent failed set used to keep autosuspend auto and miss that deadline after an idle gap. Campaign creates realityos-authority / realityos-autonomy / realityos-ipc and requires python3/timeout before first USB prepare; creating users after udev OWNER= or missing python3 after probe used to fail the first bench run. nscd/sssd can still hide a just-created user so chown/OWNER= fail; campaign flushes those caches and fails closed unless the USB tty inode uid is the authority uid and mode is 0600. Real USB-serial also requires fuser and udevadm; a missing fuser used to skip the holder check and open a UART ModemManager already had, and a missing /run/udev/rules.d used to skip ID_MM_DEVICE_IGNORE. Writing the ignore rule then udevadm control --reload || true used to announce success without loading it; a leftover 99-realityos-metal-*.rules from a SIGKILL'd run used to skip rewrite; fuser ran only before udevadm trigger --action=change, which can wake ModemManager. Reload must succeed, udevadm info must read ID_MM_DEVICE_IGNORE=1, the recorded USB identity is rematched after that trigger (FTDI/U2D2 can come back as ttyUSB1) before metal.json is rewritten, and the holder check runs again after that rematch. First prepare used to run only before journal tmpfs / staging / metal-deploy chown; that chown can emit a udev change that wakes ModemManager and resets FTDI latency_timer, so prepare runs again immediately before probe opens the UART. claim_usb_tty used to chown/chmod on every call even when the inode was already authority 0600, and metal-deploy always chowned the tty; the extra pre-probe claim then emitted another udev change and probe opened while ModemManager could still be waking (or FTDI came back as ttyUSB1 / latency_timer 16 ms). Claim, deploy, latency_timer, and power/control now skip a no-op write (a rewrite of 1/on still emits udev change). After a real claim/latency/power write, prepare settles udev, rematches the recorded USB identity, re-applies owner/latency/power only if they drifted, refuses holders, and fails closed unless latency_timer/power/control still read back 1/on. connect_serial skips a no-op chmod 0600 (that chmod can emit the same udev change and reset FTDI latency_timer before the first live hold). Campaign stty -F -hupcl before probe used to DTR-RESET cheap FTDI/CP2102; the driver clears HUPCL on the exclusive fd. Probe broadcast sniff takes exclusive on a real UART so ModemManager cannot AT-probe during the 500 ms open-settle. After serve open, claim/latency/power used to run inside if without || return so a failed latency_timer write was ignored (set -e is disabled in if) and the first hold could run at 16 ms; the campaign now settles and fails closed unless latency_timer/power/control still read back".into(),
+        "after serve open, a udev change can dangle /dev/serial/by-id or rename ttyUSB0 while the exclusive fd is still the live UART; bus_up / probe_identity must not treat that vanished path as unplug (a real unplug fails the next xfer)".into(),
         "no STO/SS1/PLC/SIL/ISO is provided or claimed".into(),
     ]
 }
@@ -413,7 +532,7 @@ mod tests {
                 2,
                 true,
                 true,
-                Some("present 2048->2050".into()),
+                Some("present 2048->2080 goal=2080 delta=32".into()),
                 "consumed",
             ),
             CaseRecord::measure(
@@ -488,5 +607,100 @@ mod tests {
         let t = incomplete.sixteen_point_report();
         assert!(t.contains("not success"));
         assert!(!t.contains("every listed criterion is true on this run"));
+    }
+
+    #[test]
+    fn measured_success_requires_identity_disconnect_and_freshness() {
+        let writes_only: Vec<CaseRecord> = ok_cases()
+            .into_iter()
+            .filter(|c| c.expected_authorization)
+            .collect();
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), writes_only, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+        let mut no_fresh = ok_meta(true);
+        no_fresh.device_capture_s = None;
+        no_fresh.authority_receive_s = None;
+        let incomplete =
+            MetalProof::from_measured(no_fresh, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+    }
+
+    #[test]
+    fn measured_success_requires_hold_still_and_nudge_present_delta() {
+        assert!(hold_still(Some("present 2048->2048 goal=2048 delta=0")));
+        assert!(hold_still(Some("present 2048->2050 goal=2048 delta=2")));
+        assert!(!hold_still(Some("present 2048->2080 goal=2080 delta=32")));
+        assert!(nudge_moved(Some("present 2048->2080 goal=2080 delta=32")));
+        assert!(!nudge_moved(Some("present 2048->2050 goal=2080 delta=2")));
+
+        let mut stuck = ok_cases();
+        stuck[1].observed_motion = Some("present 2048->2048 goal=2080 delta=0".into());
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), stuck, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status, "measured_incomplete_or_failed",
+            "a goal write without present motion is not a nudge"
+        );
+        let mut hunt_only = ok_cases();
+        hunt_only[1].observed_motion = Some("present 2048->2050 goal=2080 delta=2".into());
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), hunt_only, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status, "measured_incomplete_or_failed",
+            "a 2-tick flicker is no-load hunt, not the certified 32-tick nudge"
+        );
+        let mut yanked = ok_cases();
+        yanked[0].observed_motion = Some("present 2048->2080 goal=2080 delta=32".into());
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), yanked, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status, "measured_incomplete_or_failed",
+            "a hold that traveled the nudge step is not a zero-motion baseline"
+        );
+        let mut hunt_hold = ok_cases();
+        hunt_hold[0].observed_motion = Some("present 2048->2050 goal=2048 delta=2".into());
+        let ok = MetalProof::from_measured(ok_meta(true), hunt_hold, default_unresolved()).unwrap();
+        assert_eq!(
+            ok.experiment_status, "measured_success",
+            "no-load encoder hunt inside {HOLD_STILL_MAX_ABS_TICKS} ticks is still a hold"
+        );
+    }
+
+    #[test]
+    fn proof_refuses_swapped_xl330_hardware_model() {
+        let mut swapped = ok_meta(true);
+        swapped.hardware_model = "XL330-M077-T".into();
+        swapped.real_device_identity = serde_json::json!({"measured": {"model": 1200}});
+        let err = MetalProof::from_measured(swapped, ok_cases(), default_unresolved())
+            .expect_err("M288 EEPROM must not mint as M077");
+        assert!(err.contains("metal_proof_hardware_model_mismatch"), "{err}");
+        let mut labeled = ok_meta(true);
+        labeled.real_device_identity = serde_json::json!({"measured": {"model": 1200}});
+        let ok = MetalProof::from_measured(labeled, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(ok.hardware_model, "XL330-M288-T");
+    }
+
+    #[test]
+    fn measured_success_refuses_pty_stand_in_identity() {
+        let mut pty = ok_meta(true);
+        pty.real_device_identity = serde_json::json!({
+            "hardware_identity": {
+                "metal": false,
+                "evidence_status": "PTY_STAND_IN_NOT_METAL",
+                "serial": "tty:2:1:id1"
+            }
+        });
+        let incomplete = MetalProof::from_measured(pty, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
     }
 }

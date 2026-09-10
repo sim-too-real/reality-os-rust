@@ -39,8 +39,16 @@ chown "$AUTHORITY_USER:$AUTHORITY_USER" "$ROOT/signing.key"
 chmod 0600 "$ROOT/signing.key"
 
 if [[ -n "$DEVICE" && -e "$DEVICE" ]]; then
-  chown "$AUTHORITY_USER:$AUTHORITY_USER" "$DEVICE" 2>/dev/null || true
-  chmod 0600 "$DEVICE" 2>/dev/null || true
+  # A no-op chown still emits udev change. First prepare already claimed
+  # 0600; repeating that here used to wake ModemManager and reset FTDI
+  # latency_timer before the second prepare / probe open.
+  want_uid="$(id -u "$AUTHORITY_USER")"
+  got_uid="$(stat -c '%u' "$DEVICE" 2>/dev/null || true)"
+  mode="$(stat -c '%a' "$DEVICE" 2>/dev/null || true)"
+  if [[ "$got_uid" != "$want_uid" || "$mode" != "0600" ]]; then
+    chown "$AUTHORITY_USER:$AUTHORITY_USER" "$DEVICE" 2>/dev/null || true
+    chmod 0600 "$DEVICE" 2>/dev/null || true
+  fi
   if [[ -c "$DEVICE" && "$DEVICE" != /dev/pts/* ]] && ! id -nG "$AUTHORITY_USER" | grep -qw dialout; then
     echo "note: add $AUTHORITY_USER to dialout if device chmod/chown is refused" >&2
   fi

@@ -16,3 +16,5 @@ jobs:
         run: sudo -E env "PATH=$PATH" REALITYOS_HIL_BIN="$PWD/target/debug" REALITYOS_OS_USERS_PROOF="$PWD/docs/hil_os_users_proof.json" scripts/hil-os-users-ci.sh
       - name: two-user metal OS boundary (not physical evidence)
         run: sudo -E env "PATH=$PATH" REALITYOS_METAL_BIN="$PWD/target/debug" scripts/metal-os-boundary.sh
+      - name: metal campaign PTY sequence (not physical evidence)
+        run: sudo -E env "PATH=$PATH" REALITYOS_METAL_BIN="$PWD/target/debug" scripts/metal-pty-sequence.sh

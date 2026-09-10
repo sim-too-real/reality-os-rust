@@ -11,7 +11,8 @@ import termios
 import tty
 
 HEADER = bytes([0xFF, 0xFF, 0xFD, 0x00])
-INST_PING, INST_READ, INST_WRITE, INST_STATUS = 0x01, 0x02, 0x03, 0x55
+INST_PING, INST_READ, INST_WRITE, INST_REBOOT, INST_STATUS = 0x01, 0x02, 0x03, 0x08, 0x55
+STATUS_ALERT = 0x80
 
 CRC_TABLE = [
     0x0000, 0x8005, 0x800F, 0x000A, 0x801B, 0x001E, 0x0014, 0x8011, 0x8033, 0x0036, 0x003C, 0x8039,
@@ -99,7 +100,10 @@ def encode_status(servo_id: int, params: bytes, error: int = 0) -> bytes:
 
 def parse_request(buf: bytes) -> tuple[int, int, bytes, int] | None:
     destuffed = destuff(buf)
-    if destuffed is None or len(destuffed) < 11:
+    # Ping is 10 bytes (header+id+len+inst+crc). A 11-byte floor left PING
+    # unparsed until a later READ/WRITE arrived, so a single broadcast PING
+    # got no status and Wizard ID discovery missed.
+    if destuffed is None or len(destuffed) < 10:
         return None
     length = struct.unpack_from("<H", destuffed, 5)[0]
     need = 7 + length
@@ -112,40 +116,242 @@ def parse_request(buf: bytes) -> tuple[int, int, bytes, int] | None:
     servo_id = destuffed[4]
     inst = destuffed[7]
     params = destuffed[8 : need - 2]
-    # consumed ≈ stuffed length; drop through first header plus frame
     start = buf.find(HEADER)
-    return servo_id, inst, params, start + max(need, 11)
+    return servo_id, inst, params, start + need
 
 
 def init_regs() -> bytearray:
     regs = bytearray(256)
-    regs[0:2] = struct.pack("<H", 1190)
+    regs[0:2] = struct.pack("<H", 1200)
     regs[6] = 46
-    regs[7] = 1
+    try:
+        own = int(os.environ.get("REALITYOS_METAL_PTY_ID", "1"))
+    except ValueError:
+        own = 1
+    regs[7] = own if own != 254 else 1
+    regs[12] = 255
+    if os.environ.get("REALITYOS_METAL_PTY_SECONDARY") == "1":
+        regs[12] = 7
+    regs[13] = 20 if os.environ.get("REALITYOS_METAL_PTY_PROTOCOL_RC") == "1" else 2
+    regs[10] = 4 if os.environ.get("REALITYOS_METAL_PTY_TIME_BASED") == "1" else 0
     regs[11] = 3
+    regs[32:34] = struct.pack("<H", 70)
+    regs[34:36] = struct.pack("<H", 60 if os.environ.get("REALITYOS_METAL_PTY_HIGH_MINVIN") == "1" else 35)
+    pwm = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_PWM") == "1" else 885
+    regs[36:38] = struct.pack("<H", pwm)
     regs[38:40] = struct.pack("<H", 200)
+    vel = 1 if os.environ.get("REALITYOS_METAL_PTY_SLOW_VEL") == "1" else 445
+    regs[44:48] = struct.pack("<I", vel)
+    regs[48:52] = struct.pack("<i", 4095)
+    regs[52:56] = struct.pack("<i", 0)
+    if os.environ.get("REALITYOS_METAL_PTY_AT_MAX") == "1":
+        regs[48:52] = struct.pack("<i", 2048)
+    if os.environ.get("REALITYOS_METAL_PTY_PRESENT_OUTSIDE") == "1":
+        regs[48:52] = struct.pack("<i", 2100)
+        regs[52:56] = struct.pack("<i", 2000)
+    if os.environ.get("REALITYOS_METAL_PTY_INV_LIMITS") == "1":
+        regs[48:52] = struct.pack("<i", 1000)
+        regs[52:56] = struct.pack("<i", 3000)
+    if os.environ.get("REALITYOS_METAL_PTY_PWM") == "1":
+        regs[11] = 16
+    if os.environ.get("REALITYOS_METAL_PTY_HW_ERROR") == "1":
+        # Latched Hardware Error Status. Reboot clears it and (on XL330)
+        # Startup Configuration can re-enable torque; EEPROM then needs torque off.
+        regs[70] = 4
+        regs[11] = 16
+    p_gain = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_P") == "1" else 400
+    regs[84:86] = struct.pack("<H", p_gain)
+    if os.environ.get("REALITYOS_METAL_PTY_FEEDFORWARD") == "1":
+        regs[88:90] = struct.pack("<H", 8000)
+        regs[90:92] = struct.pack("<H", 8000)
+    vel_p = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_VEL_P") == "1" else 100
+    regs[78:80] = struct.pack("<H", vel_p)
+    vel_i = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_VEL_I") == "1" else 1600
+    regs[76:78] = struct.pack("<H", vel_i)
+    # Default Goal Position is 0 (unset). Present is 2048. Torque-on without
+    # syncing goal jumps present — that is the stale-Wizard-goal landmine.
+    if os.environ.get("REALITYOS_METAL_PTY_BUS_WATCHDOG") == "1":
+        regs[98] = 0xFF  # tripped; Goal Position is read-only until written 0
+    if os.environ.get("REALITYOS_METAL_PTY_STARTUP_TORQUE") == "1":
+        regs[64] = 1
+    regs[68] = 0 if os.environ.get("REALITYOS_METAL_PTY_SRL0") == "1" else 2
     regs[120:122] = struct.pack("<H", 1234)
     regs[126:128] = struct.pack("<h", 0)
     regs[128:132] = struct.pack("<i", 0)
     regs[132:136] = struct.pack("<i", 2048)
-    regs[144:146] = struct.pack("<H", 50)
+    if os.environ.get("REALITYOS_METAL_PTY_PRESENT_OUTSIDE") == "1":
+        regs[132:136] = struct.pack("<i", 100)
+    if os.environ.get("REALITYOS_METAL_PTY_HIGH_MOVING_THRESHOLD") == "1":
+        regs[24:28] = struct.pack("<I", 1023)
+    else:
+        regs[24:28] = struct.pack("<I", 10)
+    if os.environ.get("REALITYOS_METAL_PTY_HOMING") == "1":
+        regs[20:24] = struct.pack("<i", 10000)
+        regs[132:136] = struct.pack("<i", 12048)
+    regs[144:146] = struct.pack("<H", 0 if os.environ.get("REALITYOS_METAL_PTY_NO_VIN") == "1" else 50)
     return regs
 
 
-def handle(regs: bytearray, inst: int, params: bytes) -> bytes:
+def status_wanted(srl: int, inst: int) -> bool:
+    # Protocol 2.0 Status Return Level: 0=PING only, 1=PING+READ, 2=all.
     if inst == INST_PING:
-        return b""
+        return True
+    if srl >= 2:
+        return True
+    if srl == 1 and inst == INST_READ:
+        return True
+    return False
+
+
+_motion_block_reads = 0
+_corrupt_next_crc = False
+_travel_reads = 0
+_travel_from: int | None = None
+_travel_to: int | None = None
+
+
+def advance_delayed_travel(regs: bytearray) -> None:
+    """Real XL330 does not teleport present. Moving stays 0 until velocity
+    exceeds Moving Threshold. Used by the campaign PTY sequence."""
+    global _travel_reads, _travel_from, _travel_to
+    if os.environ.get("REALITYOS_METAL_PTY_DELAY_MOTION") != "1" or _travel_to is None:
+        return
+    assert _travel_from is not None
+    _travel_reads += 1
+    if _travel_reads < 2:
+        regs[132:136] = struct.pack("<i", _travel_from)
+        regs[122] = 0
+    elif _travel_reads < 4:
+        mid = (_travel_from + _travel_to) // 2
+        regs[132:136] = struct.pack("<i", mid)
+        regs[122] = 1
+    else:
+        regs[132:136] = struct.pack("<i", _travel_to)
+        regs[122] = 0
+        _travel_to = None
+        _travel_from = None
+
+
+def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
+    global _motion_block_reads
+    if inst == INST_PING:
+        return b"", 0
     if inst == INST_READ and len(params) >= 4:
         addr, ln = struct.unpack_from("<HH", params)
-        return bytes(regs[addr : addr + ln])
+        if os.environ.get("REALITYOS_METAL_PTY_NO_PRESENT") == "1" and addr == 132:
+            return b"", 0x80  # refuse present so setup cannot invent goal=0
+        if os.environ.get("REALITYOS_METAL_PTY_NO_VLIMIT") == "1" and addr in (32, 34):
+            return b"", 0x80  # refuse voltage EEPROM so setup cannot invent 35/70
+        if (
+            os.environ.get("REALITYOS_METAL_PTY_NO_HWERR") == "1"
+            and addr == 70
+            and regs[64] == 1
+        ):
+            return b"", 0x80  # torque is on; do not skip the post-enable check
+        if addr == 120:
+            _motion_block_reads += 1
+            advance_delayed_travel(regs)
+        chunk = bytearray(regs[addr : addr + ln])
+        # After two motion-block reads, flip model/fw so live confirm_eeprom
+        # sees a physical servo swap on the same UART (not just hot_swap.json).
+        if (
+            os.environ.get("REALITYOS_METAL_PTY_FLIP_IDENTITY") == "1"
+            and addr == 0
+            and _motion_block_reads >= 2
+        ):
+            if len(chunk) >= 2:
+                chunk[0:2] = struct.pack("<H", 1190)
+            if len(chunk) >= 7:
+                chunk[6] = 99
+        # After the first live motion sample, corrupt identity CRC so a
+        # glitch cannot latch bus_lost. Identify (addr 0 before any motion
+        # read) still answers with a good CRC.
+        if (
+            os.environ.get("REALITYOS_METAL_PTY_NO_IDENTITY") == "1"
+            and addr == 0
+            and ln >= 8
+            and _motion_block_reads >= 1
+        ):
+            global _corrupt_next_crc
+            _corrupt_next_crc = True
+        # First motion-block / Moving read after a goal step reports Moving=1,
+        # then clears so the campaign wait-for-Moving=0 path is exercised.
+        if addr <= 122 < addr + ln and regs[122] == 1:
+            regs[122] = 0
+        return bytes(chunk), 0
     if inst == INST_WRITE and len(params) >= 2:
         addr = struct.unpack_from("<H", params)[0]
         data = params[2:]
+        if addr == 116 and len(data) >= 4:
+            if regs[98] == 0xFF:
+                return b"", 0x08  # Bus Watchdog error: goal is read-only
+            goal = struct.unpack_from("<i", data)[0]
+            max_p = struct.unpack_from("<i", regs, 48)[0]
+            min_p = struct.unpack_from("<i", regs, 52)[0]
+            if goal < min_p or goal > max_p:
+                return b"", 0x08  # Protocol 2.0 data range
+        if addr == 64 and data:
+            was = regs[64]
+            regs[64] = data[0]
+            if data[0] == 1 and os.environ.get("REALITYOS_METAL_PTY_TORQUE_DROP") == "1":
+                # Overload Shutdown: torque enable does not stick.
+                regs[64] = 0
+                regs[70] = 4
+                return b"", 0
+            if was == 0 and data[0] == 1 and os.environ.get("REALITYOS_METAL_PTY_HW_AFTER_TORQUE") == "1":
+                # Torque sticks; Hardware Error Status latches after enable.
+                regs[70] = 4
+            if was == 0 and data[0] == 1:
+                goal = struct.unpack_from("<i", regs, 116)[0]
+                present = struct.unpack_from("<i", regs, 132)[0]
+                if goal != present:
+                    regs[132:136] = regs[116:120]
+                if os.environ.get("REALITYOS_METAL_PTY_TORQUE_JUMP_PRESENT") == "1":
+                    # Robotis resets Present to absolute-within-one-rotation
+                    # on torque-on in Position Control.
+                    jumped = struct.unpack_from("<i", regs, 132)[0] + 80
+                    regs[132:136] = struct.pack("<i", jumped)
+            return b"", 0
+        # Protocol 2.0 access error: EEPROM (0–63) is read-only while torque is on.
+        if addr < 64 and regs[64] == 1:
+            return b"", 0x40
+        if addr == 20 and len(data) >= 4:
+            old = struct.unpack_from("<i", regs, 20)[0]
+            new = struct.unpack_from("<i", data)[0]
+            present = struct.unpack_from("<i", regs, 132)[0]
+            regs[addr : addr + len(data)] = data
+            regs[132:136] = struct.pack("<i", present - old + new)
+            return b"", 0
         regs[addr : addr + len(data)] = data
         if addr == 116 and len(data) >= 4:
-            regs[132:136] = data[:4]
-        return b""
-    return b""
+            p_gain = struct.unpack_from("<H", regs, 84)[0]
+            pwm_limit = struct.unpack_from("<H", regs, 36)[0]
+            vel_p = struct.unpack_from("<H", regs, 78)[0]
+            if p_gain > 0 and pwm_limit > 0 and vel_p > 0:
+                old_present = struct.unpack_from("<i", regs, 132)[0]
+                new_goal = struct.unpack_from("<i", data)[0]
+                if (
+                    new_goal != old_present
+                    and os.environ.get("REALITYOS_METAL_PTY_DELAY_MOTION") == "1"
+                ):
+                    global _travel_from, _travel_to, _travel_reads
+                    _travel_from = old_present
+                    _travel_to = new_goal
+                    _travel_reads = 0
+                    regs[122] = 0
+                else:
+                    regs[132:136] = data[:4]
+                    if new_goal != old_present:
+                        regs[122] = 1
+        return b"", 0
+    if inst == INST_REBOOT:
+        regs[70] = 0
+        regs[68] = 2  # RAM reset; factory Status Return Level
+        regs[98] = 0
+        if os.environ.get("REALITYOS_METAL_PTY_HW_ERROR") == "1":
+            regs[64] = 1  # Startup Configuration torque-on after reboot
+        return b"", 0
+    return b"", 0
 
 
 def main() -> None:
@@ -167,12 +373,44 @@ def main() -> None:
             if len(buf) > 512:
                 del buf[:256]
             continue
-        servo_id, inst, params, _consumed = parsed
+        req_id, inst, params, _consumed = parsed
         del buf[:]
-        status = encode_status(servo_id, handle(regs, inst, params))
+        own = regs[7]
+        secondary = regs[12]
+        if req_id not in (254, own) and not (
+            secondary != 255 and req_id == secondary
+        ):
+            continue
+        if (
+            (
+                os.environ.get("REALITYOS_METAL_PTY_MULTI") == "1"
+                or os.environ.get("REALITYOS_METAL_PTY_SECONDARY") == "1"
+            )
+            and req_id == 254
+            and inst == INST_PING
+        ):
+            echo = HEADER + bytes([own, 0x07, 0x00, INST_PING, 0x00, 0x00])
+            os.write(
+                master,
+                echo + encode_status(1, b"") + encode_status(7, b""),
+            )
+            continue
+        alert = STATUS_ALERT if os.environ.get("REALITYOS_METAL_PTY_ALERT") == "1" else 0
+        srl = regs[68]
+        payload, inst_err = handle(regs, inst, params)
         # Half-duplex adapters often echo a request-shaped frame before status.
-        echo = HEADER + bytes([servo_id, 0x07, 0x00, INST_PING, 0x00, 0x00])
-        os.write(master, echo + status)
+        echo = HEADER + bytes([own, 0x07, 0x00, INST_PING, 0x00, 0x00])
+        if status_wanted(srl, inst):
+            pkt = echo + encode_status(own, payload, error=alert | inst_err)
+            global _corrupt_next_crc
+            if _corrupt_next_crc:
+                _corrupt_next_crc = False
+                pkt = bytearray(pkt)
+                pkt[-1] ^= 0xFF
+                pkt = bytes(pkt)
+            os.write(master, pkt)
+        else:
+            os.write(master, echo)
 
 
 if __name__ == "__main__":

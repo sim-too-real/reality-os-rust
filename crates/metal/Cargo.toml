@@ -28,6 +28,7 @@ fs2.workspace = true
 sha2.workspace = true
 hex.workspace = true
 serialport.workspace = true
+nix.workspace = true
 
 [lints]
 workspace = true

@@ -2,7 +2,9 @@ use std::env;
 use std::path::PathBuf;
 
 use realityos_metal::config::{MetalConfig, CONFIG_FILE, MEASURED_FILE};
-use realityos_metal::identity::usb_identity_for_tty;
+use realityos_metal::identity::{
+    adapter_identity_aliases, rematch_discover_device, usb_identity_for_tty,
+};
 use realityos_metal::proof::{default_unresolved, CaseRecord, MetalProof, ProofMeta, PROOF_SCHEMA};
 use realityos_metal::{serve_forever, Xl330Driver};
 
@@ -46,6 +48,18 @@ fn main() -> anyhow::Result<()> {
                 cfg.device = d;
             }
             cfg.apply_process_env();
+            if cfg.device.exists() {
+                let aliases = adapter_identity_aliases(&cfg.device, cfg.servo_id);
+                let live = rematch_discover_device(cfg.device.clone(), &aliases, cfg.servo_id);
+                if live != cfg.device {
+                    eprintln!(
+                        "metal-probe: rematched {} -> {}",
+                        cfg.device.display(),
+                        live.display()
+                    );
+                    cfg.device = live;
+                }
+            }
             cfg.save(&cfg_path)?;
             if !cfg.device.exists() {
                 let (usb, fb) = usb_identity_for_tty(&cfg.device);
@@ -117,7 +131,8 @@ fn main() -> anyhow::Result<()> {
         "serve" => {
             let cfg_path = root.join(CONFIG_FILE);
             if cfg_path.exists() {
-                let cfg = MetalConfig::load(&cfg_path)?;
+                let mut cfg = MetalConfig::load(&cfg_path)?;
+                cfg.apply_device_env();
                 if realityos_metal::identity::is_pty_path(&cfg.device)
                     && env::var("REALITYOS_METAL_ALLOW_PTY").ok().as_deref() != Some("1")
                 {
@@ -129,6 +144,7 @@ fn main() -> anyhow::Result<()> {
                     let cfg_path = root.join(CONFIG_FILE);
                     if cfg_path.exists() {
                         let mut cfg = MetalConfig::load(&cfg_path)?;
+                        cfg.apply_device_env();
                         cfg.campaign_hooks = true;
                         cfg.save(&cfg_path)?;
                     }
