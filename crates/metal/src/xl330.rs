@@ -23,8 +23,8 @@ use crate::config::{
 };
 use crate::egress::EgressLog;
 use crate::identity::{
-    adapter_identity_aliases, is_pty_path, rematch_discover_device, usb_identity_for_tty,
-    MeasuredIdentity,
+    adapter_identity_aliases, device_node_identity, is_pty_path, rematch_discover_device,
+    usb_identity_for_tty, MeasuredIdentity,
 };
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
@@ -63,6 +63,14 @@ pub struct Xl330Driver {
     /// After identify+limits, one serial attempt / 40 ms timeout so a USB-UART
     /// propose stays inside the 100 ms ONLINE software-watchdog miss.
     live_io: bool,
+    /// Adapter identity captured while `cfg.device` still resolved. After
+    /// serve open, udev can dangle by-id or rename ttyUSB0; re-reading
+    /// sysfs from that vanished name blanks serial and the first hold
+    /// dies as identity mismatch even though this exclusive fd is live.
+    latched_usb_serial: Option<String>,
+    latched_usb_fallback: Option<String>,
+    latched_node: Option<String>,
+    latched_pty: bool,
     last_hw_error: u8,
     min_position: i32,
     max_position: i32,
@@ -144,6 +152,10 @@ impl Xl330Driver {
             protocol_type: 0,
             feedforward_1st: 0,
             feedforward_2nd: 0,
+            latched_usb_serial: None,
+            latched_usb_fallback: None,
+            latched_node: None,
+            latched_pty: false,
         };
         driver.connect_serial()?;
         driver.refresh_identity();
@@ -300,15 +312,33 @@ impl Xl330Driver {
     }
 
     pub fn measured(&self) -> MeasuredIdentity {
-        let (usb_serial, usb_fallback) = usb_identity_for_tty(&self.cfg.device);
-        MeasuredIdentity::from_hardware(
+        let (usb_serial, usb_fallback, node) = if self.port.is_some() {
+            (
+                self.latched_usb_serial.clone(),
+                self.latched_usb_fallback.clone(),
+                self.latched_node.clone(),
+            )
+        } else {
+            let (usb, fb) = usb_identity_for_tty(&self.cfg.device);
+            (usb, fb, device_node_identity(&self.cfg.device))
+        };
+        MeasuredIdentity::from_adapter(
             &self.cfg,
             usb_serial,
             usb_fallback,
+            node,
             self.model,
             self.firmware,
             self.connected,
         )
+    }
+
+    fn latch_open_adapter_identity(&mut self) {
+        let (usb, fb) = usb_identity_for_tty(&self.cfg.device);
+        self.latched_usb_serial = usb;
+        self.latched_usb_fallback = fb;
+        self.latched_node = device_node_identity(&self.cfg.device);
+        self.latched_pty = is_pty_path(&self.cfg.device);
     }
 
     fn connect_serial(&mut self) -> io::Result<()> {
@@ -338,6 +368,7 @@ impl Xl330Driver {
         // keeps exclusive (TIOCEXCL+flock).
         let port = open_xl330_serial(&self.cfg.device, self.cfg.baud)?;
         self.port = Some(port);
+        self.latch_open_adapter_identity();
         match self.ping_and_identify() {
             Ok(()) => {
                 self.connected = true;
@@ -926,7 +957,12 @@ impl Xl330Driver {
     }
 
     fn refresh_identity(&mut self) {
-        let mut id = self.measured().hardware_identity(&self.cfg);
+        let pty = if self.port.is_some() {
+            self.latched_pty
+        } else {
+            is_pty_path(&self.cfg.device)
+        };
+        let mut id = self.measured().hardware_identity_class(&self.cfg, pty);
         if self.campaign_disconnected() {
             // Identity overlay only. Keep the serial path up so propose
             // reaches verify_live_hardware instead of failing acquire first.
@@ -1229,7 +1265,8 @@ impl Xl330Driver {
     }
 
     /// Test-only: udev can dangle by-id / rename ttyUSB0 while the exclusive
-    /// fd remains the live UART. The first hold must not treat that as unplug.
+    /// fd remains the live UART. The first hold must not treat that as unplug
+    /// or blank the open-time adapter serial.
     pub fn simulate_udev_path_vanished(&mut self) {
         self.cfg.device = PathBuf::from("/dev/realityos-metal-vanished-udev-name");
     }
@@ -1363,6 +1400,10 @@ impl HardwareDriverPort for Xl330Driver {
         }
         self.port = None;
         self.connected = false;
+        self.latched_usb_serial = None;
+        self.latched_usb_fallback = None;
+        self.latched_node = None;
+        self.latched_pty = false;
     }
 
     fn is_sim_harness(&self) -> bool {

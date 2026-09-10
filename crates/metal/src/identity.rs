@@ -46,7 +46,30 @@ impl MeasuredIdentity {
         firmware_version: u8,
         connected: bool,
     ) -> Self {
-        let node = device_node_identity(&cfg.device);
+        Self::from_adapter(
+            cfg,
+            usb_serial,
+            usb_fallback,
+            device_node_identity(&cfg.device),
+            model,
+            firmware_version,
+            connected,
+        )
+    }
+
+    /// Same as [`Self::from_hardware`], but use a previously measured tty
+    /// node instead of `cfg.device`. After serve open, udev can dangle
+    /// `/dev/serial/by-id` or rename `ttyUSB0`; re-statting that name
+    /// blanks serial and aborts the first hold as identity mismatch.
+    pub fn from_adapter(
+        cfg: &MetalConfig,
+        usb_serial: Option<String>,
+        usb_fallback: Option<String>,
+        node: Option<String>,
+        model: u16,
+        firmware_version: u8,
+        connected: bool,
+    ) -> Self {
         let dest_id = usb_fallback
             .as_deref()
             .filter(|f| !f.trim().is_empty())
@@ -121,7 +144,10 @@ impl MeasuredIdentity {
     }
 
     pub fn hardware_identity(&self, cfg: &MetalConfig) -> HardwareIdentity {
-        let pty = is_pty_path(&cfg.device);
+        self.hardware_identity_class(cfg, is_pty_path(&cfg.device))
+    }
+
+    pub fn hardware_identity_class(&self, cfg: &MetalConfig, pty: bool) -> HardwareIdentity {
         HardwareIdentity {
             serial: self.serial.clone(),
             firmware_id: self.firmware_id.clone(),
@@ -403,6 +429,41 @@ pub fn adapter_serial_matches(device: &Path, expected_serial: &str, servo_id: u8
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn vanished_path_without_latch_blanks_serial() {
+        let cfg = MetalConfig::example(PathBuf::from("/dev/realityos-metal-vanished-udev-name"));
+        let m = MeasuredIdentity::from_hardware(&cfg, None, None, 1200, 46, true);
+        assert!(m.serial.is_empty());
+        assert!(!m.connected);
+    }
+
+    #[test]
+    fn latched_adapter_identity_survives_vanished_path() {
+        let cfg = MetalConfig::example(PathBuf::from("/dev/realityos-metal-vanished-udev-name"));
+        let usb = MeasuredIdentity::from_adapter(
+            &cfg,
+            Some("FT123".into()),
+            Some("usb:0403:6014:1:1.0".into()),
+            None,
+            1200,
+            46,
+            true,
+        );
+        assert_eq!(usb.serial, "FT123:id1");
+        assert!(usb.connected);
+        let node = MeasuredIdentity::from_adapter(
+            &cfg,
+            None,
+            None,
+            Some("tty:ttyUSB0:bc0".into()),
+            1200,
+            46,
+            true,
+        );
+        assert_eq!(node.serial, "tty:ttyUSB0:bc0:id1");
+        assert!(node.connected);
+    }
 
     #[test]
     fn empty_usb_identity_is_not_invented() {

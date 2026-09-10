@@ -1288,6 +1288,11 @@ fn xl330_pty_vanished_udev_path_is_not_disconnect() {
     let cfg = MetalConfig::example(&tty);
     let mut driver = Xl330Driver::open(cfg, &root).expect("open");
     assert!(driver.is_connected(), "open must leave a live session");
+    let before = driver.measured();
+    assert!(
+        !before.serial.is_empty(),
+        "open must latch a measured serial: {before:?}"
+    );
     driver.simulate_udev_path_vanished();
     assert!(
         driver.is_connected(),
@@ -1301,5 +1306,23 @@ fn xl330_pty_vanished_udev_path_is_not_disconnect() {
     driver
         .read_sensor(0.0)
         .expect("first hold-class sensor must work after a vanished udev path");
+    let after = driver.measured();
+    assert_eq!(
+        after.serial, before.serial,
+        "sensor refresh must not blank the open-time adapter serial when the udev name vanishes"
+    );
+    assert!(
+        after.connected,
+        "latched identity must stay connected after sensor refresh: {after:?}"
+    );
+    let refreshed = driver.probe_identity();
+    assert_eq!(refreshed.serial, before.serial);
+    assert!(
+        refreshed.connected,
+        "write-time probe_identity must keep the bound serial after a vanished udev path: {refreshed:?}"
+    );
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("first hold-class write must use the latched serial, not a vanished udev name");
     let _ = std::fs::remove_dir_all(&root);
 }
