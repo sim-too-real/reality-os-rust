@@ -122,7 +122,7 @@ def parse_request(buf: bytes) -> tuple[int, int, bytes, int] | None:
 
 def init_regs() -> bytearray:
     regs = bytearray(256)
-    regs[0:2] = struct.pack("<H", 1190)
+    regs[0:2] = struct.pack("<H", 1200)
     regs[6] = 46
     try:
         own = int(os.environ.get("REALITYOS_METAL_PTY_ID", "1"))
@@ -260,7 +260,7 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             and _motion_block_reads >= 2
         ):
             if len(chunk) >= 2:
-                chunk[0:2] = struct.pack("<H", 1200)
+                chunk[0:2] = struct.pack("<H", 1190)
             if len(chunk) >= 7:
                 chunk[6] = 99
         # After the first live motion sample, corrupt identity CRC so a

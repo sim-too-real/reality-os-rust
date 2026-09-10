@@ -139,6 +139,36 @@ pub fn nudge_moved(motion: Option<&str>) -> bool {
     present_position_delta(motion).is_some_and(|d| d.abs() > HOLD_STILL_MAX_ABS_TICKS)
 }
 
+fn eeprom_model_from_identity(identity: &serde_json::Value) -> Option<u16> {
+    for key in ["/measured/model", "/model"] {
+        if let Some(n) = identity
+            .pointer(key)
+            .and_then(|v| v.as_u64())
+            .and_then(|n| u16::try_from(n).ok())
+            .filter(|n| *n != 0)
+        {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// Refuse a swapped 1190/1200 product name. Unit fixtures without an
+/// EEPROM model number skip this check; a live measured.json always has one.
+fn hardware_model_matches_eeprom(meta: &ProofMeta) -> Result<(), String> {
+    let Some(n) = eeprom_model_from_identity(&meta.real_device_identity) else {
+        return Ok(());
+    };
+    match crate::protocol::xl330_hardware_model(n) {
+        Some(want) if meta.hardware_model == want => Ok(()),
+        Some(want) => Err(format!(
+            "metal_proof_hardware_model_mismatch:label={} eeprom={n} want={want}",
+            meta.hardware_model
+        )),
+        None => Err(format!("metal_proof_unknown_xl330_model:{n}")),
+    }
+}
+
 fn identity_looks_like_pty_stand_in(id: &serde_json::Value) -> bool {
     let status = id
         .pointer("/hardware_identity/evidence_status")
@@ -196,6 +226,7 @@ impl MetalProof {
         if cases.is_empty() {
             return Err("metal_proof_requires_measured_cases".into());
         }
+        hardware_model_matches_eeprom(&meta)?;
         let a = aggregates_from_cases(&cases);
         let has_hold = cases.iter().any(|c| {
             c.name == "valid_hold"
@@ -638,6 +669,20 @@ mod tests {
             ok.experiment_status, "measured_success",
             "no-load encoder hunt inside {HOLD_STILL_MAX_ABS_TICKS} ticks is still a hold"
         );
+    }
+
+    #[test]
+    fn proof_refuses_swapped_xl330_hardware_model() {
+        let mut swapped = ok_meta(true);
+        swapped.hardware_model = "XL330-M077-T".into();
+        swapped.real_device_identity = serde_json::json!({"measured": {"model": 1200}});
+        let err = MetalProof::from_measured(swapped, ok_cases(), default_unresolved())
+            .expect_err("M288 EEPROM must not mint as M077");
+        assert!(err.contains("metal_proof_hardware_model_mismatch"), "{err}");
+        let mut labeled = ok_meta(true);
+        labeled.real_device_identity = serde_json::json!({"measured": {"model": 1200}});
+        let ok = MetalProof::from_measured(labeled, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(ok.hardware_model, "XL330-M288-T");
     }
 
     #[test]

@@ -1628,7 +1628,7 @@ PY
 }
 
 require_live_session
-as_authority bash -c "printf '%s' '{\"firmware_id\":\"xl330-m288:1190:255\"}' > '$ROOT/bus/hot_swap.json'"
+as_authority bash -c "printf '%s' '{\"firmware_id\":\"xl330-m288:1200:255\"}' > '$ROOT/bus/hot_swap.json'"
 add_case "$(MEASURE_REQUIRE=hardware_firmware_mismatch MEASURE_FORBID=software_watchdog_miss measure firmware_mismatch 'hot_swap firmware only' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-fw "$PROP" --root "$ROOT" propose-id)"
 add_case "$(MEASURE_REQUIRE=hardware_session_requires_online_restart MEASURE_FORBID=software_watchdog_miss measure recover_after_identity 'recover after firmware mismatch' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" recover)"
 add_case "$(MEASURE_REQUIRE='hardware_session_requires_online_restart|dispatch_safe_state_latched' MEASURE_FORBID=software_watchdog_miss measure reconnect_foreign 'same instance after foreign firmware' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-re "$PROP" --root "$ROOT" propose-id)"
@@ -1831,9 +1831,15 @@ if isinstance(measured, dict) and fresh.get("vin_0.1v") is not None:
     measured["vin_0.1v"] = fresh.get("vin_0.1v")
 inner = measured.get("measured") if isinstance(measured, dict) and isinstance(measured.get("measured"), dict) else measured
 model = inner.get("model") if isinstance(inner, dict) else None
-hardware_model = {1190: "XL330-M288-T", 1200: "XL330-M077-T"}.get(model)
+# Robotis e-Manual / Dynamixel2Arduino: M077=1190, M288=1200.
+# The swapped map minted hardware_model=M077 on the chosen M288 bench.
+hardware_model = {1200: "XL330-M288-T", 1190: "XL330-M077-T"}.get(model)
 if hardware_model is None:
     raise SystemExit("error: proof meta refuses unknown/missing XL330 model: %r" % (model,))
+fw = str(inner.get("firmware_id") or "")
+want_slug = {"XL330-M288-T": "xl330-m288:", "XL330-M077-T": "xl330-m077:"}[hardware_model]
+if not fw.startswith(want_slug):
+    raise SystemExit("error: firmware_id %r does not match EEPROM model %s (%r)" % (fw, hardware_model, model))
 serial = ""
 if isinstance(inner, dict):
     serial = str(inner.get("serial") or "")

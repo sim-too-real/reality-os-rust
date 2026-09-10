@@ -13,8 +13,9 @@ pub const BROADCAST_ID: u8 = 254;
 /// Protocol 2.0 bit 7: Hardware Error Status is latched. The instruction still completed.
 pub const STATUS_ALERT: u8 = 0x80;
 
-pub const XL330_M288_MODEL: u16 = 1190;
-pub const XL330_M077_MODEL: u16 = 1200;
+/// Robotis e-Manual / Dynamixel2Arduino `actuator.h`.
+pub const XL330_M077_MODEL: u16 = 1190;
+pub const XL330_M288_MODEL: u16 = 1200;
 
 pub const ADDR_MODEL_NUMBER: u16 = 0;
 pub const ADDR_FIRMWARE_VERSION: u16 = 6;
@@ -152,7 +153,26 @@ pub fn crc16(data: &[u8]) -> u16 {
 }
 
 pub fn is_xl330_model(model: u16) -> bool {
-    model == XL330_M288_MODEL || model == XL330_M077_MODEL
+    xl330_model_slug(model).is_some()
+}
+
+/// EEPROM model number → product slug used in measured `firmware_id`.
+pub fn xl330_model_slug(model: u16) -> Option<&'static str> {
+    match model {
+        XL330_M288_MODEL => Some("xl330-m288"),
+        XL330_M077_MODEL => Some("xl330-m077"),
+        _ => None,
+    }
+}
+
+/// EEPROM model number → proof `hardware_model`. Swapping these names
+/// would mint a successful metal proof that names the wrong actuator.
+pub fn xl330_hardware_model(model: u16) -> Option<&'static str> {
+    match model {
+        XL330_M288_MODEL => Some("XL330-M288-T"),
+        XL330_M077_MODEL => Some("XL330-M077-T"),
+        _ => None,
+    }
 }
 
 pub fn encode_packet(id: u8, inst: u8, params: &[u8]) -> Vec<u8> {
@@ -405,6 +425,21 @@ mod tests {
         assert!(is_xl330_model(XL330_M288_MODEL));
         assert!(is_xl330_model(XL330_M077_MODEL));
         assert!(!is_xl330_model(1030));
+    }
+
+    #[test]
+    fn robotis_xl330_model_numbers_match_emanual() {
+        // Dynamixel2Arduino actuator.h and Robotis e-Manual:
+        // XL330-M077-T model number 1190, XL330-M288-T model number 1200.
+        // A swapped map would mint docs/metal_proof.json as M077 on the
+        // chosen M288 bench.
+        assert_eq!(XL330_M077_MODEL, 1190);
+        assert_eq!(XL330_M288_MODEL, 1200);
+        assert_eq!(xl330_hardware_model(1200), Some("XL330-M288-T"));
+        assert_eq!(xl330_hardware_model(1190), Some("XL330-M077-T"));
+        assert_eq!(xl330_model_slug(1200), Some("xl330-m288"));
+        assert_eq!(xl330_model_slug(1190), Some("xl330-m077"));
+        assert_eq!(xl330_hardware_model(1030), None);
     }
 
     #[test]

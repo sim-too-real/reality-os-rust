@@ -106,8 +106,8 @@ fn xl330_pty_firmware_survives_sensor_and_echoed_status() {
     cfg.campaign_hooks = false;
     let mut driver = Xl330Driver::open(cfg, &root).expect("open pty xl330");
     let before = driver.measured();
-    assert_eq!(before.firmware_id, "xl330-m288:1190:46");
-    assert_eq!(before.model, 1190);
+    assert_eq!(before.firmware_id, "xl330-m288:1200:46");
+    assert_eq!(before.model, 1200);
     driver
         .read_sensor(0.0)
         .expect("sensor over echoed PTY status");
@@ -119,7 +119,7 @@ fn xl330_pty_firmware_survives_sensor_and_echoed_status() {
     );
     let after = driver.measured();
     assert_eq!(
-        after.firmware_id, "xl330-m288:1190:46",
+        after.firmware_id, "xl330-m288:1200:46",
         "sensor samples must not clobber latched firmware"
     );
     driver
@@ -173,7 +173,7 @@ fn xl330_pty_status_return_level_zero_can_still_identify() {
     let cfg = MetalConfig::example(&tty);
     let mut driver = Xl330Driver::open(cfg, &root)
         .expect("Wizard Status Return Level 0 must not block identify (poke 2, then READ)");
-    assert_eq!(driver.measured().model, 1190);
+    assert_eq!(driver.measured().model, 1200);
     driver
         .write_action(&[0.0], &ActionParams::empty())
         .expect("hold after SRL poke");
@@ -909,7 +909,7 @@ fn xl330_pty_campaign_restarts_are_live_after_identity_and_disconnect() {
         writes = auth.physical_writes();
         std::fs::write(
             root.join("bus/hot_swap.json"),
-            r#"{"firmware_id":"xl330-m288:1190:255"}"#,
+            r#"{"firmware_id":"xl330-m288:1200:255"}"#,
         )
         .unwrap();
         let fw = auth.handle(MetalRequest::propose("pty-cr-fw", "hold"));
@@ -1055,7 +1055,7 @@ fn xl330_pty_firmware_mismatch_kills_session_not_watchdog() {
     let writes = auth.physical_writes();
     std::fs::write(
         root.join("bus/hot_swap.json"),
-        r#"{"firmware_id":"xl330-m288:1190:255"}"#,
+        r#"{"firmware_id":"xl330-m288:1200:255"}"#,
     )
     .unwrap();
     let fw = auth.handle(MetalRequest::propose("pty-fw", "hold"));
@@ -1103,7 +1103,7 @@ fn xl330_pty_eeprom_identity_change_refuses_write() {
     {
         let driver = Xl330Driver::open(cfg.clone(), &root).expect("identify");
         let measured = driver.measured();
-        assert_eq!(measured.firmware_id, "xl330-m288:1190:46");
+        assert_eq!(measured.firmware_id, "xl330-m288:1200:46");
         cfg.expected_serial = measured.serial;
         cfg.expected_firmware = measured.firmware_id;
     }
@@ -1142,7 +1142,7 @@ fn xl330_pty_identity_read_failure_keeps_motion() {
     {
         let mut driver = Xl330Driver::open(cfg.clone(), &root).expect("identify");
         let measured = driver.measured();
-        assert_eq!(measured.firmware_id, "xl330-m288:1190:46");
+        assert_eq!(measured.firmware_id, "xl330-m288:1200:46");
         cfg.expected_serial = measured.serial;
         cfg.expected_firmware = measured.firmware_id;
         driver
@@ -1154,7 +1154,7 @@ fn xl330_pty_identity_read_failure_keeps_motion() {
         );
         assert_eq!(
             driver.measured().firmware_id,
-            "xl330-m288:1190:46",
+            "xl330-m288:1200:46",
             "CRC miss must keep the identify-time firmware"
         );
     }

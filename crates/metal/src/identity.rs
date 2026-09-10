@@ -6,7 +6,7 @@ use realityos_plant::HardwareIdentity;
 use serde::{Deserialize, Serialize};
 
 use crate::config::MetalConfig;
-use crate::protocol::{is_xl330_model, XL330_M077_MODEL, XL330_M288_MODEL};
+use crate::protocol::{is_xl330_model, xl330_model_slug};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -64,11 +64,7 @@ impl MeasuredIdentity {
                 serial = d.to_string();
             }
         }
-        let model_name = match model {
-            XL330_M288_MODEL => "xl330-m288",
-            XL330_M077_MODEL => "xl330-m077",
-            _ => "unknown",
-        };
+        let model_name = xl330_model_slug(model).unwrap_or("unknown");
         let firmware_id = if model == 0 {
             String::new()
         } else {
@@ -383,7 +379,7 @@ mod tests {
     #[test]
     fn empty_usb_identity_is_not_invented() {
         let cfg = MetalConfig::example(PathBuf::from("/dev/missing"));
-        let m = MeasuredIdentity::from_hardware(&cfg, None, None, 1190, 46, true);
+        let m = MeasuredIdentity::from_hardware(&cfg, None, None, 1200, 46, true);
         assert!(m.serial.is_empty());
         assert!(!m.connected);
         assert!(device_node_identity(Path::new("/dev/missing")).is_none());
@@ -406,11 +402,22 @@ mod tests {
     }
 
     #[test]
+    fn robotis_m288_is_1200_and_m077_is_1190() {
+        let cfg = MetalConfig::example(PathBuf::from("/dev/ttyUSB0"));
+        let m288 =
+            MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1200, 46, true);
+        let m077 =
+            MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1190, 46, true);
+        assert_eq!(m288.firmware_id, "xl330-m288:1200:46");
+        assert_eq!(m077.firmware_id, "xl330-m077:1190:46");
+    }
+
+    #[test]
     fn usb_serial_plus_id_is_measured() {
         let cfg = MetalConfig::example(PathBuf::from("/dev/ttyUSB0"));
-        let m = MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1190, 46, true);
+        let m = MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1200, 46, true);
         assert_eq!(m.serial, "FT123:id1");
-        assert_eq!(m.firmware_id, "xl330-m288:1190:46");
+        assert_eq!(m.firmware_id, "xl330-m288:1200:46");
         assert!(m.connected);
     }
 
@@ -418,10 +425,10 @@ mod tests {
     fn firmware_zero_is_not_the_measured_firmware() {
         let cfg = MetalConfig::example(PathBuf::from("/dev/ttyUSB0"));
         let measured =
-            MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1190, 46, true);
+            MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1200, 46, true);
         let after_sensor_clobber =
-            MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1190, 0, true);
-        assert_eq!(measured.firmware_id, "xl330-m288:1190:46");
+            MeasuredIdentity::from_hardware(&cfg, Some("FT123".into()), None, 1200, 0, true);
+        assert_eq!(measured.firmware_id, "xl330-m288:1200:46");
         assert_ne!(measured.firmware_id, after_sensor_clobber.firmware_id);
     }
 
@@ -430,7 +437,7 @@ mod tests {
         let cfg = MetalConfig::example(PathBuf::from("/dev/zero"));
         let node = device_node_identity(&cfg.device).expect("/dev/zero is a char device");
         assert!(node.starts_with("tty:zero:"), "{node}");
-        let m = MeasuredIdentity::from_hardware(&cfg, None, None, 1190, 46, true);
+        let m = MeasuredIdentity::from_hardware(&cfg, None, None, 1200, 46, true);
         assert!(m.serial.starts_with("tty:zero:"));
         assert!(m.serial.ends_with(":id1"));
         assert!(m.connected);
@@ -705,7 +712,7 @@ mod tests {
             &cfg,
             Some("FT123456".into()),
             Some("usb:0403:6001:1:1.2".into()),
-            1190,
+            1200,
             46,
             true,
         );
@@ -716,7 +723,7 @@ mod tests {
             &cfg,
             Some("FT123456".into()),
             Some("usb:0403:6001:1:1.2".into()),
-            1190,
+            1200,
             46,
             true,
         );
