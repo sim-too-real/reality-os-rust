@@ -5,10 +5,15 @@ from __future__ import annotations
 
 import os
 import pty
+import signal
 import struct
 import sys
 import termios
 import tty
+
+# Host crash_if after write_all+flush closes the slave while we emit status.
+# Default SIGPIPE would kill this stand-in and destroy the pts node.
+signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
 HEADER = bytes([0xFF, 0xFF, 0xFD, 0x00])
 INST_PING, INST_READ, INST_WRITE, INST_REBOOT, INST_STATUS = 0x01, 0x02, 0x03, 0x08, 0x55
@@ -309,7 +314,7 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
                 if os.environ.get("REALITYOS_METAL_PTY_TORQUE_JUMP_PRESENT") == "1":
                     # Robotis resets Present to absolute-within-one-rotation
                     # on torque-on in Position Control.
-                    jumped = struct.unpack_from("<i", regs, 132)[0] + 80
+                    jumped = struct.unpack_from("<i", regs, 132)[0] + 16
                     regs[132:136] = struct.pack("<i", jumped)
             return b"", 0
         # Protocol 2.0 access error: EEPROM (0–63) is read-only while torque is on.
@@ -408,9 +413,15 @@ def main() -> None:
                 pkt = bytearray(pkt)
                 pkt[-1] ^= 0xFF
                 pkt = bytes(pkt)
-            os.write(master, pkt)
+            try:
+                os.write(master, pkt)
+            except OSError:
+                continue
         else:
-            os.write(master, echo)
+            try:
+                os.write(master, echo)
+            except OSError:
+                continue
 
 
 if __name__ == "__main__":

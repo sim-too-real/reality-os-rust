@@ -284,12 +284,12 @@ fn xl330_pty_rematches_goal_when_torque_on_resets_present() {
     let cfg = MetalConfig::example(&tty);
     let mut driver =
         Xl330Driver::open(cfg, &root).expect("rematch goal after torque-on present reset");
-    assert_eq!(driver.last_present_position(), 2128);
-    assert_eq!(driver.last_goal_position(), Some(2128));
+    assert_eq!(driver.last_present_position(), 2064);
+    assert_eq!(driver.last_goal_position(), Some(2064));
     driver.read_sensor(0.0).expect("sensor");
     assert_eq!(
         driver.last_present_position(),
-        2128,
+        2064,
         "goal must already match the post-torque present so the horn does not yank"
     );
     driver.close();
@@ -1434,9 +1434,15 @@ fn xl330_pty_after_serial_tx_before_status_restart_does_not_retransmit() {
         tx_after_first >= 1,
         "first process may have transmitted once, got {tx_after_first}"
     );
+    assert!(
+        std::path::Path::new(&tty).exists(),
+        "PTY stand-in must survive host death after serial TX: {tty}"
+    );
+    let _ = std::fs::remove_file(root.join("ipc.sock"));
     let mut restart = std::process::Command::new(bin)
         .args(["--root", &root.to_string_lossy(), "--restart", "serve"])
         .env("REALITYOS_METAL_ALLOW_PTY", "1")
+        .env("REALITYOS_METAL_DEVICE", &tty)
         .env_remove("REALITYOS_HIL_CRASH")
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
@@ -1444,7 +1450,13 @@ fn xl330_pty_after_serial_tx_before_status_restart_does_not_retransmit() {
         .expect("restart serve");
     assert!(
         realityos_metal::ipc::wait_for_ipc(&root, 15_000),
-        "restart serve did not bind: {}",
+        "restart serve did not bind: {} tty_exists={}",
+        std::fs::read_to_string(root.join("serve.err")).unwrap_or_default(),
+        std::path::Path::new(&tty).exists()
+    );
+    assert!(
+        restart.try_wait().ok().flatten().is_none(),
+        "restart serve exited early: {}",
         std::fs::read_to_string(root.join("serve.err")).unwrap_or_default()
     );
     let before = recorded_serial_tx(root.join("bus"));
