@@ -1296,7 +1296,7 @@ if not serial:
 if serial.startswith("tty:"):
     controller = "Dynamixel Protocol 2.0 UART (measured tty name+rdev; no USB serial)"
 elif serial.startswith("usb:"):
-    controller = "Dynamixel Protocol 2.0 USB-UART (measured usb vid:pid:devpath)"
+    controller = "Dynamixel Protocol 2.0 USB-UART (measured usb vid:pid:bus:devpath)"
 else:
     controller = "Dynamixel Protocol 2.0 USB-UART (measured adapter serial)"
 cutoff = os.environ.get("REALITYOS_METAL_CUTOFF_TESTED","0") == "1"

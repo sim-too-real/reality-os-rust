@@ -80,7 +80,7 @@ impl MeasuredIdentity {
                 field: "serial".into(),
                 value: serial.clone(),
                 source: IdentitySource::MeasuredFromHardware,
-                note: "XL330 EEPROM has no factory serial. Preference: USB adapter serial, then USB vid:pid:devpath, then measured tty name+rdev (UART/GPIO adapters). Plus the servo bus ID.".into(),
+                note: "XL330 EEPROM has no factory serial. Preference: USB adapter serial, then USB vid:pid:bus:devpath, then measured tty name+rdev (UART/GPIO adapters). Plus the servo bus ID.".into(),
             },
             IdentityField {
                 field: "firmware_id".into(),
@@ -185,7 +185,7 @@ pub fn is_pty_path(tty: &Path) -> bool {
     canon.starts_with("/dev/pts") || tty_sysfs_name(&canon).is_some_and(|n| n.starts_with("pts"))
 }
 
-/// Walk sysfs for a USB serial, then a vendor:product:devpath fallback.
+/// Walk sysfs for a USB serial, then a vendor:product:bus:devpath fallback.
 pub fn usb_identity_for_tty(tty: &Path) -> (Option<String>, Option<String>) {
     let Some(name) = tty_sysfs_name(tty) else {
         return (None, None);
@@ -221,9 +221,18 @@ pub(crate) fn usb_identity_from_sysfs_node(start: &Path) -> (Option<String>, Opt
                 .ok()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty());
-            // Do not invent nodevpath: probe would bind usb:vid:pid:nodevpath
-            // and serve would miss when the real dest appeared.
-            let fallback = dest.map(|d| format!("usb:{v}:{p}:{d}"));
+            let bus = std::fs::read_to_string(cur.join("busnum"))
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            // Do not invent nodevpath or bus 0: probe would bind a
+            // placeholder and serve would miss when the real dest appeared.
+            // busnum distinguishes two empty-serial CH340s that share dest
+            // (both "1") on different USB controllers.
+            let fallback = match (bus.as_deref(), dest.as_deref()) {
+                (Some(b), Some(d)) => Some(format!("usb:{v}:{p}:{b}:{d}")),
+                _ => None,
+            };
             return (serial, fallback);
         }
         match std::fs::canonicalize(&cur) {
@@ -570,7 +579,7 @@ mod tests {
         let (serial, fallback) = usb_identity_from_sysfs_node(&iface);
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(serial, None, "CH340 must not inherit hub serial");
-        assert_eq!(fallback.as_deref(), Some("usb:1a86:7523:1.3"));
+        assert_eq!(fallback.as_deref(), Some("usb:1a86:7523:1:1.3"));
     }
 
     #[test]
@@ -588,12 +597,13 @@ mod tests {
         write_attr(&uart, "idVendor", "0403\n");
         write_attr(&uart, "idProduct", "6001\n");
         write_attr(&uart, "devpath", "1.2\n");
+        write_attr(&uart, "busnum", "1\n");
         write_attr(&uart, "serial", "FT123456\n");
         std::fs::create_dir_all(&iface).expect("iface");
         let (serial, fallback) = usb_identity_from_sysfs_node(&iface);
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(serial.as_deref(), Some("FT123456"));
-        assert_eq!(fallback.as_deref(), Some("usb:0403:6001:1.2"));
+        assert_eq!(fallback.as_deref(), Some("usb:0403:6001:1:1.2"));
     }
 
     #[test]
@@ -616,6 +626,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(serial, None, "empty CH340 serial file is not an identity");
         assert_eq!(fallback, None, "missing dest must not become nodevpath");
+    }
+
+    #[test]
+    fn usb_identity_does_not_invent_bus_when_busnum_missing() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "realityos-metal-usb-id-nobus-{}-{stamp}",
+            std::process::id()
+        ));
+        let uart = root.join("1-1.4");
+        let iface = uart.join("1-1.4:1.0");
+        write_attr(&uart, "idVendor", "1a86\n");
+        write_attr(&uart, "idProduct", "7523\n");
+        write_attr(&uart, "devpath", "1.4\n");
+        std::fs::create_dir_all(&iface).expect("iface");
+        let (serial, fallback) = usb_identity_from_sysfs_node(&iface);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(serial, None);
+        assert_eq!(fallback, None, "dest without busnum must not invent bus 0");
     }
 
     #[test]
@@ -667,12 +699,12 @@ mod tests {
 
     #[test]
     fn dest_only_bind_still_matches_after_iserial_appears() {
-        let dest = "usb:0403:6001:1.2:id1";
+        let dest = "usb:0403:6001:1:1.2:id1";
         let mut cfg = MetalConfig::example(PathBuf::from("/dev/ttyUSB0"));
         let fresh = MeasuredIdentity::from_hardware(
             &cfg,
             Some("FT123456".into()),
-            Some("usb:0403:6001:1.2".into()),
+            Some("usb:0403:6001:1:1.2".into()),
             1190,
             46,
             true,
@@ -683,7 +715,7 @@ mod tests {
         let bound = MeasuredIdentity::from_hardware(
             &cfg,
             Some("FT123456".into()),
-            Some("usb:0403:6001:1.2".into()),
+            Some("usb:0403:6001:1:1.2".into()),
             1190,
             46,
             true,
@@ -693,5 +725,39 @@ mod tests {
             "serve must keep the dest-only probe bind"
         );
         assert!(bound.adapter_aliases().contains(&"FT123456:id1".into()));
+    }
+
+    #[test]
+    fn usb_identity_includes_busnum_so_two_ch340s_do_not_collide() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "realityos-metal-usb-id-bus-{}-{stamp}",
+            std::process::id()
+        ));
+        let a = root.join("bus1").join("1-1");
+        let b = root.join("bus2").join("2-1");
+        let a_iface = a.join("1-1:1.0");
+        let b_iface = b.join("2-1:1.0");
+        write_attr(&a, "idVendor", "1a86\n");
+        write_attr(&a, "idProduct", "7523\n");
+        write_attr(&a, "devpath", "1\n");
+        write_attr(&a, "busnum", "1\n");
+        write_attr(&b, "idVendor", "1a86\n");
+        write_attr(&b, "idProduct", "7523\n");
+        write_attr(&b, "devpath", "1\n");
+        write_attr(&b, "busnum", "2\n");
+        std::fs::create_dir_all(&a_iface).expect("iface a");
+        std::fs::create_dir_all(&b_iface).expect("iface b");
+        let (sa, fa) = usb_identity_from_sysfs_node(&a_iface);
+        let (sb, fb) = usb_identity_from_sysfs_node(&b_iface);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(sa, None);
+        assert_eq!(sb, None);
+        assert_eq!(fa.as_deref(), Some("usb:1a86:7523:1:1"));
+        assert_eq!(fb.as_deref(), Some("usb:1a86:7523:2:1"));
+        assert_ne!(fa, fb, "same dest on two buses must not share identity");
     }
 }
