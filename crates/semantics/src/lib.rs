@@ -1,6 +1,7 @@
 //! Physical-intelligence schemas. No plant I/O. SIM ≠ METAL.
 
 pub mod capability;
+pub mod skill;
 pub mod embodiment;
 pub mod observation;
 pub mod provenance;
