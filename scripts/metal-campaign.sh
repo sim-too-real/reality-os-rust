@@ -146,20 +146,30 @@ disable_usb_autosuspend() {
   done
 }
 
-# Walk sysfs from the tty to the USB device (first idVendor) and read
-# one attribute from that node only. A CH340/CP2102 with an empty serial
-# must not inherit a parent hub serial — ATTRS{serial}==<hub> would match
-# every tty on the hub after udev rename.
+# Walk sysfs from the tty to the UART USB device (first
+# idVendor+idProduct) and read one attribute from that node only.
+# A CH340/CP2102 often has an empty `serial` file; that used to be
+# exit 0 so wait never required dest. A node with idVendor and no
+# idProduct used to climb to a parent hub and inherit that serial —
+# ATTRS{serial}==<hub> then matches every tty on the hub.
 usb_sysfs_value() {
   local dev="$1" key="$2"
-  local name node
+  local name node val
   name="$(basename "$(readlink -f "$dev" 2>/dev/null || echo "$dev")")"
   node="$(readlink -f "/sys/class/tty/${name}/device" 2>/dev/null || true)"
   while [[ -n "$node" && "$node" != / && "$node" != /sys ]]; do
     if [[ -f "$node/idVendor" ]]; then
+      if [[ ! -f "$node/idProduct" ]]; then
+        return 1
+      fi
       if [[ -f "$node/$key" ]]; then
-        tr -d '\n' <"$node/$key"
-        return 0
+        val="$(tr -d '\n' <"$node/$key")"
+        val="${val#"${val%%[![:space:]]*}"}"
+        val="${val%"${val##*[![:space:]]}"}"
+        if [[ -n "$val" ]]; then
+          printf '%s' "$val"
+          return 0
+        fi
       fi
       return 1
     fi
@@ -350,7 +360,9 @@ resolve_recorded_usb_tty() {
 # First contact after plug-in / udev add: the tty node can exist before
 # USB attributes. idVendor+idProduct alone can still lack busnum/devpath;
 # the port key used to invent 0:nodevpath and probe bound
-# usb:vid:pid:nodevpath, then serve missed when dest appeared.
+# usb:vid:pid:nodevpath, then serve missed when dest appeared. An empty
+# CH340 serial file or a parent hub serial used to count as "serial
+# present" so wait returned before the UART dest existed.
 wait_usb_sysfs_identity() {
   local dev="$1"
   local real name i
@@ -515,6 +527,12 @@ prepare_usb_serial_host() {
   fi
   if [[ -z "${METAL_USB_PORT:-}" ]]; then
     METAL_USB_PORT="$(usb_sysfs_port_key "$real" || true)"
+  fi
+  # First prepare must record a UART identity. An empty CH340 serial
+  # file used to pass wait (exit 0) and then bind nodevpath / hub.
+  if [[ -z "${METAL_USB_SERIAL:-}" && -z "${METAL_USB_PORT:-}" ]]; then
+    echo "error: USB sysfs serial or busnum:devpath:vid:pid never appeared on the UART device for $dev; refuse to bind a tty-name, parent-hub, or nodevpath identity" >&2
+    return 1
   fi
   if [[ -d /run/udev/rules.d ]]; then
     if [[ -n "$METAL_USB_SERIAL" ]]; then

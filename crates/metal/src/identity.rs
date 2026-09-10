@@ -178,17 +178,23 @@ pub(crate) fn usb_identity_from_sysfs_node(start: &Path) -> (Option<String>, Opt
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
-        if let (Some(v), Some(p)) = (vid, pid) {
+        if vid.is_some() {
+            let (Some(v), Some(p)) = (vid, pid) else {
+                // idVendor without idProduct: do not climb to a parent hub.
+                return (None, None);
+            };
             let serial = std::fs::read_to_string(cur.join("serial"))
                 .ok()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty());
-            let devpath = std::fs::read_to_string(cur.join("devpath"))
+            let dest = std::fs::read_to_string(cur.join("devpath"))
                 .ok()
                 .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "nodevpath".into());
-            return (serial, Some(format!("usb:{v}:{p}:{devpath}")));
+                .filter(|s| !s.is_empty());
+            // Do not invent nodevpath: probe would bind usb:vid:pid:nodevpath
+            // and serve would miss when the real dest appeared.
+            let fallback = dest.map(|d| format!("usb:{v}:{p}:{d}"));
+            return (serial, fallback);
         }
         match std::fs::canonicalize(&cur) {
             Ok(p) => {
@@ -546,5 +552,74 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(serial.as_deref(), Some("FT123456"));
         assert_eq!(fallback.as_deref(), Some("usb:0403:6001:1.2"));
+    }
+
+    #[test]
+    fn usb_identity_does_not_invent_nodevpath_when_dest_missing() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "realityos-metal-usb-id-nodest-{}-{stamp}",
+            std::process::id()
+        ));
+        let uart = root.join("1-1.4");
+        let iface = uart.join("1-1.4:1.0");
+        write_attr(&uart, "idVendor", "1a86\n");
+        write_attr(&uart, "idProduct", "7523\n");
+        write_attr(&uart, "serial", "\n");
+        std::fs::create_dir_all(&iface).expect("iface");
+        let (serial, fallback) = usb_identity_from_sysfs_node(&iface);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(serial, None, "empty CH340 serial file is not an identity");
+        assert_eq!(fallback, None, "missing dest must not become nodevpath");
+    }
+
+    #[test]
+    fn usb_identity_keeps_uart_serial_when_dest_missing() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "realityos-metal-usb-id-serial-nodest-{}-{stamp}",
+            std::process::id()
+        ));
+        let uart = root.join("1-1.5");
+        let iface = uart.join("1-1.5:1.0");
+        write_attr(&uart, "idVendor", "0403\n");
+        write_attr(&uart, "idProduct", "6001\n");
+        write_attr(&uart, "serial", "FT123456\n");
+        std::fs::create_dir_all(&iface).expect("iface");
+        let (serial, fallback) = usb_identity_from_sysfs_node(&iface);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(serial.as_deref(), Some("FT123456"));
+        assert_eq!(fallback, None);
+    }
+
+    #[test]
+    fn usb_identity_does_not_climb_to_hub_when_uart_vid_lacks_pid() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "realityos-metal-usb-id-nopid-{}-{stamp}",
+            std::process::id()
+        ));
+        let hub = root.join("hub");
+        let uart = hub.join("1-1.6");
+        let iface = uart.join("1-1.6:1.0");
+        write_attr(&hub, "idVendor", "1d6b\n");
+        write_attr(&hub, "idProduct", "0002\n");
+        write_attr(&hub, "serial", "HUBSERIAL\n");
+        write_attr(&hub, "devpath", "0\n");
+        write_attr(&uart, "idVendor", "1a86\n");
+        std::fs::create_dir_all(&iface).expect("iface");
+        let (serial, fallback) = usb_identity_from_sysfs_node(&iface);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(serial, None, "vid without pid must not inherit hub serial");
+        assert_eq!(fallback, None);
     }
 }
