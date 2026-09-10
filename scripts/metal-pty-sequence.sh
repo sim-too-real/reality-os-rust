@@ -56,7 +56,9 @@ if [[ "$TTY" != /dev/pts/* ]]; then
   exit 1
 fi
 
-sudo -E env \
+# Campaign must install into $REPO/docs, not $PWD/docs. A bench run
+# invoked via an absolute script path from $HOME used to mint ~/docs.
+(cd /tmp && sudo -E env \
   PATH="$PATH" \
   REALITYOS_METAL_BIN="$BIN_DIR" \
   REALITYOS_METAL_DEVICE="$TTY" \
@@ -64,7 +66,7 @@ sudo -E env \
   REALITYOS_METAL_PTY_SEQUENCE=1 \
   REALITYOS_METAL_ALLOW_PTY=1 \
   REALITYOS_METAL_CUTOFF_TESTED=0 \
-  "$SCRIPT_DIR/metal-campaign.sh"
+  "$SCRIPT_DIR/metal-campaign.sh")
 
 if [[ -f "$REPO/docs/metal_proof.json" ]]; then
   echo "error: PTY sequence installed docs/metal_proof.json" >&2

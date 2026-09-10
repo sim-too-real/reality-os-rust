@@ -10,13 +10,15 @@ IPC_GROUP="${REALITYOS_IPC_GROUP:-realityos-ipc}"
 ROOT="${REALITYOS_METAL_ROOT:-/tmp/realityos-metal}"
 BIN_DIR="${REALITYOS_METAL_BIN:-}"
 DEVICE="${REALITYOS_METAL_DEVICE:-}"
-OUT="${REALITYOS_METAL_PROOF:-docs/metal_proof.json}"
 CUTOFF_TESTED="${REALITYOS_METAL_CUTOFF_TESTED:-0}"
-
-# Authority UID cannot write the repo `docs/` tree. Resolve the install path
-# now; the reporter writes into $ROOT, then root copies here.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Authority UID cannot write the repo `docs/` tree. Resolve against the
+# script's repo, not `$PWD`: `sudo ... /path/scripts/metal-campaign.sh`
+# from $HOME used to install ~/docs/metal_proof.json after a live run.
+OUT="${REALITYOS_METAL_PROOF:-$REPO/docs/metal_proof.json}"
 if [[ "$OUT" != /* ]]; then
-  OUT="$(pwd)/$OUT"
+  OUT="$REPO/$OUT"
 fi
 
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -544,7 +546,6 @@ trap cleanup_usb_serial_host EXIT
 
 # Stale journal+seal makes --first-online refuse. Kill leftover serve first so
 # it cannot rewrite the journal after the wipe.
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
 if ! prepare_usb_serial_host "$DEVICE"; then
   echo "error: $DEVICE is already open (ModemManager/brltty/another process)." >&2
@@ -1170,7 +1171,6 @@ if [[ "${REALITYOS_METAL_CUTOFF_LIVE:-0}" == "1" ]]; then
   add_case "$(MEASURE_REQUIRE='dxl_io|driver not connected|online_hardware_disconnected|metal_live_io_deadline' MEASURE_FORBID=software_watchdog_miss measure vin_cutoff_live 'propose after VIN open' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-cutoff "$PROP" --root "$ROOT" propose-id)"
 fi
 
-REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMMIT="$(git -C "$REPO" -c safe.directory="$REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
 DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # Read measured/fresh/os-probe from files. Embedding JSON in '''$VAR'''
@@ -1294,7 +1294,7 @@ else:
     print("metal-proof-ok status=%s writes=%s" % (r["experiment_status"], r["valid_physical_device_writes"]))
 PY
 if [[ "$PTY_SEQUENCE_ACTIVE" == "1" ]]; then
-  if [[ -f docs/metal_proof.json || -f "$PWD/docs/metal_proof.json" ]]; then
+  if [[ -f "$REPO/docs/metal_proof.json" || -f "$PWD/docs/metal_proof.json" ]]; then
     echo "error: PTY sequence must not install docs/metal_proof.json" >&2
     exit 1
   fi
