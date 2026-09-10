@@ -393,6 +393,7 @@ pub fn default_unresolved() -> Vec<String> {
         "serve measures the USB-adapter serial before open; a recycled living ttyUSB0 whose serial drifted must not reach torque-on".into(),
         "campaign proof-meta reads measured/os-probe/freshness from files; interpolating JSON into python '''...''' dies on an apostrophe in a USB serial".into(),
         "campaign installs docs/metal_proof.json relative to the script's repo, not the caller's working directory; sudo /path/scripts/metal-campaign.sh from another cwd used to write ~/docs after a live run".into(),
+        "campaign runs as root with umask 0077; proof_meta.json and the cases file are chmod 0644 and chowned to the authority UID so report can read them. A hardened root umask used to abort mint after the physical run".into(),
         "no STO/SS1/PLC/SIL/ISO is provided or claimed".into(),
     ]
 }

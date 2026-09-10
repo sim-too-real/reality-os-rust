@@ -25,6 +25,15 @@ if [[ "$(id -u)" -ne 0 ]]; then
   echo "error: run as root to switch UIDs; root is not the tested actor" >&2
   exit 2
 fi
+# Root-created files default to owner-only. `report` runs as the
+# authority UID and must read proof_meta / cases. A hardened umask
+# 0077 used to abort mint after the physical campaign had already run.
+umask 0077
+authority_readable() {
+  local f="$1"
+  chmod 0644 "$f"
+  chown "$AUTHORITY_USER:$AUTHORITY_USER" "$f"
+}
 if [[ -z "$BIN_DIR" ]]; then
   echo "error: set REALITYOS_METAL_BIN to the directory containing the metal binaries" >&2
   exit 2
@@ -954,7 +963,7 @@ PY
 
 CASES_FILE="$ROOT/os_metal_cases.json"
 printf '%s\n' '[]' > "$CASES_FILE"
-chmod 0644 "$CASES_FILE"
+authority_readable "$CASES_FILE"
 add_case() {
   python3 -c 'import json,sys
 path, raw = sys.argv[1], sys.argv[2]
@@ -1242,6 +1251,7 @@ meta = {
 open(out_p, "w").write(json.dumps(meta, indent=2))
 print("meta-written")
 PY
+authority_readable "$ROOT/proof_meta.json"
 
 as_authority "$SMOKE" --root "$ROOT" --cases "$CASES_FILE" --out "$ROOT/metal_proof.json" report
 python3 - <<PY
