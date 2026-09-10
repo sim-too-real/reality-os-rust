@@ -587,7 +587,10 @@ cfg["device"] = dev
 json.dump(cfg, open(path, "w"), indent=2)
 print("metal-campaign: metal.json device -> %s" % (dev,), file=sys.stderr)
 PY
-  chown "$AUTHORITY_USER:$AUTHORITY_USER" "$cfg" 2>/dev/null || true
+  if ! chown "$AUTHORITY_USER:$AUTHORITY_USER" "$cfg"; then
+    echo "error: chown $AUTHORITY_USER $cfg failed; serve cannot read metal.json after a udev rename" >&2
+    return 1
+  fi
 }
 
 release_foreign_tty_holders() {
@@ -700,9 +703,11 @@ write_metal_udev_ignore_rule() {
   UDEV_RULE="$rules"
 }
 
+# Echo the live path. `udevadm trigger --action=change` can re-enumerate
+# FTDI/U2D2 as ttyUSB1; read-back and metal.json must follow that node.
 ensure_usb_tty_mm_ignored() {
   local dev="$1"
-  local real name
+  local real name live
   real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
   name="$(basename "$real")"
   if [[ "${METAL_UDEV_NEEDS_RELOAD:-0}" == "1" ]]; then
@@ -712,23 +717,37 @@ ensure_usb_tty_mm_ignored() {
     fi
     METAL_UDEV_NEEDS_RELOAD=0
   fi
-  if usb_tty_has_mm_ignore "$real"; then
-    return 0
-  fi
-  if ! udevadm control --reload; then
-    echo "error: udevadm control --reload failed; refuse to open a USB-UART without a loaded ID_MM_DEVICE_IGNORE rule" >&2
-    return 1
-  fi
-  if ! udevadm trigger --action=change --sysname-match="$name"; then
-    echo "error: udevadm trigger failed for $name; ID_MM_DEVICE_IGNORE was not applied" >&2
-    return 1
-  fi
-  udevadm settle --timeout=2 >/dev/null 2>&1 || true
   if ! usb_tty_has_mm_ignore "$real"; then
-    echo "error: $real has no ID_MM_DEVICE_IGNORE after udev reload/trigger (udevadm info read-back). Refuse to open; ModemManager can still claim the UART." >&2
+    if ! udevadm control --reload; then
+      echo "error: udevadm control --reload failed; refuse to open a USB-UART without a loaded ID_MM_DEVICE_IGNORE rule" >&2
+      return 1
+    fi
+    if ! udevadm trigger --action=change --sysname-match="$name"; then
+      echo "error: udevadm trigger failed for $name; ID_MM_DEVICE_IGNORE was not applied" >&2
+      return 1
+    fi
+    udevadm settle --timeout=2 >/dev/null 2>&1 || true
+  fi
+  live="$(stabilize_metal_device "$dev")" || return 1
+  if [[ -z "$live" ]]; then
+    echo "error: stabilize_metal_device returned an empty path after udev trigger" >&2
     return 1
   fi
-  echo "metal-campaign: udevadm info $real ID_MM_DEVICE_IGNORE=1"
+  if ! usb_tty_has_mm_ignore "$live"; then
+    name="$(basename "$(readlink -f "$live" 2>/dev/null || echo "$live")")"
+    if ! udevadm trigger --action=change --sysname-match="$name"; then
+      echo "error: udevadm trigger failed for $name; ID_MM_DEVICE_IGNORE was not applied" >&2
+      return 1
+    fi
+    udevadm settle --timeout=2 >/dev/null 2>&1 || true
+    live="$(stabilize_metal_device "$live")" || return 1
+    if ! usb_tty_has_mm_ignore "$live"; then
+      echo "error: $live has no ID_MM_DEVICE_IGNORE after udev reload/trigger (udevadm info read-back). Refuse to open; ModemManager can still claim the UART." >&2
+      return 1
+    fi
+  fi
+  echo "metal-campaign: udevadm info $live ID_MM_DEVICE_IGNORE=1" >&2
+  echo "$live"
 }
 
 prepare_usb_serial_host() {
@@ -797,12 +816,18 @@ prepare_usb_serial_host() {
     echo "error: stabilize_metal_device returned an empty path" >&2
     return 1
   fi
+  # Reload/trigger can wake ModemManager and rename ttyUSB0 → ttyUSB1.
+  # Rematch before metal.json / fuser / claim, then holder-check again.
+  if ! DEVICE="$(ensure_usb_tty_mm_ignored "$DEVICE")"; then
+    return 1
+  fi
+  if [[ -z "$DEVICE" ]]; then
+    echo "error: empty USB-UART path after ID_MM_DEVICE_IGNORE read-back" >&2
+    return 1
+  fi
   export REALITYOS_METAL_DEVICE="$DEVICE"
-  sync_metal_device_config
+  sync_metal_device_config || return 1
   real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
-  # Reload/trigger can wake ModemManager. Read back ignore, then fuser
-  # again — the first holder check ran before this change event.
-  ensure_usb_tty_mm_ignored "$DEVICE" || return 1
   if ! refuse_shared_usb_tty "$real"; then
     return 1
   fi
