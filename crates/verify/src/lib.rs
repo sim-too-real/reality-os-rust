@@ -9,6 +9,7 @@ pub mod driver;
 pub mod evidence;
 pub mod families;
 pub mod format;
+pub mod foundation_report;
 pub mod held_out;
 pub mod honesty;
 pub mod mujoco_exec;
@@ -29,6 +30,7 @@ pub use honesty::{
     refuse_physical_proof_origin, VerificationClass, EVIDENCE_SCHEMA, SIMULATION_ONLY,
     SIM_VERIFY_NOT_METAL,
 };
+pub use reach_foundation::{run_foundation_reach, FoundationReachReport};
 pub use runner::{load_and_normalize, qualify_bundle, run_episode, run_matrix, run_resolved};
 
 #[cfg(test)]

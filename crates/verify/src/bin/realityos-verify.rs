@@ -4,6 +4,7 @@ use realityos_verify::bundle::RobotBundle;
 use realityos_verify::corpus::{milestone_robots, robot_dir};
 use realityos_verify::evidence::{aggregate, render_markdown};
 use realityos_verify::families::{family_spec, MILESTONE_FAMILIES};
+use realityos_verify::foundation_report::{run_campaign, write_report};
 use realityos_verify::honesty::{refuse_physical_proof_origin, SIMULATION_ONLY};
 use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, require_mujoco_env};
 use realityos_verify::reduce::minimize;
@@ -16,7 +17,7 @@ fn main() {
     let mut args = env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() {
         eprintln!(
-            "usage: realityos-verify [inspect <id>|qualify <id>|episode <id> <family> <seed>|matrix|milestone]"
+            "usage: realityos-verify [inspect <id>|qualify <id>|episode <id> <family> <seed>|matrix|milestone|foundation-reach]"
         );
         std::process::exit(2);
     }
@@ -29,6 +30,7 @@ fn main() {
         "qualify" => qualify(&args[0]),
         "episode" => episode(&args),
         "matrix" | "milestone" => milestone(),
+        "foundation-reach" => foundation_reach(),
         other => {
             eprintln!("unknown {other}");
             std::process::exit(2);
@@ -167,4 +169,30 @@ fn milestone() {
         eprintln!("infra errors remain visible; milestone exits non-zero");
         std::process::exit(1);
     }
+}
+
+fn foundation_reach() {
+    let out = PathBuf::from("verify-out");
+    let report = run_campaign().expect("foundation-reach campaign");
+    write_report(&report, &out).expect("write foundation report");
+    println!(
+        "FOUNDATION REACH scenarios={} successes={} refusals={} probes={} ctrl_writes={} metal=false evidence_status={}",
+        report.scenario_count,
+        report.successes,
+        report.refusals,
+        report.probes,
+        report.ctrl_writes,
+        SIMULATION_ONLY
+    );
+    for r in &report.robots {
+        println!(
+            "  {} ({}) success={} refuse={:?} writes={}",
+            r.robot_id,
+            r.role,
+            r.reach.task_success,
+            r.reach.skill_refuse,
+            r.reach.ctrl_writes
+        );
+    }
+    println!("wrote verify-out/foundation_report.json");
 }

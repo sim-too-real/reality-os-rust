@@ -21,6 +21,7 @@ use realityos_semantics::reach::compile_reach;
 use realityos_semantics::skill::SkillRefuse;
 use realityos_semantics::world::WorldState;
 use serde_json::Value;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -30,7 +31,7 @@ const INSPECT_SOURCE: &str = "verify.inspect";
 const HORIZON_S: f64 = 0.5;
 const CONTROL_HZ: f64 = 50.0;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FoundationReachReport {
     pub robot_id: String,
     pub model_hash: String,
@@ -69,7 +70,7 @@ pub fn run_foundation_reach(
         .and_then(|st| {
             st.get("state")
                 .ok_or_else(|| "missing initial state".into())
-                .map(|s| VerifierTruth::from_mujoco_state(s))
+                .map(VerifierTruth::from_mujoco_state)
         })?;
 
     let epoch = model.calibration_epoch.clone();
@@ -630,5 +631,68 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r.replay_write_delta, Some(0));
+    }
+
+    #[test]
+    fn wrong_hash_zero_writes() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(crate::corpus::robot_dir("planar_arm")).unwrap();
+        let r = run_foundation_reach(
+            &b,
+            [0.22, 0.0, 0.12],
+            0.20,
+            10.0,
+            0.25,
+            Some("deadbeef"),
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(r.ctrl_writes, 0);
+        assert!(r.skill_refuse.is_some());
+    }
+
+    #[test]
+    fn stale_zero_writes() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(crate::corpus::robot_dir("planar_arm")).unwrap();
+        let r = run_foundation_reach(
+            &b,
+            [0.22, 0.0, 0.12],
+            0.20,
+            10.0,
+            0.25,
+            None,
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(r.ctrl_writes, 0);
+    }
+
+    #[test]
+    fn held_out_first_evaluation_is_recorded() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(crate::held_out::held_out_bundle()).unwrap();
+        let r = run_foundation_reach(
+            &b,
+            [0.20, 0.0, 0.12],
+            0.25,
+            10.0,
+            0.25,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(r.adaptation, "CONFIGURED");
+        assert!(!r.metal);
+        assert!(!r.model_hash.is_empty());
     }
 }
