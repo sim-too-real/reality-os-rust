@@ -1,0 +1,8 @@
+robot_id: bad_actuator
+model_format: mjcf
+model_file: model.xml
+expected_base_type: fixed
+source:
+  license: MIT
+  attribution: Reality OS adversarial fixture
+  redistributable: true

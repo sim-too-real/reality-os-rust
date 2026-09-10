@@ -1,0 +1,9 @@
+robot_id: urdf_slider
+model_format: urdf
+model_file: robot.urdf
+asset_roots: []
+expected_base_type: fixed
+source:
+  license: MIT
+  attribution: Reality OS adversarial/format fixture
+  redistributable: true

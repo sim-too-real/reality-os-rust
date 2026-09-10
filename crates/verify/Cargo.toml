@@ -1,0 +1,27 @@
+[package]
+name = "realityos-verify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Embodiment-agnostic MuJoCo verification harness. SIMULATION_ONLY. Never metal."
+readme = false
+
+[dependencies]
+realityos-kernel.workspace = true
+realityos-plant.workspace = true
+realityos-core.workspace = true
+realityos-governor.workspace = true
+realityos-session.workspace = true
+realityos-physics.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+hex.workspace = true
+serde_yaml = "0.9"
+rand = { version = "0.8", features = ["std", "std_rng"] }
+rayon = "1"
+
+[lints]
+workspace = true

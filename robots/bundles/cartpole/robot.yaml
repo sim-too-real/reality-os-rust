@@ -1,0 +1,30 @@
+robot_id: cartpole
+model_format: mjcf
+model_file: model.xml
+asset_roots: []
+expected_base_type: mobile
+joint_aliases:
+  cart: slider
+  pole: hinge
+actuator_aliases:
+  cart: cart_motor
+end_effectors:
+  - name: tip
+    site: tip
+    body: pole
+grippers: []
+feet: []
+cameras:
+  - name: side_cam
+    body: cart
+task_frames:
+  - name: tip
+    site: tip
+collision_groups:
+  robot: [cart, pole]
+default_controller_profile: pd_position
+source:
+  license: MIT
+  attribution: Reality OS original underactuated fixture
+  redistributable: true
+  notes: Classic cart-pole authored here. Not a vendor dump.

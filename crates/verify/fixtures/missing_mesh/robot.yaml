@@ -1,0 +1,9 @@
+robot_id: missing_mesh
+model_format: mjcf
+model_file: model.xml
+asset_roots: [assets]
+expected_base_type: fixed
+source:
+  license: MIT
+  attribution: Reality OS adversarial fixture
+  redistributable: true

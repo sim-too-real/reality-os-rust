@@ -1,0 +1,14 @@
+<mujoco model="missing_mesh">
+  <asset>
+    <mesh name="ghost" file="does_not_exist.stl"/>
+  </asset>
+  <worldbody>
+    <body name="link">
+      <joint name="j" type="hinge"/>
+      <geom type="mesh" mesh="ghost"/>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor joint="j" ctrlrange="-1 1"/>
+  </actuator>
+</mujoco>

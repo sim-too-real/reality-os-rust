@@ -1,0 +1,47 @@
+<mujoco model="arm_gripper">
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+  <worldbody>
+    <light pos="0 0 2" dir="0 0 -1"/>
+    <geom name="floor" type="plane" size="2 2 0.05" rgba="0.2 0.2 0.25 1"/>
+    <body name="base" pos="0 0 0.08">
+      <geom type="cylinder" size="0.045 0.04" rgba="0.25 0.25 0.3 1" mass="0.5"/>
+      <body name="link1" pos="0 0 0.04">
+        <joint name="joint1" type="hinge" axis="0 0 1" range="-1.8 1.8" damping="0.5"/>
+        <geom type="capsule" fromto="0 0 0 0.2 0 0" size="0.02" rgba="0.2 0.5 0.7 1" mass="0.35"/>
+        <body name="link2" pos="0.2 0 0">
+          <joint name="joint2" type="hinge" axis="0 0 1" range="-2.0 2.0" damping="0.4"/>
+          <geom type="capsule" fromto="0 0 0 0.16 0 0" size="0.018" rgba="0.2 0.6 0.6 1" mass="0.25"/>
+          <body name="wrist" pos="0.16 0 0">
+            <joint name="joint3" type="hinge" axis="0 0 1" range="-2.0 2.0" damping="0.25"/>
+            <geom type="box" size="0.03 0.02 0.02" rgba="0.3 0.3 0.35 1" mass="0.12"/>
+            <site name="ee" pos="0.05 0 0" size="0.01"/>
+            <camera name="wrist_cam" pos="0.02 -0.08 0.06" xyaxes="1 0 0 0 0.4 1"/>
+            <body name="finger_l" pos="0.04 0.015 0">
+              <joint name="finger_l" type="slide" axis="0 1 0" range="0 0.03" damping="0.8"/>
+              <geom type="box" size="0.02 0.006 0.01" rgba="0.8 0.8 0.2 1" mass="0.03"/>
+            </body>
+            <body name="finger_r" pos="0.04 -0.015 0">
+              <joint name="finger_r" type="slide" axis="0 -1 0" range="0 0.03" damping="0.8"/>
+              <geom type="box" size="0.02 0.006 0.01" rgba="0.8 0.8 0.2 1" mass="0.03"/>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <contact>
+    <exclude body1="base" body2="link1"/>
+    <exclude body1="link1" body2="link2"/>
+    <exclude body1="link2" body2="wrist"/>
+    <exclude body1="wrist" body2="finger_l"/>
+    <exclude body1="wrist" body2="finger_r"/>
+  </contact>
+  <actuator>
+    <position name="act1" joint="joint1" kp="40" ctrlrange="-1.8 1.8" forcerange="-12 12"/>
+    <position name="act2" joint="joint2" kp="30" ctrlrange="-2.0 2.0" forcerange="-8 8"/>
+    <position name="act3" joint="joint3" kp="20" ctrlrange="-2.0 2.0" forcerange="-4 4"/>
+    <position name="grip_l" joint="finger_l" kp="80" ctrlrange="0 0.03" forcerange="-2 2"/>
+    <position name="grip_r" joint="finger_r" kp="80" ctrlrange="0 0.03" forcerange="-2 2"/>
+  </actuator>
+</mujoco>

@@ -1,0 +1,11 @@
+<mujoco model="bad_actuator">
+  <worldbody>
+    <body name="link">
+      <joint name="j" type="hinge" range="-1 1"/>
+      <geom type="capsule" size="0.02 0.1" mass="0.2"/>
+    </body>
+  </worldbody>
+  <actuator>
+    <position name="ghost" joint="missing_joint" kp="10" ctrlrange="-1 1"/>
+  </actuator>
+</mujoco>

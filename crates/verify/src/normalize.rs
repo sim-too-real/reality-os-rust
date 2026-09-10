@@ -1,0 +1,391 @@
+//! RobotManifest mechanically inspected from compiled mjModel (+ bundle semantics).
+
+use crate::bundle::{BaseType, RobotBundle};
+use crate::format::ModelFormat;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct JointRecord {
+    pub name: String,
+    pub joint_type: String,
+    pub qpos_address: i32,
+    pub velocity_address: i32,
+    pub range: [f64; 2],
+    pub limited: bool,
+    pub parent_body: String,
+    pub child_body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ActuatorRecord {
+    pub name: String,
+    pub transmission_target: String,
+    pub control_dimensions: usize,
+    pub ctrlrange: [f64; 2],
+    pub ctrllimited: bool,
+    pub force_range: Option<[f64; 2]>,
+    pub actuator_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SensorRecord {
+    pub name: String,
+    pub sensor_type: String,
+    pub dimensions: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CameraRecord {
+    pub name: String,
+    pub parent_body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BodyRecord {
+    pub name: String,
+    pub mass: f64,
+    pub inertia: [f64; 3],
+    pub parent: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DerivedInterface {
+    pub base_type: BaseType,
+    pub actuated_dofs: Vec<String>,
+    pub passive_dofs: Vec<String>,
+    pub end_effector_chains: Vec<Vec<String>>,
+    pub actuator_coverage: f64,
+    pub potentially_uncontrollable_joints: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RobotManifest {
+    pub robot_id: String,
+    pub nq: i32,
+    pub nv: i32,
+    pub nu: i32,
+    pub nbody: i32,
+    pub njoint: i32,
+    pub nactuator: i32,
+    pub nsensor: i32,
+    pub ncamera: i32,
+    pub timestep: f64,
+    pub joints: Vec<JointRecord>,
+    pub actuators: Vec<ActuatorRecord>,
+    pub sensors: Vec<SensorRecord>,
+    pub cameras: Vec<CameraRecord>,
+    pub bodies: Vec<BodyRecord>,
+    pub sites: Vec<(String, String)>,
+    pub derived: DerivedInterface,
+    pub model_hash: String,
+    pub source_hash: String,
+    pub mujoco_version: String,
+    pub source_format: String,
+    pub lost_features: Vec<String>,
+    pub metal: bool,
+    pub evidence_status: String,
+}
+
+impl RobotManifest {
+    pub fn from_inspect(bundle: &RobotBundle, inspect: &serde_json::Value) -> Self {
+        let joints: Vec<JointRecord> = inspect
+            .get("joints")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|j| JointRecord {
+                        name: j["name"].as_str().unwrap_or("").into(),
+                        joint_type: joint_type_name(j["type"].as_i64().unwrap_or(-1)),
+                        qpos_address: j["qposadr"].as_i64().unwrap_or(0) as i32,
+                        velocity_address: j["dofadr"].as_i64().unwrap_or(0) as i32,
+                        range: [
+                            j["range"][0].as_f64().unwrap_or(0.0),
+                            j["range"][1].as_f64().unwrap_or(0.0),
+                        ],
+                        limited: j["limited"].as_bool().unwrap_or(false),
+                        parent_body: j["parent_body"].as_str().unwrap_or("").into(),
+                        child_body: j["child_body"].as_str().unwrap_or("").into(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let actuators: Vec<ActuatorRecord> = inspect
+            .get("actuators")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|a| ActuatorRecord {
+                        name: a["name"].as_str().unwrap_or("").into(),
+                        transmission_target: a["target"].as_str().unwrap_or("").into(),
+                        control_dimensions: 1,
+                        ctrlrange: [
+                            a["ctrlrange"][0].as_f64().unwrap_or(0.0),
+                            a["ctrlrange"][1].as_f64().unwrap_or(0.0),
+                        ],
+                        ctrllimited: a["ctrllimited"].as_bool().unwrap_or(false),
+                        force_range: if a["forcelimited"].as_bool().unwrap_or(false) {
+                            Some([
+                                a["forcerange"][0].as_f64().unwrap_or(0.0),
+                                a["forcerange"][1].as_f64().unwrap_or(0.0),
+                            ])
+                        } else {
+                            None
+                        },
+                        actuator_type: actuator_type_name(
+                            a["gaintype"].as_i64().unwrap_or(0),
+                            a["biastype"].as_i64().unwrap_or(0),
+                        ),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let sensors = inspect
+            .get("sensors")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|s| SensorRecord {
+                        name: s["name"].as_str().unwrap_or("").into(),
+                        sensor_type: s["type"].as_i64().unwrap_or(0).to_string(),
+                        dimensions: s["dim"].as_i64().unwrap_or(0) as i32,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let cameras = inspect
+            .get("cameras")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|c| CameraRecord {
+                        name: c["name"].as_str().unwrap_or("").into(),
+                        parent_body: c["parent_body"].as_str().unwrap_or("").into(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let bodies: Vec<BodyRecord> = inspect
+            .get("bodies")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|b| BodyRecord {
+                        name: b["name"].as_str().unwrap_or("").into(),
+                        mass: b["mass"].as_f64().unwrap_or(0.0),
+                        inertia: [
+                            b["inertia"][0].as_f64().unwrap_or(0.0),
+                            b["inertia"][1].as_f64().unwrap_or(0.0),
+                            b["inertia"][2].as_f64().unwrap_or(0.0),
+                        ],
+                        parent: b["parent"].as_str().unwrap_or("").into(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let sites = inspect
+            .get("sites")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|s| {
+                        Some((
+                            s["name"].as_str()?.to_string(),
+                            s["body"].as_str()?.to_string(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let actuated: Vec<String> = actuators
+            .iter()
+            .map(|a| a.transmission_target.clone())
+            .filter(|t| !t.is_empty())
+            .collect();
+        let passive: Vec<String> = joints
+            .iter()
+            .filter(|j| j.joint_type != "free" && !actuated.iter().any(|t| t == &j.name))
+            .map(|j| j.name.clone())
+            .collect();
+        let coverage = if joints.is_empty() {
+            0.0
+        } else {
+            actuated.len() as f64
+                / joints
+                    .iter()
+                    .filter(|j| j.joint_type != "free")
+                    .count()
+                    .max(1) as f64
+        };
+        let mut ee_chains = Vec::new();
+        for ee in &bundle.manifest.end_effectors {
+            let mut chain = vec![ee.name.clone()];
+            if let Some(b) = &ee.body {
+                chain.push(b.clone());
+            }
+            ee_chains.push(chain);
+        }
+        let inferred_base = infer_base(&joints, bundle.manifest.expected_base_type);
+        let nq = inspect["nq"].as_i64().unwrap_or(0) as i32;
+        let nv = inspect["nv"].as_i64().unwrap_or(0) as i32;
+        let nu = inspect["nu"].as_i64().unwrap_or(0) as i32;
+        let model_hash = stable_model_hash(bundle, nq, nv, nu, &joints, &actuators, &bodies);
+
+        Self {
+            robot_id: bundle.manifest.robot_id.clone(),
+            nq,
+            nv,
+            nu,
+            nbody: inspect["nbody"].as_i64().unwrap_or(0) as i32,
+            njoint: inspect["njnt"].as_i64().unwrap_or(joints.len() as i64) as i32,
+            nactuator: nu,
+            nsensor: inspect["nsensor"].as_i64().unwrap_or(0) as i32,
+            ncamera: inspect["ncam"].as_i64().unwrap_or(0) as i32,
+            timestep: inspect["timestep"].as_f64().unwrap_or(0.002),
+            joints,
+            actuators,
+            sensors,
+            cameras,
+            bodies,
+            sites,
+            derived: DerivedInterface {
+                base_type: inferred_base,
+                potentially_uncontrollable_joints: passive.clone(),
+                actuated_dofs: actuated,
+                passive_dofs: passive,
+                end_effector_chains: ee_chains,
+                actuator_coverage: coverage,
+            },
+            model_hash,
+            source_hash: bundle.source_hash.clone(),
+            mujoco_version: inspect["mujoco_version"].as_str().unwrap_or("").into(),
+            source_format: match bundle.format.format {
+                ModelFormat::Mjcf => "mjcf".into(),
+                ModelFormat::Urdf => "urdf".into(),
+                ModelFormat::Usd => "usd".into(),
+                other => format!("{other:?}").to_ascii_lowercase(),
+            },
+            lost_features: bundle.format.lost_or_unreliable.clone(),
+            metal: false,
+            evidence_status: crate::honesty::SIMULATION_ONLY.into(),
+        }
+    }
+
+    pub fn tau_max(&self) -> Vec<f64> {
+        self.actuators
+            .iter()
+            .map(|a| a.ctrlrange[0].abs().max(a.ctrlrange[1].abs()).max(1e-6))
+            .collect()
+    }
+
+    pub fn q_min(&self) -> Vec<f64> {
+        self.joints
+            .iter()
+            .filter(|j| j.joint_type != "free")
+            .map(|j| if j.limited { j.range[0] } else { -1e6 })
+            .collect()
+    }
+
+    pub fn q_max(&self) -> Vec<f64> {
+        self.joints
+            .iter()
+            .filter(|j| j.joint_type != "free")
+            .map(|j| if j.limited { j.range[1] } else { 1e6 })
+            .collect()
+    }
+
+    pub fn end_effector_name(&self) -> Option<String> {
+        self.sites.first().map(|s| s.0.clone()).or_else(|| {
+            self.derived
+                .end_effector_chains
+                .first()
+                .and_then(|c| c.first().cloned())
+        })
+    }
+}
+
+fn infer_base(joints: &[JointRecord], expected: BaseType) -> BaseType {
+    if joints.iter().any(|j| j.joint_type == "free") {
+        BaseType::Floating
+    } else {
+        expected
+    }
+}
+
+fn joint_type_name(code: i64) -> String {
+    match code {
+        0 => "free".into(),
+        1 => "ball".into(),
+        2 => "slide".into(),
+        3 => "hinge".into(),
+        _ => format!("type_{code}"),
+    }
+}
+
+fn actuator_type_name(gain: i64, bias: i64) -> String {
+    // MuJoCo position actuators use affine bias (ctrl is a position setpoint).
+    if bias == 1 {
+        "position".into()
+    } else if gain == 0 {
+        "motor".into()
+    } else {
+        format!("gain_{gain}")
+    }
+}
+
+impl RobotManifest {
+    pub fn actuator_qpos(&self, qpos: &[f64]) -> Vec<f64> {
+        self.actuators
+            .iter()
+            .map(|a| {
+                self.joints
+                    .iter()
+                    .find(|j| j.name == a.transmission_target)
+                    .and_then(|j| qpos.get(j.qpos_address as usize).copied())
+                    .unwrap_or(0.0)
+            })
+            .collect()
+    }
+
+    pub fn ctrl_ranges(&self) -> Vec<[f64; 2]> {
+        self.actuators.iter().map(|a| a.ctrlrange).collect()
+    }
+
+    pub fn position_mask(&self) -> Vec<bool> {
+        self.actuators
+            .iter()
+            .map(|a| a.actuator_type == "position")
+            .collect()
+    }
+}
+
+fn stable_model_hash(
+    bundle: &RobotBundle,
+    nq: i32,
+    nv: i32,
+    nu: i32,
+    joints: &[JointRecord],
+    actuators: &[ActuatorRecord],
+    bodies: &[BodyRecord],
+) -> String {
+    let mut h = Sha256::new();
+    h.update(b"realityos.normalized_robot/1\0");
+    h.update(bundle.source_hash.as_bytes());
+    h.update(nq.to_le_bytes());
+    h.update(nv.to_le_bytes());
+    h.update(nu.to_le_bytes());
+    for j in joints {
+        h.update(j.name.as_bytes());
+        h.update(j.joint_type.as_bytes());
+    }
+    for a in actuators {
+        h.update(a.name.as_bytes());
+        h.update(a.transmission_target.as_bytes());
+    }
+    for b in bodies {
+        h.update(b.name.as_bytes());
+        h.update(b.mass.to_le_bytes());
+    }
+    hex::encode(h.finalize())
+}

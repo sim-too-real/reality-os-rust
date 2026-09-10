@@ -1,0 +1,8 @@
+robot_id: cad_only
+model_format: step
+model_file: part.step
+expected_base_type: fixed
+source:
+  license: MIT
+  attribution: Reality OS adversarial CAD fixture
+  redistributable: true

@@ -1,0 +1,33 @@
+robot_id: planar_arm
+model_format: mjcf
+model_file: model.xml
+asset_roots: []
+expected_base_type: fixed
+joint_aliases:
+  shoulder: joint1
+  elbow: joint2
+  wrist: joint3
+actuator_aliases:
+  shoulder: act1
+  elbow: act2
+  wrist: act3
+end_effectors:
+  - name: ee
+    site: ee
+    body: link3
+grippers: []
+feet: []
+cameras:
+  - name: base_cam
+    body: base
+task_frames:
+  - name: ee
+    site: ee
+collision_groups:
+  robot: [base, link1, link2, link3]
+default_controller_profile: pd_position
+source:
+  license: MIT
+  attribution: Reality OS original fixture (not a vendor robot)
+  redistributable: true
+  notes: Authored for verification ingestion. Not a third-party asset dump.

@@ -3,7 +3,7 @@
 
 use std::cell::Cell;
 use std::collections::HashSet;
-use std::fs::{self, OpenOptions, Permissions};
+use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;

@@ -1,0 +1,36 @@
+robot_id: arm_gripper
+model_format: mjcf
+model_file: model.xml
+asset_roots: []
+expected_base_type: fixed
+joint_aliases:
+  shoulder: joint1
+  elbow: joint2
+  wrist: joint3
+  finger_l: finger_l
+  finger_r: finger_r
+actuator_aliases:
+  shoulder: act1
+  gripper: grip
+end_effectors:
+  - name: ee
+    site: ee
+    body: wrist
+grippers:
+  - name: gripper
+    body: wrist
+feet: []
+cameras:
+  - name: wrist_cam
+    body: wrist
+task_frames:
+  - name: ee
+    site: ee
+collision_groups:
+  robot: [base, link1, link2, wrist, finger_l, finger_r]
+default_controller_profile: pd_position
+source:
+  license: MIT
+  attribution: Reality OS original fixture (arm + gripper)
+  redistributable: true
+  notes: Authored for verification ingestion. Not a vendor dump.
