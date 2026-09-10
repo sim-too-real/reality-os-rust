@@ -34,8 +34,31 @@ authority_readable() {
   chmod 0644 "$f"
   chown "$AUTHORITY_USER:$AUTHORITY_USER" "$f"
 }
-if [[ -z "$BIN_DIR" ]]; then
-  echo "error: set REALITYOS_METAL_BIN to the directory containing the metal binaries" >&2
+# Docs set REALITYOS_METAL_BIN=$PWD/target/debug. The same
+# `sudo /path/scripts/metal-campaign.sh` from $HOME that used to
+# mint ~/docs also points BIN at ~/target/debug. Prefer the env
+# path when it has both binaries; otherwise use the script's repo.
+resolve_metal_bin() {
+  local candidates=()
+  if [[ -n "${BIN_DIR:-}" ]]; then
+    candidates+=("$BIN_DIR")
+  fi
+  candidates+=("$REPO/target/debug" "$REPO/target/release")
+  local d
+  for d in "${candidates[@]}"; do
+    if [[ -x "$d/realityos-metal-smoke" && -x "$d/realityos-metal-propose" ]]; then
+      if [[ -n "${BIN_DIR:-}" && "$d" != "$BIN_DIR" ]]; then
+        echo "metal-campaign: $BIN_DIR has no metal binaries; using $d (script repo, not cwd)" >&2
+      fi
+      BIN_DIR="$d"
+      return 0
+    fi
+  done
+  return 1
+}
+if ! resolve_metal_bin; then
+  echo "error: metal binaries not found. Set REALITYOS_METAL_BIN or: cargo build -p realityos-metal --bins" >&2
+  echo "error: looked in ${BIN_DIR:-<unset>} $REPO/target/debug $REPO/target/release" >&2
   exit 2
 fi
 if [[ -z "$DEVICE" || ! -e "$DEVICE" ]]; then

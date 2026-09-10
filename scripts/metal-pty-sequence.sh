@@ -12,8 +12,8 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 BIN_DIR="${REALITYOS_METAL_BIN:-}"
-if [[ -z "$BIN_DIR" ]]; then
-  echo "error: set REALITYOS_METAL_BIN" >&2
+if [[ ! -x "${BIN_DIR:-}/realityos-metal-smoke" && ! -x "$REPO/target/debug/realityos-metal-smoke" && ! -x "$REPO/target/release/realityos-metal-smoke" ]]; then
+  echo "error: build metal bins first (REALITYOS_METAL_BIN or $REPO/target/debug)" >&2
   exit 2
 fi
 
@@ -56,11 +56,12 @@ if [[ "$TTY" != /dev/pts/* ]]; then
   exit 1
 fi
 
-# Campaign must install into $REPO/docs, not $PWD/docs. A bench run
-# invoked via an absolute script path from $HOME used to mint ~/docs.
+# Campaign must install into $REPO/docs, not $PWD/docs, and must
+# find binaries in the script's repo when $PWD/target/debug is
+# empty. A bench run from $HOME used to miss both.
 (cd /tmp && sudo -E env \
   PATH="$PATH" \
-  REALITYOS_METAL_BIN="$BIN_DIR" \
+  REALITYOS_METAL_BIN="$PWD/target/debug" \
   REALITYOS_METAL_DEVICE="$TTY" \
   REALITYOS_METAL_ROOT="$ROOT" \
   REALITYOS_METAL_PTY_SEQUENCE=1 \
