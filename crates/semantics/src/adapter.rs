@@ -1,7 +1,6 @@
 use crate::capability::{CapName, CapStatus, CapabilityGraph};
-use crate::embodiment::{EmbodimentModel, FrameKind, Joint, JointKind};
+use crate::embodiment::{EmbodimentModel, Joint};
 use crate::observation::ObservationFrame;
-use crate::provenance::Provenanced;
 use crate::skill::{SkillContract, SkillName, SkillRefuse};
 use crate::world::WorldState;
 
@@ -184,8 +183,8 @@ fn ik_seed_candidates(joints: &[Joint]) -> Vec<Vec<f64>> {
     let mut seeds = vec![primary];
     for k in 1..=2u32 {
         let mut s = vec![0.0; n];
-        for i in 1..n {
-            s[i] = 0.4 * f64::from(k);
+        for s_i in s.iter_mut().skip(1) {
+            *s_i = 0.4 * f64::from(k);
         }
         seeds.push(s);
     }
@@ -289,6 +288,7 @@ fn forward_kinematics(
     })
 }
 
+#[allow(clippy::needless_range_loop)]
 fn jacobian(fk: &FkState, n: usize) -> Vec<Vec<f64>> {
     let mut j = vec![vec![0.0; n], vec![0.0; n], vec![0.0; n]];
     for i in 0..n {
@@ -304,15 +304,13 @@ fn jacobian(fk: &FkState, n: usize) -> Vec<Vec<f64>> {
 fn damped_least_squares(j: &[Vec<f64>], err: &[f64; 3], damp: f64) -> Vec<f64> {
     let n = j[0].len();
     let mut jjt = [[0.0; 3]; 3];
-    for r in 0..3 {
+    for (r, row) in jjt.iter_mut().enumerate() {
         for c in 0..3 {
-            for k in 0..n {
-                jjt[r][c] += j[r][k] * j[c][k];
-            }
+            row[c] = (0..n).map(|k| j[r][k] * j[c][k]).sum();
         }
     }
-    for i in 0..3 {
-        jjt[i][i] += damp * damp;
+    for (i, row) in jjt.iter_mut().enumerate() {
+        row[i] += damp * damp;
     }
     let rhs = [
         dot_row_j(j, err, 0),
@@ -321,8 +319,8 @@ fn damped_least_squares(j: &[Vec<f64>], err: &[f64; 3], damp: f64) -> Vec<f64> {
     ];
     let y = solve3x3(jjt, rhs);
     let mut dq = vec![0.0; n];
-    for k in 0..n {
-        dq[k] = j[0][k] * y[0] + j[1][k] * y[1] + j[2][k] * y[2];
+    for (k, dq_k) in dq.iter_mut().enumerate().take(n) {
+        *dq_k = j[0][k] * y[0] + j[1][k] * y[1] + j[2][k] * y[2];
     }
     dq
 }
@@ -432,8 +430,9 @@ fn solve3x3(a: [[f64; 3]; 3], b: [f64; 3]) -> [f64; 3] {
     mat_vec_mul(&inv, b)
 }
 
+#[cfg(test)]
 pub(crate) fn synth_planar_two_link() -> EmbodimentModel {
-    use crate::embodiment::{Actuator, Body, EndEffector, Joint, ModelFrame};
+    use crate::embodiment::{Actuator, Body, EndEffector, FrameKind, Joint, JointKind, ModelFrame};
     use crate::provenance::Provenanced;
 
     const L1: f64 = 0.15;

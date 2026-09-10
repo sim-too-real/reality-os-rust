@@ -23,7 +23,7 @@ pub fn embodiment_from_manifest(bundle: &RobotBundle, manifest: &RobotManifest) 
     model.bodies = manifest
         .bodies
         .iter()
-        .map(|b| map_body(b))
+        .map(map_body)
         .collect();
     model.joints = manifest.joints.iter().map(map_joint).collect();
     model.actuators = manifest.actuators.iter().map(map_actuator).collect();

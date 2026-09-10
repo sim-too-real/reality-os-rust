@@ -1,5 +1,4 @@
-use crate::embodiment::{Actuator, BaseKind, EmbodimentModel, EndEffector, Gripper, Joint, JointKind};
-use crate::provenance::Provenanced;
+use crate::embodiment::{Actuator, BaseKind, EmbodimentModel, Joint, JointKind};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -226,6 +225,8 @@ pub fn derive_capabilities(model: &EmbodimentModel, qualify_ok: Option<bool>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::embodiment::{EndEffector, Gripper};
+    use crate::provenance::Provenanced;
 
     fn synth_joint(name: &str) -> Joint {
         Joint {
