@@ -212,6 +212,12 @@ set_usb_serial_latency() {
     "/sys/class/tty/${name}/device/latency_timer"; do
     [[ -e "$timer" ]] || continue
     found=1
+    got="$(tr -d '[:space:]' <"$timer" 2>/dev/null || true)"
+    # A no-op sysfs write can still emit udev change (same class as
+    # chown). Settle used to rewrite 1 immediately before probe.
+    if [[ "$got" == "1" ]]; then
+      return 0
+    fi
     if echo 1 >"$timer" 2>/dev/null; then
       got="$(tr -d '[:space:]' <"$timer" 2>/dev/null || true)"
       if [[ "$got" == "1" ]]; then
@@ -258,6 +264,10 @@ disable_usb_autosuspend() {
   if [[ -z "$uart" || ! -f "$uart/power/control" ]]; then
     echo "error: USB-UART $dev has no UART-device power/control; refuse default autosuspend" >&2
     return 1
+  fi
+  got="$(tr -d '[:space:]' <"$uart/power/control" 2>/dev/null || true)"
+  if [[ "$got" == "on" ]]; then
+    return 0
   fi
   echo on >"$uart/power/control" 2>/dev/null || true
   if [[ -f "$uart/power/autosuspend_delay_ms" ]]; then
