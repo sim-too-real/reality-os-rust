@@ -169,7 +169,9 @@ usb_sysfs_value() {
 }
 
 # busnum:devpath:idVendor:idProduct. CH340/CP2102 often have an empty
-# USB serial; udev change can still keep this port key.
+# USB serial; udev change can still keep this port key. Do not invent
+# 0:nodevpath — probe would bind usb:vid:pid:nodevpath and serve would
+# miss when the real dest showed up.
 usb_sysfs_port_key() {
   local dev="$1"
   local bus dest vid pid
@@ -177,8 +179,8 @@ usb_sysfs_port_key() {
   dest="$(usb_sysfs_value "$dev" devpath || true)"
   vid="$(usb_sysfs_value "$dev" idVendor || true)"
   pid="$(usb_sysfs_value "$dev" idProduct || true)"
-  if [[ -n "$vid" && -n "$pid" ]]; then
-    echo "${bus:-0}:${dest:-nodevpath}:${vid}:${pid}"
+  if [[ -n "$bus" && -n "$dest" && -n "$vid" && -n "$pid" ]]; then
+    echo "${bus}:${dest}:${vid}:${pid}"
     return 0
   fi
   return 1
@@ -346,9 +348,9 @@ resolve_recorded_usb_tty() {
 }
 
 # First contact after plug-in / udev add: the tty node can exist before
-# USB attributes. idVendor alone is not enough — Rust identity stops
-# only at idVendor+idProduct. A UART node with vid and no pid used to
-# let the walk climb to a parent hub and inherit that serial.
+# USB attributes. idVendor+idProduct alone can still lack busnum/devpath;
+# the port key used to invent 0:nodevpath and probe bound
+# usb:vid:pid:nodevpath, then serve missed when dest appeared.
 wait_usb_sysfs_identity() {
   local dev="$1"
   local real name i
@@ -359,14 +361,15 @@ wait_usb_sysfs_identity() {
     *) return 0 ;;
   esac
   for i in $(seq 1 40); do
-    if [[ -e "$real" ]] \
-      && usb_sysfs_value "$real" idVendor >/dev/null \
-      && usb_sysfs_value "$real" idProduct >/dev/null; then
+    if [[ -e "$real" ]] && {
+      usb_sysfs_value "$real" serial >/dev/null \
+        || usb_sysfs_port_key "$real" >/dev/null
+    }; then
       return 0
     fi
     sleep 0.1
   done
-  echo "warning: USB sysfs idVendor+idProduct never appeared on the UART device for $real; identity may inherit a parent hub or fall back to tty name+rdev" >&2
+  echo "warning: USB sysfs serial or busnum:devpath:vid:pid never appeared on the UART device for $real" >&2
   return 1
 }
 
@@ -500,7 +503,7 @@ prepare_usb_serial_host() {
   # serial/port and may see a 1–3 s CH340 drop; that path rematches.
   if [[ -z "${METAL_USB_SERIAL:-}" && -z "${METAL_USB_PORT:-}" ]]; then
     if ! wait_usb_sysfs_identity "$dev"; then
-      echo "error: USB sysfs idVendor+idProduct never appeared on the UART device for $dev; refuse to bind a tty-name or parent-hub identity" >&2
+      echo "error: USB sysfs serial or busnum:devpath:vid:pid never appeared on the UART device for $dev; refuse to bind a tty-name, parent-hub, or nodevpath identity" >&2
       return 1
     fi
   else
