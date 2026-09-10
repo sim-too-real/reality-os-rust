@@ -25,6 +25,30 @@ if [[ "$(id -u)" -ne 0 ]]; then
   echo "error: run as root to switch UIDs; root is not the tested actor" >&2
   exit 2
 fi
+# The documented bench command does not mention HIL CI. A host that
+# has the XL330 but never ran hil-os-users-ci used to exit 2 in
+# metal-deploy before probe. Create the same system users/group here
+# (do not invent UIDs for the proof — these are real OS accounts).
+ensure_metal_os_users() {
+  if ! command -v groupadd >/dev/null 2>&1 || ! command -v useradd >/dev/null 2>&1; then
+    echo "error: groupadd/useradd not found; create $AUTHORITY_USER / $AUTONOMY_USER and group $IPC_GROUP" >&2
+    return 1
+  fi
+  if ! getent group "$IPC_GROUP" >/dev/null 2>&1; then
+    groupadd --system "$IPC_GROUP"
+    echo "metal-campaign: created system group $IPC_GROUP"
+  fi
+  if ! id -u "$AUTHORITY_USER" >/dev/null 2>&1; then
+    useradd --system --no-create-home --shell /bin/bash -G "$IPC_GROUP" "$AUTHORITY_USER"
+    echo "metal-campaign: created system user $AUTHORITY_USER"
+  fi
+  if ! id -u "$AUTONOMY_USER" >/dev/null 2>&1; then
+    useradd --system --no-create-home --shell /bin/bash -G "$IPC_GROUP" "$AUTONOMY_USER"
+    echo "metal-campaign: created system user $AUTONOMY_USER"
+  fi
+  usermod -aG "$IPC_GROUP" "$AUTHORITY_USER"
+  usermod -aG "$IPC_GROUP" "$AUTONOMY_USER"
+}
 # Root-created files default to owner-only. `report` runs as the
 # authority UID and must read proof_meta / cases. A hardened umask
 # 0077 used to abort mint after the physical campaign had already run.
@@ -707,6 +731,7 @@ PROP="$BIN_DIR/realityos-metal-propose"
 
 export REALITYOS_METAL_ROOT="$ROOT"
 export REALITYOS_METAL_DEVICE="$DEVICE"
+ensure_metal_os_users
 "$SCRIPT_DIR/metal-deploy.sh"
 
 as_autonomy() {
