@@ -17,6 +17,7 @@ pub mod policy;
 pub mod qualify;
 pub mod reduce;
 pub mod runner;
+pub mod semantics_map;
 pub mod scenario;
 pub mod task;
 pub mod validate;
