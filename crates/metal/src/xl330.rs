@@ -946,7 +946,7 @@ impl Xl330Driver {
                 id.design_content_hash = s.to_string();
             }
         }
-        if !self.cfg.device.exists() || !self.bus_up() {
+        if !self.bus_up() {
             id.connected = false;
         }
         self.last_identity = id;
@@ -1160,7 +1160,13 @@ impl Xl330Driver {
         // `verify_live_hardware` and FAULT/ABORTs the instance. Folding the
         // hook into bus_up failed the sensor first, left the session alive,
         // and made recover-after-disconnect a vacuous refuse.
-        self.connected && self.port.is_some() && self.cfg.device.exists()
+        //
+        // Do not use `cfg.device.exists()`. After serve open, udev change
+        // can dangle `/dev/serial/by-id` or rename ttyUSB0 → ttyUSB1 while
+        // this exclusive fd is still the live UART. That exists() miss
+        // used to look like unplug and abort the first hold as disconnect.
+        // A real unplug fails the next xfer and clears `connected`.
+        self.connected && self.port.is_some()
     }
 
     /// Realtime Tick (120) through Present Input Voltage (144) is 26 bytes.
@@ -1221,12 +1227,18 @@ impl Xl330Driver {
         }
         goal
     }
+
+    /// Test-only: udev can dangle by-id / rename ttyUSB0 while the exclusive
+    /// fd remains the live UART. The first hold must not treat that as unplug.
+    pub fn simulate_udev_path_vanished(&mut self) {
+        self.cfg.device = PathBuf::from("/dev/realityos-metal-vanished-udev-name");
+    }
 }
 
 impl HardwareDriverPort for Xl330Driver {
     fn probe_identity(&self) -> HardwareIdentity {
         let mut id = self.last_identity.clone();
-        if self.campaign_disconnected() || !self.cfg.device.exists() || !self.bus_up() {
+        if self.campaign_disconnected() || !self.bus_up() {
             id.connected = false;
         }
         if let Some(overlay) = self.campaign_hot_swap() {

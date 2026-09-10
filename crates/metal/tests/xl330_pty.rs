@@ -1279,3 +1279,27 @@ fn xl330_pty_bus_timeout_requires_online_restart() {
     assert_eq!(auth.physical_writes(), writes);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn xl330_pty_vanished_udev_path_is_not_disconnect() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder();
+    let root = metal_test_root("pty-udev-vanish");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("open");
+    assert!(driver.is_connected(), "open must leave a live session");
+    driver.simulate_udev_path_vanished();
+    assert!(
+        driver.is_connected(),
+        "udev rename / dangling by-id must not look like unplug while the exclusive fd is live"
+    );
+    let id = driver.probe_identity();
+    assert!(
+        id.connected,
+        "probe_identity must not report disconnect after a vanished path: {id:?}"
+    );
+    driver
+        .read_sensor(0.0)
+        .expect("first hold-class sensor must work after a vanished udev path");
+    let _ = std::fs::remove_dir_all(&root);
+}
