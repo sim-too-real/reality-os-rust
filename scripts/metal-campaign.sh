@@ -29,9 +29,24 @@ fi
 # has the XL330 but never ran hil-os-users-ci used to exit 2 in
 # metal-deploy before probe. Create the same system users/group here
 # (do not invent UIDs for the proof — these are real OS accounts).
+# nscd/sssd can keep a negative "user not found" after useradd.
+# udev OWNER= and chown then fail; MODE stays 0660 dialout and
+# authority gets EACCES at probe (same class as creating the
+# accounts after first USB prepare).
+flush_name_service_cache() {
+  if command -v nscd >/dev/null 2>&1; then
+    nscd -i passwd >/dev/null 2>&1 || true
+    nscd -i group >/dev/null 2>&1 || true
+  fi
+  if command -v sss_cache >/dev/null 2>&1; then
+    sss_cache -U >/dev/null 2>&1 || true
+    sss_cache -G >/dev/null 2>&1 || true
+  fi
+}
+
 ensure_metal_os_users() {
-  if ! command -v groupadd >/dev/null 2>&1 || ! command -v useradd >/dev/null 2>&1; then
-    echo "error: groupadd/useradd not found; create $AUTHORITY_USER / $AUTONOMY_USER and group $IPC_GROUP" >&2
+  if ! command -v groupadd >/dev/null 2>&1 || ! command -v useradd >/dev/null 2>&1 || ! command -v usermod >/dev/null 2>&1; then
+    echo "error: groupadd/useradd/usermod not found; create $AUTHORITY_USER / $AUTONOMY_USER and group $IPC_GROUP" >&2
     return 1
   fi
   if ! getent group "$IPC_GROUP" >/dev/null 2>&1; then
@@ -48,6 +63,52 @@ ensure_metal_os_users() {
   fi
   usermod -aG "$IPC_GROUP" "$AUTHORITY_USER"
   usermod -aG "$IPC_GROUP" "$AUTONOMY_USER"
+  flush_name_service_cache
+  if ! getent passwd "$AUTHORITY_USER" >/dev/null 2>&1 \
+    || ! getent passwd "$AUTONOMY_USER" >/dev/null 2>&1 \
+    || ! getent group "$IPC_GROUP" >/dev/null 2>&1; then
+    echo "error: metal OS users/group are not visible to getent (nscd/sssd cache?). udev OWNER= would fail." >&2
+    return 1
+  fi
+  local probe
+  probe="$(mktemp)"
+  if ! chown "$AUTHORITY_USER:$AUTHORITY_USER" "$probe" 2>/dev/null; then
+    rm -f "$probe"
+    echo "error: chown $AUTHORITY_USER failed; udev OWNER= cannot resolve that user" >&2
+    return 1
+  fi
+  rm -f "$probe"
+}
+
+# USB-serial only. A silent chown miss used to leave 0660 dialout;
+# authority is not in dialout, so probe open is EACCES after prepare.
+claim_usb_tty() {
+  local dev="$1"
+  local real name owner mode
+  real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
+  name="$(basename "$real")"
+  case "$name" in
+    ttyUSB*|ttyACM*|ttyCH341*) ;;
+    *) return 0 ;;
+  esac
+  if [[ ! -e "$real" ]]; then
+    echo "error: USB-UART $dev vanished before owner/mode claim" >&2
+    return 1
+  fi
+  if ! chown "$AUTHORITY_USER:$AUTHORITY_USER" "$real"; then
+    echo "error: chown $AUTHORITY_USER $real failed (NSS/udev). Authority cannot open the UART." >&2
+    return 1
+  fi
+  if ! chmod 0600 "$real"; then
+    echo "error: chmod 0600 $real failed" >&2
+    return 1
+  fi
+  owner="$(stat -c '%U' "$real" 2>/dev/null || true)"
+  mode="$(stat -c '%a' "$real" 2>/dev/null || true)"
+  if [[ "$owner" != "$AUTHORITY_USER" || "$mode" != "0600" ]]; then
+    echo "error: $real is owner=$owner mode=$mode after claim (want $AUTHORITY_USER 0600). udev/NSS did not stick." >&2
+    return 1
+  fi
 }
 # Root-created files default to owner-only. `report` runs as the
 # authority UID and must read proof_meta / cases. A hardened umask
@@ -535,9 +596,11 @@ release_foreign_tty_holders() {
     killall -q brltty 2>/dev/null || true
     STOPPED_BRLTTY=1
   fi
-  if echo "$holders" | grep -qE 'ModemManager'; then
-    echo "metal-campaign: $real is held by ModemManager; stopping ModemManager.service"
+  if echo "$holders" | grep -qE 'ModemManager|modem-manager'; then
+    echo "metal-campaign: $real is held by ModemManager; stopping ModemManager (deb and snap)"
     systemctl stop ModemManager.service 2>/dev/null || true
+    systemctl stop snap.modem-manager.modemmanager.service 2>/dev/null || true
+    killall -q ModemManager 2>/dev/null || true
     STOPPED_MM=1
   fi
 }
@@ -642,8 +705,7 @@ EOF
   sync_metal_device_config
   real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
   if [[ -e "$real" ]]; then
-    chown "$AUTHORITY_USER:$AUTHORITY_USER" "$real" 2>/dev/null || true
-    chmod 0600 "$real" 2>/dev/null || true
+    claim_usb_tty "$real" || return 1
   fi
   # Linux asserts DTR on first open. Cheap FTDI/CP2102 wire DTR to RESET.
   # Pre-open -hupcl is not enough: the next serialport open restores
@@ -666,6 +728,7 @@ cleanup_usb_serial_host() {
   fi
   if [[ "$STOPPED_MM" == "1" ]]; then
     systemctl start ModemManager.service 2>/dev/null || true
+    systemctl start snap.modem-manager.modemmanager.service 2>/dev/null || true
     STOPPED_MM=0
   fi
   if [[ "$STOPPED_BRLTTY" == "1" ]]; then
@@ -833,6 +896,12 @@ PROP="$BIN_DIR/realityos-metal-propose"
 export REALITYOS_METAL_ROOT="$ROOT"
 export REALITYOS_METAL_DEVICE="$DEVICE"
 "$SCRIPT_DIR/metal-deploy.sh"
+# metal-deploy chown is || true (PTY/HIL). USB must actually be
+# authority 0600 before probe or the open is EACCES.
+if ! claim_usb_tty "$DEVICE"; then
+  echo "error: $DEVICE must be $AUTHORITY_USER 0600 before probe (udev OWNER=/NSS)." >&2
+  exit 2
+fi
 
 as_autonomy() {
   local env_cmd=(
@@ -1013,8 +1082,7 @@ start_auth() {
   chgrp "$IPC_GROUP" "$ROOT/ipc.sock"
   # udev may reset the tty to 0660 dialout after open. Re-apply exclusive mode.
   if [[ -e "$DEVICE" ]]; then
-    chown "$AUTHORITY_USER:$AUTHORITY_USER" "$DEVICE" 2>/dev/null || true
-    chmod 0600 "$DEVICE" 2>/dev/null || true
+    claim_usb_tty "$DEVICE" || return 1
     set_usb_serial_latency "$DEVICE"
     disable_usb_autosuspend "$DEVICE"
   fi
@@ -1054,8 +1122,7 @@ if [[ -s "$ROOT/serve.err" ]]; then
   exit 1
 fi
 if [[ -e "$DEVICE" ]]; then
-  chown "$AUTHORITY_USER:$AUTHORITY_USER" "$DEVICE" 2>/dev/null || true
-  chmod 0600 "$DEVICE" 2>/dev/null || true
+  claim_usb_tty "$DEVICE" || exit 2
   set_usb_serial_latency "$DEVICE"
   disable_usb_autosuspend "$DEVICE"
 fi
