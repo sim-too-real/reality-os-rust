@@ -566,11 +566,17 @@ resolve_recorded_usb_tty() {
 wait_usb_sysfs_identity() {
   local dev="$1"
   local real name i j
-  real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
-  name="$(basename "$real")"
+  real="$(readlink -f "$dev" 2>/dev/null || true)"
+  name="$(basename "${real:-}")"
   case "$name" in
     ttyUSB*|ttyACM*|ttyCH341*) ;;
-    *) return 0 ;;
+    *)
+      if usb_serial_must_resolve "$dev"; then
+        echo "error: $dev did not resolve to a live USB-serial tty before sysfs identity wait" >&2
+        return 1
+      fi
+      return 0
+      ;;
   esac
   for i in $(seq 1 40); do
     if [[ -e "$real" ]] && {
@@ -605,8 +611,15 @@ stabilize_metal_device() {
   case "$name" in
     ttyUSB*|ttyACM*|ttyCH341*) ;;
     *)
-      echo "$dev"
-      return 0
+      # FTDI/U2D2 DEVICE is usually /dev/serial/by-id. crash_if close
+      # can leave that symlink dangling for 1–3 s; basename is then
+      # usb-FTDI_... and the old skip returned immediately — crash-replay
+      # never waited, then the caller either opened at 16 ms or failed
+      # closed without rematching the live tty.
+      if ! usb_serial_must_resolve "$dev"; then
+        echo "$dev"
+        return 0
+      fi
       ;;
   esac
   if p="$(resolve_recorded_usb_tty "$dev")"; then
