@@ -1,0 +1,13 @@
+robot_id: mesh_cube
+model_format: mjcf
+model_file: model.xml
+asset_roots: ["."]
+expected_base_type: fixed
+end_effectors:
+  - name: ee
+    site: ee
+    body: link
+source:
+  license: MIT
+  attribution: Reality OS mesh fixture
+  redistributable: true

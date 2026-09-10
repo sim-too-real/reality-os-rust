@@ -44,6 +44,28 @@ pub const ALL_FAMILIES: &[&str] = &[
     "AUTHORITY_RESTART",
 ];
 
+pub fn family_implemented(family: &str) -> bool {
+    matches!(
+        family,
+        "JOINT_TRACKING"
+            | "REACH_TARGET"
+            | "KEEP_OUT_ZONE"
+            | "AVOID_OBSTACLE"
+            | "ACTUATOR_SATURATION"
+            | "EXTERNAL_PUSH"
+            | "COMMAND_REPLAY"
+            | "DUPLICATE_COMMAND"
+            | "WRONG_ROBOT_IDENTITY"
+            | "WRONG_TASK_AUTHORITY"
+            | "POLICY_CRASH"
+            | "STALE_OBSERVATION"
+            | "AUTHORITY_RESTART"
+            | "SENSOR_DELAY"
+            | "SENSOR_DROPOUT"
+            | "UNEXPECTED_CONTACT"
+    )
+}
+
 pub fn family_spec(family: &str, nu: usize, ee: &str) -> ScenarioSpec {
     let mut p = std::collections::BTreeMap::new();
     let mut envelope = EnvelopeSpec::default();
@@ -71,6 +93,7 @@ pub fn family_spec(family: &str, nu: usize, ee: &str) -> ScenarioSpec {
         authority_restart: false,
         external_push: None,
         push_body: None,
+        saturate_command: false,
     };
     match family {
         "JOINT_TRACKING" => {
@@ -123,6 +146,7 @@ pub fn family_spec(family: &str, nu: usize, ee: &str) -> ScenarioSpec {
                 name: "keep_out".into(),
                 center: [0.35, 0.0, 0.1],
                 half: [0.04, 0.04, 0.04],
+                ..Region::default()
             });
             task = TaskSpec::KeepOut {
                 name: "keep_out".into(),
@@ -189,6 +213,7 @@ pub fn family_spec(family: &str, nu: usize, ee: &str) -> ScenarioSpec {
         "SENSOR_DROPOUT" => spec.sensor_dropout = true,
         "STALE_OBSERVATION" => spec.stale_observation = true,
         "ACTUATOR_SATURATION" => {
+            spec.saturate_command = true;
             task = TaskSpec::JointTrack {
                 target: vec![0.4; nu.max(1)],
                 tolerance: 0.8,

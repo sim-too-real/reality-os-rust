@@ -18,7 +18,7 @@ pub enum ModelFormat {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FormatDisposition {
     Supported,
-    FeatureGatedExperimental,
+    ExperimentalUnsupportedInVerifyV1,
     UnsupportedRequiresConversion,
     NotARobotDefinition,
     Unsupported,
@@ -35,10 +35,42 @@ pub struct FormatDiagnosis {
 
 impl FormatDiagnosis {
     pub fn is_loadable(&self) -> bool {
-        matches!(
-            self.disposition,
-            FormatDisposition::Supported | FormatDisposition::FeatureGatedExperimental
-        )
+        matches!(self.disposition, FormatDisposition::Supported)
+    }
+}
+
+pub fn usd_unsupported(path: impl Into<String>) -> FormatDiagnosis {
+    FormatDiagnosis {
+        format: ModelFormat::Usd,
+        disposition: FormatDisposition::ExperimentalUnsupportedInVerifyV1,
+        path: path.into(),
+        detail: "EXPERIMENTAL_UNSUPPORTED_IN_VERIFY_V1: USD/USDA/USDC/USDZ is not a verified importer in this crate. MjModel.from_xml_path is not a USD loader.".into(),
+        lost_or_unreliable: vec!["usd_not_implemented_in_verify_v1".into()],
+    }
+}
+
+/// Detect from path without decoding binary USD packages as text.
+pub fn detect_format_path(path: &Path) -> FormatDiagnosis {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(ext.as_str(), "usd" | "usda" | "usdc" | "usdz") {
+        return usd_unsupported(path.display().to_string());
+    }
+    let contents = std::fs::read_to_string(path).unwrap_or_default();
+    detect_format(path, &contents)
+}
+
+pub fn parse_declared_format(declared: &str) -> Option<ModelFormat> {
+    match declared.trim().to_ascii_lowercase().as_str() {
+        "mjcf" | "xml" | "mjb" => Some(ModelFormat::Mjcf),
+        "urdf" => Some(ModelFormat::Urdf),
+        "usd" | "usda" | "usdc" | "usdz" => Some(ModelFormat::Usd),
+        "sdf" => Some(ModelFormat::Sdf),
+        "step" | "stp" | "iges" | "igs" => Some(ModelFormat::Step),
+        _ => None,
     }
 }
 
@@ -52,15 +84,7 @@ pub fn detect_format(path: &Path, contents: &str) -> FormatDiagnosis {
     let p = path.display().to_string();
 
     match ext.as_str() {
-        "usd" | "usda" | "usdc" | "usdz" => FormatDiagnosis {
-            format: ModelFormat::Usd,
-            disposition: FormatDisposition::FeatureGatedExperimental,
-            path: p,
-            detail:
-                "MuJoCo currently describes OpenUSD support as experimental; load is feature-gated"
-                    .into(),
-            lost_or_unreliable: vec!["usd_experimental".into()],
-        },
+        "usd" | "usda" | "usdc" | "usdz" => usd_unsupported(p),
         "sdf" => FormatDiagnosis {
             format: ModelFormat::Sdf,
             disposition: FormatDisposition::UnsupportedRequiresConversion,
@@ -200,9 +224,21 @@ mod tests {
     }
 
     #[test]
-    fn usd_is_feature_gated() {
-        let d = detect_format(Path::new("r.usda"), "#usda 1.0");
-        assert_eq!(d.format, ModelFormat::Usd);
-        assert_eq!(d.disposition, FormatDisposition::FeatureGatedExperimental);
+    fn usd_is_experimental_unsupported_in_verify_v1() {
+        for name in ["r.usd", "r.usda", "r.usdc", "r.usdz"] {
+            let d = detect_format(Path::new(name), "#usda 1.0");
+            assert_eq!(d.format, ModelFormat::Usd);
+            assert_eq!(
+                d.disposition,
+                FormatDisposition::ExperimentalUnsupportedInVerifyV1
+            );
+            assert!(d.detail.contains("EXPERIMENTAL_UNSUPPORTED_IN_VERIFY_V1"));
+            assert!(!d.is_loadable());
+        }
+        let bin = detect_format_path(Path::new("pkg.usdz"));
+        assert_eq!(
+            bin.disposition,
+            FormatDisposition::ExperimentalUnsupportedInVerifyV1
+        );
     }
 }

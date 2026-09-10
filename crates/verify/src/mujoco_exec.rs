@@ -1,13 +1,15 @@
 //! Process-isolated MuJoCo worker client. Isolated mjModel/mjData per instance.
 
 use crate::bundle::RobotBundle;
-use crate::format::{FormatDisposition, ModelFormat};
+use crate::format::ModelFormat;
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::sync::Mutex;
+use std::thread;
 use std::time::Duration;
 use thiserror::Error;
 
@@ -18,13 +20,18 @@ static WORKER_POOL: Mutex<Vec<MujocoInstance>> = Mutex::new(Vec::new());
 pub fn checkout_worker() -> Result<MujocoInstance, ExecError> {
     if let Ok(mut pool) = WORKER_POOL.lock() {
         if let Some(w) = pool.pop() {
-            return Ok(w);
+            if w.alive() {
+                return Ok(w);
+            }
         }
     }
     MujocoInstance::spawn()
 }
 
 pub fn checkin_worker(inst: MujocoInstance) {
+    if !inst.alive() {
+        return;
+    }
     if let Ok(mut pool) = WORKER_POOL.lock() {
         if pool.len() < 8 {
             pool.push(inst);
@@ -38,12 +45,31 @@ pub fn checkin_worker(inst: MujocoInstance) {
 pub enum ExecError {
     #[error("{0}")]
     Msg(String),
+    #[error("worker timeout rpc={rpc} elapsed_ms={elapsed_ms}")]
+    Timeout { rpc: String, elapsed_ms: u128 },
+    #[error("worker dead rpc={rpc} exit={exit:?}")]
+    Dead { rpc: String, exit: Option<i32> },
+}
+
+impl ExecError {
+    pub fn infra_detail(&self) -> String {
+        self.to_string()
+    }
 }
 
 impl From<String> for ExecError {
     fn from(s: String) -> Self {
         Self::Msg(s)
     }
+}
+
+pub fn require_mujoco_env() -> bool {
+    matches!(
+        std::env::var("REALITYOS_REQUIRE_MUJOCO")
+            .unwrap_or_default()
+            .as_str(),
+        "1" | "true" | "TRUE" | "yes"
+    )
 }
 
 pub fn mujoco_available() -> bool {
@@ -56,23 +82,52 @@ pub fn mujoco_available() -> bool {
         .unwrap_or(false)
 }
 
+pub fn ensure_mujoco_or_skip() -> bool {
+    if mujoco_available() {
+        return true;
+    }
+    if require_mujoco_env() {
+        panic!("REALITYOS_REQUIRE_MUJOCO=1 but mujoco_available()==false");
+    }
+    false
+}
+
 pub fn worker_script_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("mujoco_worker.py")
 }
 
+fn rpc_timeout() -> Duration {
+    let ms = std::env::var("REALITYOS_RPC_TIMEOUT_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30_000u64);
+    Duration::from_millis(ms.max(50))
+}
+
+pub fn episode_timeout() -> Duration {
+    let ms = std::env::var("REALITYOS_EPISODE_TIMEOUT_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(120_000u64);
+    Duration::from_millis(ms.max(100))
+}
+
 pub struct MujocoInstance {
     child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<std::process::ChildStdout>,
+    stdin: Option<ChildStdin>,
+    stdout: Option<BufReader<std::process::ChildStdout>>,
     pub inspect: Value,
     pub mujoco_version: String,
+    pub last_rpc: String,
+    pub last_exit: Option<i32>,
 }
 
 impl Drop for MujocoInstance {
     fn drop(&mut self) {
-        let _ = self.rpc(&json!({"cmd":"close"}));
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if self.alive() {
+            let _ = self.rpc(&json!({"cmd":"close"}));
+        }
+        self.kill_and_reap();
     }
 }
 
@@ -98,6 +153,17 @@ impl MujocoInstance {
             .env("MUJOCO_GL", "disable")
             .spawn()
             .map_err(|e| ExecError::Msg(e.to_string()))?;
+        if let Some(stderr) = child.stderr.take() {
+            thread::spawn(move || {
+                let mut r = BufReader::new(stderr);
+                let mut buf = String::new();
+                while r.read_line(&mut buf).ok().unwrap_or(0) > 0 {
+                    if buf.len() > 16_384 {
+                        buf.clear();
+                    }
+                }
+            });
+        }
         let stdin = child
             .stdin
             .take()
@@ -108,10 +174,12 @@ impl MujocoInstance {
             .ok_or_else(|| ExecError::Msg("stdout".into()))?;
         let mut inst = Self {
             child,
-            stdin,
-            stdout: BufReader::new(stdout),
+            stdin: Some(stdin),
+            stdout: Some(BufReader::new(stdout)),
             inspect: Value::Null,
             mujoco_version: String::new(),
+            last_rpc: "spawn".into(),
+            last_exit: None,
         };
         let hello = inst.rpc(&json!({"cmd":"hello"}))?;
         if hello["ok"] != true {
@@ -124,21 +192,85 @@ impl MujocoInstance {
         Ok(inst)
     }
 
-    pub fn rpc(&mut self, msg: &Value) -> Result<Value, ExecError> {
-        let line = serde_json::to_string(msg).map_err(|e| ExecError::Msg(e.to_string()))?;
-        self.stdin
-            .write_all(line.as_bytes())
-            .and_then(|_| self.stdin.write_all(b"\n"))
-            .and_then(|_| self.stdin.flush())
-            .map_err(|e| ExecError::Msg(e.to_string()))?;
-        let mut resp = String::new();
-        self.stdout
-            .read_line(&mut resp)
-            .map_err(|e| ExecError::Msg(e.to_string()))?;
-        if resp.is_empty() {
-            return Err(ExecError::Msg("worker_eof".into()));
+    pub fn alive(&self) -> bool {
+        self.stdin.is_some() && self.stdout.is_some()
+    }
+
+    pub fn kill_and_reap(&mut self) {
+        let _ = self.child.kill();
+        if let Ok(status) = self.child.wait() {
+            self.last_exit = status.code();
         }
-        serde_json::from_str(resp.trim()).map_err(|e| ExecError::Msg(e.to_string()))
+        self.stdin = None;
+        self.stdout = None;
+    }
+
+    pub fn rpc(&mut self, msg: &Value) -> Result<Value, ExecError> {
+        self.rpc_timeout(msg, rpc_timeout())
+    }
+
+    pub fn rpc_timeout(&mut self, msg: &Value, timeout: Duration) -> Result<Value, ExecError> {
+        let cmd = msg
+            .get("cmd")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        self.last_rpc = cmd.clone();
+        let Some(stdin) = self.stdin.as_mut() else {
+            return Err(ExecError::Dead {
+                rpc: cmd,
+                exit: self.last_exit,
+            });
+        };
+        let line = serde_json::to_string(msg).map_err(|e| ExecError::Msg(e.to_string()))?;
+        if stdin
+            .write_all(line.as_bytes())
+            .and_then(|_| stdin.write_all(b"\n"))
+            .and_then(|_| stdin.flush())
+            .is_err()
+        {
+            self.kill_and_reap();
+            return Err(ExecError::Dead {
+                rpc: cmd,
+                exit: self.last_exit,
+            });
+        }
+        let Some(mut stdout) = self.stdout.take() else {
+            return Err(ExecError::Dead {
+                rpc: cmd.clone(),
+                exit: self.last_exit,
+            });
+        };
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let mut resp = String::new();
+            let read = stdout.read_line(&mut resp);
+            let _ = tx.send((stdout, read.map(|_| resp)));
+        });
+        match rx.recv_timeout(timeout) {
+            Ok((stdout, Ok(resp))) => {
+                self.stdout = Some(stdout);
+                if resp.is_empty() {
+                    self.kill_and_reap();
+                    return Err(ExecError::Dead {
+                        rpc: cmd,
+                        exit: self.last_exit,
+                    });
+                }
+                serde_json::from_str(resp.trim()).map_err(|e| ExecError::Msg(e.to_string()))
+            }
+            Ok((_, Err(e))) => {
+                self.kill_and_reap();
+                Err(ExecError::Msg(e.to_string()))
+            }
+            Err(_) => {
+                self.kill_and_reap();
+                Err(ExecError::Timeout {
+                    rpc: cmd,
+                    elapsed_ms: timeout.as_millis(),
+                })
+            }
+        }
     }
 
     pub fn load_bundle(
@@ -155,12 +287,9 @@ impl MujocoInstance {
                 return Err(ExecError::Msg(crate::format::step_diagnostic()));
             }
             ModelFormat::Usd => {
-                if bundle.format.disposition == FormatDisposition::FeatureGatedExperimental {
-                    let probe = self.rpc(&json!({"cmd":"hello"}))?;
-                    if probe["usd_supported"] != true {
-                        return Err(ExecError::Msg("UNSUPPORTED_EXPERIMENTAL_USD".into()));
-                    }
-                }
+                return Err(ExecError::Msg(
+                    "EXPERIMENTAL_UNSUPPORTED_IN_VERIFY_V1".into(),
+                ));
             }
             ModelFormat::Unknown => {
                 return Err(ExecError::Msg(bundle.format.detail.clone()));
@@ -169,14 +298,18 @@ impl MujocoInstance {
         }
         let fmt = match bundle.format.format {
             ModelFormat::Urdf => "urdf",
-            ModelFormat::Usd => "usd",
             _ => "mjcf",
         };
+        let asset_roots: Vec<String> = bundle
+            .asset_roots_abs()
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
         let resp = self.rpc(&json!({
             "cmd": "load",
             "format": fmt,
-            "xml": bundle.model_text,
             "path": bundle.model_path.to_string_lossy(),
+            "asset_roots": asset_roots,
             "objects": objects,
             "seed": seed,
         }))?;
@@ -189,6 +322,16 @@ impl MujocoInstance {
         Ok(resp)
     }
 
+    pub fn local_linear(&mut self) -> Result<Value, ExecError> {
+        let r = self.rpc(&json!({"cmd":"local_linear"}))?;
+        if r["ok"] != true {
+            return Err(ExecError::Msg(
+                r["error"].as_str().unwrap_or("NOT_EVALUATED").into(),
+            ));
+        }
+        Ok(r)
+    }
+
     pub fn peek_ctrl(&mut self) -> Result<(Vec<f64>, u64), ExecError> {
         let r = self.rpc(&json!({"cmd":"peek_ctrl"}))?;
         let ctrl = json_f64_vec(&r["ctrl"]);
@@ -198,6 +341,10 @@ impl MujocoInstance {
 
     pub fn set_ctrl(&mut self, ctrl: &[f64]) -> Result<Value, ExecError> {
         self.rpc(&json!({"cmd":"set_ctrl","ctrl": ctrl}))
+    }
+
+    pub fn set_safe_ctrl(&mut self, ctrl: &[f64]) -> Result<Value, ExecError> {
+        self.rpc(&json!({"cmd":"set_safe_ctrl","ctrl": ctrl}))
     }
 
     pub fn step(&mut self, n: u32) -> Result<Value, ExecError> {
@@ -270,13 +417,18 @@ pub fn wait_brief() {
     std::thread::sleep(Duration::from_millis(1));
 }
 
+#[allow(dead_code)]
+fn _read_discard(mut r: impl Read) {
+    let _ = r.read(&mut [0u8; 1]);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn hello_reports_simulation_only() {
-        if !mujoco_available() {
+        if !ensure_mujoco_or_skip() {
             return;
         }
         let mut w = MujocoInstance::spawn().unwrap();
@@ -284,5 +436,24 @@ mod tests {
         assert_eq!(h["evidence_status"], crate::honesty::SIMULATION_ONLY);
         assert_eq!(h["metal"], false);
         assert!(h["mujoco_version"].as_str().unwrap().starts_with('3'));
+    }
+
+    #[test]
+    fn hang_rpc_times_out_and_is_reaped() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let mut w = MujocoInstance::spawn().unwrap();
+        let err = w
+            .rpc_timeout(
+                &json!({"cmd":"hang","seconds": 30}),
+                Duration::from_millis(400),
+            )
+            .unwrap_err();
+        match err {
+            ExecError::Timeout { rpc, .. } => assert_eq!(rpc, "hang"),
+            other => panic!("{other}"),
+        }
+        assert!(!w.alive());
     }
 }

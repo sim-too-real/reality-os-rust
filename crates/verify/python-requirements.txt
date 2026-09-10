@@ -1,0 +1,4 @@
+# Pinned Python dependencies for the realityos-verify MuJoCo worker.
+# CI must install exactly these and fail if `import mujoco` is unavailable.
+mujoco==3.7.0
+numpy==2.2.6

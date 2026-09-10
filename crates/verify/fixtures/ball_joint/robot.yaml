@@ -1,0 +1,9 @@
+robot_id: ball_joint
+model_format: mjcf
+model_file: model.xml
+asset_roots: []
+expected_base_type: fixed
+source:
+  license: MIT
+  attribution: Reality OS ball-joint fixture
+  redistributable: true

@@ -1,0 +1,15 @@
+<mujoco model="ball_joint">
+  <option timestep="0.002"/>
+  <worldbody>
+    <body name="base" pos="0 0 0.2">
+      <geom type="sphere" size="0.03" mass="0.2"/>
+      <body name="link" pos="0 0 0.08">
+        <joint name="ball" type="ball"/>
+        <geom type="capsule" size="0.015 0.04" mass="0.1"/>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="act" joint="ball" ctrlrange="-1 1"/>
+  </actuator>
+</mujoco>

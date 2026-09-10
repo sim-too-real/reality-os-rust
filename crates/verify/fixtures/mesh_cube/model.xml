@@ -1,0 +1,21 @@
+<mujoco model="mesh_cube">
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+  <asset>
+    <mesh name="cube" file="cube.obj" scale="0.05 0.05 0.05"/>
+  </asset>
+  <worldbody>
+    <geom name="floor" type="plane" size="1 1 0.05" rgba="0.2 0.3 0.2 1"/>
+    <body name="base" pos="0 0 0.1">
+      <geom type="box" size="0.04 0.04 0.02" mass="0.3"/>
+      <body name="link" pos="0 0 0.06">
+        <joint name="hinge" type="hinge" axis="0 1 0" range="-1 1"/>
+        <geom type="mesh" mesh="cube" mass="0.1"/>
+        <site name="ee" pos="0 0 0.05"/>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <position name="act" joint="hinge" kp="40" ctrlrange="-1 1"/>
+  </actuator>
+</mujoco>

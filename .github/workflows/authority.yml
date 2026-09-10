@@ -23,3 +23,46 @@ jobs:
         run: cargo test -p realityos-metal --all-targets -- --test-threads=1
       - name: test
         run: cargo test --workspace --all-targets --exclude realityos-metal
+
+  verify-mujoco:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install pinned MuJoCo
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r crates/verify/python-requirements.txt
+          python -c "import mujoco, numpy; print('mujoco', mujoco.__version__); print('numpy', numpy.__version__); assert mujoco.__version__ == '3.7.0'"
+      - name: require-mujoco tests
+        env:
+          REALITYOS_REQUIRE_MUJOCO: "1"
+          MUJOCO_GL: disable
+        run: cargo test -p realityos-verify --all-targets
+      - name: smoke matrix 3x10x2
+        env:
+          REALITYOS_REQUIRE_MUJOCO: "1"
+          REALITYOS_VERIFY_SEEDS: "2"
+          MUJOCO_GL: disable
+        run: cargo run -p realityos-verify -- milestone
+      - name: report is simulation only
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+          p = pathlib.Path("verify-out/verification_report.json")
+          report = json.loads(p.read_text())
+          assert report.get("metal") is False, report
+          assert report.get("evidence_status") == "SIMULATION_ONLY", report
+          assert report.get("metal_verified") is False
+          scheduled = report["scheduled_jobs"]
+          completed = report["completed_jobs"]
+          infra = report["infra_error_jobs"]
+          assert scheduled == 3 * 10 * 2 * 1, scheduled
+          assert scheduled == completed + infra, (scheduled, completed, infra)
+          print("smoke ok", scheduled, "jobs", "mujoco", report.get("mujoco_version"))
+          PY

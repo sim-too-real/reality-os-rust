@@ -11,6 +11,8 @@ scratchpad/
 *.log
 graphify-out/
 verify-out/
+MUJOCO_LOG.TXT
+**/MUJOCO_LOG.TXT
 crates/plant/wip/
 crates/governor/wip/
 crates/reality-os/wip/

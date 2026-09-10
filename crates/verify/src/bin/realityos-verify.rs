@@ -5,6 +5,7 @@ use realityos_verify::corpus::{milestone_robots, robot_dir};
 use realityos_verify::evidence::{aggregate, render_markdown};
 use realityos_verify::families::{family_spec, MILESTONE_FAMILIES};
 use realityos_verify::honesty::{refuse_physical_proof_origin, SIMULATION_ONLY};
+use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, require_mujoco_env};
 use realityos_verify::reduce::minimize;
 use realityos_verify::runner::{qualify_bundle, run_episode, run_matrix, run_resolved};
 use std::env;
@@ -18,6 +19,9 @@ fn main() {
             "usage: realityos-verify [inspect <id>|qualify <id>|episode <id> <family> <seed>|matrix|milestone]"
         );
         std::process::exit(2);
+    }
+    if require_mujoco_env() {
+        let _ = ensure_mujoco_or_skip();
     }
     let cmd = args.remove(0);
     match cmd.as_str() {
@@ -85,8 +89,15 @@ fn milestone() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(100);
     let seeds: Vec<u64> = (0..n_seeds).collect();
+    let n_policies = 1_u64;
+    let scheduled = robots.len() as u64 * MILESTONE_FAMILIES.len() as u64 * n_seeds * n_policies;
     let episodes = run_matrix(&robots, MILESTONE_FAMILIES, seeds, &["pd"], true);
-    let report = aggregate(&episodes);
+    let mut report = aggregate(&episodes);
+    report.scheduled_jobs = scheduled;
+    report.unaccounted_jobs = scheduled.saturating_sub(episodes.len() as u64);
+    report.campaign_complete = report.scheduled_jobs
+        == report.completed_jobs + report.infra_error_jobs
+        && report.unaccounted_jobs == 0;
     refuse_physical_proof_origin(&serde_json::to_value(&report).unwrap()).expect("report");
     fs::write(
         out.join("verification_report.json"),
@@ -95,7 +106,7 @@ fn milestone() {
     .unwrap();
     fs::write(out.join("VERIFICATION_REPORT.md"), render_markdown(&report)).unwrap();
     for (i, ep) in episodes.iter().enumerate() {
-        if i < 8 || !ep.task_success {
+        if i < 8 || !ep.task_success || ep.infra_error.is_some() {
             let _ = ep.write(out.join(format!(
                 "episode_{}_{}_{}.json",
                 ep.robot_id, ep.family, ep.seed
@@ -105,6 +116,7 @@ fn milestone() {
     if let Some(fail) = episodes.iter().find(|e| {
         !e.task_success
             && !e.not_applicable
+            && e.infra_error.is_none()
             && !matches!(
                 e.family.as_str(),
                 "COMMAND_REPLAY"
@@ -134,9 +146,25 @@ fn milestone() {
         }
     }
     println!(
-        "SIMULATION VERIFIED episodes={} metal=false evidence_status={}",
-        episodes.len(),
+        "SIMULATION CAMPAIGN COMPLETE scheduled={} completed={} na={} infra={} metal=false evidence_status={} verification_class=SIMULATION_VERIFIED",
+        report.scheduled_jobs,
+        report.completed_jobs,
+        report.not_applicable_jobs,
+        report.infra_error_jobs,
         SIMULATION_ONLY
     );
     println!("wrote verify-out/verification_report.json");
+    if !report.campaign_complete || report.unaccounted_jobs > 0 {
+        eprintln!(
+            "unaccounted jobs: scheduled={} results={} infra={}",
+            report.scheduled_jobs,
+            episodes.len(),
+            report.infra_error_jobs
+        );
+        std::process::exit(1);
+    }
+    if report.infra_error_jobs > 0 {
+        eprintln!("infra errors remain visible; milestone exits non-zero");
+        std::process::exit(1);
+    }
 }

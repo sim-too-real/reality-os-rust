@@ -35,7 +35,7 @@ pub fn set_test_journal_write_delay_ms(ms: u64) {
 fn restrict_owner_rw(path: &Path) {
     #[cfg(unix)]
     {
-        let _ = fs::set_permissions(path, Permissions::from_mode(0o600));
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
     }
     #[cfg(not(unix))]
     {

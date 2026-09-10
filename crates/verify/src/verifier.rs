@@ -112,13 +112,8 @@ pub fn inspect_step(
         }
     }
     if envelope.actuator_effort {
-        for (i, (a, f)) in manifest
-            .actuators
-            .iter()
-            .zip(truth.actuator_force.iter())
-            .enumerate()
-        {
-            let bound = a.ctrlrange[0].abs().max(a.ctrlrange[1].abs()) * 20.0;
+        let mut saw_unbounded = false;
+        for (a, f) in manifest.actuators.iter().zip(truth.actuator_force.iter()) {
             if let Some(fr) = a.force_range {
                 if *f < fr[0] - 1e-6 || *f > fr[1] + 1e-6 {
                     out.push(v(
@@ -129,21 +124,31 @@ pub fn inspect_step(
                         t,
                     ));
                 }
-            } else if f.abs() > bound {
-                let _ = i;
-                out.push(v(
-                    ViolationKind::PhysicalInvariantViolation,
-                    "EFFORT_LIMIT_EXCEEDED",
-                    &a.name,
-                    false,
-                    t,
-                ));
+            } else if let Some(lim) = envelope.effort_limit {
+                if f.abs() > lim {
+                    out.push(v(
+                        ViolationKind::PhysicalInvariantViolation,
+                        "EFFORT_LIMIT_EXCEEDED",
+                        &format!(
+                            "{}:{f}:{}",
+                            a.name,
+                            envelope.effort_units.as_deref().unwrap_or("unspecified")
+                        ),
+                        false,
+                        t,
+                    ));
+                }
+            } else {
+                saw_unbounded = true;
             }
+        }
+        if saw_unbounded {
+            truth.effort_bound_unavailable = true;
         }
     }
     if let Some(max_f) = envelope.max_contact_force {
         for c in &truth.contacts {
-            if is_support_contact(c) || is_kinematic_neighbor(manifest, c) {
+            if is_intended_support(manifest, c) || is_kinematic_neighbor(manifest, c) {
                 continue;
             }
             if c.force > max_f {
@@ -169,7 +174,16 @@ pub fn inspect_step(
                 out.push(v(
                     ViolationKind::PhysicalInvariantViolation,
                     "SELF_COLLISION",
-                    &format!("{}-{}", c.body1, c.body2),
+                    &format!(
+                        "{}-{} rule={}",
+                        c.body1,
+                        c.body2,
+                        if envelope.self_collision_rule.is_empty() {
+                            "ignore_direct_kinematic_neighbors"
+                        } else {
+                            &envelope.self_collision_rule
+                        }
+                    ),
                     false,
                     t,
                 ));
@@ -207,34 +221,67 @@ pub fn inspect_step(
             }
         }
     }
-    for zone in &envelope.keep_out {
-        if let Some(pos) = truth
-            .ee_pos()
-            .or_else(|| truth.xpos.values().find(|p| p.len() >= 3).cloned())
-        {
-            if inside_aabb(&pos, zone.center, zone.half) {
-                truth.zone_entries.push(zone.name.clone());
-                out.push(v(
-                    ViolationKind::PhysicalInvariantViolation,
-                    "KEEP_OUT_ZONE_ENTRY",
-                    &zone.name,
-                    false,
-                    t,
-                ));
+    if let Some(lim) = envelope.max_ee_speed {
+        if let (Some(prev), Some(prev_t), Some(cur)) = (
+            truth.last_ee_pos.clone(),
+            truth.last_ee_time,
+            truth.ee_pos(),
+        ) {
+            let dt = t - prev_t;
+            if dt > 1e-6 && prev.len() >= 3 && cur.len() >= 3 {
+                let dist = (0..3)
+                    .map(|i| (cur[i] - prev[i]).powi(2))
+                    .sum::<f64>()
+                    .sqrt();
+                let speed = dist / dt;
+                if speed > lim {
+                    out.push(v(
+                        ViolationKind::PhysicalInvariantViolation,
+                        "EE_SPEED_EXCEEDED",
+                        &format!("{speed}"),
+                        false,
+                        t,
+                    ));
+                }
             }
+        }
+        truth.last_ee_pos = truth.ee_pos();
+        truth.last_ee_time = Some(t);
+    }
+    for zone in &envelope.keep_out {
+        let positions = zone_positions(manifest, truth, robot_bodies, zone);
+        if positions
+            .iter()
+            .any(|pos| inside_aabb(pos, zone.center, zone.half))
+        {
+            truth.zone_entries.push(zone.name.clone());
+            out.push(v(
+                ViolationKind::PhysicalInvariantViolation,
+                "KEEP_OUT_ZONE_ENTRY",
+                &zone.name,
+                false,
+                t,
+            ));
         }
     }
     if let Some(ws) = &envelope.workspace {
-        if let Some(base) = truth
-            .xpos
-            .get("base")
-            .cloned()
-            .or_else(|| truth.xpos.get("cart").cloned())
-        {
-            if !inside_aabb(&base, ws.center, ws.half) {
+        let pos = match envelope.workspace_kind {
+            crate::scenario::WorkspaceKind::EndEffector => truth.ee_pos(),
+            crate::scenario::WorkspaceKind::Base => truth
+                .xpos
+                .get("base")
+                .cloned()
+                .or_else(|| truth.xpos.get("cart").cloned()),
+        };
+        if let Some(p) = pos {
+            if !inside_aabb(&p, ws.center, ws.half) {
+                let code = match envelope.workspace_kind {
+                    crate::scenario::WorkspaceKind::EndEffector => "EE_OUTSIDE_WORKSPACE",
+                    crate::scenario::WorkspaceKind::Base => "BASE_OUTSIDE_REGION",
+                };
                 out.push(v(
                     ViolationKind::PhysicalInvariantViolation,
-                    "BASE_OUTSIDE_REGION",
+                    code,
                     &ws.name,
                     false,
                     t,
@@ -272,7 +319,12 @@ pub fn inspect_step(
     out
 }
 
-pub fn update_stats(stats: &mut VerifierStats, truth: &VerifierTruth, envelope: &EnvelopeSpec) {
+pub fn update_stats(
+    stats: &mut VerifierStats,
+    manifest: &RobotManifest,
+    truth: &VerifierTruth,
+    envelope: &EnvelopeSpec,
+) {
     let speed = truth
         .qvel
         .iter()
@@ -288,9 +340,7 @@ pub fn update_stats(stats: &mut VerifierStats, truth: &VerifierTruth, envelope: 
     let cf = truth
         .contacts
         .iter()
-        .filter(|c| {
-            !is_support_contact(c) && !c.body1.contains("floor") && !c.body2.contains("floor")
-        })
+        .filter(|c| !is_intended_support(manifest, c))
         .fold(0.0_f64, |a, c| a.max(c.force));
     stats.max_contact_force = stats.max_contact_force.max(cf);
     if let Some(ee) = truth.ee_pos() {
@@ -315,10 +365,54 @@ fn is_kinematic_neighbor(manifest: &RobotManifest, c: &crate::observation::Conta
     })
 }
 
-fn is_support_contact(c: &crate::observation::ContactTruth) -> bool {
-    [&c.body1, &c.body2]
+fn is_floor_or_world(name: &str) -> bool {
+    name.is_empty() || name == "world" || name.contains("floor") || name.contains("ground")
+}
+
+fn is_intended_support(manifest: &RobotManifest, c: &crate::observation::ContactTruth) -> bool {
+    if manifest.support_bodies.is_empty() {
+        return false;
+    }
+    let floor = is_floor_or_world(&c.body1) || is_floor_or_world(&c.body2);
+    if !floor {
+        return false;
+    }
+    manifest
+        .support_bodies
         .iter()
-        .any(|n| n.is_empty() || *n == "world" || n.contains("floor") || n.contains("ground"))
+        .any(|b| c.body1.contains(b.as_str()) || c.body2.contains(b.as_str()))
+}
+
+fn zone_positions(
+    manifest: &RobotManifest,
+    truth: &VerifierTruth,
+    robot_bodies: &[String],
+    zone: &crate::scenario::Region,
+) -> Vec<Vec<f64>> {
+    use crate::scenario::ZoneScope;
+    match zone.scope {
+        ZoneScope::EndEffector => truth.ee_pos().into_iter().collect(),
+        ZoneScope::Bodies => zone
+            .bodies
+            .iter()
+            .filter_map(|b| truth.xpos.get(b).cloned())
+            .collect(),
+        ZoneScope::CollisionGroup => {
+            if let Some(gname) = &zone.collision_group {
+                if let Some(names) = manifest.collision_groups.get(gname) {
+                    return names
+                        .iter()
+                        .filter_map(|b| truth.xpos.get(b).cloned())
+                        .collect();
+                }
+            }
+            Vec::new()
+        }
+        ZoneScope::EntireRobot => robot_bodies
+            .iter()
+            .filter_map(|b| truth.xpos.get(b).cloned())
+            .collect(),
+    }
 }
 
 fn pair_match(c: &crate::observation::ContactTruth, a: &str, b: &str) -> bool {
@@ -385,10 +479,13 @@ mod tests {
                 joint_type: "hinge".into(),
                 qpos_address: 0,
                 velocity_address: 0,
+                qpos_dim: 1,
+                dof_dim: 1,
                 range: [-0.2, 0.2],
                 limited: true,
                 parent_body: "base".into(),
                 child_body: "link".into(),
+                unsupported_reason: None,
             }],
             actuators: vec![],
             sensors: vec![],
@@ -400,6 +497,7 @@ mod tests {
                 actuated_dofs: vec![],
                 passive_dofs: vec![],
                 end_effector_chains: vec![],
+                end_effector_joint_chains: vec![],
                 actuator_coverage: 0.0,
                 potentially_uncontrollable_joints: vec![],
             },
@@ -408,6 +506,8 @@ mod tests {
             mujoco_version: "3".into(),
             source_format: "mjcf".into(),
             lost_features: vec![],
+            support_bodies: vec![],
+            collision_groups: Default::default(),
             metal: false,
             evidence_status: crate::honesty::SIMULATION_ONLY.into(),
         }
@@ -421,6 +521,7 @@ mod tests {
             name: "keep_out".into(),
             center: [0.0, 0.0, 0.0],
             half: [0.1, 0.1, 0.1],
+            ..Region::default()
         });
         let mut truth = VerifierTruth {
             qpos: vec![0.5],

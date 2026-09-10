@@ -33,7 +33,7 @@ mod integration_tests {
     use super::*;
     use crate::bundle::RobotBundle;
     use crate::format::{detect_format, FormatDisposition, ModelFormat};
-    use crate::mujoco_exec::mujoco_available;
+    use crate::mujoco_exec::ensure_mujoco_or_skip;
     use crate::validate::validate_bundle;
     use std::path::Path;
 
@@ -45,7 +45,7 @@ mod integration_tests {
 
     #[test]
     fn mjcf_load_three_robots() {
-        if !mujoco_available() {
+        if !ensure_mujoco_or_skip() {
             return;
         }
         for id in corpus::corpus_ids() {
@@ -62,7 +62,7 @@ mod integration_tests {
 
     #[test]
     fn urdf_load() {
-        if !mujoco_available() {
+        if !ensure_mujoco_or_skip() {
             return;
         }
         let b = RobotBundle::load(fixture("urdf_slider")).unwrap();
@@ -87,7 +87,7 @@ mod integration_tests {
         let miss = RobotBundle::load(fixture("missing_mesh")).unwrap();
         let r = validate_bundle(&miss, None);
         assert!(!r.ok());
-        if mujoco_available() {
+        if ensure_mujoco_or_skip() {
             let bad = RobotBundle::load(fixture("bad_actuator"));
             if let Ok(b) = bad {
                 let loaded = load_and_normalize(&b, &[], 0);
@@ -108,7 +108,7 @@ mod integration_tests {
 
     #[test]
     fn passive_joint_and_position_limited() {
-        if !mujoco_available() {
+        if !ensure_mujoco_or_skip() {
             return;
         }
         let b = RobotBundle::load(corpus::robot_dir("cartpole")).unwrap();
@@ -126,16 +126,21 @@ mod integration_tests {
                 | crate::qualify::ControlClass::PartiallyActuated
         ));
         assert_eq!(q.evidence_status, SIMULATION_ONLY);
-        assert!(q.local_linear_controllability.is_some());
-        assert_eq!(
-            q.local_linear_controllability.unwrap().label,
-            "LOCAL_LINEAR_CONTROLLABILITY"
-        );
+        match q.local_linear_controllability {
+            Some(llc) => {
+                assert_eq!(llc.label, "LOCAL_LINEAR_CONTROLLABILITY");
+                assert_eq!(llc.method, "mjd_transitionFD");
+                assert!(llc.state_dim > 0);
+                assert_eq!(llc.a_shape[0], llc.state_dim);
+                assert_eq!(llc.b_shape[1], llc.input_dim);
+            }
+            None => assert!(q.note.contains("NOT_EVALUATED")),
+        }
     }
 
     #[test]
     fn authority_negative_families_do_not_actuate() {
-        if !mujoco_available() {
+        if !ensure_mujoco_or_skip() {
             return;
         }
         let b = RobotBundle::load(corpus::robot_dir("planar_arm")).unwrap();
@@ -163,7 +168,7 @@ mod integration_tests {
 
     #[test]
     fn authorized_motion_changes_state() {
-        if !mujoco_available() {
+        if !ensure_mujoco_or_skip() {
             return;
         }
         let b = RobotBundle::load(corpus::robot_dir("planar_arm")).unwrap();
@@ -174,7 +179,7 @@ mod integration_tests {
 
     #[test]
     fn seeds_are_deterministic() {
-        if !mujoco_available() {
+        if !ensure_mujoco_or_skip() {
             return;
         }
         let b = RobotBundle::load(corpus::robot_dir("planar_arm")).unwrap();
@@ -188,7 +193,7 @@ mod integration_tests {
 
     #[test]
     fn three_robots_pass_control_qualification() {
-        if !mujoco_available() {
+        if !ensure_mujoco_or_skip() {
             return;
         }
         for id in corpus::corpus_ids() {
@@ -236,6 +241,7 @@ mod integration_tests {
                 actuated_dofs: vec![],
                 passive_dofs: vec![],
                 end_effector_chains: vec![],
+                end_effector_joint_chains: vec![],
                 actuator_coverage: 0.0,
                 potentially_uncontrollable_joints: vec![],
             },
@@ -244,6 +250,8 @@ mod integration_tests {
             mujoco_version: "3".into(),
             source_format: "mjcf".into(),
             lost_features: vec![],
+            support_bodies: vec![],
+            collision_groups: Default::default(),
             metal: false,
             evidence_status: SIMULATION_ONLY.into(),
         };
@@ -253,6 +261,8 @@ mod integration_tests {
                 body2: "cube_1".into(),
                 dist: -0.001,
                 force: 3.0,
+                group1: 0,
+                group2: 0,
             }],
             ..crate::observation::VerifierTruth::default()
         };
@@ -272,7 +282,7 @@ mod integration_tests {
 
     #[test]
     fn observation_freshness_refuses_before_ctrl() {
-        if !mujoco_available() {
+        if !ensure_mujoco_or_skip() {
             return;
         }
         let b = RobotBundle::load(corpus::robot_dir("planar_arm")).unwrap();
@@ -285,12 +295,24 @@ mod integration_tests {
 
     #[test]
     fn command_replay_and_wrong_identity_refuse() {
-        if !mujoco_available() {
+        if !ensure_mujoco_or_skip() {
             return;
         }
         let b = RobotBundle::load(corpus::robot_dir("planar_arm")).unwrap();
         let replay = run_episode(&b, "COMMAND_REPLAY", 5, "pd").unwrap();
-        assert!(replay.task_success);
+        assert!(
+            replay.task_success,
+            "status={} writes={} delta={:?} refusals={} decisions={:?}",
+            replay.episode_status,
+            replay.policy_ctrl_writes,
+            replay.replay_write_delta,
+            replay.authority_refusals,
+            replay
+                .authority_decisions
+                .iter()
+                .map(|d| (d.executed, d.violations.clone()))
+                .collect::<Vec<_>>()
+        );
         assert!(replay.authority_refusals > 0);
         let ident = run_episode(&b, "WRONG_ROBOT_IDENTITY", 5, "pd").unwrap();
         assert_eq!(ident.ctrl_writes, 0);
@@ -301,7 +323,7 @@ mod integration_tests {
 
     #[test]
     fn policy_crash_produces_no_actuation() {
-        if !mujoco_available() {
+        if !ensure_mujoco_or_skip() {
             return;
         }
         let b = RobotBundle::load(corpus::robot_dir("planar_arm")).unwrap();
@@ -312,7 +334,7 @@ mod integration_tests {
 
     #[test]
     fn simulator_nan_terminates() {
-        if !mujoco_available() {
+        if !ensure_mujoco_or_skip() {
             return;
         }
         let b = RobotBundle::load(corpus::robot_dir("planar_arm")).unwrap();
@@ -329,7 +351,7 @@ mod integration_tests {
 
     #[test]
     fn evidence_serialization_roundtrip() {
-        if !mujoco_available() {
+        if !ensure_mujoco_or_skip() {
             return;
         }
         let b = RobotBundle::load(corpus::robot_dir("planar_arm")).unwrap();
@@ -345,5 +367,259 @@ mod integration_tests {
         assert_eq!(v["evidence_status"], SIMULATION_ONLY);
         assert_ne!(v["schema"], crate::honesty::METAL_PROOF_SCHEMA);
         refuse_physical_proof_origin(&v).unwrap();
+    }
+
+    #[test]
+    fn mesh_bundle_loads_from_unrelated_cwd() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(fixture("mesh_cube")).unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let tmp = std::env::temp_dir().join(format!("ros-cwd-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        std::env::set_current_dir(&tmp).unwrap();
+        let (inst, man) = load_and_normalize(&b, &[], 1).expect("compile from other cwd");
+        let hash1 = man.model_hash.clone();
+        let src1 = man.source_hash.clone();
+        crate::mujoco_exec::checkin_worker(inst);
+        std::env::set_current_dir(&cwd).unwrap();
+        let (inst2, man2) = load_and_normalize(&b, &[], 1).unwrap();
+        assert_eq!(hash1, man2.model_hash);
+        assert_eq!(src1, man2.source_hash);
+        crate::mujoco_exec::checkin_worker(inst2);
+    }
+
+    #[test]
+    fn urdf_with_scenario_object_steps() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(fixture("urdf_slider")).unwrap();
+        let objects = vec![
+            serde_json::json!({"name":"cube_1","type":"box","size":[0.03,0.03,0.03],"pos":[0.15,0.0,0.05]}),
+        ];
+        let (mut inst, man) = load_and_normalize(&b, &objects, 2).unwrap();
+        assert_eq!(man.source_format, "urdf");
+        assert!(man.nbody >= 3, "scenario body must be compiled in");
+        let j = man
+            .joints
+            .iter()
+            .find(|j| j.name == "slide")
+            .expect("slide");
+        assert_ne!(j.parent_body, j.child_body);
+        let stepped = inst.step(5).unwrap();
+        assert_eq!(stepped["ok"], true);
+        crate::mujoco_exec::checkin_worker(inst);
+    }
+
+    #[test]
+    fn hinge_slide_free_ball_topology() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let arm = RobotBundle::load(corpus::robot_dir("planar_arm")).unwrap();
+        let (_i, man) = load_and_normalize(&arm, &[], 0).unwrap();
+        assert!(man
+            .joints
+            .iter()
+            .any(|j| j.joint_type == "hinge" && j.parent_body != j.child_body));
+        assert!(!man.derived.end_effector_joint_chains.is_empty());
+        assert_eq!(man.q_min().len(), man.nq as usize);
+        assert_eq!(man.q_max().len(), man.nq as usize);
+        crate::mujoco_exec::checkin_worker(_i);
+
+        let slide = RobotBundle::load(fixture("urdf_slider")).unwrap();
+        let (_i, man) = load_and_normalize(&slide, &[], 0).unwrap();
+        assert!(man.joints.iter().any(|j| j.joint_type == "slide"));
+        crate::mujoco_exec::checkin_worker(_i);
+
+        let free = RobotBundle::load(fixture("free_base")).unwrap();
+        let (_i, man) = load_and_normalize(&free, &[], 0).unwrap();
+        let root = man.joints.iter().find(|j| j.joint_type == "free").unwrap();
+        assert_eq!(root.qpos_dim, 7);
+        assert_eq!(man.q_min().len(), man.nq as usize);
+        crate::mujoco_exec::checkin_worker(_i);
+
+        let ball = RobotBundle::load(fixture("ball_joint")).unwrap();
+        let (_i, man) = load_and_normalize(&ball, &[], 0).unwrap();
+        let bj = man.joints.iter().find(|j| j.joint_type == "ball").unwrap();
+        assert_eq!(bj.qpos_dim, 4);
+        assert!(bj.unsupported_reason.as_deref() == Some("ball_joint_multi_dof"));
+        crate::mujoco_exec::checkin_worker(_i);
+    }
+
+    #[test]
+    fn authority_restart_replay_has_zero_write_delta() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(corpus::robot_dir("planar_arm")).unwrap();
+        let ep = run_episode(&b, "AUTHORITY_RESTART", 7, "pd").unwrap();
+        assert_eq!(
+            ep.replay_write_delta,
+            Some(0),
+            "{:?}",
+            ep.replay_write_delta
+        );
+        assert_eq!(ep.ctrl_writes_after_first_command, Some(1));
+        assert_eq!(ep.policy_ctrl_writes, 1);
+        assert!(ep.task_success);
+    }
+
+    #[test]
+    fn command_lease_expires_to_safe_state() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(corpus::robot_dir("planar_arm")).unwrap();
+        let ep = run_episode(&b, "JOINT_TRACKING", 2, "pd").unwrap();
+        assert!(ep.total_ctrl_writes >= ep.policy_ctrl_writes);
+        assert_eq!(
+            ep.total_ctrl_writes,
+            ep.policy_ctrl_writes + ep.authority_safe_state_writes
+        );
+    }
+
+    #[test]
+    fn worker_hang_is_infra_error() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let ep = crate::runner::run_hang_matrix_job();
+        assert_eq!(ep.episode_status, "INFRA_ERROR");
+        assert!(ep.infra_error.as_ref().unwrap().contains("timeout"));
+    }
+
+    #[test]
+    fn matrix_never_drops_jobs() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let robots = vec![corpus::robot_dir("cartpole")];
+        let eps = run_matrix(
+            &robots,
+            &["JOINT_TRACKING", "POLICY_CRASH"],
+            0..2,
+            &["pd"],
+            false,
+        );
+        assert_eq!(eps.len(), 4);
+        let report = crate::evidence::aggregate(&eps);
+        assert_eq!(report.scheduled_jobs, 4);
+        assert_eq!(
+            report.scheduled_jobs,
+            report.completed_jobs + report.infra_error_jobs
+        );
+        assert!(eps.iter().all(|e| !e.episode_status.is_empty()));
+        assert!(eps
+            .iter()
+            .all(|e| !e.metal && e.evidence_status == SIMULATION_ONLY));
+    }
+
+    #[test]
+    fn historical_keep_out_fails_even_if_final_frame_is_clear() {
+        let mut env = crate::scenario::EnvelopeSpec::default();
+        env.keep_out.push(crate::scenario::Region {
+            name: "keep_out".into(),
+            center: [0.0, 0.0, 0.0],
+            half: [0.1, 0.1, 0.1],
+            ..crate::scenario::Region::default()
+        });
+        let man = crate::normalize::RobotManifest {
+            robot_id: "t".into(),
+            nq: 1,
+            nv: 1,
+            nu: 1,
+            nbody: 2,
+            njoint: 0,
+            nactuator: 0,
+            nsensor: 0,
+            ncamera: 0,
+            timestep: 0.002,
+            joints: vec![],
+            actuators: vec![],
+            sensors: vec![],
+            cameras: vec![],
+            bodies: vec![],
+            sites: vec![],
+            derived: crate::normalize::DerivedInterface::default(),
+            model_hash: "h".into(),
+            source_hash: "s".into(),
+            mujoco_version: "3".into(),
+            source_format: "mjcf".into(),
+            lost_features: vec![],
+            support_bodies: vec![],
+            collision_groups: Default::default(),
+            metal: false,
+            evidence_status: SIMULATION_ONLY.into(),
+        };
+        let mut inside = crate::observation::VerifierTruth {
+            named_pos: std::collections::BTreeMap::from([("ee".into(), vec![0.0, 0.0, 0.0])]),
+            ..crate::observation::VerifierTruth::default()
+        };
+        let v1 = crate::verifier::inspect_step(&man, &env, &mut inside, &[]);
+        assert!(v1.iter().any(|v| v.code == "KEEP_OUT_ZONE_ENTRY"));
+        let mut hist = inside.zone_entries.clone();
+        let mut outside = crate::observation::VerifierTruth {
+            named_pos: std::collections::BTreeMap::from([("ee".into(), vec![2.0, 2.0, 2.0])]),
+            ..crate::observation::VerifierTruth::default()
+        };
+        let v2 = crate::verifier::inspect_step(&man, &env, &mut outside, &[]);
+        assert!(!v2.iter().any(|v| v.code == "KEEP_OUT_ZONE_ENTRY"));
+        hist.extend(outside.zone_entries);
+        outside.zone_entries = hist;
+        assert!(!crate::task::TaskSpec::KeepOut {
+            name: "keep_out".into()
+        }
+        .evaluate(&outside, &man));
+    }
+
+    #[test]
+    fn camera_mode_is_not_a_working_pipeline() {
+        let m = crate::normalize::RobotManifest {
+            robot_id: "x".into(),
+            nq: 1,
+            nv: 1,
+            nu: 1,
+            nbody: 1,
+            njoint: 1,
+            nactuator: 1,
+            nsensor: 0,
+            ncamera: 0,
+            timestep: 0.002,
+            joints: vec![],
+            actuators: vec![],
+            sensors: vec![],
+            cameras: vec![],
+            bodies: vec![],
+            sites: vec![],
+            derived: crate::normalize::DerivedInterface::default(),
+            model_hash: "h".into(),
+            source_hash: "s".into(),
+            mujoco_version: "3".into(),
+            source_format: "mjcf".into(),
+            lost_features: vec![],
+            support_bodies: vec![],
+            collision_groups: Default::default(),
+            metal: false,
+            evidence_status: SIMULATION_ONLY.into(),
+        };
+        let truth = crate::observation::VerifierTruth::default();
+        let obs = crate::observation::policy_observation(
+            &m,
+            "e",
+            "o",
+            &crate::task::TaskSpec::Hold { duration_s: 0.1 },
+            crate::observation::VisionMode::Camera,
+            &truth,
+            0.0,
+            false,
+        );
+        assert_eq!(
+            obs.camera_status.as_deref(),
+            Some("NOT_IMPLEMENTED_IN_VERIFY_V1")
+        );
+        assert!(obs.rgb.is_none());
     }
 }

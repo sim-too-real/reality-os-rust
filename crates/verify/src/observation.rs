@@ -37,6 +37,8 @@ pub struct PolicyObservation {
     pub detections: Vec<Detection>,
     pub rgb: Option<Vec<u8>>,
     pub depth: Option<Vec<f32>>,
+    #[serde(default)]
+    pub camera_status: Option<String>,
     pub goal_xyz: Option<[f64; 3]>,
     pub goal_q: Option<Vec<f64>>,
 }
@@ -61,6 +63,12 @@ pub struct VerifierTruth {
     pub zone_entries: Vec<String>,
     pub grasped: Vec<String>,
     pub placed: Vec<(String, String)>,
+    #[serde(default)]
+    pub effort_bound_unavailable: bool,
+    #[serde(default)]
+    pub last_ee_pos: Option<Vec<f64>>,
+    #[serde(default)]
+    pub last_ee_time: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +77,10 @@ pub struct ContactTruth {
     pub body2: String,
     pub dist: f64,
     pub force: f64,
+    #[serde(default)]
+    pub group1: i32,
+    #[serde(default)]
+    pub group2: i32,
 }
 
 impl VerifierTruth {
@@ -102,6 +114,8 @@ impl VerifierTruth {
                         body2: c["body2"].as_str().unwrap_or("").into(),
                         dist: c["dist"].as_f64().unwrap_or(0.0),
                         force: forces.get(i).copied().unwrap_or(0.0),
+                        group1: c["group1"].as_i64().unwrap_or(-1) as i32,
+                        group2: c["group2"].as_i64().unwrap_or(-1) as i32,
                     })
                     .collect()
             })
@@ -125,6 +139,9 @@ impl VerifierTruth {
             zone_entries: Vec::new(),
             grasped: Vec::new(),
             placed: Vec::new(),
+            effort_bound_unavailable: false,
+            last_ee_pos: None,
+            last_ee_time: None,
         }
     }
 
@@ -165,6 +182,11 @@ pub fn policy_observation(
             }
         }
     }
+    let camera_status = if mode == VisionMode::Camera {
+        Some("NOT_IMPLEMENTED_IN_VERIFY_V1".into())
+    } else {
+        None
+    };
     PolicyObservation {
         robot_id: manifest.robot_id.clone(),
         model_hash: manifest.model_hash.clone(),
@@ -180,6 +202,7 @@ pub fn policy_observation(
         detections,
         rgb: None,
         depth: None,
+        camera_status,
         goal_xyz: match task {
             TaskSpec::Reach { target, .. } => Some(*target),
             _ => None,
@@ -233,6 +256,7 @@ mod tests {
                 actuated_dofs: vec![],
                 passive_dofs: vec![],
                 end_effector_chains: vec![],
+                end_effector_joint_chains: vec![],
                 actuator_coverage: 0.0,
                 potentially_uncontrollable_joints: vec![],
             },
@@ -241,6 +265,8 @@ mod tests {
             mujoco_version: "3".into(),
             source_format: "mjcf".into(),
             lost_features: vec![],
+            support_bodies: vec![],
+            collision_groups: Default::default(),
             metal: false,
             evidence_status: crate::honesty::SIMULATION_ONLY.into(),
         }

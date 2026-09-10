@@ -13,6 +13,8 @@ use std::sync::{Arc, Mutex};
 pub struct SimActuationState {
     pub ctrl: Vec<f64>,
     pub write_count: u64,
+    pub policy_ctrl_writes: u64,
+    pub authority_safe_state_writes: u64,
     pub last_authorized_ctrl: Vec<f64>,
 }
 
@@ -147,6 +149,7 @@ impl HardwareDriverPort for SimulationDriverPort {
             g.ctrl = action.to_vec();
             g.last_authorized_ctrl = action.to_vec();
             g.write_count = g.write_count.saturating_add(1);
+            g.policy_ctrl_writes = g.policy_ctrl_writes.saturating_add(1);
         }
         Ok(PlantRealized::sim([
             ("n".into(), action.len() as f64),
@@ -210,6 +213,19 @@ impl SharedSimPort {
     }
 }
 
+impl SharedMujoco {
+    pub fn write_safe_ctrl(&self, action: &[f64]) -> Result<(), String> {
+        let mut inst = self.inst.lock().map_err(|e| e.to_string())?;
+        inst.set_safe_ctrl(action).map_err(|e| e.to_string())?;
+        if let Ok(mut g) = self.probe.inner.lock() {
+            g.ctrl = action.to_vec();
+            g.authority_safe_state_writes = g.authority_safe_state_writes.saturating_add(1);
+            g.write_count = g.write_count.saturating_add(1);
+        }
+        Ok(())
+    }
+}
+
 impl HardwareDriverPort for SharedSimPort {
     fn probe_identity(&self) -> HardwareIdentity {
         HardwareIdentity {
@@ -244,6 +260,7 @@ impl HardwareDriverPort for SharedSimPort {
             g.ctrl = action.to_vec();
             g.last_authorized_ctrl = action.to_vec();
             g.write_count = g.write_count.saturating_add(1);
+            g.policy_ctrl_writes = g.policy_ctrl_writes.saturating_add(1);
         }
         Ok(PlantRealized::sim([("n".into(), action.len() as f64)]))
     }
@@ -287,6 +304,7 @@ impl HardwareDriverPort for RecordingSimPort {
             g.ctrl = action.to_vec();
             g.last_authorized_ctrl = action.to_vec();
             g.write_count += 1;
+            g.policy_ctrl_writes += 1;
         }
         let _ = self.nu;
         Ok(PlantRealized::sim([("n".into(), action.len() as f64)]))

@@ -1,0 +1,9 @@
+robot_id: free_base
+model_format: mjcf
+model_file: model.xml
+asset_roots: []
+expected_base_type: floating
+source:
+  license: MIT
+  attribution: Reality OS free-joint fixture
+  redistributable: true

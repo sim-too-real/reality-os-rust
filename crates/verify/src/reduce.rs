@@ -155,6 +155,18 @@ mod tests {
             simulation_duration_s: 0.1,
             wall_clock_duration_s: 0.0,
             ctrl_writes: 0,
+            episode_status: "FAIL".into(),
+            policy_ctrl_writes: 0,
+            authority_safe_state_writes: 0,
+            total_ctrl_writes: 0,
+            effort_verification: "EFFORT_BOUND_UNAVAILABLE".into(),
+            infra_error: None,
+            ctrl_writes_before_restart: None,
+            ctrl_writes_after_first_command: None,
+            ctrl_writes_after_replay: None,
+            replay_write_delta: None,
+            last_rpc: None,
+            worker_exit: None,
         };
         let m = minimize(&spec, &ev, |_| None);
         assert_eq!(m.original_seed, 18472);

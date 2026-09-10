@@ -39,11 +39,35 @@ impl Dist {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoneScope {
+    #[default]
+    EndEffector,
+    Bodies,
+    CollisionGroup,
+    EntireRobot,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceKind {
+    #[default]
+    Base,
+    EndEffector,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct Region {
     pub name: String,
     pub center: [f64; 3],
     pub half: [f64; 3],
+    #[serde(default)]
+    pub scope: ZoneScope,
+    #[serde(default)]
+    pub bodies: Vec<String>,
+    #[serde(default)]
+    pub collision_group: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -60,9 +84,17 @@ pub struct EnvelopeSpec {
     pub max_ee_speed: Option<f64>,
     pub max_kinetic_energy: Option<f64>,
     pub self_collision: bool,
+    #[serde(default)]
+    pub self_collision_rule: String,
     pub observation_freshness_s: f64,
     pub command_lifetime_s: f64,
     pub replay_prohibited: bool,
+    #[serde(default)]
+    pub workspace_kind: WorkspaceKind,
+    #[serde(default)]
+    pub effort_limit: Option<f64>,
+    #[serde(default)]
+    pub effort_units: Option<String>,
 }
 
 impl Default for EnvelopeSpec {
@@ -80,9 +112,13 @@ impl Default for EnvelopeSpec {
             max_ee_speed: Some(5.0),
             max_kinetic_energy: Some(50.0),
             self_collision: true,
+            self_collision_rule: "ignore_direct_kinematic_neighbors".into(),
             observation_freshness_s: 0.25,
             command_lifetime_s: 1.0,
             replay_prohibited: true,
+            workspace_kind: WorkspaceKind::Base,
+            effort_limit: None,
+            effort_units: None,
         }
     }
 }
@@ -110,6 +146,8 @@ pub struct ScenarioSpec {
     pub authority_restart: bool,
     pub external_push: Option<[f64; 3]>,
     pub push_body: Option<String>,
+    #[serde(default)]
+    pub saturate_command: bool,
 }
 
 impl ScenarioSpec {
@@ -185,6 +223,7 @@ impl ScenarioSpec {
             authority_restart: self.authority_restart,
             external_push: self.external_push,
             push_body: self.push_body.clone(),
+            saturate_command: self.saturate_command,
         }
     }
 }
@@ -212,11 +251,19 @@ pub struct ResolvedScenario {
     pub authority_restart: bool,
     pub external_push: Option<[f64; 3]>,
     pub push_body: Option<String>,
+    #[serde(default)]
+    pub saturate_command: bool,
 }
 
 pub fn applicable(family: &str, bundle: &RobotBundle, manifest: &RobotManifest) -> bool {
     match family {
-        "PICK_OBJECT" | "PLACE_OBJECT" => !bundle.manifest.grippers.is_empty() && manifest.nu >= 2,
+        "PICK_OBJECT"
+        | "PLACE_OBJECT"
+        | "PAYLOAD_CHANGE"
+        | "OBJECT_MOVED_AFTER_OBSERVATION"
+        | "FRICTION_CHANGE"
+        | "PUSH_OBJECT"
+        | "CONTACT_TARGET" => false,
         "REACH_TARGET" => {
             manifest.nu >= 3 || (manifest.nu >= 2 && !bundle.manifest.grippers.is_empty())
         }
@@ -224,7 +271,6 @@ pub fn applicable(family: &str, bundle: &RobotBundle, manifest: &RobotManifest) 
             bundle.manifest.expected_base_type,
             crate::bundle::BaseType::Mobile | crate::bundle::BaseType::Floating
         ),
-        "CONTACT_TARGET" | "PUSH_OBJECT" => manifest.nu >= 1,
         _ => manifest.nu >= 1,
     }
 }
@@ -263,6 +309,7 @@ mod tests {
             authority_restart: false,
             external_push: None,
             push_body: None,
+            saturate_command: false,
         };
         let a = spec.resolve(7);
         let b = spec.resolve(7);
