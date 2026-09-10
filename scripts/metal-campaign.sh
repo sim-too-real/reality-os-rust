@@ -82,9 +82,20 @@ ensure_metal_os_users() {
 
 # USB-serial only. A silent chown miss used to leave 0660 dialout;
 # authority is not in dialout, so probe open is EACCES after prepare.
+# Inode uid+mode, not NSS %U — a stale nscd name can hide a successful
+# chown the same way OWNER= missed a just-created user.
+usb_tty_owner_mode_ok() {
+  local real="$1"
+  local want_uid got_uid mode
+  want_uid="$(id -u "$AUTHORITY_USER")"
+  got_uid="$(stat -c '%u' "$real" 2>/dev/null || true)"
+  mode="$(stat -c '%a' "$real" 2>/dev/null || true)"
+  [[ "$got_uid" == "$want_uid" && "$mode" == "0600" ]]
+}
+
 claim_usb_tty() {
   local dev="$1"
-  local real name want_uid got_uid mode
+  local real name
   real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
   name="$(basename "$real")"
   case "$name" in
@@ -95,6 +106,12 @@ claim_usb_tty() {
     echo "error: USB-UART $dev vanished before owner/mode claim" >&2
     return 1
   fi
+  # A no-op chown still emits udev change on typical Ubuntu. That used
+  # to wake ModemManager / reset FTDI latency_timer / rename ttyUSB0
+  # immediately before probe opened the UART.
+  if usb_tty_owner_mode_ok "$real"; then
+    return 0
+  fi
   if ! chown "$AUTHORITY_USER:$AUTHORITY_USER" "$real"; then
     echo "error: chown $AUTHORITY_USER $real failed (NSS/udev). Authority cannot open the UART." >&2
     return 1
@@ -103,13 +120,8 @@ claim_usb_tty() {
     echo "error: chmod 0600 $real failed" >&2
     return 1
   fi
-  # Compare the inode uid, not NSS %U — a stale nscd name can hide a
-  # successful chown the same way OWNER= missed a just-created user.
-  want_uid="$(id -u "$AUTHORITY_USER")"
-  got_uid="$(stat -c '%u' "$real" 2>/dev/null || true)"
-  mode="$(stat -c '%a' "$real" 2>/dev/null || true)"
-  if [[ "$got_uid" != "$want_uid" || "$mode" != "0600" ]]; then
-    echo "error: $real is uid=$got_uid mode=$mode after claim (want uid=$want_uid 0600). udev/NSS did not stick." >&2
+  if ! usb_tty_owner_mode_ok "$real"; then
+    echo "error: $real is uid=$(stat -c '%u' "$real" 2>/dev/null || true) mode=$(stat -c '%a' "$real" 2>/dev/null || true) after claim (want uid=$(id -u "$AUTHORITY_USER") 0600). udev/NSS did not stick." >&2
     return 1
   fi
 }
@@ -750,6 +762,74 @@ ensure_usb_tty_mm_ignored() {
   echo "$live"
 }
 
+# After chown / latency_timer / power/control, udev change can rename
+# FTDI as ttyUSB1, wake ModemManager, and reset latency_timer to 16 ms.
+# The rematched node then needs a real claim — that claim used to be
+# followed immediately by probe/serve open. Settle, rematch, re-claim
+# only if owner drifted, re-apply latency/power, then refuse holders.
+settle_usb_tty_after_host_writes() {
+  local i rematched real already
+  real="$(readlink -f "${DEVICE:-}" 2>/dev/null || echo "${DEVICE:-}")"
+  case "$(basename "$real")" in
+    ttyUSB* | ttyACM* | ttyCH341*) ;;
+    *) return 0 ;;
+  esac
+  for i in 1 2 3; do
+    if command -v udevadm >/dev/null 2>&1; then
+      udevadm settle --timeout=2 >/dev/null 2>&1 || true
+    else
+      sleep 0.2
+    fi
+    rematched="$(stabilize_metal_device "$DEVICE")" || return 1
+    if [[ -z "$rematched" ]]; then
+      echo "error: empty USB-UART path after host-write udev settle" >&2
+      return 1
+    fi
+    if [[ "$rematched" != "$DEVICE" ]]; then
+      echo "metal-campaign: rematched $DEVICE -> $rematched after host chown/sysfs writes" >&2
+      DEVICE="$rematched"
+      export REALITYOS_METAL_DEVICE="$DEVICE"
+      sync_metal_device_config || return 1
+    fi
+    real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
+    if [[ ! -e "$real" ]]; then
+      echo "error: USB-UART $DEVICE vanished after host-write udev settle" >&2
+      return 1
+    fi
+    if ! usb_tty_has_mm_ignore "$real"; then
+      if ! DEVICE="$(ensure_usb_tty_mm_ignored "$DEVICE")"; then
+        return 1
+      fi
+      export REALITYOS_METAL_DEVICE="$DEVICE"
+      sync_metal_device_config || return 1
+      real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
+    fi
+    already=0
+    if usb_tty_owner_mode_ok "$real"; then
+      already=1
+    fi
+    claim_usb_tty "$real" || return 1
+    set_usb_serial_latency "$DEVICE" || return 1
+    disable_usb_autosuspend "$DEVICE" || return 1
+    real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
+    if [[ "$already" == "1" ]] && usb_tty_owner_mode_ok "$real"; then
+      break
+    fi
+  done
+  real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
+  if ! refuse_shared_usb_tty "$real"; then
+    return 1
+  fi
+  if ! usb_tty_has_mm_ignore "$real"; then
+    echo "error: $DEVICE lost ID_MM_DEVICE_IGNORE after host-write settle. Refuse to open; ModemManager can still claim the UART." >&2
+    return 1
+  fi
+  if ! usb_tty_owner_mode_ok "$real"; then
+    echo "error: $DEVICE is not $AUTHORITY_USER 0600 after host-write settle" >&2
+    return 1
+  fi
+}
+
 prepare_usb_serial_host() {
   local dev="$1"
   local real name
@@ -844,8 +924,11 @@ prepare_usb_serial_host() {
   if [[ -e "$real" ]]; then
     /bin/stty -F "$real" -hupcl >/dev/null 2>&1 || true
   fi
-  set_usb_serial_latency "$DEVICE"
-  disable_usb_autosuspend "$DEVICE"
+  set_usb_serial_latency "$DEVICE" || return 1
+  disable_usb_autosuspend "$DEVICE" || return 1
+  # Claim / latency / power can emit udev change. Do not hand that
+  # in-flight node to probe or serve.
+  settle_usb_tty_after_host_writes || return 1
 }
 
 cleanup_usb_serial_host() {
@@ -1040,17 +1123,21 @@ PROP="$BIN_DIR/realityos-metal-propose"
 export REALITYOS_METAL_ROOT="$ROOT"
 export REALITYOS_METAL_DEVICE="$DEVICE"
 "$SCRIPT_DIR/metal-deploy.sh"
-# First prepare ran before tmpfs/staging. metal-deploy chown is || true
-# (PTY/HIL) and can emit a udev change that wakes ModemManager and
-# resets FTDI latency_timer to 16 ms. Probe opens the UART next —
-# re-prepare so fuser / ignore / rematch / latency / owner are current.
+# First prepare ran before tmpfs/staging. metal-deploy used to always
+# chown the tty (|| true for PTY/HIL); a no-op chown still emits udev
+# change. Re-prepare so fuser / ignore / rematch / latency / owner are
+# current, then settle again immediately before probe.
 if ! prepare_usb_serial_host "$DEVICE"; then
   echo "error: $DEVICE is already open or the bound USB-UART identity drifted after deploy." >&2
   echo "error: stop the holder, then re-run. Probe cannot share the tty." >&2
   exit 2
 fi
-if ! claim_usb_tty "$DEVICE"; then
-  echo "error: $DEVICE must be $AUTHORITY_USER 0600 before probe (udev OWNER=/NSS)." >&2
+# Prepare already claimed+settled. Settle once more immediately before
+# init/probe so a late udev rename from that claim is rematched and a
+# leftover holder is refused. A second claim_usb_tty here used to
+# always chown and emit another change, then probe opened anyway.
+if ! settle_usb_tty_after_host_writes; then
+  echo "error: $DEVICE drifted or is held after the pre-probe USB settle (udev OWNER=/NSS/ModemManager)." >&2
   exit 2
 fi
 
