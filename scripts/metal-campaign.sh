@@ -1420,7 +1420,7 @@ as_authority() {
 # used to skip latency_timer and crash-replay rematch. serve rematches
 # via pick_live_device after bind-measured; probe runs before that bind.
 rematch_campaign_usb_device() {
-  local rematched
+  local rematched real
   rematched="$(stabilize_metal_device "$DEVICE")" || return 1
   if [[ -z "$rematched" ]]; then
     echo "error: empty USB-UART path while rematching before probe" >&2
@@ -1429,12 +1429,22 @@ rematch_campaign_usb_device() {
   if [[ "$rematched" != "$DEVICE" ]]; then
     echo "metal-campaign: rematched $DEVICE -> $rematched before probe" >&2
     DEVICE="$rematched"
-    export REALITYOS_METAL_DEVICE="$DEVICE"
   fi
-  if ! usb_serial_resolved_real "$DEVICE" >/dev/null; then
+  # stabilize prefers /dev/serial/by-id. Authority is not in plugdev.
+  # A 0750 by-id dir makes Path::exists() fail on the symlink even when
+  # ttyUSB0 is 0600 — serve already rematches via pick_live_device;
+  # probe used to exit metal_device_missing and abort the first run.
+  # apply_process_env also overwrites --device from this env, so the
+  # live tty must be REALITYOS_METAL_DEVICE, not only argv.
+  if ! real="$(usb_serial_resolved_real "$DEVICE")"; then
     echo "error: $DEVICE did not resolve to a live USB-serial tty before probe" >&2
     return 1
   fi
+  if [[ "$real" != "$DEVICE" ]]; then
+    echo "metal-campaign: probe opens live $real (not $DEVICE)" >&2
+  fi
+  DEVICE="$real"
+  export REALITYOS_METAL_DEVICE="$DEVICE"
 }
 
 run_init_and_probe() {
