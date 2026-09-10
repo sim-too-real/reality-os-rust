@@ -362,10 +362,12 @@ resolve_recorded_usb_tty() {
 # the port key used to invent 0:nodevpath and probe bound
 # usb:vid:pid:nodevpath, then serve missed when dest appeared. An empty
 # CH340 serial file or a parent hub serial used to count as "serial
-# present" so wait returned before the UART dest existed.
+# present" so wait returned before the UART dest existed. dest can also
+# appear before iSerial; Rust prefers serial, so binding dest then
+# measuring FTDI/U2D2 serial on serve misses before hold.
 wait_usb_sysfs_identity() {
   local dev="$1"
-  local real name i
+  local real name i j
   real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
   name="$(basename "$real")"
   case "$name" in
@@ -377,7 +379,19 @@ wait_usb_sysfs_identity() {
       usb_sysfs_value "$real" serial >/dev/null \
         || usb_sysfs_port_key "$real" >/dev/null
     }; then
-      return 0
+      if usb_sysfs_value "$real" serial >/dev/null; then
+        return 0
+      fi
+      for j in $(seq 1 10); do
+        sleep 0.05
+        if usb_sysfs_value "$real" serial >/dev/null; then
+          return 0
+        fi
+      done
+      if usb_sysfs_port_key "$real" >/dev/null \
+        || usb_sysfs_value "$real" serial >/dev/null; then
+        return 0
+      fi
     fi
     sleep 0.1
   done
@@ -424,6 +438,7 @@ STOPPED_BRLTTY=0
 STOPPED_MM=0
 METAL_USB_SERIAL=""
 METAL_USB_PORT=""
+METAL_USB_IDENTITY_LOCKED=0
 
 wait_tty_free() {
   local real="$1"
@@ -522,17 +537,17 @@ prepare_usb_serial_host() {
     wait_usb_sysfs_identity "$dev" || true
   fi
   real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
-  if [[ -z "${METAL_USB_SERIAL:-}" ]]; then
+  # Lock the first UART identity. A late FTDI/U2D2 iSerial used to be
+  # promoted on the serve prepare after probe bound dest, then rematch
+  # and Rust serial preference missed before hold.
+  if [[ "$METAL_USB_IDENTITY_LOCKED" != "1" ]]; then
     METAL_USB_SERIAL="$(usb_sysfs_value "$real" serial || true)"
-  fi
-  if [[ -z "${METAL_USB_PORT:-}" ]]; then
     METAL_USB_PORT="$(usb_sysfs_port_key "$real" || true)"
-  fi
-  # First prepare must record a UART identity. An empty CH340 serial
-  # file used to pass wait (exit 0) and then bind nodevpath / hub.
-  if [[ -z "${METAL_USB_SERIAL:-}" && -z "${METAL_USB_PORT:-}" ]]; then
-    echo "error: USB sysfs serial or busnum:devpath:vid:pid never appeared on the UART device for $dev; refuse to bind a tty-name, parent-hub, or nodevpath identity" >&2
-    return 1
+    if [[ -z "${METAL_USB_SERIAL:-}" && -z "${METAL_USB_PORT:-}" ]]; then
+      echo "error: USB sysfs serial or busnum:devpath:vid:pid never appeared on the UART device for $dev; refuse to bind a tty-name, parent-hub, or nodevpath identity" >&2
+      return 1
+    fi
+    METAL_USB_IDENTITY_LOCKED=1
   fi
   if [[ -d /run/udev/rules.d ]]; then
     if [[ -n "$METAL_USB_SERIAL" ]]; then
