@@ -23,7 +23,7 @@ use crate::config::{
 };
 use crate::egress::EgressLog;
 use crate::identity::{
-    adapter_identity_aliases, adapter_serial_matches, device_node_identity, is_pty_path,
+    adapter_identity_aliases, adapter_still_same_as_latched, device_node_identity, is_pty_path,
     rematch_discover_device, usb_identity_for_tty, MeasuredIdentity,
 };
 use crate::protocol::{
@@ -344,6 +344,19 @@ impl Xl330Driver {
         self.latched_pty = is_pty_path(&self.cfg.device);
     }
 
+    fn latched_adapter_aliases(&self) -> Vec<String> {
+        MeasuredIdentity::from_adapter(
+            &self.cfg,
+            self.latched_usb_serial.clone(),
+            self.latched_usb_fallback.clone(),
+            self.latched_node.clone(),
+            0,
+            0,
+            false,
+        )
+        .adapter_aliases()
+    }
+
     fn connect_serial(&mut self) -> io::Result<()> {
         if !self.cfg.device.exists() {
             self.connected = false;
@@ -381,11 +394,13 @@ impl Xl330Driver {
         // chmod/open can recycle ttyUSB0 onto a different UART. The pre-open
         // latch would then name adapter A while this fd is adapter B.
         // A vanished by-id / renamed tty keeps the latch (same fd).
-        if self.cfg.device.exists()
-            && !self.cfg.expected_serial.trim().is_empty()
-            && !adapter_serial_matches(
+        // Exact expected_serial alone false-refuses FTDI when iSerial
+        // flaps empty after open and only dest remains.
+        if !self.cfg.expected_serial.trim().is_empty()
+            && !adapter_still_same_as_latched(
                 &self.cfg.device,
                 &self.cfg.expected_serial,
+                &self.latched_adapter_aliases(),
                 self.cfg.servo_id,
             )
         {

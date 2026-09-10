@@ -425,10 +425,79 @@ pub fn adapter_serial_matches(device: &Path, expected_serial: &str, servo_id: u8
             .any(|s| s == want)
 }
 
+/// Same UART after open if the live node still shares an alias with the
+/// pre-open latch (or the dest-only / iSerial bind). Exact
+/// `expected_serial` alone false-refuses FTDI when iSerial flaps empty
+/// after the first exclusive open and only dest remains.
+pub fn adapter_still_same_as_latched(
+    device: &Path,
+    expected_serial: &str,
+    latched_aliases: &[String],
+    servo_id: u8,
+) -> bool {
+    if !device.exists() {
+        return true;
+    }
+    if adapter_serial_matches(device, expected_serial, servo_id) {
+        return true;
+    }
+    let now = adapter_identity_aliases(device, servo_id);
+    now.iter().any(|a| latched_aliases.iter().any(|b| a == b))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn adapter_still_same_when_iserial_flaps_to_dest() {
+        let dest = "usb:0403:6014:1:1.0:id1";
+        let latched = vec!["FT123:id1".into(), dest.to_string()];
+        assert!(
+            adapter_still_same_as_latched(
+                Path::new("/dev/missing-after-open"),
+                "FT123:id1",
+                &latched,
+                1
+            ),
+            "vanished path keeps the pre-open latch"
+        );
+        let cfg = MetalConfig::example(PathBuf::from("/dev/null"));
+        let dest_only = MeasuredIdentity::from_adapter(
+            &cfg,
+            None,
+            Some("usb:0403:6014:1:1.0".into()),
+            None,
+            0,
+            0,
+            false,
+        );
+        assert!(dest_only.adapter_aliases().contains(&dest.to_string()));
+        assert!(
+            dest_only
+                .adapter_aliases()
+                .iter()
+                .any(|a| latched.iter().any(|b| a == b)),
+            "dest-only after iSerial flap still overlaps the FTDI latch"
+        );
+        let other = MeasuredIdentity::from_adapter(
+            &cfg,
+            Some("OTHER".into()),
+            Some("usb:1a86:7523:2:1.0".into()),
+            None,
+            0,
+            0,
+            false,
+        );
+        assert!(
+            !other
+                .adapter_aliases()
+                .iter()
+                .any(|a| latched.iter().any(|b| a == b)),
+            "a recycled UART must not overlap the bound latch"
+        );
+    }
 
     #[test]
     fn vanished_path_without_latch_blanks_serial() {
