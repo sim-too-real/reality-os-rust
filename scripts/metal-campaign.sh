@@ -1446,28 +1446,38 @@ rematch_campaign_usb_device() {
   DEVICE="$real"
   export REALITYOS_METAL_DEVICE="$DEVICE"
   # A rematch after udev rename can land on a fresh ttyUSB1 still
-  # 0660 dialout / latency 16. Authority is not in dialout; probe
-  # then EACCES (not metal_device_missing) and the retry loop used
-  # to abort the first XL330 run.
-  claim_usb_tty "$real" || return 1
-  set_usb_serial_latency "$real" || return 1
-  disable_usb_autosuspend "$real" || return 1
-  rematched="$(stabilize_metal_device "$DEVICE")" || return 1
-  if ! real="$(usb_serial_resolved_real "$rematched")"; then
-    echo "error: $rematched did not resolve to a live USB-serial tty after claim" >&2
+  # 0660 dialout, latency 16, and without ID_MM_DEVICE_IGNORE.
+  # Authority is not in dialout; MM can hold the new node. Probe
+  # then EACCES/EBUSY (not metal_device_missing) and the retry
+  # loop used to abort the first XL330 run.
+  if ! refuse_shared_usb_tty "$real"; then
+    return 1
+  fi
+  if ! DEVICE="$(ensure_usb_tty_mm_ignored "$DEVICE")"; then
+    return 1
+  fi
+  export REALITYOS_METAL_DEVICE="$DEVICE"
+  settle_usb_tty_after_host_writes || return 1
+  if ! real="$(usb_serial_resolved_real "$DEVICE")"; then
+    echo "error: $DEVICE did not resolve to a live USB-serial tty after rematch settle" >&2
     return 1
   fi
   DEVICE="$real"
   export REALITYOS_METAL_DEVICE="$DEVICE"
-  claim_usb_tty "$real" || return 1
-  set_usb_serial_latency "$real" || return 1
-  disable_usb_autosuspend "$real" || return 1
+  if ! usb_tty_has_mm_ignore "$real"; then
+    echo "error: $real has no ID_MM_DEVICE_IGNORE after rematch; ModemManager can claim the UART" >&2
+    return 1
+  fi
   if ! usb_tty_owner_mode_ok "$real"; then
     echo "error: $real is not $AUTHORITY_USER 0600 after rematch; probe would EACCES (authority is not in dialout)" >&2
     return 1
   fi
   if ! usb_tty_latency_ok "$real"; then
     echo "error: $real latency_timer is not 1 after rematch; default 16 ms misses the 40 ms live deadline" >&2
+    return 1
+  fi
+  if ! usb_tty_power_ok "$real"; then
+    echo "error: $real power/control drifted after rematch; autosuspend can miss the 40 ms live deadline" >&2
     return 1
   fi
 }
@@ -1495,9 +1505,9 @@ run_init_and_probe() {
     fi
     if usb_serial_must_resolve "$DEVICE" && {
       [[ "$rc" -eq 2 ]] \
-        || grep -qE 'metal_device_missing|Permission denied|EACCES' "$err"
+        || grep -qE 'metal_device_missing|Permission denied|EACCES|EBUSY|Device or resource busy' "$err"
     }; then
-      echo "metal-campaign: probe missing/EACCES (attempt $attempt); rematch USB-UART" >&2
+      echo "metal-campaign: probe missing/EACCES/EBUSY (attempt $attempt); rematch USB-UART" >&2
       cat "$err" >&2 || true
       sleep 0.4
       continue
