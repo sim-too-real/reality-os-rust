@@ -895,6 +895,55 @@ settle_usb_tty_after_host_writes() {
   fi
 }
 
+# Serve already holds exclusive. udev change after open can restore
+# 0660 dialout and FTDI latency_timer 16 ms. Re-assert owner/latency/
+# power, settle, and fail closed unless they still read back. Do not
+# refuse_shared — the smoke child is the holder. These calls used to
+# sit inside `if` without `|| return`, so a failed latency write was
+# ignored (set -e is disabled in `if`) and the first hold ran at 16 ms.
+reassert_usb_tty_after_serve_open() {
+  local rematched real
+  real="$(readlink -f "${DEVICE:-}" 2>/dev/null || echo "${DEVICE:-}")"
+  case "$(basename "$real")" in
+    ttyUSB* | ttyACM* | ttyCH341*) ;;
+    *) return 0 ;;
+  esac
+  [[ -e "$real" ]] || return 0
+  claim_usb_tty "$real" || return 1
+  set_usb_serial_latency "$DEVICE" || return 1
+  disable_usb_autosuspend "$DEVICE" || return 1
+  if command -v udevadm >/dev/null 2>&1; then
+    udevadm settle --timeout=2 >/dev/null 2>&1 || true
+  else
+    sleep 0.2
+  fi
+  rematched="$(stabilize_metal_device "$DEVICE")" || return 1
+  if [[ -n "$rematched" && "$rematched" != "$DEVICE" ]]; then
+    echo "metal-campaign: rematched $DEVICE -> $rematched after serve open" >&2
+    DEVICE="$rematched"
+    export REALITYOS_METAL_DEVICE="$DEVICE"
+    sync_metal_device_config || return 1
+  fi
+  real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
+  set_usb_serial_latency "$DEVICE" || return 1
+  disable_usb_autosuspend "$DEVICE" || return 1
+  if command -v udevadm >/dev/null 2>&1; then
+    udevadm settle --timeout=2 >/dev/null 2>&1 || true
+  fi
+  if ! usb_tty_latency_ok "$real"; then
+    echo "error: $DEVICE latency_timer is not 1 after serve open; default 16 ms misses the 40 ms live deadline" >&2
+    return 1
+  fi
+  if ! usb_tty_power_ok "$real"; then
+    echo "error: $DEVICE power/control is not on after serve open; autosuspend can miss the 40 ms live deadline" >&2
+    return 1
+  fi
+  if ! usb_tty_owner_mode_ok "$real"; then
+    echo "error: $DEVICE is not $AUTHORITY_USER 0600 after serve open" >&2
+    return 1
+  fi
+}
+
 prepare_usb_serial_host() {
   local dev="$1"
   local real name
@@ -913,7 +962,7 @@ prepare_usb_serial_host() {
   case "$name" in
     ttyUSB*|ttyACM*|ttyCH341*) ;;
     *)
-      set_usb_serial_latency "$dev"
+      set_usb_serial_latency "$dev" || return 1
       return 0
       ;;
   esac
@@ -1376,12 +1425,9 @@ start_auth() {
   fi
   chmod 0660 "$ROOT/ipc.sock"
   chgrp "$IPC_GROUP" "$ROOT/ipc.sock"
-  # udev may reset the tty to 0660 dialout after open. Re-apply exclusive mode.
-  if [[ -e "$DEVICE" ]]; then
-    claim_usb_tty "$DEVICE" || return 1
-    set_usb_serial_latency "$DEVICE"
-    disable_usb_autosuspend "$DEVICE"
-  fi
+  # udev may reset the tty to 0660 dialout after open. Re-apply exclusive
+  # mode and fail closed unless latency_timer / power/control still stick.
+  reassert_usb_tty_after_serve_open || return 1
 }
 
 stop_auth() {
@@ -1417,10 +1463,9 @@ if [[ -s "$ROOT/serve.err" ]]; then
   cat "$ROOT/serve.err" >&2
   exit 1
 fi
-if [[ -e "$DEVICE" ]]; then
-  claim_usb_tty "$DEVICE" || exit 2
-  set_usb_serial_latency "$DEVICE"
-  disable_usb_autosuspend "$DEVICE"
+if ! reassert_usb_tty_after_serve_open; then
+  echo "error: $DEVICE latency_timer/power/owner drifted after first serve open" >&2
+  exit 2
 fi
 
 PROBE="$(as_autonomy env METAL_AUTHORITY_PID="${SMOKE_PID:-$AUTH_PID}" "$PROP" --root "$ROOT" --authority-pid "${SMOKE_PID:-$AUTH_PID}" os-probe)"
