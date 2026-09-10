@@ -26,11 +26,22 @@ jobs:
 
   verify-mujoco:
     runs-on: ubuntu-latest
+    env:
+      # Must match rust-toolchain.toml. @stable leaves the first cargo
+      # invocation to rustup-bootstrap 1.95.0, which flakes with:
+      #   recovering from a partially installed toolchain
+      #   failed to install component clippy-preview ... conflict: bin/cargo-clippy
+      RUSTUP_TOOLCHAIN: "1.95.0"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt, clippy
+      - name: assert pinned toolchain
+        run: |
+          rustup show
+          rustc --version
+          rustc --version | grep -F "1.95.0"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
