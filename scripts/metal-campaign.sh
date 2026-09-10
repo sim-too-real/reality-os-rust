@@ -157,9 +157,12 @@ set_usb_serial_latency() {
 # Ubuntu usbcore autosuspend is often 2 s. An idle gap between campaign
 # cases then makes the next USB-UART xfer miss the 40 ms live deadline
 # and look like bus_lost / a watchdog miss. PTY has no sysfs node.
+# A write without read-back used to continue on `auto` (same class as
+# latency_timer). Stop at the UART device (idVendor+idProduct); do not
+# climb to a hub and treat that as success.
 disable_usb_autosuspend() {
   local dev="$1"
-  local real name node
+  local real name node uart="" got
   real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
   name="$(basename "$real")"
   case "$name" in
@@ -168,19 +171,28 @@ disable_usb_autosuspend() {
   esac
   node="$(readlink -f "/sys/class/tty/${name}/device" 2>/dev/null || true)"
   while [[ -n "$node" && "$node" != / && "$node" != /sys ]]; do
-    if [[ -f "$node/power/control" ]]; then
-      if echo on >"$node/power/control" 2>/dev/null; then
-        echo "metal-campaign: set $node/power/control=on (USB autosuspend can miss the 40 ms live deadline)"
-      fi
-    fi
-    if [[ -f "$node/power/autosuspend_delay_ms" ]]; then
-      echo -1 >"$node/power/autosuspend_delay_ms" 2>/dev/null || true
-    fi
     if [[ -f "$node/idVendor" ]]; then
+      if [[ -f "$node/idProduct" ]]; then
+        uart="$node"
+      fi
       break
     fi
     node="$(dirname "$node")"
   done
+  if [[ -z "$uart" || ! -f "$uart/power/control" ]]; then
+    echo "error: USB-UART $dev has no UART-device power/control; refuse default autosuspend" >&2
+    return 1
+  fi
+  echo on >"$uart/power/control" 2>/dev/null || true
+  if [[ -f "$uart/power/autosuspend_delay_ms" ]]; then
+    echo -1 >"$uart/power/autosuspend_delay_ms" 2>/dev/null || true
+  fi
+  got="$(tr -d '[:space:]' <"$uart/power/control" 2>/dev/null || true)"
+  if [[ "$got" != "on" ]]; then
+    echo "error: USB-UART power/control is '${got:-unreadable}' after write (want on); autosuspend can miss the 40 ms live deadline" >&2
+    return 1
+  fi
+  echo "metal-campaign: set $uart/power/control=on (USB autosuspend can miss the 40 ms live deadline)"
 }
 
 # Walk sysfs from the tty to the UART USB device (first
