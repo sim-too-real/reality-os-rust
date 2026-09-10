@@ -704,6 +704,72 @@ metal_is_mountpoint() {
   fi
 }
 
+# Hardened benches often mount /tmp noexec. Staging the cargo
+# binaries there then execing them as realityos-authority fails
+# with Permission denied at init/probe (after USB prepare).
+# findmnt --target walks to the mount even when the path is new.
+metal_mount_has_noexec() {
+  local probe="$1"
+  local opts=""
+  if [[ ! -e "$probe" ]]; then
+    probe="$(dirname "$probe")"
+  fi
+  if command -v findmnt >/dev/null 2>&1; then
+    opts="$(findmnt -n -o OPTIONS --target "$probe" 2>/dev/null || true)"
+  fi
+  [[ "$opts" == *noexec* ]]
+}
+
+# These CLIs have no --help. A successful image prints usage and
+# exits 2. `sudo -u -- $bin` returns 1 on noexec ("unable to
+# execute"); exec via /bin/sh surfaces the kernel 126 instead.
+metal_os_users_can_exec() {
+  local dir="$1"
+  metal_user_can_exec() {
+    local user="$1"
+    local bin="$2"
+    local rc=0
+    sudo -u "$user" -- /bin/sh -c 'exec "$1"' sh "$bin" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+      0 | 2) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+  metal_user_can_exec "$AUTHORITY_USER" "$dir/realityos-metal-smoke" \
+    && metal_user_can_exec "$AUTONOMY_USER" "$dir/realityos-metal-propose"
+}
+
+# Copy cargo bins to dest so the metal UIDs can exec without
+# traversing a 0700 repo. Never copy onto the 32 MiB journal tmpfs
+# (debug smoke+propose are tens of MiB each).
+try_stage_metal_bins() {
+  local dest="$1"
+  local b
+  if [[ "$dest" == "$ROOT" || "$dest" == "$ROOT/"* ]]; then
+    echo "metal-campaign: refuse to copy metal binaries onto journal root $ROOT (32M tmpfs)" >&2
+    return 1
+  fi
+  if metal_mount_has_noexec "$dest"; then
+    echo "metal-campaign: mount for $dest is noexec; skip staging there" >&2
+    return 1
+  fi
+  rm -rf "$dest"
+  install -d -m 0755 "$dest" || return 1
+  for b in realityos-metal-smoke realityos-metal-propose; do
+    if [[ ! -x "$BUILT_BIN/$b" ]]; then
+      echo "error: missing $BUILT_BIN/$b" >&2
+      return 1
+    fi
+    install -m 0755 "$BUILT_BIN/$b" "$dest/$b" || return 1
+  done
+  if ! metal_os_users_can_exec "$dest"; then
+    echo "metal-campaign: $AUTHORITY_USER / $AUTONOMY_USER cannot exec staged binaries at $dest" >&2
+    return 1
+  fi
+  BIN_DIR="$dest"
+  return 0
+}
+
 # Each watchdog/heartbeat emit fsyncs journal+seal. A disk fsync >100 ms
 # latches the software watchdog and cannot be caught up. That is a
 # deployment constraint, not a kernel redesign.
@@ -729,17 +795,26 @@ else
   exit 2
 fi
 
+BUILT_BIN="$BIN_DIR"
 STAGE="${REALITYOS_METAL_STAGE:-/tmp/realityos-metal-bin}"
-rm -rf "$STAGE"
-install -d -m 0755 "$STAGE"
-for b in realityos-metal-smoke realityos-metal-propose; do
-  if [[ ! -x "$BIN_DIR/$b" ]]; then
-    echo "error: missing $BIN_DIR/$b" >&2
+if try_stage_metal_bins "$STAGE"; then
+  echo "metal-campaign: staged metal binaries at $BIN_DIR"
+elif [[ -z "${REALITYOS_METAL_STAGE:-}" ]] && try_stage_metal_bins /dev/shm/realityos-metal-bin; then
+  STAGE=/dev/shm/realityos-metal-bin
+  echo "metal-campaign: default /tmp stage is not executable; using $STAGE" >&2
+else
+  echo "metal-campaign: cannot exec a staged copy; using cargo binaries at $BUILT_BIN" >&2
+  chmod 0755 "$BUILT_BIN/realityos-metal-smoke" "$BUILT_BIN/realityos-metal-propose"
+  chmod a+rx "$BUILT_BIN"
+  BIN_DIR="$BUILT_BIN"
+  if ! metal_os_users_can_exec "$BIN_DIR"; then
+    echo "error: $AUTHORITY_USER / $AUTONOMY_USER cannot exec metal binaries." >&2
+    echo "error: the stage mount is noexec (or exec failed) and $BUILT_BIN is not usable by those UIDs." >&2
+    echo "error: set REALITYOS_METAL_STAGE to a world-accessible directory on an executable filesystem." >&2
+    echo "error: do not stage onto the 32M journal tmpfs at $ROOT." >&2
     exit 2
   fi
-  install -m 0755 "$BIN_DIR/$b" "$STAGE/$b"
-done
-BIN_DIR="$STAGE"
+fi
 SMOKE="$BIN_DIR/realityos-metal-smoke"
 PROP="$BIN_DIR/realityos-metal-propose"
 
