@@ -22,7 +22,10 @@ use crate::config::{
     LOCK_FILE, MOVING_FILE, PRESENT_FILE, VIN_FILE,
 };
 use crate::egress::EgressLog;
-use crate::identity::{is_pty_path, usb_identity_for_tty, MeasuredIdentity};
+use crate::identity::{
+    adapter_identity_aliases, is_pty_path, rematch_discover_device, usb_identity_for_tty,
+    MeasuredIdentity,
+};
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
     instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, unique_status_ids, ProtocolError,
@@ -160,7 +163,7 @@ impl Xl330Driver {
     /// Probe-only: try configured baud/id first, then common XL330 bus settings.
     /// Production `serve` keeps using [`Self::open`] with the bound config.
     pub fn open_discovering(
-        cfg: MetalConfig,
+        mut cfg: MetalConfig,
         root: impl AsRef<Path>,
     ) -> io::Result<(Self, MetalConfig)> {
         if !cfg.device.exists() {
@@ -169,6 +172,11 @@ impl Xl330Driver {
                 format!("metal_device_missing:{}", cfg.device.display()),
             ));
         }
+        // Latch adapter aliases before the first open. Each sniff/open can
+        // emit udev change; FTDI/U2D2 by-id then dangles for 1–3 s. Sniff
+        // used to treat !exists as "no servo at this baud" and skip the
+        // rest of the scan instead of rematching ttyUSB1.
+        let latched_aliases = adapter_identity_aliases(&cfg.device, cfg.servo_id);
         let extra_baud = std::env::var("REALITYOS_METAL_BAUD")
             .ok()
             .and_then(|s| s.parse().ok());
@@ -179,6 +187,23 @@ impl Xl330Driver {
         let ids = candidate_servo_ids(cfg.servo_id, extra_id);
         let mut last_err: Option<io::Error> = None;
         for baud in bauds {
+            let live = rematch_discover_device(cfg.device.clone(), &latched_aliases, cfg.servo_id);
+            if live != cfg.device {
+                eprintln!(
+                    "metal-discover: rematched {} -> {}",
+                    cfg.device.display(),
+                    live.display()
+                );
+                cfg.device = live;
+            }
+            if !cfg.device.exists() {
+                last_err = Some(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("metal_device_missing:{}", cfg.device.display()),
+                ));
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
             // Wizard may leave a non-1/2 ID. Broadcast PING still answers at
             // SRL=0 and the status carries the servo's own ID.
             let sniffed = sniff_servo_ids(&cfg.device, baud)?;

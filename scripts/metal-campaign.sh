@@ -1414,8 +1414,69 @@ as_authority() {
     "$@"
 }
 
-as_authority "$SMOKE" --root "$ROOT" --device "$DEVICE" init
-as_authority "$SMOKE" --root "$ROOT" --device "$DEVICE" probe
+# Probe opens the UART (sniff + identify) on the campaign DEVICE. After
+# stabilize that is usually /dev/serial/by-id. Those opens emit udev
+# change; the symlink then dangles for 1–3 s — the same window that
+# used to skip latency_timer and crash-replay rematch. serve rematches
+# via pick_live_device after bind-measured; probe runs before that bind.
+rematch_campaign_usb_device() {
+  local rematched
+  rematched="$(stabilize_metal_device "$DEVICE")" || return 1
+  if [[ -z "$rematched" ]]; then
+    echo "error: empty USB-UART path while rematching before probe" >&2
+    return 1
+  fi
+  if [[ "$rematched" != "$DEVICE" ]]; then
+    echo "metal-campaign: rematched $DEVICE -> $rematched before probe" >&2
+    DEVICE="$rematched"
+    export REALITYOS_METAL_DEVICE="$DEVICE"
+  fi
+  if ! usb_serial_resolved_real "$DEVICE" >/dev/null; then
+    echo "error: $DEVICE did not resolve to a live USB-serial tty before probe" >&2
+    return 1
+  fi
+}
+
+run_init_and_probe() {
+  local attempt rc err
+  err="$(mktemp)"
+  for attempt in 1 2 3 4 5; do
+    if usb_serial_must_resolve "$DEVICE"; then
+      if ! rematch_campaign_usb_device; then
+        echo "metal-campaign: USB-UART not live before probe (attempt $attempt); rematch" >&2
+        sleep 0.4
+        continue
+      fi
+    fi
+    as_authority "$SMOKE" --root "$ROOT" --device "$DEVICE" init || {
+      rm -f "$err"
+      return 1
+    }
+    rc=0
+    as_authority "$SMOKE" --root "$ROOT" --device "$DEVICE" probe 2>"$err" || rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+      rm -f "$err"
+      return 0
+    fi
+    if usb_serial_must_resolve "$DEVICE" && {
+      [[ "$rc" -eq 2 ]] || grep -q metal_device_missing "$err"
+    }; then
+      echo "metal-campaign: probe metal_device_missing (attempt $attempt); rematch USB-UART" >&2
+      cat "$err" >&2 || true
+      sleep 0.4
+      continue
+    fi
+    cat "$err" >&2 || true
+    rm -f "$err"
+    return "$rc"
+  done
+  cat "$err" >&2 || true
+  rm -f "$err"
+  echo "error: probe failed after rematch retries; bound USB-UART was not on a live tty" >&2
+  return 1
+}
+
+run_init_and_probe
 as_authority "$SMOKE" --root "$ROOT" bind-measured
 # Probe wrote the working baud/id. REALITYOS_METAL_BAUD is a probe
 # hint (2/3/4 Mbps only). A factory XL330 is 57 600; 1 Mbps is already

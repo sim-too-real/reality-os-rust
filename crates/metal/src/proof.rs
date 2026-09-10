@@ -415,6 +415,7 @@ pub fn default_unresolved() -> Vec<String> {
         "live EEPROM identity re-read is skipped when the motion-block read already took >=15 ms; that cycle keeps the previously latched identity".into(),
         "identity CRC/NAK after a good motion sample keeps the previous latched identity for that cycle".into(),
         "a half-duplex TTL/RS485 adapter that needs more than 1.5 ms after host TX, or more than 500 ms after DTR-RESET, is still a first-contact hole".into(),
+        "probe rematches a dangling USB-serial by-id from aliases latched before the first open; a udev rename that also changes the adapter serial still fail-closes".into(),
         "HUPCL is cleared on the live exclusive fd via termios after open; stty after TIOCEXCL is EBUSY on the node and on /proc/<pid>/fd/N, /proc/self/fd/N misses an O_CLOEXEC tty, and a fresh USB-serial session restores kernel-default HUPCL so a pre-open stty is lost".into(),
         "campaign settle treats present inside the hold-still band of the written goal as arrived; Moving=0 alone is not arrived (accel below Moving Threshold)".into(),
         "an XL330 already in Wizard RC-PWM / S.BUS / iBUS mode at boot cannot be identified over Protocol 2.0".into(),

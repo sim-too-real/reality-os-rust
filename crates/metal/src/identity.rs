@@ -361,6 +361,34 @@ pub fn pick_live_device(
     preferred
 }
 
+/// Probe discover latches adapter aliases from the live node, then rematches
+/// if a later udev change dangles `/dev/serial/by-id` (the same 1–3 s window
+/// that used to skip campaign latency/crash-replay rematch). `serve` already
+/// does this via [`pick_live_device`] after `bind-measured`. Probe runs
+/// before that bind, so it cannot use `expected_serial`.
+pub fn rematch_discover_device(
+    preferred: PathBuf,
+    latched_aliases: &[String],
+    servo_id: u8,
+) -> PathBuf {
+    if latched_aliases.is_empty() {
+        return preferred;
+    }
+    if preferred.exists()
+        && latched_aliases
+            .iter()
+            .any(|alias| adapter_serial_matches(&preferred, alias, servo_id))
+    {
+        return preferred;
+    }
+    for alias in latched_aliases {
+        if let Some(found) = find_tty_for_expected_serial(alias, servo_id) {
+            return found;
+        }
+    }
+    PathBuf::from(MISSING_ADAPTER_PATH)
+}
+
 /// USB-adapter serial on this node, before any servo open / torque-on.
 pub fn adapter_serial_matches(device: &Path, expected_serial: &str, servo_id: u8) -> bool {
     let want = expected_serial.trim();
@@ -532,6 +560,55 @@ mod tests {
         assert_ne!(got, PathBuf::from("/dev/null"));
         assert_ne!(got, PathBuf::from("/dev/zero"));
         assert!(!got.exists() || adapter_serial_for_tty(&got, 1) == expected);
+        assert_eq!(got, PathBuf::from(MISSING_ADAPTER_PATH));
+    }
+
+    #[test]
+    fn rematch_discover_keeps_preferred_when_alias_matches() {
+        let preferred = PathBuf::from("/dev/null");
+        let aliases = adapter_identity_aliases(&preferred, 1);
+        assert!(!aliases.is_empty());
+        assert_eq!(
+            rematch_discover_device(preferred.clone(), &aliases, 1),
+            preferred
+        );
+    }
+
+    #[test]
+    fn rematch_discover_vanished_non_usb_alias_is_sentinel() {
+        // find_tty_for_expected_serial only walks USB-UART nodes. A vanished
+        // GPIO/PTY fallback must not invent a different char device.
+        let aliases = adapter_identity_aliases(Path::new("/dev/zero"), 1);
+        assert!(aliases.iter().any(|a| a.starts_with("tty:zero:")));
+        assert_eq!(
+            rematch_discover_device(PathBuf::from("/dev/missing-metal-tty"), &aliases, 1),
+            PathBuf::from(MISSING_ADAPTER_PATH)
+        );
+    }
+
+    #[test]
+    fn rematch_discover_refuses_living_wrong_adapter() {
+        let aliases = adapter_identity_aliases(Path::new("/dev/zero"), 1);
+        let got = rematch_discover_device(PathBuf::from("/dev/null"), &aliases, 1);
+        assert_ne!(got, PathBuf::from("/dev/null"));
+        assert_eq!(got, PathBuf::from(MISSING_ADAPTER_PATH));
+    }
+
+    #[test]
+    fn rematch_discover_empty_aliases_keep_preferred() {
+        assert_eq!(
+            rematch_discover_device(PathBuf::from("/dev/missing-metal-tty"), &[], 1),
+            PathBuf::from("/dev/missing-metal-tty")
+        );
+    }
+
+    #[test]
+    fn rematch_discover_missing_bound_adapter_is_sentinel() {
+        let got = rematch_discover_device(
+            PathBuf::from("/dev/missing-metal-tty"),
+            &["usb:dead:beef:missing:id1".into()],
+            1,
+        );
         assert_eq!(got, PathBuf::from(MISSING_ADAPTER_PATH));
     }
 
