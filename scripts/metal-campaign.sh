@@ -1040,8 +1040,15 @@ PROP="$BIN_DIR/realityos-metal-propose"
 export REALITYOS_METAL_ROOT="$ROOT"
 export REALITYOS_METAL_DEVICE="$DEVICE"
 "$SCRIPT_DIR/metal-deploy.sh"
-# metal-deploy chown is || true (PTY/HIL). USB must actually be
-# authority 0600 before probe or the open is EACCES.
+# First prepare ran before tmpfs/staging. metal-deploy chown is || true
+# (PTY/HIL) and can emit a udev change that wakes ModemManager and
+# resets FTDI latency_timer to 16 ms. Probe opens the UART next —
+# re-prepare so fuser / ignore / rematch / latency / owner are current.
+if ! prepare_usb_serial_host "$DEVICE"; then
+  echo "error: $DEVICE is already open or the bound USB-UART identity drifted after deploy." >&2
+  echo "error: stop the holder, then re-run. Probe cannot share the tty." >&2
+  exit 2
+fi
 if ! claim_usb_tty "$DEVICE"; then
   echo "error: $DEVICE must be $AUTHORITY_USER 0600 before probe (udev OWNER=/NSS)." >&2
   exit 2
