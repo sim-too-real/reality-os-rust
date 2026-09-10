@@ -23,8 +23,8 @@ use crate::config::{
 };
 use crate::egress::EgressLog;
 use crate::identity::{
-    adapter_identity_aliases, device_node_identity, is_pty_path, rematch_discover_device,
-    usb_identity_for_tty, MeasuredIdentity,
+    adapter_identity_aliases, adapter_serial_matches, device_node_identity, is_pty_path,
+    rematch_discover_device, usb_identity_for_tty, MeasuredIdentity,
 };
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
@@ -63,10 +63,11 @@ pub struct Xl330Driver {
     /// After identify+limits, one serial attempt / 40 ms timeout so a USB-UART
     /// propose stays inside the 100 ms ONLINE software-watchdog miss.
     live_io: bool,
-    /// Adapter identity captured while `cfg.device` still resolved. After
-    /// serve open, udev can dangle by-id or rename ttyUSB0; re-reading
-    /// sysfs from that vanished name blanks serial and the first hold
-    /// dies as identity mismatch even though this exclusive fd is live.
+    /// Adapter identity captured while `cfg.device` still resolved.
+    /// chmod / the first exclusive open emit udev change; by-id then
+    /// dangles and ttyUSB0 can rename. Re-reading that vanished name
+    /// blanks serial: serve dies as metal_serial_mismatch after ping,
+    /// or the first hold dies as identity mismatch while this fd is live.
     latched_usb_serial: Option<String>,
     latched_usb_fallback: Option<String>,
     latched_node: Option<String>,
@@ -334,6 +335,8 @@ impl Xl330Driver {
     }
 
     fn latch_open_adapter_identity(&mut self) {
+        // Caller must invoke this before chmod/open, while cfg.device still
+        // resolves. usb_identity_for_tty canonicalizes a live by-id.
         let (usb, fb) = usb_identity_for_tty(&self.cfg.device);
         self.latched_usb_serial = usb;
         self.latched_usb_fallback = fb;
@@ -349,6 +352,12 @@ impl Xl330Driver {
                 format!("metal_device_missing:{}", self.cfg.device.display()),
             ));
         }
+        // Latch while the path still resolves. Campaign stabilize prefers
+        // `/dev/serial/by-id` on FTDI/U2D2. chmod + the first exclusive
+        // open emit udev change; that symlink then dangles for 1–3 s.
+        // Latching after open used to re-walk the vanished name, blank
+        // serial, and fail serve as metal_serial_mismatch after a good ping.
+        self.latch_open_adapter_identity();
         // A no-op chmod still emits udev change on typical Ubuntu — the
         // same class as campaign chown resetting FTDI latency_timer to
         // 16 ms before the first live hold. Skip when already 0600.
@@ -368,7 +377,27 @@ impl Xl330Driver {
         // keeps exclusive (TIOCEXCL+flock).
         let port = open_xl330_serial(&self.cfg.device, self.cfg.baud)?;
         self.port = Some(port);
-        self.latch_open_adapter_identity();
+        // Path still present after open: it must still be the bound adapter.
+        // chmod/open can recycle ttyUSB0 onto a different UART. The pre-open
+        // latch would then name adapter A while this fd is adapter B.
+        // A vanished by-id / renamed tty keeps the latch (same fd).
+        if self.cfg.device.exists()
+            && !self.cfg.expected_serial.trim().is_empty()
+            && !adapter_serial_matches(
+                &self.cfg.device,
+                &self.cfg.expected_serial,
+                self.cfg.servo_id,
+            )
+        {
+            self.port = None;
+            self.connected = false;
+            return Err(io::Error::other(format!(
+                "metal_adapter_recycled_after_open:expected={} actual={} device={}",
+                self.cfg.expected_serial,
+                crate::identity::adapter_serial_for_tty(&self.cfg.device, self.cfg.servo_id),
+                self.cfg.device.display()
+            )));
+        }
         match self.ping_and_identify() {
             Ok(()) => {
                 self.connected = true;
