@@ -1043,6 +1043,7 @@ dependencies = [
  "realityos-kernel",
  "realityos-physics",
  "realityos-plant",
+ "realityos-semantics",
  "realityos-session",
  "serde",
  "serde_json",
