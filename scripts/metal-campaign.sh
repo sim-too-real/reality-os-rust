@@ -666,6 +666,20 @@ trap cleanup_usb_serial_host EXIT
 # Stale journal+seal makes --first-online refuse. Kill leftover serve first so
 # it cannot rewrite the journal after the wipe.
 "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
+# First prepare installs udev OWNER=authority and chowns the tty.
+# Creating those accounts after that used to leave OWNER looking up a
+# missing user, so MODE/owner never stuck and ModemManager grabbed the
+# UART before probe. python3 is required before any UART open — a miss
+# after probe used to DTR-RESET then abort on baud-bind.
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "error: python3 is required (device remap, case records, proof mint). Install it before opening the UART." >&2
+  exit 2
+fi
+if ! command -v timeout >/dev/null 2>&1; then
+  echo "error: timeout(1) is required for propose IPC bounds" >&2
+  exit 2
+fi
+ensure_metal_os_users
 if ! prepare_usb_serial_host "$DEVICE"; then
   echo "error: $DEVICE is already open (ModemManager/brltty/another process)." >&2
   echo "error: stop that process, then re-run. First contact cannot share the tty." >&2
@@ -731,7 +745,6 @@ PROP="$BIN_DIR/realityos-metal-propose"
 
 export REALITYOS_METAL_ROOT="$ROOT"
 export REALITYOS_METAL_DEVICE="$DEVICE"
-ensure_metal_os_users
 "$SCRIPT_DIR/metal-deploy.sh"
 
 as_autonomy() {
