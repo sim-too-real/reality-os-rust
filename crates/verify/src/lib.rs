@@ -16,6 +16,7 @@ pub mod normalize;
 pub mod observation;
 pub mod policy;
 pub mod qualify;
+pub mod reach_foundation;
 pub mod reduce;
 pub mod runner;
 pub mod semantics_map;
