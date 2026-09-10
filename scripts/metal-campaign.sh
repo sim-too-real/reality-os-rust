@@ -84,7 +84,7 @@ ensure_metal_os_users() {
 # authority is not in dialout, so probe open is EACCES after prepare.
 claim_usb_tty() {
   local dev="$1"
-  local real name owner mode
+  local real name want_uid got_uid mode
   real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
   name="$(basename "$real")"
   case "$name" in
@@ -103,10 +103,13 @@ claim_usb_tty() {
     echo "error: chmod 0600 $real failed" >&2
     return 1
   fi
-  owner="$(stat -c '%U' "$real" 2>/dev/null || true)"
+  # Compare the inode uid, not NSS %U — a stale nscd name can hide a
+  # successful chown the same way OWNER= missed a just-created user.
+  want_uid="$(id -u "$AUTHORITY_USER")"
+  got_uid="$(stat -c '%u' "$real" 2>/dev/null || true)"
   mode="$(stat -c '%a' "$real" 2>/dev/null || true)"
-  if [[ "$owner" != "$AUTHORITY_USER" || "$mode" != "0600" ]]; then
-    echo "error: $real is owner=$owner mode=$mode after claim (want $AUTHORITY_USER 0600). udev/NSS did not stick." >&2
+  if [[ "$got_uid" != "$want_uid" || "$mode" != "0600" ]]; then
+    echo "error: $real is uid=$got_uid mode=$mode after claim (want uid=$want_uid 0600). udev/NSS did not stick." >&2
     return 1
   fi
 }
@@ -661,37 +664,44 @@ prepare_usb_serial_host() {
     fi
     METAL_USB_IDENTITY_LOCKED=1
   fi
-  if [[ -d /run/udev/rules.d ]]; then
-    if [[ -n "$METAL_USB_SERIAL" ]]; then
-      rules="/run/udev/rules.d/99-realityos-metal-usb.rules"
-    elif [[ -n "$METAL_USB_PORT" ]]; then
-      rules="/run/udev/rules.d/99-realityos-metal-usbport.rules"
-    else
-      rules="/run/udev/rules.d/99-realityos-metal-${name}.rules"
+  # Missing /run/udev/rules.d used to skip the rule entirely, so
+  # ModemManager could grab the UART after the fuser check and before
+  # probe. Create the dir or refuse to open.
+  if [[ ! -d /run/udev/rules.d ]]; then
+    if ! install -d -m 0755 /run/udev/rules.d; then
+      echo "error: cannot create /run/udev/rules.d; refuse to open a USB-UART without ID_MM_DEVICE_IGNORE" >&2
+      return 1
     fi
-    if [[ ! -f "$rules" ]]; then
-      if [[ -n "$METAL_USB_SERIAL" ]]; then
-        cat >"$rules" <<EOF
+  fi
+  if [[ -n "$METAL_USB_SERIAL" ]]; then
+    rules="/run/udev/rules.d/99-realityos-metal-usb.rules"
+  elif [[ -n "$METAL_USB_PORT" ]]; then
+    rules="/run/udev/rules.d/99-realityos-metal-usbport.rules"
+  else
+    rules="/run/udev/rules.d/99-realityos-metal-${name}.rules"
+  fi
+  if [[ ! -f "$rules" ]]; then
+    if [[ -n "$METAL_USB_SERIAL" ]]; then
+      cat >"$rules" <<EOF
 ACTION=="add|change", SUBSYSTEM=="tty", ATTRS{serial}=="${METAL_USB_SERIAL}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_BRLTTY}="0", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
 EOF
-      elif [[ -n "$METAL_USB_PORT" ]]; then
-        IFS=: read -r usb_bus usb_dest usb_vid usb_pid <<<"$METAL_USB_PORT"
-        cat >"$rules" <<EOF
+    elif [[ -n "$METAL_USB_PORT" ]]; then
+      IFS=: read -r usb_bus usb_dest usb_vid usb_pid <<<"$METAL_USB_PORT"
+      cat >"$rules" <<EOF
 ACTION=="add|change", SUBSYSTEM=="tty", ATTRS{idVendor}=="${usb_vid}", ATTRS{idProduct}=="${usb_pid}", ATTRS{busnum}=="${usb_bus}", ATTRS{devpath}=="${usb_dest}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_BRLTTY}="0", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
 EOF
-      else
-        cat >"$rules" <<EOF
+    else
+      cat >"$rules" <<EOF
 ACTION=="add|change", KERNEL=="${name}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_BRLTTY}="0", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
 EOF
-      fi
-      UDEV_RULE="$rules"
-      udevadm control --reload 2>/dev/null || true
-      udevadm trigger --action=change --sysname-match="$name" 2>/dev/null || true
-      udevadm settle --timeout=2 2>/dev/null || true
-      echo "metal-campaign: installed $rules (ID_MM_DEVICE_IGNORE + ID_BRLTTY=0 + 0600 ${AUTHORITY_USER})"
-    else
-      UDEV_RULE="$rules"
     fi
+    UDEV_RULE="$rules"
+    udevadm control --reload 2>/dev/null || true
+    udevadm trigger --action=change --sysname-match="$name" 2>/dev/null || true
+    udevadm settle --timeout=2 2>/dev/null || true
+    echo "metal-campaign: installed $rules (ID_MM_DEVICE_IGNORE + ID_BRLTTY=0 + 0600 ${AUTHORITY_USER})"
+  else
+    UDEV_RULE="$rules"
   fi
   if ! DEVICE="$(stabilize_metal_device "$dev")"; then
     echo "error: refusing recycled $dev; bound USB-UART identity is not on the bus" >&2
@@ -753,6 +763,23 @@ fi
 if ! command -v timeout >/dev/null 2>&1; then
   echo "error: timeout(1) is required for propose IPC bounds" >&2
   exit 2
+fi
+# Without fuser the campaign used to skip the holder check and open a
+# UART ModemManager already had (AT vs Protocol 2.0). PTY keeps the
+# responder on the master; that path does not need fuser.
+if [[ "$PTY_SEQUENCE_ACTIVE" != "1" ]]; then
+  if ! command -v fuser >/dev/null 2>&1; then
+    echo "error: fuser(1) is required to refuse a shared UART (ModemManager/brltty). Install psmisc before opening the UART." >&2
+    exit 2
+  fi
+  case "$(basename "$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")")" in
+    ttyUSB* | ttyACM* | ttyCH341*)
+      if ! command -v udevadm >/dev/null 2>&1; then
+        echo "error: udevadm is required to install ID_MM_DEVICE_IGNORE before opening the UART." >&2
+        exit 2
+      fi
+      ;;
+  esac
 fi
 ensure_metal_os_users
 if ! prepare_usb_serial_host "$DEVICE"; then
