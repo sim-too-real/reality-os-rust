@@ -552,6 +552,7 @@ STOPPED_MM=0
 METAL_USB_SERIAL=""
 METAL_USB_PORT=""
 METAL_USB_IDENTITY_LOCKED=0
+METAL_UDEV_NEEDS_RELOAD=0
 
 wait_tty_free() {
   local real="$1"
@@ -608,9 +609,131 @@ release_foreign_tty_holders() {
   fi
 }
 
+# Exclusive-tty refuse. PTY keeps the Protocol 2.0 stand-in on the master.
+refuse_shared_usb_tty() {
+  local real="$1"
+  if [[ "$PTY_SEQUENCE_ACTIVE" == "1" ]]; then
+    return 0
+  fi
+  if [[ ! -e "$real" ]]; then
+    return 0
+  fi
+  wait_tty_free "$real" || true
+  if fuser "$real" >/dev/null 2>&1; then
+    release_foreign_tty_holders "$real"
+    wait_tty_free "$real" || true
+  fi
+  if fuser "$real" >/dev/null 2>&1; then
+    echo "metal-campaign: $real still open:" >&2
+    fuser -v "$real" >&2 || true
+    return 1
+  fi
+  return 0
+}
+
+# Same class as latency_timer / power/control: writing a udev rule is not
+# enough. `udevadm info` must show the ignore flag on the live tty.
+usb_tty_has_mm_ignore() {
+  local dev="$1"
+  local real props
+  real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
+  [[ -e "$real" ]] || return 1
+  props="$(udevadm info --query=property --name="$real" 2>/dev/null || true)"
+  printf '%s\n' "$props" | grep -Eq '^ID_MM_DEVICE_IGNORE=1[[:space:]]*$'
+}
+
+metal_udev_ignore_rule_path() {
+  local name="$1"
+  if [[ -n "${METAL_USB_SERIAL:-}" ]]; then
+    echo "/run/udev/rules.d/99-realityos-metal-usb.rules"
+  elif [[ -n "${METAL_USB_PORT:-}" ]]; then
+    echo "/run/udev/rules.d/99-realityos-metal-usbport.rules"
+  else
+    echo "/run/udev/rules.d/99-realityos-metal-${name}.rules"
+  fi
+}
+
+metal_udev_ignore_rule_text() {
+  local name="$1"
+  if [[ -n "${METAL_USB_SERIAL:-}" ]]; then
+    cat <<EOF
+ACTION=="add|change", SUBSYSTEM=="tty", ATTRS{serial}=="${METAL_USB_SERIAL}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_BRLTTY}="0", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
+EOF
+  elif [[ -n "${METAL_USB_PORT:-}" ]]; then
+    local usb_bus usb_dest usb_vid usb_pid
+    IFS=: read -r usb_bus usb_dest usb_vid usb_pid <<<"$METAL_USB_PORT"
+    cat <<EOF
+ACTION=="add|change", SUBSYSTEM=="tty", ATTRS{idVendor}=="${usb_vid}", ATTRS{idProduct}=="${usb_pid}", ATTRS{busnum}=="${usb_bus}", ATTRS{devpath}=="${usb_dest}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_BRLTTY}="0", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
+EOF
+  else
+    cat <<EOF
+ACTION=="add|change", KERNEL=="${name}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_BRLTTY}="0", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
+EOF
+  fi
+}
+
+# Overwrite leftover SIGKILL rules, fail closed unless udev actually
+# reloads, and trigger change only when the live tty still lacks ignore.
+# Checking fuser only *before* that trigger used to miss ModemManager
+# waking on the change event.
+write_metal_udev_ignore_rule() {
+  local name="$1"
+  local rules leftover
+  rules="$(metal_udev_ignore_rule_path "$name")"
+  METAL_UDEV_NEEDS_RELOAD=0
+  for leftover in /run/udev/rules.d/99-realityos-metal-*.rules; do
+    [[ -e "$leftover" ]] || continue
+    if [[ "$leftover" != "$rules" ]]; then
+      rm -f "$leftover"
+      METAL_UDEV_NEEDS_RELOAD=1
+      echo "metal-campaign: removed leftover $leftover (wrong adapter ignore rule)"
+    fi
+  done
+  if [[ ! -f "$rules" ]] || ! metal_udev_ignore_rule_text "$name" | cmp -s - "$rules"; then
+    metal_udev_ignore_rule_text "$name" >"$rules" || {
+      echo "error: cannot write $rules; refuse to open a USB-UART without ID_MM_DEVICE_IGNORE" >&2
+      return 1
+    }
+    METAL_UDEV_NEEDS_RELOAD=1
+    echo "metal-campaign: wrote $rules (ID_MM_DEVICE_IGNORE + ID_BRLTTY=0 + 0600 ${AUTHORITY_USER})"
+  fi
+  UDEV_RULE="$rules"
+}
+
+ensure_usb_tty_mm_ignored() {
+  local dev="$1"
+  local real name
+  real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
+  name="$(basename "$real")"
+  if [[ "${METAL_UDEV_NEEDS_RELOAD:-0}" == "1" ]]; then
+    if ! udevadm control --reload; then
+      echo "error: udevadm control --reload failed; refuse to open a USB-UART without a loaded ID_MM_DEVICE_IGNORE rule" >&2
+      return 1
+    fi
+    METAL_UDEV_NEEDS_RELOAD=0
+  fi
+  if usb_tty_has_mm_ignore "$real"; then
+    return 0
+  fi
+  if ! udevadm control --reload; then
+    echo "error: udevadm control --reload failed; refuse to open a USB-UART without a loaded ID_MM_DEVICE_IGNORE rule" >&2
+    return 1
+  fi
+  if ! udevadm trigger --action=change --sysname-match="$name"; then
+    echo "error: udevadm trigger failed for $name; ID_MM_DEVICE_IGNORE was not applied" >&2
+    return 1
+  fi
+  udevadm settle --timeout=2 >/dev/null 2>&1 || true
+  if ! usb_tty_has_mm_ignore "$real"; then
+    echo "error: $real has no ID_MM_DEVICE_IGNORE after udev reload/trigger (udevadm info read-back). Refuse to open; ModemManager can still claim the UART." >&2
+    return 1
+  fi
+  echo "metal-campaign: udevadm info $real ID_MM_DEVICE_IGNORE=1"
+}
+
 prepare_usb_serial_host() {
   local dev="$1"
-  local real name rules
+  local real name
   real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
   name="$(basename "$real")"
   # Crash-replay and disconnect restart close exclusive, then reopen. Our
@@ -620,17 +743,8 @@ prepare_usb_serial_host() {
   # /dev/pts/N reports that python as a holder; treating it as
   # ModemManager exits 2 before the first serve (CI os-users). Exclusive
   # tty is a USB-UART check. PTY open is already non-TIOCEXCL.
-  if [[ "$PTY_SEQUENCE_ACTIVE" != "1" ]] && command -v fuser >/dev/null 2>&1 && [[ -e "$real" ]]; then
-    wait_tty_free "$real" || true
-    if fuser "$real" >/dev/null 2>&1; then
-      release_foreign_tty_holders "$real"
-      wait_tty_free "$real" || true
-    fi
-    if fuser "$real" >/dev/null 2>&1; then
-      echo "metal-campaign: $real still open:" >&2
-      fuser -v "$real" >&2 || true
-      return 1
-    fi
+  if ! refuse_shared_usb_tty "$real"; then
+    return 1
   fi
   case "$name" in
     ttyUSB*|ttyACM*|ttyCH341*) ;;
@@ -652,6 +766,7 @@ prepare_usb_serial_host() {
     wait_usb_sysfs_identity "$dev" || true
   fi
   real="$(readlink -f "$dev" 2>/dev/null || echo "$dev")"
+  name="$(basename "$real")"
   # Lock the first UART identity. A late FTDI/U2D2 iSerial used to be
   # promoted on the serve prepare after probe bound dest, then rematch
   # and Rust serial preference missed before hold.
@@ -673,36 +788,7 @@ prepare_usb_serial_host() {
       return 1
     fi
   fi
-  if [[ -n "$METAL_USB_SERIAL" ]]; then
-    rules="/run/udev/rules.d/99-realityos-metal-usb.rules"
-  elif [[ -n "$METAL_USB_PORT" ]]; then
-    rules="/run/udev/rules.d/99-realityos-metal-usbport.rules"
-  else
-    rules="/run/udev/rules.d/99-realityos-metal-${name}.rules"
-  fi
-  if [[ ! -f "$rules" ]]; then
-    if [[ -n "$METAL_USB_SERIAL" ]]; then
-      cat >"$rules" <<EOF
-ACTION=="add|change", SUBSYSTEM=="tty", ATTRS{serial}=="${METAL_USB_SERIAL}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_BRLTTY}="0", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
-EOF
-    elif [[ -n "$METAL_USB_PORT" ]]; then
-      IFS=: read -r usb_bus usb_dest usb_vid usb_pid <<<"$METAL_USB_PORT"
-      cat >"$rules" <<EOF
-ACTION=="add|change", SUBSYSTEM=="tty", ATTRS{idVendor}=="${usb_vid}", ATTRS{idProduct}=="${usb_pid}", ATTRS{busnum}=="${usb_bus}", ATTRS{devpath}=="${usb_dest}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_BRLTTY}="0", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
-EOF
-    else
-      cat >"$rules" <<EOF
-ACTION=="add|change", KERNEL=="${name}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_BRLTTY}="0", OWNER="${AUTHORITY_USER}", GROUP="${AUTHORITY_USER}", MODE="0600"
-EOF
-    fi
-    UDEV_RULE="$rules"
-    udevadm control --reload 2>/dev/null || true
-    udevadm trigger --action=change --sysname-match="$name" 2>/dev/null || true
-    udevadm settle --timeout=2 2>/dev/null || true
-    echo "metal-campaign: installed $rules (ID_MM_DEVICE_IGNORE + ID_BRLTTY=0 + 0600 ${AUTHORITY_USER})"
-  else
-    UDEV_RULE="$rules"
-  fi
+  write_metal_udev_ignore_rule "$name" || return 1
   if ! DEVICE="$(stabilize_metal_device "$dev")"; then
     echo "error: refusing recycled $dev; bound USB-UART identity is not on the bus" >&2
     return 1
@@ -714,6 +800,12 @@ EOF
   export REALITYOS_METAL_DEVICE="$DEVICE"
   sync_metal_device_config
   real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
+  # Reload/trigger can wake ModemManager. Read back ignore, then fuser
+  # again — the first holder check ran before this change event.
+  ensure_usb_tty_mm_ignored "$DEVICE" || return 1
+  if ! refuse_shared_usb_tty "$real"; then
+    return 1
+  fi
   if [[ -e "$real" ]]; then
     claim_usb_tty "$real" || return 1
   fi
