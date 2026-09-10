@@ -1,0 +1,35 @@
+robot_id: spatial_arm4
+model_format: mjcf
+model_file: model.xml
+asset_roots: []
+expected_base_type: fixed
+joint_aliases:
+  base_yaw: j1
+  shoulder: j2
+  elbow: j3
+  wrist: j4
+actuator_aliases:
+  base_yaw: act1
+  shoulder: act2
+  elbow: act3
+  wrist: act4
+end_effectors:
+  - name: ee
+    site: ee
+    body: link4
+grippers: []
+feet: []
+cameras:
+  - name: base_cam
+    body: base
+task_frames:
+  - name: ee
+    site: ee
+collision_groups:
+  robot: [base, link1, link2, link3, link4]
+default_controller_profile: pd_position
+source:
+  license: MIT
+  attribution: Reality OS original fixture (not a vendor robot)
+  redistributable: true
+  notes: Authored for verification ingestion. Four-DoF spatial arm with mixed Z/Y/Y/Z hinge axes. Not a third-party asset dump.

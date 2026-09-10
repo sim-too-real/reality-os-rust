@@ -104,6 +104,7 @@ class Instance:
                     "dof_dim": ddim,
                     "range": [float(m.jnt_range[i][0]), float(m.jnt_range[i][1])],
                     "limited": bool(m.jnt_limited[i]),
+                    "axis": [float(x) for x in m.jnt_axis[i]],
                     "parent_body": m.body(parent_id).name or f"body_{parent_id}",
                     "child_body": m.body(child_id).name or f"body_{child_id}",
                     "parent_id": parent_id,
@@ -168,12 +169,19 @@ class Instance:
                     "inertia": [float(x) for x in m.body_inertia[i]],
                     "parent": m.body(parent).name if parent >= 0 else "",
                     "parent_id": parent,
+                    "pos": [float(x) for x in m.body_pos[i]],
                     "ipos": [float(x) for x in m.body_ipos[i]],
                 }
             )
         sites = []
         for i in range(m.nsite):
-            sites.append({"name": m.site(i).name or f"site_{i}", "body": m.body(int(m.site_bodyid[i])).name})
+            sites.append(
+                {
+                    "name": m.site(i).name or f"site_{i}",
+                    "body": m.body(int(m.site_bodyid[i])).name,
+                    "pos": [float(x) for x in m.site_pos[i]],
+                }
+            )
         geoms = []
         for i in range(m.ngeom):
             geoms.append(
@@ -699,36 +707,74 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
             sid = 0
         if sid is None:
             return {"ok": False, "error": "no_site"}
-        jacp = np.zeros((3, INST.model.nv))
-        jacr = np.zeros((3, INST.model.nv))
-        damping = 1e-3
-        q0 = np.array(INST.data.qpos, copy=True)
-        err_norm = 1e9
-        for _ in range(int(msg.get("iters", 40))):
+
+        def _run_ik(q_start: np.ndarray, iters: int) -> tuple[list[float], float]:
+            jacp = np.zeros((3, INST.model.nv))
+            jacr = np.zeros((3, INST.model.nv))
+            damping = 1e-3
+            q0 = np.array(INST.data.qpos, copy=True)
+            INST.data.qpos[:] = q_start
+            err_norm = 1e9
+            for _ in range(iters):
+                mujoco.mj_forward(INST.model, INST.data)
+                mujoco.mj_jacSite(INST.model, INST.data, jacp, jacr, sid)
+                err = target - np.array(INST.data.site_xpos[sid])
+                err_norm = float(np.linalg.norm(err))
+                if err_norm < 1e-4:
+                    break
+                jjt = jacp @ jacp.T + damping * np.eye(3)
+                dq = jacp.T @ np.linalg.solve(jjt, err)
+                for j in range(INST.model.njnt):
+                    adr = int(INST.model.jnt_qposadr[j])
+                    dof = int(INST.model.jnt_dofadr[j])
+                    jtype = int(INST.model.jnt_type[j])
+                    if jtype == 3 and 0 <= dof < INST.model.nv:
+                        INST.data.qpos[adr] = float(INST.data.qpos[adr] + dq[dof])
+                        if INST.model.jnt_limited[j]:
+                            lo, hi = INST.model.jnt_range[j]
+                            INST.data.qpos[adr] = min(
+                                max(float(INST.data.qpos[adr]), float(lo)), float(hi)
+                            )
+            qpos = [float(x) for x in INST.data.qpos]
+            INST.data.qpos[:] = q0
             mujoco.mj_forward(INST.model, INST.data)
-            mujoco.mj_jacSite(INST.model, INST.data, jacp, jacr, sid)
-            err = target - np.array(INST.data.site_xpos[sid])
-            err_norm = float(np.linalg.norm(err))
+            return qpos, err_norm
+
+        q_home = np.array(INST.data.qpos, copy=True)
+        iters = int(msg.get("iters", 80))
+        seeds = [q_home]
+        for j in range(INST.model.njnt):
+            adr = int(INST.model.jnt_qposadr[j])
+            jtype = int(INST.model.jnt_type[j])
+            if jtype != 3:
+                continue
+            for delta in (0.35, -0.35, 0.75, -0.75, 1.1, -1.1):
+                q = np.array(q_home, copy=True)
+                q[adr] = float(q[adr] + delta)
+                if INST.model.jnt_limited[j]:
+                    lo, hi = INST.model.jnt_range[j]
+                    q[adr] = min(max(float(q[adr]), float(lo)), float(hi))
+                seeds.append(q)
+
+        best_q = [float(x) for x in q_home]
+        best_err = 1e9
+        for seed in seeds:
+            qpos, err_norm = _run_ik(seed, iters)
+            if err_norm < best_err:
+                best_q, best_err = qpos, err_norm
             if err_norm < 1e-3:
                 break
-            jjt = jacp @ jacp.T + damping * np.eye(3)
-            dq = jacp.T @ np.linalg.solve(jjt, err)
-            for j in range(INST.model.njnt):
-                adr = int(INST.model.jnt_qposadr[j])
-                dof = int(INST.model.jnt_dofadr[j])
-                jtype = int(INST.model.jnt_type[j])
-                if jtype == 3 and 0 <= dof < INST.model.nv:
-                    INST.data.qpos[adr] = float(INST.data.qpos[adr] + dq[dof])
-                    if INST.model.jnt_limited[j]:
-                        lo, hi = INST.model.jnt_range[j]
-                        INST.data.qpos[adr] = min(max(float(INST.data.qpos[adr]), float(lo)), float(hi))
-        qpos = [float(x) for x in INST.data.qpos]
-        INST.data.qpos[:] = q0
+
+        INST.data.qpos[:] = np.array(best_q, dtype=float)
         mujoco.mj_forward(INST.model, INST.data)
+        best_err = float(np.linalg.norm(target - np.array(INST.data.site_xpos[sid])))
+        INST.data.qpos[:] = q_home
+        mujoco.mj_forward(INST.model, INST.data)
+
         return {
             "ok": True,
-            "qpos": qpos,
-            "error": err_norm,
+            "qpos": best_q,
+            "error": best_err,
             "site": site,
             "metal": False,
             "evidence_status": EVIDENCE_STATUS,

@@ -1,0 +1,37 @@
+robot_id: wrist_offset_arm
+model_format: mjcf
+model_file: model.xml
+asset_roots: []
+expected_base_type: fixed
+joint_aliases:
+  base_yaw: j1
+  shoulder: j2
+  elbow: j3
+  wrist_roll: j4
+  wrist_yaw: j5
+actuator_aliases:
+  base_yaw: act1
+  shoulder: act2
+  elbow: act3
+  wrist_roll: act4
+  wrist_yaw: act5
+end_effectors:
+  - name: ee
+    site: ee
+    body: link5
+grippers: []
+feet: []
+cameras:
+  - name: base_cam
+    body: base
+task_frames:
+  - name: ee
+    site: ee
+collision_groups:
+  robot: [base, link1, link2, link3, link4, wrist_offset, link5]
+default_controller_profile: pd_position
+source:
+  license: MIT
+  attribution: Reality OS original fixture (not a vendor robot)
+  redistributable: true
+  notes: Authored for verification ingestion. Five-DoF spatial arm with mixed Z/Y/Y/X/Z hinge axes and 0.04 m wrist Y-offset. Not a third-party asset dump.

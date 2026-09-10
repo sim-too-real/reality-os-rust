@@ -1005,6 +1005,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "realityos-semantics"
+version = "0.1.0"
+dependencies = [
+ "realityos-kernel",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "realityos-session"
 version = "0.1.0"
 dependencies = [
@@ -1033,6 +1043,7 @@ dependencies = [
  "realityos-kernel",
  "realityos-physics",
  "realityos-plant",
+ "realityos-semantics",
  "realityos-session",
  "serde",
  "serde_json",

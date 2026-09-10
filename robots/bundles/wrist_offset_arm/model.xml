@@ -1,0 +1,56 @@
+<!-- MIT License: Reality OS original verification fixture (wrist_offset_arm).
+     Authored for verification ingestion. Not a third-party vendor asset. -->
+<mujoco model="wrist_offset_arm">
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+  <visual>
+    <global offwidth="64" offheight="64"/>
+  </visual>
+  <worldbody>
+    <light pos="0 0 2" dir="0 0 -1"/>
+    <geom name="floor" type="plane" size="2 2 0.05" rgba="0.2 0.2 0.25 1"/>
+    <body name="base" pos="0 0 0.08">
+      <geom type="cylinder" size="0.04 0.04" rgba="0.3 0.3 0.35 1" mass="0.45"/>
+      <camera name="base_cam" pos="0.7 -0.5 0.5" xyaxes="1 0.3 0 0 0.3 1"/>
+      <body name="link1" pos="0 0 0.04">
+        <joint name="j1" type="hinge" axis="0 0 1" range="-2.8 2.8" damping="0.45"/>
+        <geom type="capsule" fromto="0 0 0 0.18 0 0" size="0.02" rgba="0.7 0.35 0.2 1" mass="0.32"/>
+        <body name="link2" pos="0.18 0 0">
+          <joint name="j2" type="hinge" axis="0 1 0" range="-2.0 2.0" damping="0.35"/>
+          <geom type="capsule" fromto="0 0 0 0 0 0.16" size="0.018" rgba="0.55 0.45 0.25 1" mass="0.28"/>
+          <body name="link3" pos="0 0 0.16">
+            <joint name="j3" type="hinge" axis="0 1 0" range="-2.2 2.2" damping="0.28"/>
+            <geom type="capsule" fromto="0 0 0 0 0 0.12" size="0.016" rgba="0.45 0.55 0.3 1" mass="0.18"/>
+            <body name="link4" pos="0 0 0.12">
+              <joint name="j4" type="hinge" axis="1 0 0" range="-2.5 2.5" damping="0.22"/>
+              <geom type="capsule" fromto="0 0 0 0.06 0 0" size="0.014" rgba="0.35 0.6 0.4 1" mass="0.1"/>
+              <body name="wrist_offset" pos="0 0.04 0">
+                <geom type="sphere" size="0.012" rgba="0.4 0.5 0.45 1" mass="0.04"/>
+                <body name="link5" pos="0 0 0">
+                  <joint name="j5" type="hinge" axis="0 0 1" range="-3.0 3.0" damping="0.18"/>
+                  <geom type="capsule" fromto="0 0 0 0.05 0 0" size="0.012" rgba="0.3 0.65 0.45 1" mass="0.06"/>
+                  <site name="ee" pos="0.05 0 0" size="0.012" rgba="0.1 0.8 0.2 1"/>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <contact>
+    <exclude body1="base" body2="link1"/>
+    <exclude body1="link1" body2="link2"/>
+    <exclude body1="link2" body2="link3"/>
+    <exclude body1="link3" body2="link4"/>
+    <exclude body1="link4" body2="wrist_offset"/>
+    <exclude body1="wrist_offset" body2="link5"/>
+  </contact>
+  <actuator>
+    <position name="act1" joint="j1" kp="45" ctrlrange="-2.8 2.8" forcerange="-14 14"/>
+    <position name="act2" joint="j2" kp="35" ctrlrange="-2.0 2.0" forcerange="-10 10"/>
+    <position name="act3" joint="j3" kp="25" ctrlrange="-2.2 2.2" forcerange="-6 6"/>
+    <position name="act4" joint="j4" kp="18" ctrlrange="-2.5 2.5" forcerange="-3 3"/>
+    <position name="act5" joint="j5" kp="15" ctrlrange="-3.0 3.0" forcerange="-2 2"/>
+  </actuator>
+</mujoco>
