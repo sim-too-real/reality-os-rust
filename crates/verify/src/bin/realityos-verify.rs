@@ -187,11 +187,7 @@ fn foundation_reach() {
     for r in &report.robots {
         println!(
             "  {} ({}) success={} refuse={:?} writes={}",
-            r.robot_id,
-            r.role,
-            r.reach.task_success,
-            r.reach.skill_refuse,
-            r.reach.ctrl_writes
+            r.robot_id, r.role, r.reach.task_success, r.reach.skill_refuse, r.reach.ctrl_writes
         );
     }
     println!("wrote verify-out/foundation_report.json");

@@ -2,12 +2,12 @@
 
 pub mod adapter;
 pub mod capability;
-pub mod skill;
 pub mod embodiment;
 pub mod observation;
 pub mod provenance;
 pub mod reach;
 pub mod sensor;
+pub mod skill;
 pub mod transform;
 pub mod world;
 

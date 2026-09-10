@@ -2,9 +2,9 @@
 
 use crate::bundle::RobotBundle;
 use crate::honesty::SIMULATION_ONLY;
-use crate::reach_foundation::{run_foundation_reach, FoundationReachReport};
-use crate::mujoco_exec::checkin_worker;
 use crate::load_and_normalize;
+use crate::mujoco_exec::checkin_worker;
+use crate::reach_foundation::{run_foundation_reach, FoundationReachReport};
 use crate::semantics_map::embodiment_from_manifest;
 use realityos_semantics::capability::{derive_capabilities, CapabilityGraph};
 use serde::{Deserialize, Serialize};
@@ -105,7 +105,13 @@ pub fn run_campaign() -> Result<FoundationReport, String> {
     let robots = vec![
         record_robot(&planar, "development", [0.22, 0.0, 0.12], 0.20, true)?,
         record_robot(&spatial, "development", [0.22, 0.0, 0.12], 0.20, false)?,
-        record_robot(&held_out, "held_out_first_score", [0.20, 0.0, 0.12], 0.25, false)?,
+        record_robot(
+            &held_out,
+            "held_out_first_score",
+            [0.20, 0.0, 0.12],
+            0.25,
+            false,
+        )?,
     ];
 
     let scenario_count = robots.len() as u64;
@@ -155,7 +161,10 @@ pub fn render_markdown(report: &FoundationReport) -> String {
     md.push_str(&format!("software_sha: `{}`\n\n", report.software_sha));
     md.push_str(&format!("evidence_status: {}\n\n", report.evidence_status));
     md.push_str("metal: false\n\n");
-    md.push_str(&format!("skill: {}  adapter: {}  adaptation: {}\n\n", report.skill, report.adapter_id, report.adaptation));
+    md.push_str(&format!(
+        "skill: {}  adapter: {}  adaptation: {}\n\n",
+        report.skill, report.adapter_id, report.adaptation
+    ));
     md.push_str(&format!(
         "scenarios={} successes={} refusals={} probes={} ctrl_writes={}\n\n",
         report.scenario_count, report.successes, report.refusals, report.probes, report.ctrl_writes

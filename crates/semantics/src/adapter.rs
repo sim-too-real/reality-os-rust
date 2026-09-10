@@ -79,8 +79,7 @@ impl ControlAdapter for ChainIkPositionPdAdapter {
 
         let q = solve_ik(&joints, &link_offsets, &ee_offset, target)?;
 
-        let mut joint_q: std::collections::HashMap<String, f64> =
-            std::collections::HashMap::new();
+        let mut joint_q: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
         for (joint, qi) in joints.iter().zip(q.iter()) {
             joint_q.insert(joint.name.clone(), *qi);
         }
@@ -262,11 +261,7 @@ fn forward_kinematics(
     q: &[f64],
 ) -> Result<FkState, SkillRefuse> {
     let mut pos = [0.0, 0.0, 0.0];
-    let mut rot = [
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-    ];
+    let mut rot = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
     let mut joint_origins = Vec::with_capacity(joints.len());
     let mut axes_world = Vec::with_capacity(joints.len());
 

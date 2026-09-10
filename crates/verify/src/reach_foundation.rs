@@ -20,8 +20,8 @@ use realityos_semantics::provenance::{Provenance, Provenanced};
 use realityos_semantics::reach::compile_reach;
 use realityos_semantics::skill::SkillRefuse;
 use realityos_semantics::world::WorldState;
-use serde_json::Value;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -64,14 +64,11 @@ pub fn run_foundation_reach(
     let mut model = embodiment_from_manifest(bundle, &manifest);
     let mut caps = derive_capabilities(&model, None);
 
-    let initial = inst
-        .step(0)
-        .map_err(|e| e.to_string())
-        .and_then(|st| {
-            st.get("state")
-                .ok_or_else(|| "missing initial state".into())
-                .map(VerifierTruth::from_mujoco_state)
-        })?;
+    let initial = inst.step(0).map_err(|e| e.to_string()).and_then(|st| {
+        st.get("state")
+            .ok_or_else(|| "missing initial state".into())
+            .map(VerifierTruth::from_mujoco_state)
+    })?;
 
     let epoch = model.calibration_epoch.clone();
     let model_hash = model.model_hash.clone();
@@ -120,12 +117,8 @@ pub fn run_foundation_reach(
     });
     let port = SharedSimPort::new(shared.clone());
     let max_a = manifest.tau_max().into_iter().fold(1.0, f64::max);
-    let plant = HardwareBackedPlant::new(
-        port,
-        &manifest.robot_id,
-        manifest.nu.max(1) as usize,
-        max_a,
-    );
+    let plant =
+        HardwareBackedPlant::new(port, &manifest.robot_id, manifest.nu.max(1) as usize, max_a);
     let journal = std::env::temp_dir().join(format!(
         "realityos-foundation-reach-{}-{}.jsonl",
         manifest.robot_id,
@@ -148,12 +141,7 @@ pub fn run_foundation_reach(
         target,
         now_s,
     );
-    let proposal = action_proposal_from_ctrl(
-        &policy_obs,
-        &ctrl,
-        now_s,
-        auth.command_lifetime_s,
-    );
+    let proposal = action_proposal_from_ctrl(&policy_obs, &ctrl, now_s, auth.command_lifetime_s);
     let task = TaskSpec::Reach {
         end_effector: "ee".into(),
         target,
@@ -237,14 +225,11 @@ pub fn run_foundation_reach_missing_target(
     let model = embodiment_from_manifest(bundle, &manifest);
     let caps = derive_capabilities(&model, None);
 
-    let initial = inst
-        .step(0)
-        .map_err(|e| e.to_string())
-        .and_then(|st| {
-            st.get("state")
-                .ok_or_else(|| "missing initial state".into())
-                .map(|s| json_f64_vec(&s["qpos"]))
-        })?;
+    let initial = inst.step(0).map_err(|e| e.to_string()).and_then(|st| {
+        st.get("state")
+            .ok_or_else(|| "missing initial state".into())
+            .map(|s| json_f64_vec(&s["qpos"]))
+    })?;
 
     let epoch = model.calibration_epoch.clone();
     let now_s = 10.0;
@@ -324,12 +309,13 @@ fn fill_from_inspect(model: &mut EmbodimentModel, inspect: &Value) {
         let frame_name = format!("link_{}", joint.name);
         let pos = body_pos.get(&joint.child_body).copied();
         if let Some(pos) = pos {
-            if let Some(frame) = model.frames.iter_mut().find(|f| {
-                f.name == frame_name && f.parent_body == joint.parent_body
-            }) {
+            if let Some(frame) = model
+                .frames
+                .iter_mut()
+                .find(|f| f.name == frame_name && f.parent_body == joint.parent_body)
+            {
                 if frame.translation.value.is_none() {
-                    frame.translation =
-                        Provenanced::simulator_derived(pos, INSPECT_SOURCE, 0.0);
+                    frame.translation = Provenanced::simulator_derived(pos, INSPECT_SOURCE, 0.0);
                 }
             } else {
                 model.frames.push(ModelFrame {
@@ -404,18 +390,10 @@ fn vec3_from_json(v: &Value) -> Option<[f64; 3]> {
     if arr.len() < 3 {
         return None;
     }
-    Some([
-        arr[0].as_f64()?,
-        arr[1].as_f64()?,
-        arr[2].as_f64()?,
-    ])
+    Some([arr[0].as_f64()?, arr[1].as_f64()?, arr[2].as_f64()?])
 }
 
-fn fk_frame_target(
-    truth: &VerifierTruth,
-    manifest: &RobotManifest,
-    target: [f64; 3],
-) -> [f64; 3] {
+fn fk_frame_target(truth: &VerifierTruth, manifest: &RobotManifest, target: [f64; 3]) -> [f64; 3] {
     let base_name = manifest
         .derived
         .end_effector_joint_chains
@@ -578,19 +556,10 @@ mod tests {
             return;
         }
         for id in ["planar_arm", "spatial_arm4"] {
-            let b =
-                RobotBundle::load(crate::corpus::bundled_robots_root().join(id)).unwrap();
-            let r = run_foundation_reach(
-                &b,
-                [0.22, 0.0, 0.12],
-                0.20,
-                10.0,
-                0.25,
-                None,
-                false,
-                false,
-            )
-            .unwrap();
+            let b = RobotBundle::load(crate::corpus::bundled_robots_root().join(id)).unwrap();
+            let r =
+                run_foundation_reach(&b, [0.22, 0.0, 0.12], 0.20, 10.0, 0.25, None, false, false)
+                    .unwrap();
             assert_eq!(r.skill, "REACH");
             assert_eq!(r.adapter_id, "chain_ik_position_pd");
             assert!(!r.metal);
@@ -619,17 +588,8 @@ mod tests {
             return;
         }
         let b = RobotBundle::load(crate::corpus::robot_dir("planar_arm")).unwrap();
-        let r = run_foundation_reach(
-            &b,
-            [0.22, 0.0, 0.12],
-            0.20,
-            10.0,
-            0.25,
-            None,
-            false,
-            true,
-        )
-        .unwrap();
+        let r = run_foundation_reach(&b, [0.22, 0.0, 0.12], 0.20, 10.0, 0.25, None, false, true)
+            .unwrap();
         assert_eq!(r.replay_write_delta, Some(0));
     }
 
@@ -660,17 +620,8 @@ mod tests {
             return;
         }
         let b = RobotBundle::load(crate::corpus::robot_dir("planar_arm")).unwrap();
-        let r = run_foundation_reach(
-            &b,
-            [0.22, 0.0, 0.12],
-            0.20,
-            10.0,
-            0.25,
-            None,
-            true,
-            false,
-        )
-        .unwrap();
+        let r = run_foundation_reach(&b, [0.22, 0.0, 0.12], 0.20, 10.0, 0.25, None, true, false)
+            .unwrap();
         assert_eq!(r.ctrl_writes, 0);
     }
 
@@ -680,17 +631,8 @@ mod tests {
             return;
         }
         let b = RobotBundle::load(crate::held_out::held_out_bundle()).unwrap();
-        let r = run_foundation_reach(
-            &b,
-            [0.20, 0.0, 0.12],
-            0.25,
-            10.0,
-            0.25,
-            None,
-            false,
-            false,
-        )
-        .unwrap();
+        let r = run_foundation_reach(&b, [0.20, 0.0, 0.12], 0.25, 10.0, 0.25, None, false, false)
+            .unwrap();
         assert_eq!(r.adaptation, "CONFIGURED");
         assert!(!r.metal);
         assert!(!r.model_hash.is_empty());

@@ -138,7 +138,10 @@ mod tests {
 
     #[test]
     fn llm_string_is_not_a_skill() {
-        assert!(matches!(SkillName::parse("do_a_flip"), Err(SkillRefuse::NotInIr)));
+        assert!(matches!(
+            SkillName::parse("do_a_flip"),
+            Err(SkillRefuse::NotInIr)
+        ));
     }
 
     #[test]
