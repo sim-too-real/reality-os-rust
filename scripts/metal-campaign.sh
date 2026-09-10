@@ -1445,6 +1445,31 @@ rematch_campaign_usb_device() {
   fi
   DEVICE="$real"
   export REALITYOS_METAL_DEVICE="$DEVICE"
+  # A rematch after udev rename can land on a fresh ttyUSB1 still
+  # 0660 dialout / latency 16. Authority is not in dialout; probe
+  # then EACCES (not metal_device_missing) and the retry loop used
+  # to abort the first XL330 run.
+  claim_usb_tty "$real" || return 1
+  set_usb_serial_latency "$real" || return 1
+  disable_usb_autosuspend "$real" || return 1
+  rematched="$(stabilize_metal_device "$DEVICE")" || return 1
+  if ! real="$(usb_serial_resolved_real "$rematched")"; then
+    echo "error: $rematched did not resolve to a live USB-serial tty after claim" >&2
+    return 1
+  fi
+  DEVICE="$real"
+  export REALITYOS_METAL_DEVICE="$DEVICE"
+  claim_usb_tty "$real" || return 1
+  set_usb_serial_latency "$real" || return 1
+  disable_usb_autosuspend "$real" || return 1
+  if ! usb_tty_owner_mode_ok "$real"; then
+    echo "error: $real is not $AUTHORITY_USER 0600 after rematch; probe would EACCES (authority is not in dialout)" >&2
+    return 1
+  fi
+  if ! usb_tty_latency_ok "$real"; then
+    echo "error: $real latency_timer is not 1 after rematch; default 16 ms misses the 40 ms live deadline" >&2
+    return 1
+  fi
 }
 
 run_init_and_probe() {
@@ -1469,9 +1494,10 @@ run_init_and_probe() {
       return 0
     fi
     if usb_serial_must_resolve "$DEVICE" && {
-      [[ "$rc" -eq 2 ]] || grep -q metal_device_missing "$err"
+      [[ "$rc" -eq 2 ]] \
+        || grep -qE 'metal_device_missing|Permission denied|EACCES' "$err"
     }; then
-      echo "metal-campaign: probe metal_device_missing (attempt $attempt); rematch USB-UART" >&2
+      echo "metal-campaign: probe missing/EACCES (attempt $attempt); rematch USB-UART" >&2
       cat "$err" >&2 || true
       sleep 0.4
       continue
