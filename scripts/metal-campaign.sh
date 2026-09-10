@@ -104,8 +104,12 @@ usb_serial_resolved_real() {
   name="$(basename "${real:-}")"
   case "$name" in
     ttyUSB* | ttyACM* | ttyCH341*)
-      echo "$real"
-      return 0
+      # A dangling by-id can readlink to a vanished or recycled
+      # ttyUSB0. That is not a live UART.
+      if [[ -e "$real" ]]; then
+        echo "$real"
+        return 0
+      fi
       ;;
   esac
   return 1
@@ -241,9 +245,17 @@ usb_tty_latency_timer_path() {
 }
 
 # CH340/ch341 often has no latency_timer (ok). FTDI/U2D2 must read 1.
+# A vanished tty or dangling by-id has no timer file too — that is not
+# CH340 success (the first hold then ran at the kernel 16 ms default).
 usb_tty_latency_ok() {
-  local dev="$1" name timer got
-  name="$(basename "$(readlink -f "$dev" 2>/dev/null || echo "$dev")")"
+  local dev="$1" name timer got real
+  real="$(readlink -f "$dev" 2>/dev/null || true)"
+  name="$(basename "${real:-}")"
+  case "$name" in
+    ttyUSB* | ttyACM* | ttyCH341*) ;;
+    *) return 1 ;;
+  esac
+  [[ -e "$real" ]] || return 1
   timer="$(usb_tty_latency_timer_path "$name" || true)"
   [[ -z "$timer" ]] && return 0
   got="$(tr -d '[:space:]' <"$timer" 2>/dev/null || true)"
@@ -912,7 +924,10 @@ settle_usb_tty_after_host_writes() {
       fi
       export REALITYOS_METAL_DEVICE="$DEVICE"
       sync_metal_device_config || return 1
-      real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
+      if ! real="$(usb_serial_resolved_real "$DEVICE")"; then
+        echo "error: $DEVICE did not resolve to a live tty after ID_MM_DEVICE_IGNORE rematch" >&2
+        return 1
+      fi
     fi
     already=0
     if usb_tty_owner_mode_ok "$real"; then
@@ -1133,13 +1148,14 @@ prepare_usb_serial_host() {
   fi
   export REALITYOS_METAL_DEVICE="$DEVICE"
   sync_metal_device_config || return 1
-  real="$(readlink -f "$DEVICE" 2>/dev/null || echo "$DEVICE")"
+  if ! real="$(usb_serial_resolved_real "$DEVICE")"; then
+    echo "error: $DEVICE did not resolve to a live USB-serial tty after ignore rematch; refuse to skip claim/latency/power" >&2
+    return 1
+  fi
   if ! refuse_shared_usb_tty "$real"; then
     return 1
   fi
-  if [[ -e "$real" ]]; then
-    claim_usb_tty "$real" || return 1
-  fi
+  claim_usb_tty "$real" || return 1
   # Do not stty -F here. That open asserts DTR (servo RESET on cheap
   # FTDI/CP2102) and a fresh serialport session restores kernel-default
   # HUPCL anyway. The driver takes exclusive, then clears HUPCL on that fd.
@@ -1197,6 +1213,18 @@ if [[ "$PTY_SEQUENCE_ACTIVE" != "1" ]]; then
         echo "error: udevadm is required to install ID_MM_DEVICE_IGNORE before opening the UART." >&2
         exit 2
       fi
+      ;;
+    *)
+      # Documented DEVICE is ttyUSB0. An operator by-id / by-path
+      # whose target is not up yet used to skip this check.
+      case "$DEVICE" in
+        /dev/serial/by-id/* | /dev/serial/by-path/*)
+          if ! command -v udevadm >/dev/null 2>&1; then
+            echo "error: udevadm is required to install ID_MM_DEVICE_IGNORE before opening the UART." >&2
+            exit 2
+          fi
+          ;;
+      esac
       ;;
   esac
 fi
