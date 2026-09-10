@@ -162,7 +162,7 @@ fn resolve_ee_offset(model: &EmbodimentModel, ee: &str) -> Result<[f64; 3], Skil
         .iter()
         .find(|f| f.name == ee_def.frame)
         .ok_or(SkillRefuse::Unsupported)?;
-    Ok(frame.translation.value.unwrap_or([0.0, 0.0, 0.0]))
+    frame.translation.value.ok_or(SkillRefuse::Unsupported)
 }
 
 fn solve_ik(
@@ -175,7 +175,7 @@ fn solve_ik(
     let mut q = vec![0.0; n];
 
     for _ in 0..IK_MAX_ITERS {
-        let fk = forward_kinematics(joints, link_offsets, ee_offset, &q);
+        let fk = forward_kinematics(joints, link_offsets, ee_offset, &q)?;
         if !fk.ee.iter().all(|v| v.is_finite()) {
             return Err(SkillRefuse::Unreachable);
         }
@@ -193,7 +193,7 @@ fn solve_ik(
         }
     }
 
-    let fk = forward_kinematics(joints, link_offsets, ee_offset, &q);
+    let fk = forward_kinematics(joints, link_offsets, ee_offset, &q)?;
     if !fk.ee.iter().all(|v| v.is_finite()) || !q.iter().all(|v| v.is_finite()) {
         return Err(SkillRefuse::Unreachable);
     }
@@ -212,7 +212,7 @@ fn forward_kinematics(
     link_offsets: &[[f64; 3]],
     ee_offset: &[f64; 3],
     q: &[f64],
-) -> FkState {
+) -> Result<FkState, SkillRefuse> {
     let mut pos = [0.0, 0.0, 0.0];
     let mut rot = [
         [1.0, 0.0, 0.0],
@@ -224,7 +224,7 @@ fn forward_kinematics(
 
     for (joint, offset) in joints.iter().zip(link_offsets.iter()) {
         joint_origins.push(pos);
-        let axis_local = joint.axis.value.unwrap_or([0.0, 0.0, 1.0]);
+        let axis_local = joint.axis.value.ok_or(SkillRefuse::Unreachable)?;
         let axis_w = mat_vec_mul(&rot, axis_local);
         axes_world.push(normalize3(axis_w));
         let qi = q[joint_origins.len() - 1];
@@ -233,11 +233,11 @@ fn forward_kinematics(
     }
 
     let ee = add3(pos, mat_vec_mul(&rot, *ee_offset));
-    FkState {
+    Ok(FkState {
         ee,
         joint_origins,
         axes_world,
-    }
+    })
 }
 
 fn jacobian(fk: &FkState, n: usize) -> Vec<Vec<f64>> {
@@ -490,7 +490,7 @@ pub(crate) fn synth_planar_two_link() -> EmbodimentModel {
 mod tests {
     use super::*;
     use crate::capability::derive_capabilities;
-    use crate::provenance::Provenance;
+    use crate::provenance::{Provenance, Provenanced};
 
     #[test]
     fn adapter_selected_by_caps_not_name() {
@@ -542,5 +542,38 @@ mod tests {
             .compile(&SkillContract::reach(), &m, &caps, &world, &obs)
             .unwrap_err();
         assert_eq!(err, SkillRefuse::Unreachable);
+    }
+
+    #[test]
+    fn unknown_ee_translation_is_refused_not_invented() {
+        let mut m = synth_planar_two_link();
+        let ee_frame = m
+            .frames
+            .iter()
+            .position(|f| f.name == "ee")
+            .expect("ee frame");
+        m.frames[ee_frame].translation = Provenanced::unknown("bundle", 0.0);
+        let caps = derive_capabilities(&m, None);
+        let world = WorldState::empty("e0", 1.0).with_target(
+            "ee",
+            [0.2, 0.0, 0.0],
+            5.0,
+            "e0",
+            1.0,
+            Provenance::UserDeclared,
+        );
+        let obs = ObservationFrame {
+            frame_id: "f".into(),
+            transform_epoch: "e0".into(),
+            observations: vec![],
+            as_of_s: 1.0,
+        };
+        let err = ChainIkPositionPdAdapter
+            .compile(&SkillContract::reach(), &m, &caps, &world, &obs)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            SkillRefuse::Unsupported | SkillRefuse::Unreachable
+        ));
     }
 }
