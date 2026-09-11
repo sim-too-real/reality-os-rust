@@ -122,6 +122,13 @@ impl Xl330Driver {
         root: impl AsRef<Path>,
         apply_limits: bool,
     ) -> io::Result<Self> {
+        let mut driver = Self::prepare_locked(cfg, root)?;
+        driver.connect_serial()?;
+        driver.finish_open(apply_limits)?;
+        Ok(driver)
+    }
+
+    fn prepare_locked(cfg: MetalConfig, root: impl AsRef<Path>) -> io::Result<Self> {
         let bus = root.as_ref().join(BUS_DIR);
         std::fs::create_dir_all(&bus)?;
         let _ = std::fs::set_permissions(&bus, std::fs::Permissions::from_mode(0o700));
@@ -135,7 +142,7 @@ impl Xl330Driver {
             .open(&lock_path)?;
         lock.try_lock_exclusive()?;
         let egress = EgressLog::open(&bus)?;
-        let mut driver = Self {
+        Ok(Self {
             port: None,
             lock,
             cfg,
@@ -193,24 +200,31 @@ impl Xl330Driver {
             latched_usb_fallback: None,
             latched_node: None,
             latched_pty: false,
-        };
-        driver.connect_serial()?;
-        driver.refresh_identity();
-        if driver.connected && apply_limits {
-            driver
-                .apply_bench_limits()
+        })
+    }
+
+    fn finish_open(&mut self, apply_limits: bool) -> io::Result<()> {
+        self.refresh_identity();
+        if self.connected && apply_limits {
+            self.apply_bench_limits()
                 .map_err(|e| io::Error::other(e.to_string()))?;
-            driver.enter_live_io();
-        } else if driver.connected {
+            self.enter_live_io();
+        } else if self.connected {
             // Startup Configuration can enable torque after a DTR reboot.
             // Identify-only must not leave the horn tracking a stale goal.
-            driver.quiesce_found_torque();
+            self.quiesce_found_torque();
         }
-        Ok(driver)
+        Ok(())
     }
 
     /// Probe-only: try configured baud/id first, then common XL330 bus settings.
     /// Production `serve` keeps using [`Self::open`] with the bound config.
+    ///
+    /// Cheap FTDI/CP2102 boards wire DTR to servo RESET. Each new USB-serial
+    /// open asserts DTR. Discover used to open+close for every sniff and
+    /// again for every identify, so a leftover 1 Mbps / 2/3/4 Mbps scan
+    /// DTR-RESET the horn on every rate. Hold one exclusive fd and retune
+    /// baud in place; reopen only when udev rematches a new node.
     pub fn open_discovering(
         mut cfg: MetalConfig,
         root: impl AsRef<Path>,
@@ -235,6 +249,7 @@ impl Xl330Driver {
         let bauds = discover_baud_attempts(&candidate_bauds(cfg.baud, extra_baud));
         let ids = candidate_servo_ids(cfg.servo_id, extra_id);
         let mut last_err: Option<io::Error> = None;
+        let mut held: Option<HeldDiscover> = None;
         for baud in bauds {
             let live = rematch_discover_device(cfg.device.clone(), &latched_aliases, cfg.servo_id);
             if live != cfg.device {
@@ -250,35 +265,85 @@ impl Xl330Driver {
                     io::ErrorKind::NotFound,
                     format!("metal_device_missing:{}", cfg.device.display()),
                 ));
+                held = None;
                 std::thread::sleep(Duration::from_millis(100));
                 continue;
             }
+            match held.as_mut() {
+                Some(session) => {
+                    if let Err(e) = session.ensure(&cfg.device, baud) {
+                        last_err = Some(e);
+                        held = None;
+                        continue;
+                    }
+                }
+                None => match HeldDiscover::open(cfg.device.clone(), baud) {
+                    Ok(session) => held = Some(session),
+                    Err(e) => {
+                        last_err = Some(e);
+                        continue;
+                    }
+                },
+            }
+            let Some(session) = held.as_mut() else {
+                continue;
+            };
             // Wizard may leave a non-1/2 ID. Broadcast PING still answers at
             // SRL=0 and the status carries the servo's own ID.
-            let sniffed = sniff_servo_ids(&cfg.device, baud)?;
+            let sniffed = sniff_on_port(&mut *session.port, &cfg.device)?;
             let try_ids = prefer_servo_id(&ids, sniffed.first().copied());
+            let mut session = held.take().expect("discover session");
             for id in try_ids {
                 let mut attempt = cfg.clone();
                 attempt.baud = baud;
                 attempt.servo_id = id;
-                match Self::open_inner(attempt.clone(), root.as_ref(), false) {
-                    Ok(driver) => return Ok((driver, attempt)),
+                let mut driver = match Self::prepare_locked(attempt.clone(), root.as_ref()) {
+                    Ok(driver) => driver,
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Err(e),
                     Err(e) => {
                         last_err = Some(e);
-                        // U2D2/FTDI often NAKs the next open if we reopen at a
-                        // new baud immediately after a failed ping.
+                        break;
+                    }
+                };
+                match driver.adopt_held_serial(session.port) {
+                    Ok(()) => {
+                        driver.finish_open(false)?;
+                        return Ok((driver, attempt));
+                    }
+                    Err((e, _port)) if e.kind() == io::ErrorKind::WouldBlock => return Err(e),
+                    Err((e, port)) => {
+                        last_err = Some(e);
+                        session.port = port;
                         std::thread::sleep(Duration::from_millis(100));
                     }
                 }
             }
+            held = Some(session);
         }
         // Factory 57 600 again after the scan has opened the tty. Do not
         // retry a leftover 2/3/4 Mbps hint here: that open is after the
         // factory rates and can wedge CH340 so a late identify never
-        // happens. The first scan rate is already retried immediately.
+        // happens. Retune the held fd; do not close+open (DTR-RESET).
         let mut configured = cfg.clone();
         configured.baud = CANDIDATE_BAUDS[0];
+        if let Some(mut session) = held.take() {
+            if let Err(e) = session.ensure(&cfg.device, CANDIDATE_BAUDS[0]) {
+                last_err = Some(e);
+            } else {
+                match Self::prepare_locked(configured.clone(), root.as_ref()) {
+                    Ok(mut driver) => match driver.adopt_held_serial(session.port) {
+                        Ok(()) => {
+                            driver.finish_open(false)?;
+                            return Ok((driver, configured));
+                        }
+                        Err((e, _)) if e.kind() == io::ErrorKind::WouldBlock => return Err(e),
+                        Err((e, _)) => return Err(last_err.unwrap_or(e)),
+                    },
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Err(e),
+                    Err(e) => last_err = Some(e),
+                }
+            }
+        }
         match Self::open_inner(configured.clone(), root.as_ref(), false) {
             Ok(driver) => Ok((driver, configured)),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(e),
@@ -423,39 +488,20 @@ impl Xl330Driver {
         .adapter_aliases()
     }
 
-    fn connect_serial(&mut self) -> io::Result<()> {
-        if !self.cfg.device.exists() {
-            self.connected = false;
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("metal_device_missing:{}", self.cfg.device.display()),
-            ));
-        }
-        // Latch while the path still resolves. Campaign stabilize prefers
-        // `/dev/serial/by-id` on FTDI/U2D2. chmod + the first exclusive
-        // open emit udev change; that symlink then dangles for 1–3 s.
-        // Latching after open used to re-walk the vanished name, blank
-        // serial, and fail serve as metal_serial_mismatch after a good ping.
-        self.latch_open_adapter_identity();
+    fn ensure_tty_mode_0600(&self) {
         // A no-op chmod still emits udev change on typical Ubuntu — the
         // same class as campaign chown resetting FTDI latency_timer to
         // 16 ms before the first live hold. Skip when already 0600.
-        {
-            let mode = std::fs::metadata(&self.cfg.device)
-                .map(|m| m.permissions().mode() & 0o777)
-                .unwrap_or(0);
-            if mode != 0o600 {
-                let _ = std::fs::set_permissions(
-                    &self.cfg.device,
-                    std::fs::Permissions::from_mode(0o600),
-                );
-            }
+        let mode = std::fs::metadata(&self.cfg.device)
+            .map(|m| m.permissions().mode() & 0o777)
+            .unwrap_or(0);
+        if mode != 0o600 {
+            let _ =
+                std::fs::set_permissions(&self.cfg.device, std::fs::Permissions::from_mode(0o600));
         }
-        // PTY stand-in: TIOCEXCL survives process::exit (crash_if) and the
-        // next serve gets EBUSY. Sidecar flock still serializes. Real tty
-        // keeps exclusive (TIOCEXCL+flock).
-        let port = open_xl330_serial(&self.cfg.device, self.cfg.baud)?;
-        self.port = Some(port);
+    }
+
+    fn adapter_recycled_after_open(&self) -> Option<io::Error> {
         // Path still present after open: it must still be the bound adapter.
         // chmod/open can recycle ttyUSB0 onto a different UART. The pre-open
         // latch would then name adapter A while this fd is adapter B.
@@ -470,14 +516,41 @@ impl Xl330Driver {
                 self.cfg.servo_id,
             )
         {
-            self.port = None;
-            self.connected = false;
-            return Err(io::Error::other(format!(
+            Some(io::Error::other(format!(
                 "metal_adapter_recycled_after_open:expected={} actual={} device={}",
                 self.cfg.expected_serial,
                 crate::identity::adapter_serial_for_tty(&self.cfg.device, self.cfg.servo_id),
                 self.cfg.device.display()
-            )));
+            )))
+        } else {
+            None
+        }
+    }
+
+    fn connect_serial(&mut self) -> io::Result<()> {
+        if !self.cfg.device.exists() {
+            self.connected = false;
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("metal_device_missing:{}", self.cfg.device.display()),
+            ));
+        }
+        // Latch while the path still resolves. Campaign stabilize prefers
+        // `/dev/serial/by-id` on FTDI/U2D2. chmod + the first exclusive
+        // open emit udev change; that symlink then dangles for 1–3 s.
+        // Latching after open used to re-walk the vanished name, blank
+        // serial, and fail serve as metal_serial_mismatch after a good ping.
+        self.latch_open_adapter_identity();
+        self.ensure_tty_mode_0600();
+        // PTY stand-in: TIOCEXCL survives process::exit (crash_if) and the
+        // next serve gets EBUSY. Sidecar flock still serializes. Real tty
+        // keeps exclusive (TIOCEXCL+flock).
+        let port = open_xl330_serial(&self.cfg.device, self.cfg.baud)?;
+        self.port = Some(port);
+        if let Some(e) = self.adapter_recycled_after_open() {
+            self.port = None;
+            self.connected = false;
+            return Err(e);
         }
         match self.ping_and_identify() {
             Ok(()) => {
@@ -487,6 +560,44 @@ impl Xl330Driver {
             Err(e) => {
                 self.connected = false;
                 Err(e)
+            }
+        }
+    }
+
+    /// Identify on a discover fd that is already exclusive. On failure the
+    /// caller keeps that fd so the next baud is a termios retune, not a
+    /// close+open DTR-RESET.
+    fn adopt_held_serial(
+        &mut self,
+        port: Box<dyn SerialPort>,
+    ) -> Result<(), (io::Error, Box<dyn SerialPort>)> {
+        if !self.cfg.device.exists() {
+            self.connected = false;
+            return Err((
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("metal_device_missing:{}", self.cfg.device.display()),
+                ),
+                port,
+            ));
+        }
+        self.latch_open_adapter_identity();
+        self.ensure_tty_mode_0600();
+        self.port = Some(port);
+        if let Some(e) = self.adapter_recycled_after_open() {
+            self.connected = false;
+            let port = self.port.take().expect("adopted serial");
+            return Err((e, port));
+        }
+        match self.ping_and_identify() {
+            Ok(()) => {
+                self.connected = true;
+                Ok(())
+            }
+            Err(e) => {
+                self.connected = false;
+                let port = self.port.take().expect("adopted serial");
+                Err((e, port))
             }
         }
     }
@@ -2055,6 +2166,54 @@ fn open_xl330_serial(device: &Path, baud: u32) -> io::Result<Box<dyn SerialPort>
     open_xl330_serial_with(device, baud, !is_pty_path(device))
 }
 
+/// Discover holds one exclusive fd. `set_baud_rate` must not re-open the
+/// tty: that would assert DTR and RESET a cheap FTDI/CP2102 servo again.
+fn retune_held_baud(port: &mut dyn SerialPort, device: &Path, baud: u32) -> io::Result<()> {
+    port.set_baud_rate(baud)
+        .map_err(|e| io::Error::other(format!("dxl_set_baud:{e}")))?;
+    let _ = port.clear(serialport::ClearBuffer::Input);
+    if !is_pty_path(device) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
+struct HeldDiscover {
+    port: Box<dyn SerialPort>,
+    baud: u32,
+    device: PathBuf,
+}
+
+impl HeldDiscover {
+    fn open(device: PathBuf, baud: u32) -> io::Result<Self> {
+        let port = open_xl330_serial(&device, baud)?;
+        Ok(Self { port, baud, device })
+    }
+
+    fn ensure(&mut self, device: &Path, baud: u32) -> io::Result<()> {
+        if self.device != device {
+            *self = Self::open(device.to_path_buf(), baud)?;
+            return Ok(());
+        }
+        if self.baud == baud {
+            return Ok(());
+        }
+        match retune_held_baud(&mut *self.port, device, baud) {
+            Ok(()) => {
+                self.baud = baud;
+                Ok(())
+            }
+            Err(_) => {
+                // Adapter rejected an in-place retune. Reopen at the new
+                // rate (one DTR-RESET) rather than walking the rest of the
+                // scan on a wedged termios.
+                *self = Self::open(device.to_path_buf(), baud)?;
+                Ok(())
+            }
+        }
+    }
+}
+
 fn open_xl330_serial_with(
     device: &Path,
     baud: u32,
@@ -2095,17 +2254,7 @@ fn prefer_servo_id(ids: &[u8], found: Option<u8>) -> Vec<u8> {
 
 /// Broadcast PING. Status ID is the servo's own ID even when Status Return Level is 0.
 /// Waits the full window so a second servo on the drop is visible.
-fn sniff_servo_ids(device: &Path, baud: u32) -> io::Result<Vec<u8>> {
-    if !device.exists() {
-        return Ok(Vec::new());
-    }
-    // Real UART takes exclusive so ModemManager cannot AT-probe during
-    // the 500 ms open-settle. Drop before a second open (Secondary ID
-    // check). PTY stays shared (`process::exit` can leave TIOCEXCL).
-    let mut port = match open_xl330_serial_with(device, baud, !is_pty_path(device)) {
-        Ok(p) => p,
-        Err(_) => return Ok(Vec::new()),
-    };
+fn sniff_on_port(port: &mut dyn SerialPort, device: &Path) -> io::Result<Vec<u8>> {
     let frame = encode_ping(BROADCAST_ID);
     if port.clear(serialport::ClearBuffer::Input).is_err()
         || port.write_all(&frame).is_err()
@@ -2126,9 +2275,8 @@ fn sniff_servo_ids(device: &Path, baud: u32) -> io::Result<Vec<u8>> {
         }
     }
     let ids = unique_status_ids(&acc);
-    drop(port);
     if ids.len() > 1 {
-        if let Some(primary) = primary_if_secondary_pair(device, baud, &ids) {
+        if let Some(primary) = primary_if_secondary_pair_on(port, device, &ids) {
             return Ok(vec![primary]);
         }
         return Err(io::Error::other(format!(
@@ -2144,16 +2292,19 @@ fn sniff_servo_ids(device: &Path, baud: u32) -> io::Result<Vec<u8>> {
 
 /// Wizard Secondary ID makes one servo answer two IDs. Both addresses then
 /// read the same ID register. Two distinct servos read two distinct IDs.
-fn primary_if_secondary_pair(device: &Path, baud: u32, ids: &[u8]) -> Option<u8> {
+fn primary_if_secondary_pair_on(
+    port: &mut dyn SerialPort,
+    device: &Path,
+    ids: &[u8],
+) -> Option<u8> {
     if ids.len() != 2 {
         return None;
     }
-    let mut port = open_xl330_serial_with(device, baud, !is_pty_path(device)).ok()?;
     for &id in ids {
-        poke_srl_all(&mut *port, device, id);
+        poke_srl_all(port, device, id);
     }
-    let via_a = read_id_register(&mut *port, device, ids[0])?;
-    let via_b = read_id_register(&mut *port, device, ids[1])?;
+    let via_a = read_id_register(port, device, ids[0])?;
+    let via_b = read_id_register(port, device, ids[1])?;
     if via_a == via_b && via_a != BROADCAST_ID {
         Some(via_a)
     } else {
