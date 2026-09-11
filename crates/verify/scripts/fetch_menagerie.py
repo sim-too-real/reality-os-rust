@@ -27,10 +27,11 @@ def sha256_file(path: Path) -> str:
 def fetch(rel_dir: str, dest: Path) -> dict:
     dest.mkdir(parents=True, exist_ok=True)
     marker = dest / "PROVENANCE.json"
-    if (dest / Path(rel_dir).name).exists() or (dest / "ur5e.xml").exists():
-        if marker.exists():
-            return json.loads(marker.read_text(encoding="utf-8"))
-    cache = dest.parent / ".cache"
+    if marker.exists() and any(dest.glob("*.xml")):
+        return json.loads(marker.read_text(encoding="utf-8"))
+    cache = dest.parent.parent / ".cache"
+    if not cache.exists():
+        cache = dest.parent / ".cache"
     cache.mkdir(parents=True, exist_ok=True)
     tar_path = cache / f"menagerie-{SHA}.tar.gz"
     if not tar_path.exists():

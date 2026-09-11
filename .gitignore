@@ -12,6 +12,7 @@ scratchpad/
 graphify-out/
 verify-out/
 robots/external/.cache/
+robots/external/**/.cache/
 robots/external/ur5e/model/
 robots/external/panda/model/
 MUJOCO_LOG.TXT
