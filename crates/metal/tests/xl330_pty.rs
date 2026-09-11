@@ -279,7 +279,10 @@ fn xl330_pty_forces_wizard_rc_protocol_type_to_protocol_2() {
 #[test]
 fn xl330_pty_zeros_wizard_position_id_so_nudge_stays_in_cage() {
     let _serial = pty_serial();
-    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_WIZARD_PID", "1")]);
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_WIZARD_PID", "1"),
+        ("REALITYOS_METAL_PTY_UNREAD_PID", "1"),
+    ]);
     let root = metal_test_root("pty-pos-id");
     let cfg = MetalConfig::example(&tty);
     let mut driver = Xl330Driver::open(cfg, &root).expect("zero Wizard position I/D");
@@ -383,7 +386,10 @@ fn xl330_pty_restores_factory_pwm_slope_when_wizard_too_low() {
 #[test]
 fn xl330_pty_zeros_wizard_feedforward_so_nudge_stays_bounded() {
     let _serial = pty_serial();
-    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_FEEDFORWARD", "1")]);
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_FEEDFORWARD", "1"),
+        ("REALITYOS_METAL_PTY_UNREAD_FF", "1"),
+    ]);
     let root = metal_test_root("pty-ff");
     let cfg = MetalConfig::example(&tty);
     let mut driver = Xl330Driver::open(cfg, &root).expect("zero Wizard feedforward");
@@ -686,7 +692,10 @@ fn xl330_pty_syncs_stale_goal_before_torque_so_present_does_not_jump() {
 #[test]
 fn xl330_pty_clears_bus_watchdog_error_so_goal_writes_are_live() {
     let _serial = pty_serial();
-    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_BUS_WATCHDOG", "1")]);
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_BUS_WATCHDOG", "1"),
+        ("REALITYOS_METAL_PTY_UNREAD_WATCHDOG", "1"),
+    ]);
     let root = metal_test_root("pty-bus-wd");
     let cfg = MetalConfig::example(&tty);
     let mut driver = Xl330Driver::open(cfg, &root).expect("clear Bus Watchdog 0xFF before goal");
@@ -991,6 +1000,7 @@ fn xl330_pty_quiesces_startup_torque_during_open_settle() {
     let (_guard, tty) = spawn_responder_env(&[
         ("REALITYOS_METAL_PTY_STARTUP_TORQUE", "1"),
         ("REALITYOS_METAL_PTY_STARTUP_YANK", "1"),
+        ("REALITYOS_METAL_PTY_UNREAD_STARTUP", "1"),
     ]);
     let root = metal_test_root("pty-startup-yank");
     let cfg = MetalConfig::example(&tty);

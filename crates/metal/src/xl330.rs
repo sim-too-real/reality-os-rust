@@ -776,13 +776,14 @@ impl Xl330Driver {
         let startup = self
             .read_reg(ADDR_STARTUP_CONFIGURATION, 1)
             .ok()
-            .and_then(|b| b.first().copied())
-            .unwrap_or(0);
-        self.startup_configuration = startup;
+            .and_then(|b| b.first().copied());
+        self.startup_configuration = startup.unwrap_or(0xFF);
         // Bit 0 torque-on at boot. A DTR-RESET then tracks Goal (RAM 0)
         // during the next open settle before any certified command.
         // Factory 0. Probe must not write this EEPROM.
-        if startup != FACTORY_STARTUP_CONFIGURATION {
+        // Do not treat a failed read as 0: that skipped the write and
+        // the next crash_if DTR-RESET yanked.
+        if startup != Some(FACTORY_STARTUP_CONFIGURATION) {
             self.write_reg(
                 ADDR_STARTUP_CONFIGURATION,
                 &[FACTORY_STARTUP_CONFIGURATION],
@@ -790,9 +791,21 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.startup_configuration = FACTORY_STARTUP_CONFIGURATION;
             eeprom_changed = true;
         }
+        let startup_got = self
+            .read_reg(ADDR_STARTUP_CONFIGURATION, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if startup_got != Some(FACTORY_STARTUP_CONFIGURATION) {
+            return Err(PlantError::refused(format!(
+                "dxl_startup_configuration_unverified:{}",
+                startup_got
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unread".into())
+            )));
+        }
+        self.startup_configuration = FACTORY_STARTUP_CONFIGURATION;
         let proto = self
             .read_reg(ADDR_PROTOCOL_TYPE, 1)
             .ok()
@@ -936,18 +949,17 @@ impl Xl330Driver {
         let got_i = self
             .read_reg(ADDR_POSITION_I_GAIN, 2)
             .ok()
-            .and_then(|b| le_u16(&b))
-            .unwrap_or(0);
+            .and_then(|b| le_u16(&b));
         let got_d = self
             .read_reg(ADDR_POSITION_D_GAIN, 2)
             .ok()
-            .and_then(|b| le_u16(&b))
-            .unwrap_or(0);
-        self.position_i_gain = got_i;
-        self.position_d_gain = got_d;
+            .and_then(|b| le_u16(&b));
+        self.position_i_gain = got_i.unwrap_or(u16::MAX);
+        self.position_d_gain = got_d.unwrap_or(u16::MAX);
         // Factory 0. Wizard position I/D overshoots the certified 32-tick
-        // step past the 48-tick session cage.
-        if got_i != 0 || got_d != 0 {
+        // step past the 48-tick session cage. A failed read used to look
+        // like factory 0 and skip the write.
+        if got_i != Some(0) || got_d != Some(0) {
             self.write_reg(
                 ADDR_POSITION_I_GAIN,
                 &0u16.to_le_bytes(),
@@ -962,9 +974,22 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.position_i_gain = 0;
-            self.position_d_gain = 0;
         }
+        let i_got = self
+            .read_reg(ADDR_POSITION_I_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        let d_got = self
+            .read_reg(ADDR_POSITION_D_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        if i_got != Some(0) || d_got != Some(0) {
+            return Err(PlantError::refused(format!(
+                "dxl_position_id_unverified:i={i_got:?}:d={d_got:?}"
+            )));
+        }
+        self.position_i_gain = 0;
+        self.position_d_gain = 0;
         let got_vp = self
             .read_reg(ADDR_VELOCITY_P_GAIN, 2)
             .ok()
@@ -1020,18 +1045,17 @@ impl Xl330Driver {
         let ff2 = self
             .read_reg(ADDR_FEEDFORWARD_2ND, 2)
             .ok()
-            .and_then(|b| le_u16(&b))
-            .unwrap_or(0);
+            .and_then(|b| le_u16(&b));
         let ff1 = self
             .read_reg(ADDR_FEEDFORWARD_1ST, 2)
             .ok()
-            .and_then(|b| le_u16(&b))
-            .unwrap_or(0);
-        self.feedforward_2nd = ff2;
-        self.feedforward_1st = ff1;
+            .and_then(|b| le_u16(&b));
+        self.feedforward_2nd = ff2.unwrap_or(u16::MAX);
+        self.feedforward_1st = ff1.unwrap_or(u16::MAX);
         // Factory 0. Wizard feedforward makes the certified 32-tick step
-        // overshoot; that is not a tiny bounded nudge.
-        if ff1 != 0 || ff2 != 0 {
+        // overshoot. A failed read used to look like factory 0 and skip
+        // the write.
+        if ff1 != Some(0) || ff2 != Some(0) {
             self.write_reg(
                 ADDR_FEEDFORWARD_2ND,
                 &0u16.to_le_bytes(),
@@ -1046,9 +1070,22 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.feedforward_2nd = 0;
-            self.feedforward_1st = 0;
         }
+        let ff2_got = self
+            .read_reg(ADDR_FEEDFORWARD_2ND, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        let ff1_got = self
+            .read_reg(ADDR_FEEDFORWARD_1ST, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        if ff1_got != Some(0) || ff2_got != Some(0) {
+            return Err(PlantError::refused(format!(
+                "dxl_feedforward_unverified:ff1={ff1_got:?}:ff2={ff2_got:?}"
+            )));
+        }
+        self.feedforward_2nd = 0;
+        self.feedforward_1st = 0;
         // EEPROM writes can NAK the next instruction if we immediately continue.
         std::thread::sleep(Duration::from_millis(50));
         let max_v = self
@@ -1102,10 +1139,9 @@ impl Xl330Driver {
         let wd = self
             .read_reg(ADDR_BUS_WATCHDOG, 1)
             .ok()
-            .and_then(|b| b.first().copied())
-            .unwrap_or(0);
-        self.bus_watchdog = wd;
-        if wd != 0 {
+            .and_then(|b| b.first().copied());
+        self.bus_watchdog = wd.unwrap_or(0xFF);
+        if wd != Some(0) {
             self.write_reg(
                 ADDR_BUS_WATCHDOG,
                 &[0],
@@ -1113,8 +1149,20 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.bus_watchdog = 0;
         }
+        let wd_got = self
+            .read_reg(ADDR_BUS_WATCHDOG, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if wd_got != Some(0) {
+            return Err(PlantError::refused(format!(
+                "dxl_bus_watchdog_unverified:{}",
+                wd_got
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unread".into())
+            )));
+        }
+        self.bus_watchdog = 0;
         // Position Mode uses Goal PWM(100) as the live output limiter.
         // PWM Limit(36) only caps that register. A Wizard leftover 0
         // (or |Goal PWM| below MIN_PWM_LIMIT) leaves the 32-tick nudge

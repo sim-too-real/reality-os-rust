@@ -245,6 +245,19 @@ _travel_reads = 0
 _travel_from: int | None = None
 _travel_to: int | None = None
 _boot = time.monotonic()
+# One-shot READ refuses. A failed setup read used to look like factory 0
+# and skip the safe write (Startup Configuration, I/D, feedforward, watchdog).
+_fail_reads: dict[int, int] = {}
+if os.environ.get("REALITYOS_METAL_PTY_UNREAD_STARTUP") == "1":
+    _fail_reads[60] = 1
+if os.environ.get("REALITYOS_METAL_PTY_UNREAD_PID") == "1":
+    _fail_reads[80] = 1
+    _fail_reads[82] = 1
+if os.environ.get("REALITYOS_METAL_PTY_UNREAD_FF") == "1":
+    _fail_reads[88] = 1
+    _fail_reads[90] = 1
+if os.environ.get("REALITYOS_METAL_PTY_UNREAD_WATCHDOG") == "1":
+    _fail_reads[98] = 1
 
 
 def maybe_startup_yank(regs: bytearray) -> None:
@@ -291,6 +304,10 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         return b"", 0
     if inst == INST_READ and len(params) >= 4:
         addr, ln = struct.unpack_from("<HH", params)
+        global _fail_reads
+        if addr in _fail_reads and _fail_reads[addr] > 0:
+            _fail_reads[addr] -= 1
+            return b"", 0x80
         if os.environ.get("REALITYOS_METAL_PTY_NO_PRESENT") == "1" and addr == 132:
             return b"", 0x80  # refuse present so setup cannot invent goal=0
         if os.environ.get("REALITYOS_METAL_PTY_NO_VLIMIT") == "1" and addr in (32, 34):
