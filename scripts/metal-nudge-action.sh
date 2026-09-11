@@ -80,32 +80,52 @@ if delta_ticks <= 0:
     sys.exit("metal_nudge_delta_ticks_not_positive:%s" % (delta_ticks,))
 if not math.isfinite(tau_max) or tau_max <= 0:
     sys.exit("metal_nudge_tau_max_invalid:%s" % (tau_max,))
+# propose() re-acquires last_present. write_action does not clamp.
+# Prefer +delta when that goal is in-cage *and* survives slack.
+# A raw in-cage +32 after an AT_MAX inbound nudge still hits leftover
+# max; slack then overshoots. Fall back to -delta when that sign fits.
+slack = 4
+
+def survives(step):
+    for raw in (present, present - slack, present + slack):
+        p = raw
+        if p < experiment_min:
+            p = experiment_min
+        if p > experiment_max:
+            p = experiment_max
+        goal = p + step
+        if goal < experiment_min or goal > experiment_max:
+            return False
+    return True
+
 plus = present + delta_ticks
-if experiment_min <= plus <= experiment_max:
+minus = present - delta_ticks
+plus_in = experiment_min <= plus <= experiment_max
+minus_in = experiment_min <= minus <= experiment_max
+if plus_in and survives(delta_ticks):
     action = tau_max
-    step = delta_ticks
-elif experiment_min <= present - delta_ticks <= experiment_max:
+elif minus_in and survives(-delta_ticks):
     action = -tau_max
-    step = -delta_ticks
+elif plus_in or minus_in:
+    step = delta_ticks if plus_in else -delta_ticks
+    for raw in (present, present - slack, present + slack):
+        p = raw
+        if p < experiment_min:
+            p = experiment_min
+        if p > experiment_max:
+            p = experiment_max
+        goal = p + step
+        if goal < experiment_min or goal > experiment_max:
+            sys.exit(
+                "metal_nudge_eaten_by_present_slack:present=%s:p=%s:goal=%s:delta=%s:cage=%s..%s:slack=%s"
+                % (present, p, goal, delta_ticks, experiment_min, experiment_max, slack)
+            )
+    sys.exit("metal_nudge_action_invalid")
 else:
     sys.exit(
         "metal_nudge_no_inbound_step:present=%s:delta=%s:cage=%s..%s"
         % (present, delta_ticks, experiment_min, experiment_max)
     )
-# propose() re-acquires last_present. write_action does not clamp.
-# The chosen sign must still fit after a hold-still hunt.
-slack = 4
-for p in (present, present - slack, present + slack):
-    if p < experiment_min:
-        p = experiment_min
-    if p > experiment_max:
-        p = experiment_max
-    goal = p + step
-    if goal < experiment_min or goal > experiment_max:
-        sys.exit(
-            "metal_nudge_eaten_by_present_slack:present=%s:p=%s:goal=%s:delta=%s:cage=%s..%s:slack=%s"
-            % (present, p, goal, delta_ticks, experiment_min, experiment_max, slack)
-        )
 print("%g" % (action,))
 sys.exit(0)
 PY
@@ -143,5 +163,10 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     echo "error: 36-tick leftover after hold must not propose -0.2" >&2
     exit 1
   fi
+  # After AT_MAX inbound nudge, restart cages around 2016 with leftover
+  # max 2048. Raw +32 fits; slack 4 overshoots. Must flip to -0.2.
+  printf '%s\n' '2016' >"$tmp/bus/present"
+  printf '%s\n' '{"experiment_min":1968,"experiment_max":2048}' >"$tmp/bus/position_cage.json"
+  [[ "$(metal_nudge_action_from_bus "$tmp")" == "-0.2" ]]
   echo "metal-nudge-action-ok"
 fi

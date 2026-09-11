@@ -386,6 +386,30 @@ pub fn pick_inbound_nudge_action(
     delta_ticks: i32,
     tau_max: f64,
 ) -> Result<f64, String> {
+    pick_inbound_nudge_action_surviving_slack(
+        present,
+        experiment_min,
+        experiment_max,
+        delta_ticks,
+        tau_max,
+        0,
+    )
+}
+
+/// Same preference as `pick_inbound_nudge_action`, but a raw in-cage
+/// `+delta` that fails slack is not chosen. After an AT_MAX inbound
+/// nudge, restart builds a cage around present-32 whose `+32` still
+/// fits the leftover max; slack then overshoots and used to refuse
+/// setup / abort-latch the picker. Fall back to `-delta` when that
+/// sign still survives.
+pub fn pick_inbound_nudge_action_surviving_slack(
+    present: i32,
+    experiment_min: i32,
+    experiment_max: i32,
+    delta_ticks: i32,
+    tau_max: f64,
+    slack: i32,
+) -> Result<f64, String> {
     if delta_ticks <= 0 {
         return Err(format!(
             "metal_nudge_delta_ticks_not_positive:{delta_ticks}"
@@ -394,13 +418,50 @@ pub fn pick_inbound_nudge_action(
     if !tau_max.is_finite() || tau_max <= 0.0 {
         return Err(format!("metal_nudge_tau_max_invalid:{tau_max}"));
     }
+    if slack < 0 {
+        return Err(format!("metal_nudge_slack_negative:{slack}"));
+    }
     let plus = present.saturating_add(delta_ticks);
-    if plus >= experiment_min && plus <= experiment_max {
+    let minus = present.saturating_sub(delta_ticks);
+    let plus_in = plus >= experiment_min && plus <= experiment_max;
+    let minus_in = minus >= experiment_min && minus <= experiment_max;
+    if plus_in
+        && chosen_nudge_survives_slack(
+            present,
+            experiment_min,
+            experiment_max,
+            delta_ticks,
+            tau_max,
+            slack,
+        )
+        .is_ok()
+    {
         return Ok(tau_max);
     }
-    let minus = present.saturating_sub(delta_ticks);
-    if minus >= experiment_min && minus <= experiment_max {
+    if minus_in
+        && chosen_nudge_survives_slack(
+            present,
+            experiment_min,
+            experiment_max,
+            delta_ticks,
+            -tau_max,
+            slack,
+        )
+        .is_ok()
+    {
         return Ok(-tau_max);
+    }
+    if plus_in || minus_in {
+        let action = if plus_in { tau_max } else { -tau_max };
+        return chosen_nudge_survives_slack(
+            present,
+            experiment_min,
+            experiment_max,
+            delta_ticks,
+            action,
+            slack,
+        )
+        .map(|()| action);
     }
     Err(format!(
         "metal_nudge_no_inbound_step:present={present}:delta={delta_ticks}:cage={experiment_min}..{experiment_max}"
@@ -459,21 +520,15 @@ pub fn cage_allows_inbound_nudge_after_hold_still(
     delta_ticks: i32,
     tau_max: f64,
 ) -> Result<(), String> {
-    let action = pick_inbound_nudge_action(
+    pick_inbound_nudge_action_surviving_slack(
         present,
         experiment_min,
         experiment_max,
         delta_ticks,
         tau_max,
-    )?;
-    chosen_nudge_survives_slack(
-        present,
-        experiment_min,
-        experiment_max,
-        delta_ticks,
-        action,
         NUDGE_PRESENT_SLACK_TICKS,
     )
+    .map(|_| ())
 }
 
 #[cfg(test)]
@@ -802,6 +857,26 @@ mod tests {
         assert!(action < 0.0);
         chosen_nudge_survives_slack(2044, 2012, 2048, delta, action, HOLD_STILL_HEADROOM_TICKS)
             .expect_err("campaign picker at post-hold 2044 must not propose -0.2");
+        assert_eq!(
+            pick_inbound_nudge_action(2016, 1968, 2048, delta, tau).unwrap(),
+            tau,
+            "raw +32 after AT_MAX inbound nudge still lands on leftover max"
+        );
+        assert_eq!(
+            pick_inbound_nudge_action_surviving_slack(
+                2016,
+                1968,
+                2048,
+                delta,
+                tau,
+                NUDGE_PRESENT_SLACK_TICKS
+            )
+            .unwrap(),
+            -tau,
+            "slack 8 makes +32 from present+8 miss leftover max; flip sign"
+        );
+        cage_allows_inbound_nudge_after_hold_still(2016, 1968, 2048, delta, tau)
+            .expect("AT_MAX restart after inbound nudge must still host -32");
     }
 
     #[test]

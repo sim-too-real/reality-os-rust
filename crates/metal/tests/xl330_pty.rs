@@ -315,6 +315,35 @@ fn xl330_pty_inbound_nudge_at_wizard_max_window_tracks() {
 }
 
 #[test]
+fn xl330_pty_at_max_restart_after_inbound_nudge_still_hosts_step() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_AT_MAX", "1")]);
+    let root = metal_test_root("pty-at-max-restart");
+    let cfg = MetalConfig::example(&tty);
+    let mut first = Xl330Driver::open(cfg.clone(), &root).expect("identify at Wizard max");
+    first
+        .write_action(&[-0.2], &ActionParams::empty())
+        .expect("inbound -0.2");
+    first.read_sensor(0.0).expect("sensor after inbound nudge");
+    assert_eq!(first.last_present_position(), 2016);
+    first.abandon_without_eeprom_restore_for_test();
+    drop(first);
+    let mut second = Xl330Driver::open(cfg, &root)
+        .expect("restart cage around 2016 must flip off +32 that slack-misses leftover max");
+    assert_eq!(second.last_present_position(), 2016);
+    let (emin, emax) = second.experiment_cage();
+    assert_eq!((emin, emax), (1968, 2048));
+    second
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect_err("raw +0.2 still refuses; slack would abort-latch ONLINE");
+    second
+        .write_action(&[-0.2], &ActionParams::empty())
+        .expect("inbound -0.2 must still fit after AT_MAX restart");
+    second.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_pwm_operating_mode_is_forced_to_position() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_PWM", "1")]);
