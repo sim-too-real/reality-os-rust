@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Factory XL330 is 57 600. Automatic scan also tries 115 200, 1 Mbps, and
-/// Wizard 9 600 last. 2 / 3 / 4 Mbps are Wizard rates only — a CH340/CP2102
-/// (datasheet max ~2 Mbps) can wedge after those opens, so a cold miss at
-/// 57 600 never recovers on the configured retry.
+/// Wizard 9 600 last. 1 Mbps and Wizard 2 / 3 / 4 Mbps can wedge a
+/// CH340/CP2102 (datasheet max ~2 Mbps) after a DTR-RESET miss, so those
+/// opens must not follow a factory miss without another 57 600 retry.
 pub const CANDIDATE_BAUDS: &[u32] = &[57_600, 115_200, 1_000_000, 9_600];
 /// Only added when configured or `REALITYOS_METAL_BAUD` is already 2 Mbps.
 pub const FAST_WIZARD_BAUDS: &[u32] = &[2_000_000];
@@ -306,8 +306,11 @@ pub fn candidate_bauds(configured: u32, extra: Option<u32>) -> Vec<u32> {
     out
 }
 
-fn is_wedge_wizard_baud(b: u32) -> bool {
-    FAST_WIZARD_BAUDS.contains(&b) || HIGH_WIZARD_BAUDS.contains(&b)
+/// 1 Mbps is in the automatic scan. 2 / 3 / 4 Mbps join only when hinted.
+/// A CH340/CP2102 can fail to leave any of those rates after a DTR-RESET
+/// identify miss, so the factory servo is never found.
+fn is_ch340_wedge_baud(b: u32) -> bool {
+    b == 1_000_000 || FAST_WIZARD_BAUDS.contains(&b) || HIGH_WIZARD_BAUDS.contains(&b)
 }
 
 /// Repeat the first baud immediately. That first rate is factory 57 600
@@ -316,16 +319,17 @@ fn is_wedge_wizard_baud(b: u32) -> bool {
 /// after-scan retry used to run only after 2 Mbps had already opened
 /// (and could wedge) a CH340.
 ///
-/// A leftover 2/3/4 Mbps env still joins the scan. If the factory servo
-/// was only still in DTR-RESET during the first factory/1 Mbps opens,
-/// the next open used to be 2/3/4 Mbps and could wedge CH340. Retry
+/// 1 Mbps still joins every scan after 115 200. If DTR-RESET hides the
+/// factory servo during the first 57 600 / 115 200 windows, the next
+/// open used to be 1 Mbps and can wedge CH340 before any later factory
+/// retry. A leftover 2/3/4 Mbps env still joins after that. Retry
 /// factory 57 600 immediately before each of those rates (a 4 Mbps hint
 /// also opens 3 Mbps first; inserting only before that 3 Mbps leaves
 /// 4 Mbps immediately after a high-rate miss).
 pub fn discover_baud_attempts(bauds: &[u32]) -> Vec<u32> {
     let mut out = Vec::new();
     for (i, b) in bauds.iter().copied().enumerate() {
-        if is_wedge_wizard_baud(b) && out.last().copied() != Some(CANDIDATE_BAUDS[0]) {
+        if is_ch340_wedge_baud(b) && out.last().copied() != Some(CANDIDATE_BAUDS[0]) {
             out.push(CANDIDATE_BAUDS[0]);
         }
         out.push(b);
@@ -377,7 +381,8 @@ mod tests {
         let attempts = discover_baud_attempts(&one);
         assert_eq!(attempts[0], 57_600);
         assert_eq!(attempts[1], 57_600);
-        assert!(attempts[2..].contains(&1_000_000));
+        let one_pos = attempts.iter().position(|&x| x == 1_000_000).unwrap();
+        assert_eq!(attempts[one_pos - 1], 57_600);
         assert!(!attempts.contains(&2_000_000));
 
         let two = candidate_bauds(2_000_000, None);
@@ -437,6 +442,27 @@ mod tests {
         assert_eq!(attempts[1], 57_600);
         assert!(attempts[2..].contains(&115_200));
         assert!(!attempts.contains(&2_000_000));
+        let one_m = attempts.iter().position(|&x| x == 1_000_000).unwrap();
+        assert_eq!(
+            attempts[one_m - 1],
+            57_600,
+            "DTR-RESET can miss the first factory/115200 opens; do not wedge CH340 at 1 Mbps next"
+        );
+    }
+
+    #[test]
+    fn discover_retries_factory_again_before_one_megabit_open() {
+        let bauds = candidate_bauds(57_600, None);
+        let attempts = discover_baud_attempts(&bauds);
+        let one = attempts
+            .iter()
+            .position(|&x| x == 1_000_000)
+            .expect("1 Mbps stays in the automatic scan");
+        assert_eq!(attempts[one - 1], 57_600);
+        assert!(
+            !attempts.contains(&2_000_000),
+            "unhinted scan must not open Wizard 2/3/4 Mbps"
+        );
     }
 
     #[test]
