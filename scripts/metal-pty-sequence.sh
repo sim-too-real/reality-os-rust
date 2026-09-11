@@ -115,9 +115,43 @@ print("pty-nudge-action-ok action=%s" % (want,))
 PY
 }
 
-TTY="$(start_responder "$ROOT.responder.out")"
+# valid_nudge records the serve cage and pre-write present. A mid-range
+# +16 torque wrap must recenter to 2016..2112 and park at 2064; keeping
+# 2000..2096 makes the campaign picker fail slack after hold.
+require_nudge_torque_wrap_park() {
+  local root="$1"
+  python3 - "$root/os_metal_cases.json" <<'PY'
+import json, re, sys
+cases = json.load(open(sys.argv[1]))
+nudge = next((c for c in cases if c.get("name") == "valid_nudge"), None)
+if not nudge:
+    sys.exit("error: missing valid_nudge case in %s" % (sys.argv[1],))
+if nudge.get("experiment_min") != 2016 or nudge.get("experiment_max") != 2112:
+    sys.exit(
+        "error: torque-wrap campaign must recenter cage to 2016..2112, got %s..%s"
+        % (nudge.get("experiment_min"), nudge.get("experiment_max"))
+    )
+motion = nudge.get("observed_motion") or ""
+m = re.search(r"present (-?\d+)->", motion)
+if not m:
+    sys.exit("error: valid_nudge missing present-before in %r" % (motion,))
+before = int(m.group(1))
+if abs(before - 2064) > 4:
+    sys.exit(
+        "error: torque-wrap park must be 2064±4 before valid_nudge, got %s (%s)"
+        % (before, motion)
+    )
+print("pty-torque-wrap-park-ok present_before=%s cage=2016..2112" % (before,))
+PY
+}
+
+# Robotis Present reset on torque-on. Mid-range +16 wrap used to keep
+# cage 2000..2096; after hold at 2064 the picker slack misses 2096.
+# Do not set this on AT_MAX: 2064 is past leftover max 2048 and setup refuses.
+TTY="$(start_responder "$ROOT.responder.out" REALITYOS_METAL_PTY_TORQUE_JUMP_PRESENT=1)"
 run_campaign "$ROOT" "$TTY"
 require_nudge_action "$ROOT" "0.2"
+require_nudge_torque_wrap_park "$ROOT"
 
 # Wizard leftover max==present: hardcoded +0.2 is experiment_cage_violation
 # and abort-latches ONLINE. The campaign must pick -0.2 before propose.
