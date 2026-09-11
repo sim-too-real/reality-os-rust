@@ -1528,11 +1528,8 @@ fn xl330_pty_reenable_torque_rematches_goal_to_present() {
     driver
         .write_action(&[0.0], &ActionParams::empty())
         .expect("hold");
-    driver
-        .write_action(&[0.2], &ActionParams::empty())
-        .expect("nudge");
-    driver.read_sensor(0.0).expect("sensor after nudge");
-    let after_nudge = driver.last_present_position();
+    driver.read_sensor(0.0).expect("sensor after hold");
+    let parked = driver.last_present_position();
     driver.engage_hw_estop("test");
     driver
         .clear_hw_estop(true)
@@ -1543,7 +1540,7 @@ fn xl330_pty_reenable_torque_rematches_goal_to_present() {
     let after_reenable = driver.last_present_position();
     assert_eq!(
         after_reenable,
-        after_nudge + 20,
+        parked + 20,
         "re-enable must match goal to drifted present, not yank back to the stale goal"
     );
     driver.close();
