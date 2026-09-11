@@ -1490,3 +1490,89 @@ fn xl330_pty_after_serial_tx_before_status_restart_does_not_retransmit() {
     let _ = restart.wait();
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn xl330_pty_hw_error_refresh_timeout_does_not_latch_disconnect() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_ALERT", "1"),
+        ("REALITYOS_METAL_PTY_HWERR_REFRESH_FAIL", "1"),
+    ]);
+    let root = metal_test_root("pty-hwerr-refresh");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("open with ALERT + refresh fail");
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold latches STATUS_ALERT");
+    driver
+        .read_sensor(0.0)
+        .expect("good motion sample must survive a failed hw_error refresh");
+    assert!(
+        driver.is_connected(),
+        "diagnostic register 70 timeout must not clear connected"
+    );
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("next certified hold must still reach the bus");
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_reenable_torque_rematches_goal_to_present() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_DRIFT_ON_TORQUE_OFF", "1")]);
+    let root = metal_test_root("pty-reenable-match");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("open");
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold");
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("nudge");
+    driver.read_sensor(0.0).expect("sensor after nudge");
+    let after_nudge = driver.last_present_position();
+    driver.engage_hw_estop("test");
+    driver
+        .clear_hw_estop(true)
+        .expect("clear estop without re-energizing");
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold after rematch");
+    let after_reenable = driver.last_present_position();
+    assert_eq!(
+        after_reenable,
+        after_nudge + 20,
+        "re-enable must match goal to drifted present, not yank back to the stale goal"
+    );
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_crash_restart_restores_wizard_window_before_new_cage() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder();
+    let root = metal_test_root("pty-cage-restore");
+    let cfg = MetalConfig::example(&tty);
+    let mut first = Xl330Driver::open(cfg.clone(), &root).expect("first open");
+    let (first_min, first_max) = first.experiment_cage();
+    first
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("nudge toward the cage edge");
+    first.read_sensor(0.0).expect("sensor after nudge");
+    first.abandon_without_eeprom_restore_for_test();
+    drop(first);
+    let mut second = Xl330Driver::open(cfg, &root).expect("reopen after crash-like abandon");
+    let (_min, second_max) = second.experiment_cage();
+    assert!(
+        second_max > first_max,
+        "leftover EEPROM cage must not ratchet the next session window: first={first_min}..{first_max} second_max={second_max}"
+    );
+    second
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("post-restart nudge needs the restored Wizard window");
+    second.close();
+    let _ = std::fs::remove_dir_all(&root);
+}

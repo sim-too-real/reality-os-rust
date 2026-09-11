@@ -210,6 +210,7 @@ def status_wanted(srl: int, inst: int) -> bool:
 
 _motion_block_reads = 0
 _corrupt_next_crc = False
+_silent_next_status = False
 _travel_reads = 0
 _travel_from: int | None = None
 _travel_to: int | None = None
@@ -253,6 +254,17 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             and regs[64] == 1
         ):
             return b"", 0x80  # torque is on; do not skip the post-enable check
+        if (
+            os.environ.get("REALITYOS_METAL_PTY_HWERR_REFRESH_FAIL") == "1"
+            and addr == 70
+            and regs[70] != 0
+        ):
+            # Setup already read register 70 as 0. After STATUS_ALERT latches
+            # a non-zero error, drop the diagnostic refresh so the driver
+            # must not treat that timeout as bus_lost.
+            global _silent_next_status
+            _silent_next_status = True
+            return bytes([regs[70]]), 0
         if addr == 120:
             _motion_block_reads += 1
             advance_delayed_travel(regs)
@@ -306,6 +318,9 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             if was == 0 and data[0] == 1 and os.environ.get("REALITYOS_METAL_PTY_HW_AFTER_TORQUE") == "1":
                 # Torque sticks; Hardware Error Status latches after enable.
                 regs[70] = 4
+            if was == 1 and data[0] == 0 and os.environ.get("REALITYOS_METAL_PTY_DRIFT_ON_TORQUE_OFF") == "1":
+                present = struct.unpack_from("<i", regs, 132)[0]
+                regs[132:136] = struct.pack("<i", present + 20)
             if was == 0 and data[0] == 1:
                 goal = struct.unpack_from("<i", regs, 116)[0]
                 present = struct.unpack_from("<i", regs, 132)[0]
@@ -413,6 +428,10 @@ def main() -> None:
         payload, inst_err = handle(regs, inst, params)
         # Half-duplex adapters often echo a request-shaped frame before status.
         echo = HEADER + bytes([own, 0x07, 0x00, INST_PING, 0x00, 0x00])
+        global _silent_next_status
+        if _silent_next_status:
+            _silent_next_status = False
+            continue
         if status_wanted(srl, inst):
             pkt = echo + encode_status(own, payload, error=alert | inst_err)
             global _corrupt_next_crc

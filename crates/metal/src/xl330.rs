@@ -1060,6 +1060,12 @@ impl Xl330Driver {
     }
 
     fn establish_startup_cage(&mut self, present: i32) -> PlantResult<()> {
+        // crash_if skips Drop, so EEPROM still holds the previous session
+        // cage. Intersecting a new ±excursion window with that leftover
+        // cage ratchets headroom away; a later nudge then refuses and the
+        // frozen ONLINE mapping abort-latches the instance. Restore the
+        // recorded Wizard window first (fail-safe while serve is down).
+        self.restore_recorded_wizard_window_before_new_cage()?;
         let excursion = self.cfg.max_total_excursion_ticks;
         if excursion < 0 {
             return Err(PlantError::refused(format!(
@@ -1131,6 +1137,71 @@ impl Xl330Driver {
             "current_limit_is_not_position_mode_torque_boundary": true,
         });
         let _ = std::fs::write(self.bus.join(PWM_EVIDENCE_FILE), v.to_string());
+    }
+
+    fn restore_recorded_wizard_window_before_new_cage(&mut self) -> PlantResult<()> {
+        let path = self.bus.join(CAGE_EVIDENCE_FILE);
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return Ok(());
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return Ok(());
+        };
+        let Some(min) = v.get("eeprom_previous_min").and_then(|x| x.as_i64()) else {
+            return Ok(());
+        };
+        let Some(max) = v.get("eeprom_previous_max").and_then(|x| x.as_i64()) else {
+            return Ok(());
+        };
+        let min = i32::try_from(min).map_err(|_| {
+            PlantError::refused(format!("metal_wizard_window_restore_min_overflow:{min}"))
+        })?;
+        let max = i32::try_from(max).map_err(|_| {
+            PlantError::refused(format!("metal_wizard_window_restore_max_overflow:{max}"))
+        })?;
+        if !(XL330_POSITION_MODE_MIN..=XL330_POSITION_MODE_MAX).contains(&min)
+            || !(XL330_POSITION_MODE_MIN..=XL330_POSITION_MODE_MAX).contains(&max)
+            || min > max
+        {
+            return Err(PlantError::refused(format!(
+                "metal_wizard_window_restore_invalid:min={min}:max={max}"
+            )));
+        }
+        if min == self.min_position && max == self.max_position {
+            return Ok(());
+        }
+        self.write_reg(
+            ADDR_MIN_POSITION_LIMIT,
+            &min.to_le_bytes(),
+            "setup_restore_wizard_min",
+            None,
+            false,
+        )?;
+        self.write_reg(
+            ADDR_MAX_POSITION_LIMIT,
+            &max.to_le_bytes(),
+            "setup_restore_wizard_max",
+            None,
+            false,
+        )?;
+        let got_min = self
+            .read_reg(ADDR_MIN_POSITION_LIMIT, 4)
+            .ok()
+            .and_then(|b| le_i32(&b))
+            .ok_or_else(|| PlantError::refused("metal_wizard_window_restore_min_unverified"))?;
+        let got_max = self
+            .read_reg(ADDR_MAX_POSITION_LIMIT, 4)
+            .ok()
+            .and_then(|b| le_i32(&b))
+            .ok_or_else(|| PlantError::refused("metal_wizard_window_restore_max_unverified"))?;
+        if got_min != min || got_max != max {
+            return Err(PlantError::refused(format!(
+                "metal_wizard_window_restore_readback_mismatch:want={min}..{max} got={got_min}..{got_max}"
+            )));
+        }
+        self.min_position = min;
+        self.max_position = max;
+        Ok(())
     }
 
     fn persist_cage_evidence(&self) {
@@ -1501,7 +1572,77 @@ impl Xl330Driver {
         ) as i32
     }
 
-    /// Intended goal before cage refuse. Does not clamp outbound steps inward.
+    fn enable_torque_matched_to_present(&mut self) -> PlantResult<()> {
+        let present = self
+            .read_reg(ADDR_PRESENT_POSITION, 4)
+            .ok()
+            .and_then(|b| le_i32(&b))
+            .ok_or_else(|| PlantError::refused("dxl_present_unreadable_before_torque"))?;
+        if !self.in_experiment_cage(present) {
+            return Err(PlantError::refused(format!(
+                "experiment_cage_violation:present={present}:min={}:max={}",
+                self.experiment_min, self.experiment_max
+            )));
+        }
+        self.last_present = present;
+        self.write_reg(
+            ADDR_GOAL_POSITION,
+            &present.to_le_bytes(),
+            "reenable_goal_match_present",
+            Some(present),
+            false,
+        )?;
+        self.last_goal = Some(present);
+        self.persist_positions();
+        self.write_reg(ADDR_TORQUE_ENABLE, &[1], "torque_on", None, false)?;
+        self.torque_enabled = true;
+        let after = match self
+            .read_reg(ADDR_PRESENT_POSITION, 4)
+            .ok()
+            .and_then(|b| le_i32(&b))
+        {
+            Some(p) => p,
+            None => {
+                let _ = self.write_reg(
+                    ADDR_TORQUE_ENABLE,
+                    &[0],
+                    "reenable_torque_off_present_unread",
+                    None,
+                    false,
+                );
+                self.torque_enabled = false;
+                return Err(PlantError::refused("dxl_present_unreadable_after_torque"));
+            }
+        };
+        if after != present {
+            if !self.in_experiment_cage(after) {
+                let _ = self.write_reg(
+                    ADDR_TORQUE_ENABLE,
+                    &[0],
+                    "reenable_torque_off_present_jump",
+                    None,
+                    false,
+                );
+                self.torque_enabled = false;
+                return Err(PlantError::refused(format!(
+                    "dxl_present_outside_experiment_cage_after_torque:present={after}:min={}:max={}",
+                    self.experiment_min, self.experiment_max
+                )));
+            }
+            self.write_reg(
+                ADDR_GOAL_POSITION,
+                &after.to_le_bytes(),
+                "reenable_goal_match_present_after_torque",
+                Some(after),
+                false,
+            )?;
+            self.last_present = after;
+            self.last_goal = Some(after);
+            self.persist_positions();
+        }
+        Ok(())
+    }
+
     fn note_status_error(&mut self, error: u8) {
         if error & STATUS_ALERT != 0 {
             self.hw_error_needs_refresh = true;
@@ -1509,14 +1650,24 @@ impl Xl330Driver {
     }
 
     fn refresh_hw_error_status(&mut self) {
-        if let Ok(b) = self.read_reg(ADDR_HARDWARE_ERROR, 1) {
-            if let Some(v) = b.first().copied() {
-                self.last_hw_error = v;
-                self.hw_error_needs_refresh = false;
+        // Same contract as confirm_eeprom_identity: this extra READ is
+        // diagnostic. A CRC/timeout after a good motion sample must not
+        // latch `connected=false` / bus_lost and kill the session.
+        let was_connected = self.connected;
+        match self.read_reg(ADDR_HARDWARE_ERROR, 1) {
+            Ok(b) => {
+                if let Some(v) = b.first().copied() {
+                    self.last_hw_error = v;
+                    self.hw_error_needs_refresh = false;
+                }
+            }
+            Err(_) => {
+                self.connected = was_connected;
             }
         }
     }
 
+    /// Intended goal before cage refuse. Does not clamp outbound steps inward.
     fn intended_goal(&self, action: &[f64]) -> i32 {
         let ticks = self.ticks_from_action(action);
         if ticks == 0 {
@@ -1534,6 +1685,26 @@ impl Xl330Driver {
     /// or blank the open-time adapter serial.
     pub fn simulate_udev_path_vanished(&mut self) {
         self.cfg.device = PathBuf::from("/dev/realityos-metal-vanished-udev-name");
+    }
+
+    /// crash_if / SIGKILL skip Drop. Tests need the same leftover EEPROM
+    /// cage plus a surviving `position_cage.json` without releasing the
+    /// PTY by restoring Wizard limits.
+    pub fn abandon_without_eeprom_restore_for_test(&mut self) {
+        if self.bus_up() && self.torque_enabled {
+            let _ = self.write_reg(
+                ADDR_TORQUE_ENABLE,
+                &[0],
+                "test_abandon_torque_off",
+                None,
+                false,
+            );
+            self.torque_enabled = false;
+        }
+        self.eeprom_min_saved = None;
+        self.eeprom_max_saved = None;
+        self.port = None;
+        self.connected = false;
     }
 }
 
@@ -1614,6 +1785,12 @@ impl HardwareDriverPort for Xl330Driver {
         if !is_xl330_model(self.model) {
             return Err(PlantError::refused("metal_refuses_non_xl330_model"));
         }
+        // Torque-on tracks Goal Position. After ESTOP the last certified
+        // goal can differ from present. Re-enable without rematching yanks
+        // the horn before the certified write. Match present first.
+        if !self.torque_enabled {
+            self.enable_torque_matched_to_present()?;
+        }
         // propose() already acquired sensors. Extra register pokes here would
         // exceed the 100 ms software-watchdog miss on a USB-UART bench.
         let goal = self.intended_goal(action);
@@ -1628,10 +1805,6 @@ impl HardwareDriverPort for Xl330Driver {
                 "experiment_cage_violation:present={}:min={}:max={}",
                 self.last_present, self.experiment_min, self.experiment_max
             )));
-        }
-        if !self.torque_enabled {
-            self.write_reg(ADDR_TORQUE_ENABLE, &[1], "torque_on", None, false)?;
-            self.torque_enabled = true;
         }
         self.write_reg(
             ADDR_GOAL_POSITION,

@@ -52,6 +52,10 @@ pub struct CaseRecord {
     pub experiment_min: Option<i32>,
     #[serde(default)]
     pub experiment_max: Option<i32>,
+    /// Authority violation tokens from the measured IPC body. Identity and
+    /// disconnect aggregates must not be inferred from case-name substrings.
+    #[serde(default)]
+    pub violations: Vec<String>,
 }
 
 impl CaseRecord {
@@ -92,7 +96,13 @@ impl CaseRecord {
             commanded_goal: None,
             experiment_min: None,
             experiment_max: None,
+            violations: Vec::new(),
         }
+    }
+
+    pub fn with_violations(mut self, violations: Vec<String>) -> Self {
+        self.violations = violations;
+        self
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -152,10 +162,10 @@ pub fn aggregates_from_cases(cases: &[CaseRecord]) -> ProofAggregates {
             if c.unauthorized_write || c.serial_tx_delta > 0 {
                 a.unauthorized_physical_writes += c.serial_tx_delta;
             }
-            if c.name.contains("identity") || c.name.contains("firmware") {
+            if refusal_has_token(c, IDENTITY_MISMATCH_TOKENS) {
                 a.identity_mismatch_refusals += 1;
             }
-            if c.name.contains("disconnect") {
+            if refusal_has_token(c, DISCONNECT_TOKENS) {
                 a.disconnect_refusals += 1;
             }
             if c.blocking_layer == BlockingLayer::CrashRecoveryBlocked
@@ -167,6 +177,35 @@ pub fn aggregates_from_cases(cases: &[CaseRecord]) -> ProofAggregates {
         }
     }
     a
+}
+
+const IDENTITY_MISMATCH_TOKENS: &[&str] = &[
+    "hardware_firmware_mismatch",
+    "hardware_serial_mismatch",
+    "hardware_identity_mismatch",
+    "metal_serial_mismatch",
+    "identity_mismatch",
+];
+
+const DISCONNECT_TOKENS: &[&str] = &[
+    "online_hardware_disconnected",
+    "driver not connected",
+    "metal_live_io_deadline",
+    "metal_serial_closed",
+];
+
+fn refusal_evidence(c: &CaseRecord) -> String {
+    let mut blob = c.decision_result.to_ascii_lowercase();
+    for v in &c.violations {
+        blob.push(' ');
+        blob.push_str(&v.to_ascii_lowercase());
+    }
+    blob
+}
+
+fn refusal_has_token(c: &CaseRecord, tokens: &[&str]) -> bool {
+    let blob = refusal_evidence(c);
+    tokens.iter().any(|tok| blob.contains(tok))
 }
 
 /// Experiment acceptance for a no-load XL330 hold, in position ticks.
@@ -771,6 +810,55 @@ mod tests {
     }
 
     #[test]
+    fn identity_and_disconnect_aggregates_use_tokens_not_case_names() {
+        let named_only = CaseRecord::measure(
+            "firmware_mismatch",
+            "hot_swap",
+            "authorize:refuse",
+            BlockingLayer::AuthorizationBlocked,
+            0,
+            0,
+            false,
+            false,
+            None,
+            "no_consume",
+        );
+        let a = aggregates_from_cases(&[named_only]);
+        assert_eq!(a.identity_mismatch_refusals, 0);
+        assert_eq!(a.disconnect_refusals, 0);
+
+        let identity = CaseRecord::measure(
+            "unrelated_name",
+            "hot_swap",
+            "authorize:refuse",
+            BlockingLayer::AuthorizationBlocked,
+            0,
+            0,
+            false,
+            false,
+            None,
+            "no_consume",
+        )
+        .with_violations(vec!["hardware_firmware_mismatch".into()]);
+        let disconnect = CaseRecord::measure(
+            "also_unrelated",
+            "unplug",
+            "authorize:refuse",
+            BlockingLayer::AuthorizationBlocked,
+            0,
+            0,
+            false,
+            false,
+            None,
+            "no_consume",
+        )
+        .with_violations(vec!["online_hardware_disconnected".into()]);
+        let b = aggregates_from_cases(&[identity, disconnect]);
+        assert_eq!(b.identity_mismatch_refusals, 1);
+        assert_eq!(b.disconnect_refusals, 1);
+    }
+
+    #[test]
     fn proof_refuses_without_hardware() {
         let meta = ProofMeta {
             hardware_model: "none".into(),
@@ -881,6 +969,7 @@ mod tests {
                 None,
                 "no_consume",
             )
+            .with_violations(vec!["hardware_firmware_mismatch".into()])
             .with_certified_transport(
                 2,
                 2,
@@ -905,6 +994,7 @@ mod tests {
                 None,
                 "no_consume",
             )
+            .with_violations(vec!["online_hardware_disconnected".into()])
             .with_certified_transport(
                 2,
                 2,

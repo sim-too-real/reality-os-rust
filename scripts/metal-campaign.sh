@@ -15,6 +15,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=metal-unix-mode.sh
 source "$SCRIPT_DIR/metal-unix-mode.sh"
+# shellcheck source=metal-sensor-drop.sh
+source "$SCRIPT_DIR/metal-sensor-drop.sh"
 # Authority UID cannot write the repo `docs/` tree. Resolve against the
 # script's repo, not `$PWD`: `sudo ... /path/scripts/metal-campaign.sh`
 # from $HOME used to install ~/docs/metal_proof.json after a live run.
@@ -1848,6 +1850,7 @@ rec = {
     "commanded_goal": gp_i,
     "experiment_min": cage.get("experiment_min"),
     "experiment_max": cage.get("experiment_max"),
+    "violations": r.get("violations") or [],
 }
 print(json.dumps(rec))
 PY
@@ -2072,9 +2075,11 @@ add_case "$(crash_replay after_ack metal-crash-afterack)"
 VIN="$(cat "$ROOT/bus/vin" 2>/dev/null || echo "")"
 if [[ "$CUTOFF_TESTED" == "1" ]]; then
   CUTOFF_BEFORE="$(writes)"
+  CUTOFF_TX="$(serial_tx)"
   add_case "$(python3 - <<PY
 import json
 before=int("$CUTOFF_BEFORE")
+tx=int("$CUTOFF_TX")
 print(json.dumps({
     "name": "independent_vin_cutoff",
     "expected_authorization": False,
@@ -2089,13 +2094,14 @@ print(json.dumps({
     "proposal": "physical VIN disconnect (not STO/SS1/PL/SIL)",
     "unauthorized_write": False,
     "egress_attempt_delta": 0,
-    "serial_tx_before": before,
-    "serial_tx_after": before,
+    "serial_tx_before": tx,
+    "serial_tx_after": tx,
     "serial_tx_delta": 0,
     "device_ack_delta": 0,
     "unauthorized_device_ack_delta": 0,
     "observed_present_after": None,
     "commanded_goal": None,
+    "violations": [],
 }))
 PY
 )"
@@ -2105,15 +2111,32 @@ if [[ "${REALITYOS_METAL_CUTOFF_LIVE:-0}" == "1" ]]; then
   echo "Open the independent VIN switch now (USB data may stay enumerated)." >&2
   dropped=0
   for _ in $(seq 1 120); do
-    if ! as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1; then
+    respfile="$(mktemp)"
+    ipc_ok=1
+    if as_autonomy "$PROP" --root "$ROOT" sensor >"$respfile" 2>"$respfile.err"; then
+      ipc_ok=1
+    else
+      ipc_ok=0
+    fi
+    if metal_sensor_indicates_drop "$respfile"; then
       dropped=1
+      cp "$respfile" "$ROOT/vin_cutoff_sensor.json" || true
+      rm -f "$respfile" "$respfile.err"
+      break
+    fi
+    if [[ "$ipc_ok" != "1" ]] && [[ ! -s "$respfile" ]]; then
+      # Socket gone after a real unplug/brownout that killed serve.
+      dropped=1
+      rm -f "$respfile" "$respfile.err"
       break
     fi
     vin_now="$(cat "$ROOT/bus/vin" 2>/dev/null || echo 999)"
     if [[ "$vin_now" =~ ^[0-9]+$ ]] && [[ "$vin_now" -lt 20 ]]; then
       dropped=1
+      rm -f "$respfile" "$respfile.err"
       break
     fi
+    rm -f "$respfile" "$respfile.err"
     sleep 0.5
   done
   if [[ "$dropped" != "1" ]]; then
