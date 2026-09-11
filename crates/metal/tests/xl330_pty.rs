@@ -317,6 +317,46 @@ fn xl330_pty_forces_wizard_rc_protocol_type_to_protocol_2() {
 }
 
 #[test]
+fn xl330_pty_refuses_when_protocol_type_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_PROTOCOL_RC", "1"),
+        ("REALITYOS_METAL_PTY_DROP_PROTOCOL_TYPE", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-protocol-type");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped Protocol Type write must not look like 2"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_protocol_type_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_secondary_id_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_SECONDARY", "1"),
+        ("REALITYOS_METAL_PTY_DROP_SECONDARY_ID", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-secondary-id");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped Secondary ID write must not look like 255"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_secondary_id_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_zeros_wizard_position_id_so_nudge_stays_in_cage() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[

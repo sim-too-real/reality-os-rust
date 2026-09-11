@@ -822,7 +822,6 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.protocol_type = PROTOCOL_TYPE_2;
             eeprom_changed = true;
         }
         let drive = self
@@ -884,6 +883,29 @@ impl Xl330Driver {
             )));
         }
         self.drive_mode = DRIVE_MODE_VELOCITY_BASED;
+        // Wizard 20/21/22 at the next DTR-RESET leaves RC boot (auto
+        // torque-on, no Protocol 2.0). A write_reg ACK that does not
+        // store used to leave applied_protocol_type lying as 2.
+        // Secondary ID 255 is this experiment's one-actuator invariant.
+        let proto_got = self
+            .read_reg(ADDR_PROTOCOL_TYPE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if proto_got != Some(PROTOCOL_TYPE_2) {
+            return Err(PlantError::refused(format!(
+                "dxl_protocol_type_unverified:{proto_got:?}"
+            )));
+        }
+        self.protocol_type = PROTOCOL_TYPE_2;
+        let secondary_got = self
+            .read_reg(ADDR_SECONDARY_ID, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if secondary_got != Some(SECONDARY_ID_DISABLED) {
+            return Err(PlantError::refused(format!(
+                "dxl_secondary_id_unverified:{secondary_got:?}"
+            )));
+        }
         self.refresh_position_limits()?;
         let want = self.cfg.current_limit_milli;
         let got = self
