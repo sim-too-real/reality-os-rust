@@ -302,6 +302,61 @@ fn xl330_pty_restores_factory_pwm_slope_when_wizard_zero() {
 }
 
 #[test]
+fn xl330_pty_matches_goal_pwm_to_cap_when_wizard_zero() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_GOAL_PWM", "1")]);
+    let root = metal_test_root("pty-zero-goal-pwm");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver =
+        Xl330Driver::open(cfg, &root).expect("Wizard Goal PWM 0 must match the PWM cap");
+    assert_eq!(
+        driver.applied_goal_pwm(),
+        i16::try_from(driver.applied_pwm_limit()).expect("pwm cap fits i16"),
+        "Position Mode uses Goal PWM as the live limiter"
+    );
+    driver.read_sensor(0.0).expect("sensor");
+    let before = driver.last_present_position();
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("nudge after restoring Goal PWM");
+    driver.read_sensor(0.1).expect("sensor");
+    let after = driver.last_present_position();
+    assert_ne!(
+        after, before,
+        "Wizard Goal PWM 0 must not leave present stuck after setup"
+    );
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_matches_goal_pwm_to_cap_when_wizard_too_low() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_LOW_GOAL_PWM", "1")]);
+    let root = metal_test_root("pty-low-goal-pwm");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver =
+        Xl330Driver::open(cfg, &root).expect("Wizard Goal PWM 1 must match the PWM cap");
+    assert_eq!(
+        driver.applied_goal_pwm(),
+        i16::try_from(driver.applied_pwm_limit()).expect("pwm cap fits i16")
+    );
+    driver.read_sensor(0.0).expect("sensor");
+    let before = driver.last_present_position();
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("nudge after raising a legal-but-too-small Goal PWM");
+    driver.read_sensor(0.1).expect("sensor");
+    assert_ne!(
+        driver.last_present_position(),
+        before,
+        "Wizard Goal PWM 1 must not leave present stuck after setup"
+    );
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_restores_factory_pwm_slope_when_wizard_too_low() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_LOW_PWM_SLOPE", "1")]);

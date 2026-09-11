@@ -29,22 +29,23 @@ use crate::identity::{
 };
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
-    instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, pwm_limit_percent, unique_status_ids,
-    ProtocolError, ADDR_BUS_WATCHDOG, ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE, ADDR_FEEDFORWARD_1ST,
-    ADDR_FEEDFORWARD_2ND, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR,
-    ADDR_HOMING_OFFSET, ADDR_ID, ADDR_MAX_POSITION_LIMIT, ADDR_MAX_VOLTAGE_LIMIT,
-    ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER, ADDR_MOVING,
-    ADDR_MOVING_THRESHOLD, ADDR_OPERATING_MODE, ADDR_POSITION_D_GAIN, ADDR_POSITION_I_GAIN,
-    ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION, ADDR_PRESENT_TEMPERATURE, ADDR_PRESENT_VOLTAGE,
-    ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_PROTOCOL_TYPE, ADDR_PWM_LIMIT, ADDR_PWM_SLOPE,
-    ADDR_REALTIME_TICK, ADDR_SECONDARY_ID, ADDR_STARTUP_CONFIGURATION, ADDR_STATUS_RETURN_LEVEL,
-    ADDR_TEMPERATURE_LIMIT, ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT,
-    ADDR_VELOCITY_P_GAIN, BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_MOVING_THRESHOLD,
-    FACTORY_POSITION_P_GAIN, FACTORY_PWM_SLOPE, FACTORY_STARTUP_CONFIGURATION,
-    FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN, MIN_PWM_SLOPE,
-    MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION, PROTOCOL_TYPE_2,
-    SECONDARY_ID_DISABLED, STATUS_ALERT, STATUS_RETURN_ALL, XL330_POSITION_MODE_MAX,
-    XL330_POSITION_MODE_MIN, XL330_PWM_LIMIT_MAX,
+    instruction_ok, is_xl330_model, le_i16, le_i32, le_u16, le_u32, pwm_limit_percent,
+    unique_status_ids, ProtocolError, ADDR_BUS_WATCHDOG, ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE,
+    ADDR_FEEDFORWARD_1ST, ADDR_FEEDFORWARD_2ND, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION,
+    ADDR_GOAL_PWM, ADDR_HARDWARE_ERROR, ADDR_HOMING_OFFSET, ADDR_ID, ADDR_MAX_POSITION_LIMIT,
+    ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER,
+    ADDR_MOVING, ADDR_MOVING_THRESHOLD, ADDR_OPERATING_MODE, ADDR_POSITION_D_GAIN,
+    ADDR_POSITION_I_GAIN, ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION, ADDR_PRESENT_TEMPERATURE,
+    ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_PROTOCOL_TYPE,
+    ADDR_PWM_LIMIT, ADDR_PWM_SLOPE, ADDR_REALTIME_TICK, ADDR_SECONDARY_ID,
+    ADDR_STARTUP_CONFIGURATION, ADDR_STATUS_RETURN_LEVEL, ADDR_TEMPERATURE_LIMIT,
+    ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN,
+    BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN,
+    FACTORY_PWM_SLOPE, FACTORY_STARTUP_CONFIGURATION, FACTORY_VELOCITY_I_GAIN,
+    FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN, MIN_PWM_SLOPE, MIN_VELOCITY_I_GAIN,
+    MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION, PROTOCOL_TYPE_2, SECONDARY_ID_DISABLED,
+    STATUS_ALERT, STATUS_RETURN_ALL, XL330_POSITION_MODE_MAX, XL330_POSITION_MODE_MIN,
+    XL330_PWM_LIMIT_MAX,
 };
 
 pub struct Xl330Driver {
@@ -97,6 +98,7 @@ pub struct Xl330Driver {
     velocity_p_gain: u16,
     velocity_i_gain: u16,
     pwm_limit: u16,
+    goal_pwm: i16,
     homing_offset: i32,
     bus_watchdog: u8,
     moving_threshold: u32,
@@ -188,6 +190,7 @@ impl Xl330Driver {
             velocity_p_gain: 0,
             velocity_i_gain: 0,
             pwm_limit: 0,
+            goal_pwm: 0,
             homing_offset: 0,
             bus_watchdog: 0,
             moving_threshold: 0,
@@ -388,6 +391,10 @@ impl Xl330Driver {
 
     pub fn applied_pwm_limit(&self) -> u16 {
         self.pwm_limit
+    }
+
+    pub fn applied_goal_pwm(&self) -> i16 {
+        self.goal_pwm
     }
 
     pub fn pwm_limit_requested(&self) -> u16 {
@@ -1108,6 +1115,12 @@ impl Xl330Driver {
             )?;
             self.bus_watchdog = 0;
         }
+        // Position Mode uses Goal PWM(100) as the live output limiter.
+        // PWM Limit(36) only caps that register. A Wizard leftover 0
+        // (or |Goal PWM| below MIN_PWM_LIMIT) leaves the 32-tick nudge
+        // stuck after we write PWM Limit 200. Match the measured cap
+        // after watchdog is cleared (Goal Values are read-only at 0xFF).
+        self.sync_goal_pwm_to_measured_cap()?;
         // Torque-on tracks Goal Position. A stale Wizard goal (often 0)
         // would move before any certified command. Match present first.
         // Not counted as command egress.
@@ -1336,6 +1349,42 @@ impl Xl330Driver {
         }
         self.pwm_limit = measured;
         self.persist_pwm_evidence();
+        Ok(())
+    }
+
+    /// Goal PWM is a Goal Value. Bus Watchdog 0xFF makes it read-only,
+    /// so this runs after setup writes watchdog 0.
+    fn sync_goal_pwm_to_measured_cap(&mut self) -> PlantResult<()> {
+        let measured = self.pwm_limit;
+        let want_goal = i16::try_from(measured).map_err(|_| {
+            PlantError::refused(format!("metal_goal_pwm_cap_out_of_range:{measured}"))
+        })?;
+        let got_goal = self
+            .read_reg(ADDR_GOAL_PWM, 2)
+            .ok()
+            .and_then(|b| le_i16(&b));
+        self.goal_pwm = got_goal.unwrap_or(0);
+        if got_goal != Some(want_goal) {
+            self.write_reg(
+                ADDR_GOAL_PWM,
+                &want_goal.to_le_bytes(),
+                "setup_goal_pwm_match_cap",
+                None,
+                false,
+            )?;
+            self.goal_pwm = want_goal;
+        }
+        let measured_goal = self
+            .read_reg(ADDR_GOAL_PWM, 2)
+            .ok()
+            .and_then(|b| le_i16(&b))
+            .ok_or_else(|| PlantError::refused("metal_goal_pwm_readback_unverified"))?;
+        if measured_goal != want_goal {
+            return Err(PlantError::refused(format!(
+                "metal_goal_pwm_readback_mismatch:want={want_goal} measured={measured_goal}"
+            )));
+        }
+        self.goal_pwm = measured_goal;
         Ok(())
     }
 

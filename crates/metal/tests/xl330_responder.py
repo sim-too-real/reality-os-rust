@@ -148,6 +148,14 @@ def init_regs() -> bytearray:
     regs[34:36] = struct.pack("<H", 60 if os.environ.get("REALITYOS_METAL_PTY_HIGH_MINVIN") == "1" else 35)
     pwm = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_PWM") == "1" else 885
     regs[36:38] = struct.pack("<H", pwm)
+    # Position Mode live limiter. PWM Limit only caps this register.
+    # Reboot / mode-switch copies PWM Limit here; Wizard can leave 0.
+    if os.environ.get("REALITYOS_METAL_PTY_ZERO_GOAL_PWM") == "1":
+        regs[100:102] = struct.pack("<h", 0)
+    elif os.environ.get("REALITYOS_METAL_PTY_LOW_GOAL_PWM") == "1":
+        regs[100:102] = struct.pack("<h", 1)
+    else:
+        regs[100:102] = struct.pack("<h", pwm if pwm <= 32767 else 32767)
     regs[38:40] = struct.pack("<H", 200)
     vel = 1 if os.environ.get("REALITYOS_METAL_PTY_SLOW_VEL") == "1" else 445
     regs[44:48] = struct.pack("<I", vel)
@@ -352,9 +360,10 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
     if inst == INST_WRITE and len(params) >= 2:
         addr = struct.unpack_from("<H", params)[0]
         data = params[2:]
+        # Goal PWM/Current/Velocity/Position are read-only while Watchdog=0xFF.
+        if regs[98] == 0xFF and addr in (100, 102, 104, 116):
+            return b"", 0x08
         if addr == 116 and len(data) >= 4:
-            if regs[98] == 0xFF:
-                return b"", 0x08  # Bus Watchdog error: goal is read-only
             goal = struct.unpack_from("<i", data)[0]
             max_p = struct.unpack_from("<i", regs, 48)[0]
             min_p = struct.unpack_from("<i", regs, 52)[0]
@@ -407,9 +416,16 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         if addr == 116 and len(data) >= 4:
             p_gain = struct.unpack_from("<H", regs, 84)[0]
             pwm_limit = struct.unpack_from("<H", regs, 36)[0]
+            goal_pwm = struct.unpack_from("<h", regs, 100)[0]
             vel_p = struct.unpack_from("<H", regs, 78)[0]
             slope = regs[62]
-            if p_gain > 0 and pwm_limit > 0 and vel_p > 0 and slope >= 20:
+            if (
+                p_gain > 0
+                and pwm_limit > 0
+                and abs(goal_pwm) >= 80
+                and vel_p > 0
+                and slope >= 20
+            ):
                 old_present = struct.unpack_from("<i", regs, 132)[0]
                 new_goal = struct.unpack_from("<i", data)[0]
                 # Wizard P above factory 400 overshoots a 32-tick step

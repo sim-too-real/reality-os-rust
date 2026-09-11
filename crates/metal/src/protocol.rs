@@ -114,6 +114,12 @@ pub const FACTORY_POSITION_P_GAIN: u16 = 400;
 pub const MIN_POSITION_P_GAIN: u16 = 80;
 /// RAM. Unit 20 ms. 0 = off; 0xFF (-1) = tripped (goal registers read-only).
 pub const ADDR_BUS_WATCHDOG: u16 = 98;
+/// RAM. Signed. In Position Mode this is the live PWM output limiter.
+/// PWM Limit(36) only caps how large this register may be. Wizard 0
+/// (or |Goal PWM| below MIN_PWM_LIMIT) leaves the 32-tick nudge stuck
+/// even after setup writes PWM Limit 200. Factory / reboot typically
+/// copies PWM Limit here; a mode switch also resets it to PWM Limit.
+pub const ADDR_GOAL_PWM: u16 = 100;
 pub const ADDR_PROFILE_ACCEL: u16 = 108;
 pub const ADDR_PROFILE_VELOCITY: u16 = 112;
 pub const ADDR_GOAL_POSITION: u16 = 116;
@@ -388,6 +394,10 @@ pub fn find_header(buf: &[u8]) -> Option<usize> {
 
 pub fn le_u16(b: &[u8]) -> Option<u16> {
     Some(u16::from_le_bytes([*b.first()?, *b.get(1)?]))
+}
+
+pub fn le_i16(b: &[u8]) -> Option<i16> {
+    Some(i16::from_le_bytes([*b.first()?, *b.get(1)?]))
 }
 
 pub fn le_u32(b: &[u8]) -> Option<u32> {
