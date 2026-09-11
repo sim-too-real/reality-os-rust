@@ -222,7 +222,14 @@ def init_regs() -> bytearray:
         regs[62] = 1
     else:
         regs[62] = 140
-    regs[68] = 0 if os.environ.get("REALITYOS_METAL_PTY_SRL0") == "1" else 2
+    if os.environ.get("REALITYOS_METAL_PTY_SRL0") == "1":
+        regs[68] = 0
+    elif os.environ.get("REALITYOS_METAL_PTY_SRL1") == "1":
+        # Wizard "PING + READ". WRITE has no status. Identify READs succeed;
+        # setup write_reg then times out unless the SRL poke sticks.
+        regs[68] = 1
+    else:
+        regs[68] = 2
     regs[120:122] = struct.pack("<H", 1234)
     regs[126:128] = struct.pack("<h", 0)
     regs[128:132] = struct.pack("<i", 0)
@@ -265,6 +272,11 @@ _boot = time.monotonic()
 # One-shot READ refuses. A failed setup read used to look like factory 0
 # and skip the safe write (Startup Configuration, I/D, feedforward, watchdog).
 _fail_reads: dict[int, int] = {}
+_drop_srl_writes = 0
+if os.environ.get("REALITYOS_METAL_PTY_DROP_SRL") == "1":
+    _drop_srl_writes = 10_000
+elif os.environ.get("REALITYOS_METAL_PTY_DROP_SRL_ONCE") == "1":
+    _drop_srl_writes = 1
 if os.environ.get("REALITYOS_METAL_PTY_UNREAD_STARTUP") == "1":
     _fail_reads[60] = 1
 if os.environ.get("REALITYOS_METAL_PTY_UNREAD_PID") == "1":
@@ -475,6 +487,11 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             return b"", 0
         if addr == 24 and os.environ.get("REALITYOS_METAL_PTY_DROP_MOVING_THRESHOLD") == "1":
             return b"", 0
+        if addr == 68:
+            global _drop_srl_writes
+            if _drop_srl_writes > 0:
+                _drop_srl_writes -= 1
+                return b"", 0
         if addr == 20 and len(data) >= 4:
             old = struct.unpack_from("<i", regs, 20)[0]
             new = struct.unpack_from("<i", data)[0]

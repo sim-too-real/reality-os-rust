@@ -196,6 +196,62 @@ fn xl330_pty_status_return_level_zero_can_still_identify() {
 }
 
 #[test]
+fn xl330_pty_status_return_level_one_can_still_write() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_SRL1", "1")]);
+    let root = metal_test_root("pty-srl1");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("Wizard Status Return Level 1 must poke 2 before setup WRITE");
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold after SRL=1 poke");
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_retries_when_srl_poke_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_SRL1", "1"),
+        ("REALITYOS_METAL_PTY_DROP_SRL_ONCE", "1"),
+    ]);
+    let root = metal_test_root("pty-srl1-drop-once");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect(
+        "Wizard SRL=1 plus a dropped first poke must retry; identify READs succeed and the next write_reg would time out",
+    );
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold after SRL poke retry");
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_srl_poke_never_sticks() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_SRL1", "1"),
+        ("REALITYOS_METAL_PTY_DROP_SRL", "1"),
+    ]);
+    let root = metal_test_root("pty-srl1-drop");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped SRL poke must not leave WRITE silent"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_status_return_level_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_outbound_nudge_at_cage_edge_is_refused() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_AT_MAX", "1")]);

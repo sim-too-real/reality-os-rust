@@ -89,7 +89,8 @@ pub fn pwm_limit_percent(raw: u16) -> f64 {
     f64::from(raw) * XL330_PWM_LIMIT_UNIT_PERCENT
 }
 pub const ADDR_TORQUE_ENABLE: u16 = 64;
-/// RAM. 0 = no status except PING (Wizard); 2 = all instructions (factory).
+/// RAM. 0 = PING only (Wizard); 1 = PING+READ (WRITE has no status);
+/// 2 = all instructions (factory).
 pub const ADDR_STATUS_RETURN_LEVEL: u16 = 68;
 pub const STATUS_RETURN_ALL: u8 = 2;
 pub const ADDR_HARDWARE_ERROR: u16 = 70;

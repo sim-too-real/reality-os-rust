@@ -619,9 +619,11 @@ impl Xl330Driver {
 
     fn ping_and_identify(&mut self) -> io::Result<()> {
         let _ = self.xfer(&encode_ping(self.cfg.servo_id), true)?;
-        // Wizard can set Status Return Level to 0 (PING only). Then READ and
-        // WRITE have no status and identify/setup fail. Poke 2 without
-        // requiring an ack — there may be no status packet to read.
+        // Wizard can set Status Return Level to 0 (PING only) or 1
+        // (PING+READ). WRITE then has no status. Identify READs still
+        // succeed at SRL=1, and the first setup write_reg times out or
+        // decodes the half-duplex echo as dxl_truncated. Poke 2 and
+        // read it back — the poke itself may have no status.
         self.force_status_return_all()?;
         // Startup Configuration can already be tracking a stale goal.
         // Identify READs used to run while torque was on.
@@ -644,6 +646,22 @@ impl Xl330Driver {
     }
 
     fn force_status_return_all(&mut self) -> io::Result<()> {
+        let mut last: Option<u8> = None;
+        for _ in 0..3 {
+            self.poke_status_return_all()?;
+            last = self.peek_status_return_level()?;
+            if last == Some(STATUS_RETURN_ALL) {
+                return Ok(());
+            }
+        }
+        Err(io::Error::other(format!(
+            "dxl_status_return_level_unverified:{}",
+            last.map(|v| v.to_string())
+                .unwrap_or_else(|| "unread".into())
+        )))
+    }
+
+    fn poke_status_return_all(&mut self) -> io::Result<()> {
         let frame = encode_write(
             self.cfg.servo_id,
             ADDR_STATUS_RETURN_LEVEL,
@@ -659,15 +677,15 @@ impl Xl330Driver {
         port.write_all(&frame).map_err(io::Error::other)?;
         port.flush().map_err(io::Error::other)?;
         half_duplex_turnaround(&self.cfg.device);
-        // Factory SRL=2 replies; Wizard SRL=0 does not. Consume an optional
-        // status so a late USB packet is not decoded as the model READ.
-        // 25 ms > default FTDI latency_timer (16 ms).
+        // Factory SRL=2 replies; Wizard SRL=0/1 does not. Consume an
+        // optional status so a late USB packet is not decoded as the
+        // readback or the model READ. 25 ms > default FTDI latency (16 ms).
         port.set_timeout(Duration::from_millis(25))
             .map_err(io::Error::other)?;
         let mut acc = Vec::new();
         let mut tmp = [0u8; 64];
-        let end = std::time::Instant::now() + Duration::from_millis(25);
-        while std::time::Instant::now() < end {
+        let end = Instant::now() + Duration::from_millis(25);
+        while Instant::now() < end {
             match port.read(&mut tmp) {
                 Ok(0) => {}
                 Ok(n) => {
@@ -687,6 +705,49 @@ impl Xl330Driver {
             .map_err(io::Error::other)?;
         port.set_timeout(saved).map_err(io::Error::other)?;
         Ok(())
+    }
+
+    /// Identify has not set `connected` yet, so this must not use `read_reg`.
+    /// SRL=0 still has no READ status; treat that as unread and retry the poke.
+    fn peek_status_return_level(&mut self) -> io::Result<Option<u8>> {
+        let frame = encode_read(self.cfg.servo_id, ADDR_STATUS_RETURN_LEVEL, 1);
+        let port = self
+            .port
+            .as_mut()
+            .ok_or_else(|| io::Error::other("metal_serial_closed"))?;
+        let saved = port.timeout();
+        port.clear(serialport::ClearBuffer::Input)
+            .map_err(io::Error::other)?;
+        port.write_all(&frame).map_err(io::Error::other)?;
+        port.flush().map_err(io::Error::other)?;
+        half_duplex_turnaround(&self.cfg.device);
+        port.set_timeout(Duration::from_millis(25))
+            .map_err(io::Error::other)?;
+        let mut acc = Vec::new();
+        let mut tmp = [0u8; 64];
+        let end = Instant::now() + Duration::from_millis(25);
+        let mut got = None;
+        while Instant::now() < end {
+            match port.read(&mut tmp) {
+                Ok(0) => {}
+                Ok(n) => {
+                    acc.extend_from_slice(&tmp[..n]);
+                    if let Ok(st) = decode_status_scan(&acc) {
+                        got = st.params.first().copied();
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::TimedOut => break,
+                Err(e) => {
+                    let _ = port.set_timeout(saved);
+                    return Err(e);
+                }
+            }
+        }
+        port.clear(serialport::ClearBuffer::Input)
+            .map_err(io::Error::other)?;
+        port.set_timeout(saved).map_err(io::Error::other)?;
+        Ok(got)
     }
 
     /// Directed torque-off before identify READs. Not command egress.
