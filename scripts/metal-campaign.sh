@@ -1604,8 +1604,8 @@ settle_after_write() {
     fi
     sleep 0.05
   done
-  echo "warning: XL330 present did not reach goal within 1.5s; sampling anyway" >&2
-  as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1 || true
+  echo "error: XL330 present did not reach the written goal within 1.5s (still traveling or PWM-stalled)" >&2
+  return 1
 }
 
 # $! after `sudo -u ... serve &` is the sudo wrapper. /proc/<sudo>/fd is not
@@ -1793,7 +1793,11 @@ measure() {
   # merely Moving=0 — a real XL330 is still parked then). action=0.2 uses
   # the full 32-tick cap; plastic-gear backlash can hide an 8-tick step.
   if [[ "$expected" == "true" ]] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("ok") else 1)' "$respfile"; then
-    settle_after_write
+    if ! settle_after_write; then
+      echo "error: authorized $name did not settle; refuse to sample a traveling or stuck horn as a proof case" >&2
+      rm -f "$respfile"
+      exit 1
+    fi
   fi
   after="$(writes)"
   eg_after="$(egress_attempts)"
@@ -2155,6 +2159,25 @@ wait_for_usb_replug() {
   return 1
 }
 
+# After replug the char device can exist while the servo is still in
+# DTR-RESET. start_auth retries prepare; this also retries a bound serve
+# whose first sensor still misses.
+start_auth_after_usb_replug() {
+  local attempt
+  for attempt in 1 2 3 4 5 6; do
+    echo "metal-campaign: post-replug serve attempt $attempt (DTR-RESET window)" >&2
+    if start_auth 0; then
+      if as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1; then
+        return 0
+      fi
+      echo "metal-campaign: post-replug serve bound but sensor refused; retry" >&2
+      stop_auth || true
+    fi
+    sleep 0.8
+  done
+  return 1
+}
+
 # After a confirmed VIN/UART drop, propose must refuse with a drop token
 # and serial_tx_delta=0. If unplug killed serve, propose-id cannot return
 # those tokens; record measured serial_tx and the drop evidence file.
@@ -2244,15 +2267,13 @@ if [[ "${REALITYOS_METAL_UNPLUG_LIVE:-0}" == "1" ]]; then
   if ! wait_for_usb_replug; then
     exit 1
   fi
-  # Physical replug asserts DTR again. Cheap FTDI/CP2102 boards RESET the
-  # servo; identify during that reboot window fails the first start_auth.
-  sleep 0.5
-  if ! prepare_usb_serial_host "$DEVICE"; then
-    echo "error: USB-UART prepare after replug failed" >&2
-    exit 1
-  fi
-  if ! start_auth 0; then
-    echo "error: serve restart after USB replug failed" >&2
+  # Physical replug asserts DTR. Cheap FTDI/CP2102 RESET the servo. The
+  # tty can exist before udev owner/latency stick and before Protocol 2.0
+  # answers. A single prepare-or-exit after 0.5 s aborted the first live
+  # unplug on that window. start_auth already retries prepare; keep
+  # retrying until a live sensor lands.
+  if ! start_auth_after_usb_replug; then
+    echo "error: serve restart after USB replug failed (DTR-RESET / identify)" >&2
     exit 1
   fi
   require_live_session
