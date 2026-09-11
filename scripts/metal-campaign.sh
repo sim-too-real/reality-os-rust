@@ -1722,6 +1722,32 @@ stop_auth() {
   rm -f "$ROOT/stop_serve" "$ROOT/ipc.sock"
 }
 
+# After crash_if / USB replug / first serve open, the tty can exist while
+# the servo is still in DTR-RESET. start_auth retries prepare until
+# ipc.sock binds (MetalAuthority::start succeeded), but propose/sensor
+# exits 0 for ok=false. A DTR-RESET refuse used to look like a landed
+# session on every restart except USB replug. Retry until the JSON body
+# is ok=true. Sensor IPC does not fire crash_if.
+start_auth_until_live() {
+  local first="${1:-0}"
+  local crash="${2:-}"
+  local sensor_path="${3:-$ROOT/live_sensor.json}"
+  local attempt
+  for attempt in 1 2 3 4 5 6; do
+    echo "metal-campaign: serve attempt $attempt (DTR-RESET window first=$first crash=${crash:-none})" >&2
+    if start_auth "$first" "$crash"; then
+      if as_autonomy "$PROP" --root "$ROOT" sensor >"$sensor_path" 2>/dev/null \
+        && metal_sensor_is_live "$sensor_path"; then
+        return 0
+      fi
+      echo "metal-campaign: serve bound but sensor is not live (ok!=true); retry" >&2
+      stop_auth || true
+    fi
+    sleep 0.8
+  done
+  return 1
+}
+
 AUTH_PID=""
 SMOKE_PID=""
 cleanup() {
@@ -1729,7 +1755,13 @@ cleanup() {
   cleanup_usb_serial_host || true
 }
 trap cleanup EXIT
-start_auth 1
+if ! start_auth_until_live 1 "" "$ROOT/first_live_sensor.json"; then
+  echo "error: first serve did not become live (DTR-RESET / identify)" >&2
+  cat "$ROOT/first_live_sensor.json" >&2 || true
+  cat "$ROOT/authority.err" >&2 || true
+  cat "$ROOT/serve.err" >&2 || true
+  exit 1
+fi
 if [[ -s "$ROOT/serve.err" ]]; then
   echo "error: serve.err after first bind; identity/hold would be unmeasured:" >&2
   cat "$ROOT/serve.err" >&2
@@ -1942,7 +1974,11 @@ add_case "$(MEASURE_REQUIRE='hardware_session_requires_online_restart|dispatch_s
 as_authority rm -f "$ROOT/bus/hot_swap.json"
 
 stop_auth
-start_auth 0
+if ! start_auth_until_live 0 "" "$ROOT/disconnect_restart_sensor.json"; then
+  echo "error: serve restart before force_disconnect did not become live (DTR-RESET / identify)" >&2
+  cat "$ROOT/disconnect_restart_sensor.json" >&2 || true
+  exit 1
+fi
 require_live_session
 as_authority bash -c "echo 1 > '$ROOT/bus/force_disconnect'"
 add_case "$(MEASURE_REQUIRE=online_hardware_disconnected MEASURE_FORBID=software_watchdog_miss measure device_disconnect 'force_disconnect then propose' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-disc "$PROP" --root "$ROOT" propose-id)"
@@ -1990,8 +2026,9 @@ crash_replay() {
   local point="$1"
   local cid="$2"
   stop_auth
-  if ! start_auth 0 "$point"; then
-    echo "error: crash serve did not bind for $point" >&2
+  if ! start_auth_until_live 0 "$point" "$ROOT/crash-${point}-live.json"; then
+    echo "error: crash serve did not become live for $point (DTR-RESET / identify)" >&2
+    cat "$ROOT/crash-${point}-live.json" >&2 || true
     exit 1
   fi
   local before_crash
@@ -2021,8 +2058,9 @@ crash_replay() {
   fi
   wait "$AUTH_PID" 2>/dev/null || true
   "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
-  if ! start_auth 0; then
-    echo "error: restart after $point crash failed" >&2
+  if ! start_auth_until_live 0 "" "$ROOT/crash-${point}-restart.json"; then
+    echo "error: restart after $point crash did not become live (DTR-RESET / identify)" >&2
+    cat "$ROOT/crash-${point}-restart.json" >&2 || true
     exit 1
   fi
   local before after after_restart
@@ -2086,8 +2124,9 @@ PY
   # A successful driver_write resets the counter. Do that here, quietly
   # (stdout is the case JSON for add_case).
   stop_auth
-  if ! start_auth 0; then
-    echo "error: restart after $point replay failed; next crash point would be unmeasured" >&2
+  if ! start_auth_until_live 0 "" "$ROOT/reset-${cid}-live.json"; then
+    echo "error: restart after $point replay did not become live; next crash point would be unmeasured" >&2
+    cat "$ROOT/reset-${cid}-live.json" >&2 || true
     exit 1
   fi
   as_autonomy "$PROP" --root "$ROOT" --id "${cid}-reset" --verb hold propose >"$ROOT/reset-${cid}.json" || true
@@ -2163,23 +2202,9 @@ wait_for_usb_replug() {
 }
 
 # After replug the char device can exist while the servo is still in
-# DTR-RESET. start_auth retries prepare; this also retries a bound serve
-# whose first sensor still misses.
+# DTR-RESET. Same live-sensor retry as first start / crash-replay.
 start_auth_after_usb_replug() {
-  local attempt
-  for attempt in 1 2 3 4 5 6; do
-    echo "metal-campaign: post-replug serve attempt $attempt (DTR-RESET window)" >&2
-    if start_auth 0; then
-      if as_autonomy "$PROP" --root "$ROOT" sensor >"$ROOT/replug_sensor.json" 2>/dev/null \
-        && metal_sensor_is_live "$ROOT/replug_sensor.json"; then
-        return 0
-      fi
-      echo "metal-campaign: post-replug serve bound but sensor is not live (ok!=true); retry" >&2
-      stop_auth || true
-    fi
-    sleep 0.8
-  done
-  return 1
+  start_auth_until_live 0 "" "$ROOT/replug_sensor.json"
 }
 
 # After a confirmed VIN/UART drop, propose must refuse with a drop token
@@ -2274,8 +2299,8 @@ if [[ "${REALITYOS_METAL_UNPLUG_LIVE:-0}" == "1" ]]; then
   # Physical replug asserts DTR. Cheap FTDI/CP2102 RESET the servo. The
   # tty can exist before udev owner/latency stick and before Protocol 2.0
   # answers. A single prepare-or-exit after 0.5 s aborted the first live
-  # unplug on that window. start_auth already retries prepare; keep
-  # retrying until a live sensor lands.
+  # unplug on that window. Same live-sensor retry as first start and
+  # crash-replay.
   if ! start_auth_after_usb_replug; then
     echo "error: serve restart after USB replug failed (DTR-RESET / identify)" >&2
     exit 1

@@ -2387,5 +2387,15 @@ mod tests {
                 .contains(ControlFlags::HUPCL),
             "HUPCL must stay clear on the exclusive fd"
         );
+        slave
+            .set_baud_rate(115_200)
+            .expect("in-place baud retune must not require reopen");
+        assert!(
+            !tcgetattr(fd)
+                .expect("tcgetattr after set_baud_rate")
+                .control_flags
+                .contains(ControlFlags::HUPCL),
+            "serialport set_baud_rate must not restore HUPCL (discover retune would DTR-RESET on close)"
+        );
     }
 }
