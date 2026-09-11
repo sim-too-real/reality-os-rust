@@ -166,6 +166,10 @@ def init_regs() -> bytearray:
         regs[11] = 16
     p_gain = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_P") == "1" else 400
     regs[84:86] = struct.pack("<H", p_gain)
+    if os.environ.get("REALITYOS_METAL_PTY_WIZARD_PID") == "1":
+        # Wizard position I/D. Factory is 0. High I/D overshoots a 32-tick step.
+        regs[80:82] = struct.pack("<H", 4000)
+        regs[82:84] = struct.pack("<H", 4000)
     if os.environ.get("REALITYOS_METAL_PTY_FEEDFORWARD") == "1":
         regs[88:90] = struct.pack("<H", 8000)
         regs[90:92] = struct.pack("<H", 8000)

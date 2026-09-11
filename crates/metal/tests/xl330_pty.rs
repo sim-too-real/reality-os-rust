@@ -277,6 +277,19 @@ fn xl330_pty_forces_wizard_rc_protocol_type_to_protocol_2() {
 }
 
 #[test]
+fn xl330_pty_zeros_wizard_position_id_so_nudge_stays_in_cage() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_WIZARD_PID", "1")]);
+    let root = metal_test_root("pty-pos-id");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("zero Wizard position I/D");
+    assert_eq!(driver.applied_position_i_gain(), 0);
+    assert_eq!(driver.applied_position_d_gain(), 0);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_zeros_wizard_feedforward_so_nudge_stays_bounded() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_FEEDFORWARD", "1")]);

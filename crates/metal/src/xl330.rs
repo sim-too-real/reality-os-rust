@@ -34,15 +34,15 @@ use crate::protocol::{
     ADDR_FEEDFORWARD_2ND, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR,
     ADDR_HOMING_OFFSET, ADDR_ID, ADDR_MAX_POSITION_LIMIT, ADDR_MAX_VOLTAGE_LIMIT,
     ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER, ADDR_MOVING,
-    ADDR_MOVING_THRESHOLD, ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION,
-    ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_PROTOCOL_TYPE,
-    ADDR_PWM_LIMIT, ADDR_REALTIME_TICK, ADDR_SECONDARY_ID, ADDR_STATUS_RETURN_LEVEL,
-    ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN,
-    BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN,
-    FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN, MIN_VELOCITY_I_GAIN,
-    MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION, PROTOCOL_TYPE_2, SECONDARY_ID_DISABLED,
-    STATUS_ALERT, STATUS_RETURN_ALL, XL330_POSITION_MODE_MAX, XL330_POSITION_MODE_MIN,
-    XL330_PWM_LIMIT_MAX,
+    ADDR_MOVING_THRESHOLD, ADDR_OPERATING_MODE, ADDR_POSITION_D_GAIN, ADDR_POSITION_I_GAIN,
+    ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL,
+    ADDR_PROFILE_VELOCITY, ADDR_PROTOCOL_TYPE, ADDR_PWM_LIMIT, ADDR_REALTIME_TICK,
+    ADDR_SECONDARY_ID, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN,
+    ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN, BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED,
+    FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN, FACTORY_VELOCITY_I_GAIN,
+    FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN, MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN,
+    OPERATING_MODE_POSITION, PROTOCOL_TYPE_2, SECONDARY_ID_DISABLED, STATUS_ALERT,
+    STATUS_RETURN_ALL, XL330_POSITION_MODE_MAX, XL330_POSITION_MODE_MIN, XL330_PWM_LIMIT_MAX,
 };
 
 pub struct Xl330Driver {
@@ -90,6 +90,8 @@ pub struct Xl330Driver {
     velocity_limit: u32,
     drive_mode: u8,
     position_p_gain: u16,
+    position_i_gain: u16,
+    position_d_gain: u16,
     velocity_p_gain: u16,
     velocity_i_gain: u16,
     pwm_limit: u16,
@@ -163,6 +165,8 @@ impl Xl330Driver {
             velocity_limit: 0,
             drive_mode: 0,
             position_p_gain: 0,
+            position_i_gain: 0,
+            position_d_gain: 0,
             velocity_p_gain: 0,
             velocity_i_gain: 0,
             pwm_limit: 0,
@@ -329,6 +333,14 @@ impl Xl330Driver {
 
     pub fn applied_protocol_type(&self) -> u8 {
         self.protocol_type
+    }
+
+    pub fn applied_position_i_gain(&self) -> u16 {
+        self.position_i_gain
+    }
+
+    pub fn applied_position_d_gain(&self) -> u16 {
+        self.position_d_gain
     }
 
     pub fn applied_feedforward_1st(&self) -> u16 {
@@ -718,6 +730,38 @@ impl Xl330Driver {
                 false,
             )?;
             self.position_p_gain = FACTORY_POSITION_P_GAIN;
+        }
+        let got_i = self
+            .read_reg(ADDR_POSITION_I_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b))
+            .unwrap_or(0);
+        let got_d = self
+            .read_reg(ADDR_POSITION_D_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b))
+            .unwrap_or(0);
+        self.position_i_gain = got_i;
+        self.position_d_gain = got_d;
+        // Factory 0. Wizard position I/D overshoots the certified 32-tick
+        // step past the 48-tick session cage.
+        if got_i != 0 || got_d != 0 {
+            self.write_reg(
+                ADDR_POSITION_I_GAIN,
+                &0u16.to_le_bytes(),
+                "setup_position_i_gain_zero",
+                None,
+                false,
+            )?;
+            self.write_reg(
+                ADDR_POSITION_D_GAIN,
+                &0u16.to_le_bytes(),
+                "setup_position_d_gain_zero",
+                None,
+                false,
+            )?;
+            self.position_i_gain = 0;
+            self.position_d_gain = 0;
         }
         let got_vp = self
             .read_reg(ADDR_VELOCITY_P_GAIN, 2)

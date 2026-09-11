@@ -85,6 +85,9 @@ pub const MIN_VELOCITY_I_GAIN: u16 = 200;
 pub const ADDR_VELOCITY_P_GAIN: u16 = 78;
 pub const FACTORY_VELOCITY_P_GAIN: u16 = 100;
 pub const MIN_VELOCITY_P_GAIN: u16 = 20;
+/// RAM. Factory 0. Wizard PID I/D makes a 32-tick goal overshoot the cage.
+pub const ADDR_POSITION_D_GAIN: u16 = 80;
+pub const ADDR_POSITION_I_GAIN: u16 = 82;
 /// RAM. Factory 400. Wizard 0 means the servo never tracks a goal.
 pub const ADDR_POSITION_P_GAIN: u16 = 84;
 /// RAM. Factory 0. Wizard feedforward makes a 32-tick goal overshoot.
