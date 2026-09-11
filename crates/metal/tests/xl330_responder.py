@@ -261,6 +261,8 @@ if os.environ.get("REALITYOS_METAL_PTY_UNREAD_FF") == "1":
     _fail_reads[90] = 1
 if os.environ.get("REALITYOS_METAL_PTY_UNREAD_WATCHDOG") == "1":
     _fail_reads[98] = 1
+if os.environ.get("REALITYOS_METAL_PTY_UNREAD_MOVING_THRESHOLD") == "1":
+    _fail_reads[24] = 1
 
 
 def maybe_startup_yank(regs: bytearray) -> None:
@@ -449,6 +451,8 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         if addr == 12 and os.environ.get("REALITYOS_METAL_PTY_DROP_SECONDARY_ID") == "1":
             return b"", 0
         if addr == 20 and os.environ.get("REALITYOS_METAL_PTY_DROP_HOMING_OFFSET") == "1":
+            return b"", 0
+        if addr == 24 and os.environ.get("REALITYOS_METAL_PTY_DROP_MOVING_THRESHOLD") == "1":
             return b"", 0
         if addr == 20 and len(data) >= 4:
             old = struct.unpack_from("<i", regs, 20)[0]

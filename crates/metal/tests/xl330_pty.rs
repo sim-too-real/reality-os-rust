@@ -294,13 +294,36 @@ fn xl330_pty_refuses_when_velocity_limit_write_does_not_stick() {
 #[test]
 fn xl330_pty_lowers_wizard_moving_threshold_so_moving_can_assert() {
     let _serial = pty_serial();
-    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_HIGH_MOVING_THRESHOLD", "1")]);
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_HIGH_MOVING_THRESHOLD", "1"),
+        ("REALITYOS_METAL_PTY_UNREAD_MOVING_THRESHOLD", "1"),
+    ]);
     let root = metal_test_root("pty-move-th");
     let cfg = MetalConfig::example(&tty);
     let mut driver =
         Xl330Driver::open(cfg, &root).expect("lower Moving Threshold 1023 to factory 10");
     assert_eq!(driver.applied_moving_threshold(), 10);
     driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_moving_threshold_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_HIGH_MOVING_THRESHOLD", "1"),
+        ("REALITYOS_METAL_PTY_DROP_MOVING_THRESHOLD", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-moving-threshold");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped Moving Threshold write must not look like 10"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_moving_threshold_unverified"),
+        "got {err}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
