@@ -2477,15 +2477,21 @@ fn early_broadcast_torque_off(port: &mut dyn SerialPort, device: &Path) {
     let _ = port.set_timeout(saved);
 }
 
-/// Discover's first open is factory 57 600. Wizard 115 200 + Startup
-/// Configuration bit 0 tracks Goal 0 during that settle unless we also
-/// speak 115 200 on the held fd. Do not include 1 Mbps: a CH340 can wedge.
-fn settle_quiesce_bauds(open_baud: u32) -> [u32; 2] {
-    if open_baud == 115_200 {
-        [115_200, 57_600]
+/// Discover's first open is factory 57 600. Wizard 115 200 or 9 600 plus
+/// Startup Configuration bit 0 tracks Goal 0 during that settle unless
+/// we also speak those rates on the held fd. 9 600 is Wizard baud index
+/// 0 and is safe to speak. Do not include 1 Mbps / 2 / 3 / 4 Mbps: a
+/// CH340 can wedge.
+fn settle_quiesce_bauds(open_baud: u32) -> Vec<u32> {
+    let mut out = if open_baud == 115_200 {
+        vec![115_200, 57_600]
     } else {
-        [open_baud, 115_200]
+        vec![open_baud, 115_200]
+    };
+    if !out.contains(&9_600) {
+        out.push(9_600);
     }
+    out
 }
 
 fn broadcast_torque_off_at(
@@ -2511,8 +2517,9 @@ fn open_settle_and_quiesce(port: &mut dyn SerialPort, device: &Path, baud: u32) 
     // Do not sit silent for that whole window. Startup Configuration bit 0
     // torque-ons after reboot and tracks Goal (RAM initial 0). Broadcast
     // torque-off as soon as the servo might answer, then keep retrying.
-    // Alternate the open baud with 115 200 so a Wizard-rate bus is not
-    // left tracking until the later discover retune.
+    // Alternate the open baud with 115 200 and Wizard 9 600 so those
+    // leftover rates are not left tracking until the later discover
+    // retune. Do not speak 1 Mbps here (CH340 wedge).
     let total_ms = if is_pty_path(device) { 100 } else { 500 };
     let step_ms = if is_pty_path(device) { 20 } else { 50 };
     let end = Instant::now() + Duration::from_millis(total_ms);
@@ -2785,11 +2792,22 @@ mod tests {
         let factory = settle_quiesce_bauds(57_600);
         assert_eq!(factory[0], 57_600);
         assert_eq!(factory[1], 115_200);
+        assert!(
+            factory.contains(&9_600),
+            "Wizard baud-index 0 tracks Goal 0 during settle unless spoken"
+        );
         assert!(!factory.contains(&1_000_000));
+        assert!(!factory.contains(&2_000_000));
         let wizard = settle_quiesce_bauds(115_200);
         assert_eq!(wizard[0], 115_200);
         assert_eq!(wizard[1], 57_600);
+        assert!(wizard.contains(&9_600));
         assert!(!wizard.contains(&1_000_000));
+        let slow = settle_quiesce_bauds(9_600);
+        assert_eq!(slow[0], 9_600);
+        assert_eq!(slow[1], 115_200);
+        assert_eq!(slow.iter().filter(|b| **b == 9_600).count(), 1);
+        assert!(!slow.contains(&1_000_000));
     }
 
     #[test]
