@@ -827,6 +827,20 @@ fn xl330_pty_syncs_stale_goal_before_torque_so_present_does_not_jump() {
 }
 
 #[test]
+fn xl330_pty_refuses_when_goal_match_present_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_DROP_GOAL_POSITION", "1")]);
+    let root = metal_test_root("pty-drop-goal");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped goal=present must not reach torque-on"),
+        Err(e) => e,
+    };
+    assert!(err.to_string().contains("dxl_goal_unverified"), "got {err}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_clears_bus_watchdog_error_so_goal_writes_are_live() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[

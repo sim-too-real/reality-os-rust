@@ -432,6 +432,8 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             return b"", 0
         if addr == 76 and os.environ.get("REALITYOS_METAL_PTY_DROP_VELOCITY_I") == "1":
             return b"", 0
+        if addr == 116 and os.environ.get("REALITYOS_METAL_PTY_DROP_GOAL_POSITION") == "1":
+            return b"", 0
         if addr == 20 and len(data) >= 4:
             old = struct.unpack_from("<i", regs, 20)[0]
             new = struct.unpack_from("<i", data)[0]

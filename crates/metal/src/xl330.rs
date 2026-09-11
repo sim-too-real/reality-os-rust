@@ -1301,15 +1301,7 @@ impl Xl330Driver {
         }
         self.establish_startup_cage(present)?;
         self.last_present = present;
-        self.write_reg(
-            ADDR_GOAL_POSITION,
-            &present.to_le_bytes(),
-            "setup_goal_match_present",
-            Some(present),
-            false,
-        )?;
-        self.last_goal = Some(present);
-        self.persist_positions();
+        self.write_and_verify_goal(present, "setup_goal_match_present")?;
         // Torque-on here (software watchdog not running yet) so the first
         // certified write is a single goal_position xfer, not torque_on + goal.
         self.write_reg(ADDR_TORQUE_ENABLE, &[1], "setup_torque_on", None, false)?;
@@ -1393,17 +1385,43 @@ impl Xl330Driver {
                     self.experiment_min, self.experiment_max
                 )));
             }
-            self.write_reg(
-                ADDR_GOAL_POSITION,
-                &after.to_le_bytes(),
-                "setup_goal_match_present_after_torque",
-                Some(after),
-                false,
-            )?;
+            if let Err(e) =
+                self.write_and_verify_goal(after, "setup_goal_match_present_after_torque")
+            {
+                let _ = self.write_reg(
+                    ADDR_TORQUE_ENABLE,
+                    &[0],
+                    "setup_torque_off_goal_unverified",
+                    None,
+                    false,
+                );
+                self.torque_enabled = false;
+                return Err(e);
+            }
             self.last_present = after;
-            self.last_goal = Some(after);
-            self.persist_positions();
         }
+        Ok(())
+    }
+
+    fn write_and_verify_goal(&mut self, present: i32, why: &'static str) -> PlantResult<()> {
+        self.write_reg(
+            ADDR_GOAL_POSITION,
+            &present.to_le_bytes(),
+            why,
+            Some(present),
+            false,
+        )?;
+        let goal_got = self
+            .read_reg(ADDR_GOAL_POSITION, 4)
+            .ok()
+            .and_then(|b| le_i32(&b));
+        if goal_got != Some(present) {
+            return Err(PlantError::refused(format!(
+                "dxl_goal_unverified:got={goal_got:?}:want={present}"
+            )));
+        }
+        self.last_goal = Some(present);
+        self.persist_positions();
         Ok(())
     }
 
@@ -2052,15 +2070,7 @@ impl Xl330Driver {
             )));
         }
         self.last_present = present;
-        self.write_reg(
-            ADDR_GOAL_POSITION,
-            &present.to_le_bytes(),
-            "reenable_goal_match_present",
-            Some(present),
-            false,
-        )?;
-        self.last_goal = Some(present);
-        self.persist_positions();
+        self.write_and_verify_goal(present, "reenable_goal_match_present")?;
         self.write_reg(ADDR_TORQUE_ENABLE, &[1], "torque_on", None, false)?;
         self.torque_enabled = true;
         let after = match self
@@ -2096,16 +2106,20 @@ impl Xl330Driver {
                     self.experiment_min, self.experiment_max
                 )));
             }
-            self.write_reg(
-                ADDR_GOAL_POSITION,
-                &after.to_le_bytes(),
-                "reenable_goal_match_present_after_torque",
-                Some(after),
-                false,
-            )?;
+            if let Err(e) =
+                self.write_and_verify_goal(after, "reenable_goal_match_present_after_torque")
+            {
+                let _ = self.write_reg(
+                    ADDR_TORQUE_ENABLE,
+                    &[0],
+                    "reenable_torque_off_goal_unverified",
+                    None,
+                    false,
+                );
+                self.torque_enabled = false;
+                return Err(e);
+            }
             self.last_present = after;
-            self.last_goal = Some(after);
-            self.persist_positions();
         }
         Ok(())
     }
