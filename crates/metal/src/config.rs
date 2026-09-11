@@ -306,14 +306,28 @@ pub fn candidate_bauds(configured: u32, extra: Option<u32>) -> Vec<u32> {
     out
 }
 
+fn is_wedge_wizard_baud(b: u32) -> bool {
+    FAST_WIZARD_BAUDS.contains(&b) || HIGH_WIZARD_BAUDS.contains(&b)
+}
+
 /// Repeat the first baud immediately. That first rate is factory 57 600
 /// (`candidate_bauds` does not let a 1 Mbps docs hint or a 2/3/4 Mbps
 /// Wizard hint lead). U2D2/FTDI often drop a cold first ping; the
 /// after-scan retry used to run only after 2 Mbps had already opened
 /// (and could wedge) a CH340.
+///
+/// A leftover 2/3/4 Mbps env still joins the scan. If the factory servo
+/// was only still in DTR-RESET during the first factory/1 Mbps opens,
+/// the next open used to be 2/3/4 Mbps and could wedge CH340. Retry
+/// factory 57 600 immediately before each of those rates (a 4 Mbps hint
+/// also opens 3 Mbps first; inserting only before that 3 Mbps leaves
+/// 4 Mbps immediately after a high-rate miss).
 pub fn discover_baud_attempts(bauds: &[u32]) -> Vec<u32> {
     let mut out = Vec::new();
     for (i, b) in bauds.iter().copied().enumerate() {
+        if is_wedge_wizard_baud(b) && out.last().copied() != Some(CANDIDATE_BAUDS[0]) {
+            out.push(CANDIDATE_BAUDS[0]);
+        }
         out.push(b);
         if i == 0 {
             out.push(b);
@@ -423,6 +437,30 @@ mod tests {
         assert_eq!(attempts[1], 57_600);
         assert!(attempts[2..].contains(&115_200));
         assert!(!attempts.contains(&2_000_000));
+    }
+
+    #[test]
+    fn discover_retries_factory_again_before_high_wizard_open() {
+        let bauds = candidate_bauds(57_600, Some(4_000_000));
+        let attempts = discover_baud_attempts(&bauds);
+        assert_eq!(attempts[0], 57_600);
+        assert_eq!(attempts[1], 57_600);
+        let three = attempts.iter().position(|&x| x == 3_000_000).unwrap();
+        let four = attempts.iter().position(|&x| x == 4_000_000).unwrap();
+        assert_eq!(
+            attempts[three - 1],
+            57_600,
+            "DTR-RESET can miss the first factory opens; do not wedge CH340 at 3 Mbps next"
+        );
+        assert_eq!(
+            attempts[four - 1],
+            57_600,
+            "a 4 Mbps hint also opens 3 Mbps; factory must precede 4 Mbps too"
+        );
+        let two = candidate_bauds(57_600, Some(2_000_000));
+        let two_a = discover_baud_attempts(&two);
+        let two_pos = two_a.iter().position(|&x| x == 2_000_000).unwrap();
+        assert_eq!(two_a[two_pos - 1], 57_600);
     }
 
     #[test]
