@@ -783,8 +783,7 @@ impl Xl330Driver {
             .validate_xl330_limits()
             .map_err(PlantError::refused)?;
         // Current limit / operating mode are EEPROM; only write with torque off, and only if needed.
-        self.write_reg(ADDR_TORQUE_ENABLE, &[0], "setup_torque_off", None, false)?;
-        self.torque_enabled = false;
+        self.write_torque_off_verified("setup_torque_off")?;
         // Protocol 2.0 sets STATUS_ALERT on every packet while Hardware Error
         // Status is latched (Wizard overload, VIN blip). That is not a NAK.
         // Reboot once *before* RAM profile writes — reboot clears RAM.
@@ -799,14 +798,7 @@ impl Xl330Driver {
                 .map_err(|e| PlantError::refused(format!("dxl_reboot_identify:{e}")))?;
             // Startup Configuration can re-enable torque after reboot.
             // EEPROM writes then access-NAK, and a stale Wizard goal moves.
-            self.write_reg(
-                ADDR_TORQUE_ENABLE,
-                &[0],
-                "setup_torque_off_after_reboot",
-                None,
-                false,
-            )?;
-            self.torque_enabled = false;
+            self.write_torque_off_verified("setup_torque_off_after_reboot")?;
             self.last_hw_error = self
                 .read_reg(ADDR_HARDWARE_ERROR, 1)
                 .ok()
@@ -1495,9 +1487,25 @@ impl Xl330Driver {
         )
     }
 
-    fn torque_off_setup(&mut self, why: &'static str) {
-        let _ = self.write_reg(ADDR_TORQUE_ENABLE, &[0], why, None, false);
-        self.torque_enabled = false;
+    fn write_torque_off_verified(&mut self, why: &'static str) -> PlantResult<()> {
+        for _ in 0..3 {
+            self.write_reg(ADDR_TORQUE_ENABLE, &[0], why, None, false)?;
+            self.torque_enabled = false;
+            let got = self
+                .read_reg(ADDR_TORQUE_ENABLE, 1)
+                .ok()
+                .and_then(|b| b.first().copied());
+            if got == Some(0) {
+                return Ok(());
+            }
+        }
+        Err(PlantError::refused(format!(
+            "dxl_torque_still_on_before_eeprom:{why}"
+        )))
+    }
+
+    fn torque_off_setup(&mut self, why: &'static str) -> PlantResult<()> {
+        self.write_torque_off_verified(why)
     }
 
     /// Robotis Present reset is a register wrap, not certified excursion.
@@ -1513,13 +1521,13 @@ impl Xl330Driver {
     fn recenter_or_rematch_after_torque_present_reset(&mut self, after: i32) -> PlantResult<()> {
         let (wizard_min, wizard_max) = self.wizard_legal_window();
         if after < wizard_min || after > wizard_max {
-            self.torque_off_setup("setup_torque_off_present_jump");
+            self.torque_off_setup("setup_torque_off_present_jump")?;
             return Err(PlantError::refused(format!(
                 "dxl_present_outside_wizard_limits_after_torque:present={after}:min={wizard_min}:max={wizard_max}"
             )));
         }
         if !self.in_experiment_cage(after) {
-            self.torque_off_setup("setup_torque_off_present_jump");
+            self.torque_off_setup("setup_torque_off_present_jump")?;
             return Err(PlantError::refused(format!(
                 "dxl_present_outside_experiment_cage_after_torque:present={after}:min={}:max={}",
                 self.experiment_min, self.experiment_max
@@ -1552,13 +1560,13 @@ impl Xl330Driver {
             if let Err(e) =
                 self.write_and_verify_goal(after, "setup_goal_match_present_after_torque")
             {
-                self.torque_off_setup("setup_torque_off_goal_unverified");
+                self.torque_off_setup("setup_torque_off_goal_unverified")?;
                 return Err(e);
             }
             self.last_present = after;
             return Ok(());
         }
-        self.torque_off_setup("setup_torque_off_recenter_cage");
+        self.torque_off_setup("setup_torque_off_recenter_cage")?;
         let park = self.live_park_for_recenter()?;
         self.establish_startup_cage(park)?;
         let park = self.live_park_for_recenter()?;
@@ -1603,7 +1611,7 @@ impl Xl330Driver {
         let again = self
             .read_present_setup("dxl_present_unreadable_after_torque")
             .inspect_err(|_| {
-                self.torque_off_setup("setup_torque_off_present_unread_recenter");
+                let _ = self.torque_off_setup("setup_torque_off_present_unread_recenter");
             })?;
         if again != park {
             let hunt = again.abs_diff(park);
@@ -1613,7 +1621,7 @@ impl Xl330Driver {
                 && self.in_experiment_cage(again)
                 && hunt <= HOLD_STILL_HEADROOM_TICKS as u32;
             if !still_legal {
-                self.torque_off_setup("setup_torque_off_present_jumped_twice");
+                self.torque_off_setup("setup_torque_off_present_jumped_twice")?;
                 return Err(PlantError::refused(format!(
                     "dxl_present_jumped_twice_after_torque_recenter:first={park}:second={again}"
                 )));
@@ -1621,7 +1629,7 @@ impl Xl330Driver {
             if let Err(e) =
                 self.write_and_verify_goal(again, "setup_goal_match_present_after_recenter_hunt")
             {
-                self.torque_off_setup("setup_torque_off_goal_unverified");
+                self.torque_off_setup("setup_torque_off_goal_unverified")?;
                 return Err(e);
             }
             self.last_present = again;

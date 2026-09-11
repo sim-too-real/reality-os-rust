@@ -277,6 +277,11 @@ if os.environ.get("REALITYOS_METAL_PTY_DROP_SRL") == "1":
     _drop_srl_writes = 10_000
 elif os.environ.get("REALITYOS_METAL_PTY_DROP_SRL_ONCE") == "1":
     _drop_srl_writes = 1
+_drop_torque_off_writes = 0
+if os.environ.get("REALITYOS_METAL_PTY_DROP_TORQUE_OFF") == "1":
+    _drop_torque_off_writes = 10_000
+elif os.environ.get("REALITYOS_METAL_PTY_DROP_TORQUE_OFF_ONCE") == "1":
+    _drop_torque_off_writes = 1
 if os.environ.get("REALITYOS_METAL_PTY_UNREAD_STARTUP") == "1":
     _fail_reads[60] = 1
 if os.environ.get("REALITYOS_METAL_PTY_UNREAD_PID") == "1":
@@ -419,6 +424,12 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
                 return b"", 0x08  # Protocol 2.0 data range
         if addr == 64 and data:
             was = regs[64]
+            if data[0] == 0 and was == 1:
+                global _drop_torque_off_writes
+                if _drop_torque_off_writes > 0:
+                    # ACK but keep torque on. EEPROM then access-NAKs 0x40.
+                    _drop_torque_off_writes -= 1
+                    return b"", 0
             regs[64] = data[0]
             if data[0] == 1 and os.environ.get("REALITYOS_METAL_PTY_TORQUE_DROP") == "1":
                 # Overload Shutdown: torque enable does not stick.

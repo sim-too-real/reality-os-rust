@@ -737,6 +737,48 @@ fn xl330_pty_zeros_wizard_feedforward_so_nudge_stays_bounded() {
 }
 
 #[test]
+fn xl330_pty_retries_when_recenter_torque_off_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_TORQUE_JUMP_PRESENT", "1"),
+        ("REALITYOS_METAL_PTY_DROP_TORQUE_OFF_ONCE", "1"),
+    ]);
+    let root = metal_test_root("pty-tq-off-drop-once");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect(
+        "a dropped recenter torque-off must retry; EEPROM Min/Max then access-NAK 0x40",
+    );
+    assert_eq!(driver.startup_present(), 2064);
+    let (emin, emax) = driver.experiment_cage();
+    assert_eq!((emin, emax), (2016, 2112));
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("inbound +0.2 after verified torque-off recenter");
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_recenter_torque_off_never_sticks() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_TORQUE_JUMP_PRESENT", "1"),
+        ("REALITYOS_METAL_PTY_DROP_TORQUE_OFF", "1"),
+    ]);
+    let root = metal_test_root("pty-tq-off-drop");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("torque still on must not rewrite EEPROM Min/Max"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_torque_still_on_before_eeprom"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_rematches_goal_when_torque_on_resets_present() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_TORQUE_JUMP_PRESENT", "1")]);
