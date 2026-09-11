@@ -422,6 +422,16 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             return b"", 0
         if addr in (108, 112) and os.environ.get("REALITYOS_METAL_PTY_DROP_PROFILE") == "1":
             return b"", 0
+        if addr == 11 and os.environ.get("REALITYOS_METAL_PTY_DROP_OPERATING_MODE") == "1":
+            return b"", 0
+        if addr == 10 and os.environ.get("REALITYOS_METAL_PTY_DROP_DRIVE_MODE") == "1":
+            return b"", 0
+        if addr == 44 and os.environ.get("REALITYOS_METAL_PTY_DROP_VELOCITY_LIMIT") == "1":
+            return b"", 0
+        if addr == 78 and os.environ.get("REALITYOS_METAL_PTY_DROP_VELOCITY_P") == "1":
+            return b"", 0
+        if addr == 76 and os.environ.get("REALITYOS_METAL_PTY_DROP_VELOCITY_I") == "1":
+            return b"", 0
         if addr == 20 and len(data) >= 4:
             old = struct.unpack_from("<i", regs, 20)[0]
             new = struct.unpack_from("<i", data)[0]

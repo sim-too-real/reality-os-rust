@@ -838,7 +838,6 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.drive_mode = DRIVE_MODE_VELOCITY_BASED;
             eeprom_changed = true;
         }
         let mode = self
@@ -861,6 +860,30 @@ impl Xl330Driver {
             self.ping_and_identify()
                 .map_err(|e| PlantError::refused(format!("dxl_mode_identify:{e}")))?;
         }
+        // A write_reg ACK that does not store used to leave applied
+        // drive/mode lying. Wizard PWM (16) then treats Goal PWM as the
+        // command: setup matching that register to the PWM cap would
+        // spin at torque-on. Time-based drive treats profile 20/10 as
+        // milliseconds, so the 32-tick step is not the rpm cage.
+        let mode_got = self
+            .read_reg(ADDR_OPERATING_MODE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if mode_got != Some(OPERATING_MODE_POSITION) {
+            return Err(PlantError::refused(format!(
+                "dxl_operating_mode_unverified:{mode_got:?}"
+            )));
+        }
+        let drive_got = self
+            .read_reg(ADDR_DRIVE_MODE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if drive_got != Some(DRIVE_MODE_VELOCITY_BASED) {
+            return Err(PlantError::refused(format!(
+                "dxl_drive_mode_unverified:{drive_got:?}"
+            )));
+        }
+        self.drive_mode = DRIVE_MODE_VELOCITY_BASED;
         self.refresh_position_limits()?;
         let want = self.cfg.current_limit_milli;
         let got = self
@@ -891,8 +914,17 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.velocity_limit = want_vel;
         }
+        let vel_got = self
+            .read_reg(ADDR_VELOCITY_LIMIT, 4)
+            .ok()
+            .and_then(|b| le_u32(&b));
+        let Some(vel_ok) = vel_got.filter(|v| *v >= want_vel) else {
+            return Err(PlantError::refused(format!(
+                "dxl_velocity_limit_unverified:{vel_got:?}"
+            )));
+        };
+        self.velocity_limit = vel_ok;
         self.write_reg(
             ADDR_PROFILE_VELOCITY,
             &self.cfg.max_profile_velocity.to_le_bytes(),
@@ -1030,8 +1062,17 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.velocity_p_gain = FACTORY_VELOCITY_P_GAIN;
         }
+        let vp_got = self
+            .read_reg(ADDR_VELOCITY_P_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        let Some(vp_ok) = vp_got.filter(|v| *v >= MIN_VELOCITY_P_GAIN) else {
+            return Err(PlantError::refused(format!(
+                "dxl_velocity_p_unverified:{vp_got:?}"
+            )));
+        };
+        self.velocity_p_gain = vp_ok;
         let got_vi = self
             .read_reg(ADDR_VELOCITY_I_GAIN, 2)
             .ok()
@@ -1046,8 +1087,17 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.velocity_i_gain = FACTORY_VELOCITY_I_GAIN;
         }
+        let vi_got = self
+            .read_reg(ADDR_VELOCITY_I_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        let Some(vi_ok) = vi_got.filter(|v| *v >= MIN_VELOCITY_I_GAIN) else {
+            return Err(PlantError::refused(format!(
+                "dxl_velocity_i_unverified:{vi_got:?}"
+            )));
+        };
+        self.velocity_i_gain = vi_ok;
         self.apply_pwm_output_cap()?;
         let slope = self
             .read_reg(ADDR_PWM_SLOPE, 1)

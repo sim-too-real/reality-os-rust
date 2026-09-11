@@ -235,6 +235,26 @@ fn xl330_pty_pwm_operating_mode_is_forced_to_position() {
 }
 
 #[test]
+fn xl330_pty_refuses_when_operating_mode_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_PWM", "1"),
+        ("REALITYOS_METAL_PTY_DROP_OPERATING_MODE", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-operating-mode");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped position-mode write must not look like mode 3"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_operating_mode_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_raises_wizard_velocity_limit_so_nudge_can_finish() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_SLOW_VEL", "1")]);
@@ -248,6 +268,26 @@ fn xl330_pty_raises_wizard_velocity_limit_so_nudge_can_finish() {
         .expect("nudge after raising velocity limit");
     assert_eq!(recorded_writes(root.join("bus")), 1);
     driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_velocity_limit_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_SLOW_VEL", "1"),
+        ("REALITYOS_METAL_PTY_DROP_VELOCITY_LIMIT", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-velocity-limit");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped Velocity Limit write must not look like 20"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_velocity_limit_unverified"),
+        "got {err}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -614,6 +654,26 @@ fn xl330_pty_raises_wizard_zero_velocity_p_so_nudge_can_track() {
 }
 
 #[test]
+fn xl330_pty_refuses_when_velocity_p_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_ZERO_VEL_P", "1"),
+        ("REALITYOS_METAL_PTY_DROP_VELOCITY_P", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-velocity-p");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped Velocity P write must not look like factory 100"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_velocity_p_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_raises_wizard_zero_velocity_i_so_profile_can_settle() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_VEL_I", "1")]);
@@ -627,6 +687,26 @@ fn xl330_pty_raises_wizard_zero_velocity_i_so_profile_can_settle() {
         .expect("hold after restoring Velocity I");
     assert_eq!(recorded_writes(root.join("bus")), 1);
     driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_velocity_i_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_ZERO_VEL_I", "1"),
+        ("REALITYOS_METAL_PTY_DROP_VELOCITY_I", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-velocity-i");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped Velocity I write must not look like factory 1600"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_velocity_i_unverified"),
+        "got {err}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -780,6 +860,26 @@ fn xl330_pty_time_based_drive_mode_is_forced_velocity_based() {
         .expect("hold after forcing velocity-based drive");
     assert_eq!(recorded_writes(root.join("bus")), 1);
     driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_drive_mode_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_TIME_BASED", "1"),
+        ("REALITYOS_METAL_PTY_DROP_DRIVE_MODE", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-drive-mode");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped drive-mode write must not look like velocity-based"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_drive_mode_unverified"),
+        "got {err}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
