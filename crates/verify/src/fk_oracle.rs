@@ -65,18 +65,23 @@ pub fn compare_semantic_fk(
             .map_err(|e| e.to_string())?;
         let truth = VerifierTruth::from_mujoco_state(st.get("state").unwrap_or(&st));
         let fk = forward_kinematics(&model, &chain, &ee, &q).map_err(|e| format!("{e:?}"))?;
-        let site = bundle
-            .manifest
-            .end_effectors
-            .first()
-            .and_then(|e| e.site.clone())
+        let ee_ref = bundle.manifest.end_effectors.first();
+        let site = ee_ref.and_then(|e| e.site.clone());
+        let body = ee_ref.and_then(|e| e.body.clone());
+        let oracle_name = site
+            .clone()
+            .or_else(|| body.clone())
             .unwrap_or_else(|| ee.clone());
-        let oracle = truth
-            .named_pos
-            .get(&site)
-            .cloned()
-            .or_else(|| truth.xpos.get(&site).cloned())
-            .ok_or_else(|| format!("missing privileged site {site}"))?;
+        let oracle = if let Some(s) = &site {
+            truth
+                .named_pos
+                .get(s)
+                .cloned()
+                .or_else(|| truth.xpos.get(s).cloned())
+        } else {
+            truth.xpos.get(&oracle_name).cloned()
+        }
+        .ok_or_else(|| format!("missing privileged pose {oracle_name}"))?;
         if oracle.len() < 3 {
             continue;
         }
@@ -86,7 +91,11 @@ pub fn compare_semantic_fk(
             fk.ee.xyz[1] - oracle_xyz[1],
             fk.ee.xyz[2] - oracle_xyz[2],
         ]);
-        let oerr = if let Some(q) = truth.site_xquat.get(&site) {
+        let oerr = if let Some(q) = site
+            .as_ref()
+            .and_then(|s| truth.site_xquat.get(s))
+            .or_else(|| truth.xquat.get(&oracle_name))
+        {
             if q.len() >= 4 {
                 if let Ok(oracle_se3) = realityos_semantics::transform::Se3::try_new(
                     oracle_xyz,
@@ -156,6 +165,30 @@ fn sample_q(
 mod tests {
     use super::*;
     use crate::mujoco_exec::ensure_mujoco_or_skip;
+
+    #[test]
+    fn body_backed_ee_fk_matches_mujoco_body_pose() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let mut b =
+            RobotBundle::load(crate::corpus::bundled_robots_root().join("planar_arm")).unwrap();
+        for ee in &mut b.manifest.end_effectors {
+            ee.site = None;
+            ee.body = Some("link3".into());
+        }
+        let r = compare_semantic_fk(&b, 100, 11).unwrap();
+        assert!(
+            r.max_position_error <= 1e-5,
+            "body-frame max_position_error={}",
+            r.max_position_error
+        );
+        assert!(
+            r.max_orientation_error <= 1e-4,
+            "body-frame max_orientation_error={}",
+            r.max_orientation_error
+        );
+    }
 
     #[test]
     fn planar_and_spatial_fk_match_mujoco() {

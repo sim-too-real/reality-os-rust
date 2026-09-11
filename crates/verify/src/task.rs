@@ -93,10 +93,11 @@ impl TaskSpec {
                 let p = truth
                     .named_pos
                     .get(end_effector)
+                    .or_else(|| truth.xpos.get(end_effector))
                     .or_else(|| {
                         manifest
                             .end_effector_name()
-                            .and_then(|n| truth.named_pos.get(&n))
+                            .and_then(|n| truth.named_pos.get(&n).or_else(|| truth.xpos.get(&n)))
                     })
                     .cloned()
                     .or_else(|| truth.ee_pos());

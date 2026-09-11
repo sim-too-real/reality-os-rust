@@ -119,15 +119,26 @@ class Instance:
             a = m.actuator(i)
             trn = int(m.actuator_trntype[i])
             target_id = int(m.actuator_trnid[i][0])
+            kind = {
+                0: "joint",
+                1: "joint",
+                2: "slidercrank",
+                3: "tendon",
+                4: "site",
+                5: "body",
+            }.get(trn, "other")
             target = ""
-            if trn == 0 and 0 <= target_id < m.njnt:  # joint
+            if trn in (0, 1) and 0 <= target_id < m.njnt:
                 target = m.joint(target_id).name
+            elif trn == 3 and 0 <= target_id < getattr(m, "ntendon", 0):
+                target = m.tendon(target_id).name
             elif 0 <= target_id < m.nbody:
                 target = m.body(target_id).name
             actuators.append(
                 {
                     "name": a.name or f"actuator_{i}",
                     "trntype": trn,
+                    "transmission_kind": kind,
                     "target": target,
                     "target_id": target_id,
                     "ctrlrange": [float(m.actuator_ctrlrange[i][0]), float(m.actuator_ctrlrange[i][1])],
@@ -199,6 +210,32 @@ class Instance:
                     "conaffinity": int(m.geom_conaffinity[i]),
                 }
             )
+        tendons = []
+        for i in range(int(getattr(m, "ntendon", 0))):
+            tendons.append({"name": m.tendon(i).name or f"tendon_{i}"})
+        equalities = []
+        for i in range(int(getattr(m, "neq", 0))):
+            eq_type = int(m.eq_type[i])
+            obj1 = int(m.eq_obj1id[i])
+            obj2 = int(m.eq_obj2id[i])
+            type_name = {0: "connect", 1: "weld", 2: "joint", 3: "tendon"}.get(
+                eq_type, f"type_{eq_type}"
+            )
+            name1 = ""
+            name2 = ""
+            if eq_type == 2:
+                if 0 <= obj1 < m.njnt:
+                    name1 = m.joint(obj1).name
+                if 0 <= obj2 < m.njnt:
+                    name2 = m.joint(obj2).name
+            equalities.append(
+                {
+                    "name": f"eq_{i}",
+                    "type": type_name,
+                    "obj1": name1,
+                    "obj2": name2,
+                }
+            )
         ee_chains = _end_effector_chains(m, joints, bodies, sites)
         return {
             "nq": int(m.nq),
@@ -220,6 +257,8 @@ class Instance:
             "sites": sites,
             "geoms": geoms,
             "end_effector_chains": ee_chains,
+            "tendons": tendons,
+            "equalities": equalities,
             "self_collision_rule": "ignore_direct_kinematic_neighbors",
             "mujoco_version": mujoco.__version__,
             "source_format": self.source_format,

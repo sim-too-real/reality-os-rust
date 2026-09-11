@@ -256,16 +256,20 @@ pub fn run_foundation_reach_on(
     let ctrl_writes = shared.probe.snapshot().policy_ctrl_writes;
     let task_success = task.evaluate(&truth, manifest);
     let ee_site = privileged_ee(bundle);
-    let cartesian_residual = truth.named_pos.get(&ee_site).and_then(|p| {
-        if p.len() < 3 {
-            None
-        } else {
-            let dx = p[0] - target[0];
-            let dy = p[1] - target[1];
-            let dz = p[2] - target[2];
-            Some((dx * dx + dy * dy + dz * dz).sqrt())
-        }
-    });
+    let cartesian_residual = truth
+        .named_pos
+        .get(&ee_site)
+        .or_else(|| truth.xpos.get(&ee_site))
+        .and_then(|p| {
+            if p.len() < 3 {
+                None
+            } else {
+                let dx = p[0] - target[0];
+                let dy = p[1] - target[1];
+                let dz = p[2] - target[2];
+                Some((dx * dx + dy * dy + dz * dz).sqrt())
+            }
+        });
 
     drop(auth);
     let inst = match Arc::try_unwrap(shared) {

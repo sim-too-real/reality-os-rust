@@ -246,10 +246,24 @@ pub fn derive_capabilities(model: &EmbodimentModel, qualify_ok: Option<bool>) ->
     };
 
     let has_named_gripper = model.grippers.iter().any(|g| !g.actuator.is_empty());
-    let gripper_status = if has_named_gripper {
-        CapStatus::PartiallySupported
+    let coupled_gripper = model.diagnostics.iter().any(|d| {
+        matches!(
+            d.code.as_str(),
+            "TENDON_PRESENT"
+                | "ACTUATOR_TARGETS_TENDON"
+                | "JOINT_EQUALITY_CONSTRAINT"
+                | "COUPLED_JOINTS"
+        )
+    });
+    let (gripper_status, gripper_reason) = if !has_named_gripper {
+        (CapStatus::Unsupported, None)
+    } else if coupled_gripper {
+        (
+            CapStatus::PartiallySupported,
+            Some("COUPLED_GRIPPER_NOT_QUALIFIED".into()),
+        )
     } else {
-        CapStatus::Unsupported
+        (CapStatus::PartiallySupported, None)
     };
 
     let mut nodes = vec![
@@ -294,13 +308,19 @@ pub fn derive_capabilities(model: &EmbodimentModel, qualify_ok: Option<bool>) ->
         ),
         node(CapName::MobileBase, mobile_status, vec![], vec![], None),
         node(CapName::FloatingBase, floating_status, vec![], vec![], None),
-        node(CapName::Grasping, gripper_status, vec![], vec![], None),
+        node(
+            CapName::Grasping,
+            gripper_status,
+            vec![],
+            vec![],
+            gripper_reason.clone(),
+        ),
         node(
             CapName::ParallelGripper,
             gripper_status,
             vec![],
             vec![],
-            None,
+            gripper_reason,
         ),
     ];
     nodes.extend(scoped);
@@ -340,6 +360,7 @@ mod tests {
             name: name.into(),
             target_joint: joint.into(),
             control_mode: mode.into(),
+            transmission_kind: "joint".into(),
             ctrlrange: Provenanced::unknown("test", 0.0),
             forcerange: Provenanced::unknown("test", 0.0),
             gear: Provenanced::unknown("test", 0.0),
@@ -450,6 +471,31 @@ mod tests {
         );
         assert_ne!(g.get(CapName::Grasping).status, CapStatus::Proven);
         assert_ne!(g.get(CapName::Grasping).status, CapStatus::Supported);
+    }
+
+    #[test]
+    fn coupled_gripper_stays_unqualified() {
+        let mut m = synth_fixed_position_arm();
+        m.grippers.push(Gripper {
+            name: "g0".into(),
+            actuator: "grip_a".into(),
+            opening_range: Provenanced::declared([0.0, 0.08], "test", 0.0),
+        });
+        m.diagnostics.push(crate::embodiment::ModelDiagnostic {
+            code: "ACTUATOR_TARGETS_TENDON".into(),
+            detail: "grip_a".into(),
+        });
+        let g = derive_capabilities(&m, Some(true));
+        assert_eq!(
+            g.get(CapName::Grasping).status,
+            CapStatus::PartiallySupported
+        );
+        assert_eq!(
+            g.get(CapName::Grasping).unsupported_reason.as_deref(),
+            Some("COUPLED_GRIPPER_NOT_QUALIFIED")
+        );
+        assert_ne!(g.get(CapName::Grasping).status, CapStatus::Supported);
+        assert_ne!(g.get(CapName::Grasping).status, CapStatus::Proven);
     }
 
     #[test]

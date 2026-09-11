@@ -1,6 +1,6 @@
 //! Map inspected `RobotManifest` + bundle YAML into `EmbodimentModel` v2.
 
-use crate::bundle::{BaseType, NamedRef, RobotBundle};
+use crate::bundle::{BaseType, FrameReference, NamedRef, RobotBundle};
 use crate::normalize::RobotManifest;
 use realityos_semantics::embodiment::{
     unknown_se3, Actuator, BaseKind, Body, EmbodimentModel, EndEffector, FrameKind, Gripper, Joint,
@@ -37,6 +37,9 @@ pub fn embodiment_from_manifest(bundle: &RobotBundle, manifest: &RobotManifest) 
         })
         .collect();
     model.diagnostics = map_diagnostics(manifest);
+    model
+        .diagnostics
+        .extend(frame_diagnostics(bundle, manifest));
     model.diagnostics.extend(model.validate_transforms());
     model
 }
@@ -145,17 +148,15 @@ fn map_actuator(a: &crate::normalize::ActuatorRecord) -> Actuator {
         name: a.name.clone(),
         target_joint: a.transmission_target.clone(),
         control_mode: a.actuator_type.clone(),
+        transmission_kind: if a.transmission_kind.is_empty() {
+            "joint".into()
+        } else {
+            a.transmission_kind.clone()
+        },
         ctrlrange,
         forcerange,
         gear: Provenanced::unknown(SOURCE, 0.0),
     }
-}
-
-fn ee_frame_name(ee: &NamedRef) -> String {
-    ee.site
-        .clone()
-        .or_else(|| ee.body.clone())
-        .unwrap_or_else(|| ee.name.clone())
 }
 
 fn site_parent_body(manifest: &RobotManifest, site: &str) -> String {
@@ -181,44 +182,81 @@ fn pose_from_parts(pos: Option<[f64; 3]>, quat: Option<[f64; 4]>) -> Provenanced
     }
 }
 
+const BODY_FRAME_SOURCE: &str = "BUNDLE_DECLARED_BODY_FRAME";
+const BODY_OFFSET_SOURCE: &str = "BUNDLE_DECLARED_BODY_OFFSET";
+
+fn identity_body_frame_pose() -> (Provenanced<[f64; 3]>, Provenanced<[f64; 4]>) {
+    (
+        Provenanced::user_declared([0.0, 0.0, 0.0], BODY_FRAME_SOURCE, 0.0),
+        Provenanced::user_declared([1.0, 0.0, 0.0, 0.0], BODY_FRAME_SOURCE, 0.0),
+    )
+}
+
+fn map_ee_frame(ee: &NamedRef, manifest: &RobotManifest) -> ModelFrame {
+    let name = ee.semantic_frame_name();
+    match ee.frame_reference() {
+        Some(FrameReference::Site { site }) => {
+            let parent_body = site_parent_body(manifest, &site);
+            let rec = manifest.site_records.iter().find(|s| s.name == site);
+            let (translation, rotation) = match rec {
+                Some(s) => (
+                    match s.pos {
+                        Some(p) => Provenanced::simulator_derived(p, SOURCE, 0.0),
+                        None => Provenanced::unknown(SOURCE, 0.0),
+                    },
+                    match s.quat {
+                        Some(q) => Provenanced::simulator_derived(q, SOURCE, 0.0),
+                        None => Provenanced::unknown(SOURCE, 0.0),
+                    },
+                ),
+                None => (
+                    Provenanced::unknown(SOURCE, 0.0),
+                    Provenanced::unknown(SOURCE, 0.0),
+                ),
+            };
+            ModelFrame {
+                name,
+                kind: FrameKind::Ee,
+                parent_body,
+                translation,
+                rotation,
+            }
+        }
+        Some(FrameReference::Body { body }) => {
+            let (translation, rotation) = identity_body_frame_pose();
+            ModelFrame {
+                name,
+                kind: FrameKind::Ee,
+                parent_body: body,
+                translation,
+                rotation,
+            }
+        }
+        Some(FrameReference::BodyOffset {
+            body,
+            xyz,
+            quat_wxyz,
+        }) => ModelFrame {
+            name,
+            kind: FrameKind::Ee,
+            parent_body: body,
+            translation: Provenanced::user_declared(xyz, BODY_OFFSET_SOURCE, 0.0),
+            rotation: Provenanced::user_declared(quat_wxyz, BODY_OFFSET_SOURCE, 0.0),
+        },
+        None => ModelFrame {
+            name,
+            kind: FrameKind::Ee,
+            parent_body: String::new(),
+            translation: Provenanced::unknown(SOURCE, 0.0),
+            rotation: Provenanced::unknown(SOURCE, 0.0),
+        },
+    }
+}
+
 fn map_frames(bundle: &RobotBundle, manifest: &RobotManifest) -> Vec<ModelFrame> {
     let mut frames = Vec::new();
     for ee in &bundle.manifest.end_effectors {
-        let frame = ee_frame_name(ee);
-        let parent_body = ee
-            .site
-            .as_ref()
-            .map(|s| site_parent_body(manifest, s))
-            .filter(|p| !p.is_empty())
-            .or_else(|| ee.body.clone())
-            .unwrap_or_default();
-        let site = ee
-            .site
-            .as_ref()
-            .and_then(|name| manifest.site_records.iter().find(|s| s.name == *name));
-        let (translation, rotation) = match site {
-            Some(s) => (
-                match s.pos {
-                    Some(p) => Provenanced::simulator_derived(p, SOURCE, 0.0),
-                    None => Provenanced::unknown(SOURCE, 0.0),
-                },
-                match s.quat {
-                    Some(q) => Provenanced::simulator_derived(q, SOURCE, 0.0),
-                    None => Provenanced::unknown(SOURCE, 0.0),
-                },
-            ),
-            None => (
-                Provenanced::unknown(SOURCE, 0.0),
-                Provenanced::unknown(SOURCE, 0.0),
-            ),
-        };
-        frames.push(ModelFrame {
-            name: frame,
-            kind: FrameKind::Ee,
-            parent_body,
-            translation,
-            rotation,
-        });
+        frames.push(map_ee_frame(ee, manifest));
     }
     for cam in &manifest.cameras {
         frames.push(ModelFrame {
@@ -272,7 +310,7 @@ fn map_end_effectors(bundle: &RobotBundle, manifest: &RobotManifest) -> Vec<EndE
         .enumerate()
         .map(|(idx, ee)| EndEffector {
             name: ee.name.clone(),
-            frame: ee_frame_name(ee),
+            frame: ee.semantic_frame_name(),
             joint_chain: joint_chain_for_ee(bundle, manifest, idx, ee),
         })
         .collect()
@@ -286,14 +324,66 @@ fn map_gripper(g: &NamedRef) -> Gripper {
     }
 }
 
+fn frame_diagnostics(bundle: &RobotBundle, manifest: &RobotManifest) -> Vec<ModelDiagnostic> {
+    let mut out = Vec::new();
+    for ee in &bundle.manifest.end_effectors {
+        match ee.frame_reference() {
+            None => out.push(ModelDiagnostic {
+                code: "MODEL_FEATURE_UNSUPPORTED".into(),
+                detail: format!("unknown_frame_reference:{}", ee.name),
+            }),
+            Some(FrameReference::Site { site }) => {
+                if !manifest.site_records.iter().any(|s| s.name == site) {
+                    out.push(ModelDiagnostic {
+                        code: "MODEL_FEATURE_UNSUPPORTED".into(),
+                        detail: format!("missing_site:{}", site),
+                    });
+                }
+            }
+            Some(FrameReference::Body { body }) | Some(FrameReference::BodyOffset { body, .. }) => {
+                if !manifest.bodies.iter().any(|b| b.name == body) {
+                    out.push(ModelDiagnostic {
+                        code: "MODEL_FEATURE_UNSUPPORTED".into(),
+                        detail: format!("missing_body:{}", body),
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+fn typed_lost_feature(f: &str) -> ModelDiagnostic {
+    const TYPED: &[&str] = &[
+        "TENDON_PRESENT",
+        "ACTUATOR_TARGETS_TENDON",
+        "JOINT_EQUALITY_CONSTRAINT",
+        "COUPLED_JOINTS",
+    ];
+    if let Some((code, detail)) = f.split_once(':') {
+        if TYPED.contains(&code) {
+            return ModelDiagnostic {
+                code: code.into(),
+                detail: detail.into(),
+            };
+        }
+    } else if TYPED.contains(&f) {
+        return ModelDiagnostic {
+            code: f.into(),
+            detail: String::new(),
+        };
+    }
+    ModelDiagnostic {
+        code: "lost_feature".into(),
+        detail: f.into(),
+    }
+}
+
 fn map_diagnostics(manifest: &RobotManifest) -> Vec<ModelDiagnostic> {
     let mut out: Vec<ModelDiagnostic> = manifest
         .lost_features
         .iter()
-        .map(|f| ModelDiagnostic {
-            code: "lost_feature".into(),
-            detail: f.clone(),
-        })
+        .map(|f| typed_lost_feature(f))
         .collect();
     for b in &manifest.bodies {
         if b.inertia.iter().all(|&x| x == 0.0) {
@@ -343,7 +433,215 @@ mod tests {
         assert!(m
             .frames
             .iter()
-            .any(|f| f.name == "ee" && f.pose().is_some()));
+            .any(|f| f.name == "ee:ee" && f.pose().is_some()));
+    }
+
+    fn synth_named(name: &str, site: Option<&str>, body: Option<&str>) -> NamedRef {
+        NamedRef {
+            name: name.into(),
+            site: site.map(|s| s.into()),
+            body: body.map(|s| s.into()),
+            joint: None,
+            xyz: None,
+            quat: None,
+        }
+    }
+
+    fn synth_bundle(ees: Vec<NamedRef>) -> RobotBundle {
+        use crate::format::{FormatDiagnosis, FormatDisposition, ModelFormat};
+        RobotBundle {
+            root: std::path::PathBuf::from("synth"),
+            manifest: crate::bundle::RobotYaml {
+                robot_id: "synth_body_ee".into(),
+                model_format: "mjcf".into(),
+                model_file: "model.xml".into(),
+                asset_roots: vec![],
+                expected_base_type: BaseType::Fixed,
+                joint_aliases: Default::default(),
+                actuator_aliases: Default::default(),
+                end_effectors: ees,
+                grippers: vec![],
+                feet: vec![],
+                cameras: vec![],
+                task_frames: vec![],
+                collision_groups: Default::default(),
+                default_controller_profile: None,
+                effort_limit: None,
+                effort_units: None,
+                source: None,
+            },
+            model_path: std::path::PathBuf::from("synth/model.xml"),
+            model_text: String::new(),
+            model_bytes: vec![],
+            format: FormatDiagnosis {
+                format: ModelFormat::Mjcf,
+                disposition: FormatDisposition::Supported,
+                path: "synth".into(),
+                detail: String::new(),
+                lost_or_unreliable: vec![],
+            },
+            asset_files: vec![],
+            source_hash: "synth".into(),
+        }
+    }
+
+    fn synth_manifest(body: &str, site: Option<(&str, &str, [f64; 3], [f64; 4])>) -> RobotManifest {
+        let mut man = RobotManifest {
+            robot_id: "synth_body_ee".into(),
+            nq: 1,
+            nv: 1,
+            nu: 1,
+            nbody: 2,
+            njoint: 1,
+            nactuator: 1,
+            nsensor: 0,
+            ncamera: 0,
+            timestep: 0.002,
+            joints: vec![crate::normalize::JointRecord {
+                name: "j0".into(),
+                joint_type: "hinge".into(),
+                qpos_address: 0,
+                velocity_address: 0,
+                qpos_dim: 1,
+                dof_dim: 1,
+                range: [-1.0, 1.0],
+                limited: true,
+                parent_body: "world".into(),
+                child_body: body.into(),
+                unsupported_reason: None,
+                axis: Some([0.0, 0.0, 1.0]),
+                pos: Some([0.0, 0.0, 0.0]),
+            }],
+            actuators: vec![],
+            sensors: vec![],
+            cameras: vec![],
+            bodies: vec![crate::normalize::BodyRecord {
+                name: body.into(),
+                mass: 1.0,
+                inertia: [1.0, 1.0, 1.0],
+                parent: "world".into(),
+                pos: Some([0.0, 0.0, 0.0]),
+                quat: Some([1.0, 0.0, 0.0, 0.0]),
+            }],
+            sites: vec![],
+            site_records: vec![],
+            derived: crate::normalize::DerivedInterface::default(),
+            model_hash: "h".into(),
+            source_hash: "s".into(),
+            mujoco_version: "3.7.0".into(),
+            source_format: "mjcf".into(),
+            lost_features: vec![],
+            support_bodies: vec![],
+            collision_groups: Default::default(),
+            metal: false,
+            evidence_status: crate::honesty::SIMULATION_ONLY.into(),
+        };
+        if let Some((name, parent, pos, quat)) = site {
+            man.sites.push((name.into(), parent.into()));
+            man.site_records.push(crate::normalize::SiteRecord {
+                name: name.into(),
+                body: parent.into(),
+                pos: Some(pos),
+                quat: Some(quat),
+            });
+        }
+        man
+    }
+
+    #[test]
+    fn body_backed_ee_without_site_no_longer_has_unknown_pose() {
+        // Characterization (pre-fix): body-only EE pose was None and FK was Unsupported.
+        let bundle = synth_bundle(vec![synth_named("tool0", None, Some("wrist"))]);
+        let man = synth_manifest("wrist", None);
+        let m = embodiment_from_manifest(&bundle, &man);
+        let ee = m.end_effectors.iter().find(|e| e.name == "tool0").unwrap();
+        let frame = m.frames.iter().find(|f| f.name == ee.frame).unwrap();
+        assert!(
+            frame.pose().is_some(),
+            "body-backed EE must carry identity pose"
+        );
+        realityos_semantics::kinematics::forward_kinematics(&m, &["j0".into()], "tool0", &[0.0])
+            .expect("body-backed EE FK");
+    }
+
+    #[test]
+    fn bundle_declared_body_frame_is_identity_not_assumed() {
+        let bundle = synth_bundle(vec![synth_named("tool0", None, Some("wrist"))]);
+        let man = synth_manifest("wrist", None);
+        let m = embodiment_from_manifest(&bundle, &man);
+        let ee = m
+            .end_effectors
+            .iter()
+            .find(|e| e.name == "tool0")
+            .expect("ee");
+        assert_eq!(ee.frame, "ee:tool0");
+        let frame = m
+            .frames
+            .iter()
+            .find(|f| f.name == "ee:tool0")
+            .expect("frame");
+        assert_eq!(frame.parent_body, "wrist");
+        let pose = frame.pose().expect("declared body frame has identity pose");
+        assert_eq!(pose.xyz, [0.0, 0.0, 0.0]);
+        assert_eq!(pose.quat_wxyz, [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(frame.translation.provenance, Provenance::UserDeclared);
+        assert_eq!(frame.translation.source, "BUNDLE_DECLARED_BODY_FRAME");
+        assert_ne!(frame.translation.provenance, Provenance::Assumed);
+        realityos_semantics::kinematics::forward_kinematics(&m, &["j0".into()], "tool0", &[0.0])
+            .expect("body-backed EE FK must not be unsupported");
+    }
+
+    #[test]
+    fn site_backed_ee_preserves_site_local_se3() {
+        let bundle = synth_bundle(vec![synth_named("ee", Some("tip"), Some("wrist"))]);
+        let man = synth_manifest(
+            "wrist",
+            Some(("tip", "wrist", [0.0, 0.1, 0.0], [-0.707, 0.707, 0.0, 0.0])),
+        );
+        let m = embodiment_from_manifest(&bundle, &man);
+        let ee = m.end_effectors.iter().find(|e| e.name == "ee").unwrap();
+        assert_eq!(ee.frame, "ee:ee");
+        let frame = m.frames.iter().find(|f| f.name == "ee:ee").unwrap();
+        let pose = frame.pose().expect("site pose");
+        assert!((pose.xyz[1] - 0.1).abs() < 1e-12);
+        assert_eq!(frame.translation.provenance, Provenance::SimulatorDerived);
+    }
+
+    #[test]
+    fn body_offset_ee_preserves_explicit_offset() {
+        let mut ee = synth_named("tool0", None, Some("wrist"));
+        ee.xyz = Some([0.0, 0.0, 0.05]);
+        ee.quat = Some([1.0, 0.0, 0.0, 0.0]);
+        let bundle = synth_bundle(vec![ee]);
+        let man = synth_manifest("wrist", None);
+        let m = embodiment_from_manifest(&bundle, &man);
+        let frame = m.frames.iter().find(|f| f.name == "ee:tool0").unwrap();
+        let pose = frame.pose().expect("offset pose");
+        assert!((pose.xyz[2] - 0.05).abs() < 1e-12);
+        assert_eq!(frame.translation.source, "BUNDLE_DECLARED_BODY_OFFSET");
+        assert_ne!(frame.translation.provenance, Provenance::Assumed);
+    }
+
+    #[test]
+    fn missing_body_or_site_is_model_feature_unsupported() {
+        let bundle = synth_bundle(vec![synth_named("ghost", None, None)]);
+        let man = synth_manifest("wrist", None);
+        let m = embodiment_from_manifest(&bundle, &man);
+        assert!(m
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "MODEL_FEATURE_UNSUPPORTED"));
+        let err = realityos_semantics::kinematics::forward_kinematics(
+            &m,
+            &["j0".into()],
+            "ghost",
+            &[0.0],
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            realityos_semantics::skill::SkillRefuse::ModelFeatureUnsupported
+        );
     }
 
     #[test]

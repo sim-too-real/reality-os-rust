@@ -25,6 +25,8 @@ mod quarantine {
             ["ur", "5"].join(""),
             ["pan", "da"].join(""),
             ["fran", "ka"].join(""),
+            ["ku", "ka"].join(""),
+            ["ii", "wa"].join(""),
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         for ent in std::fs::read_dir(root).unwrap() {

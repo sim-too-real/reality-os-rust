@@ -470,6 +470,7 @@ mod tests {
                 ctrllimited: true,
                 force_range: None,
                 actuator_type: "fixed".into(),
+                transmission_kind: "joint".into(),
             }],
             sensors: vec![],
             cameras: vec![],

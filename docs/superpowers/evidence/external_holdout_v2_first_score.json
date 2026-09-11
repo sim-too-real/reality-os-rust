@@ -1,0 +1,610 @@
+{
+  "source_repository": "https://github.com/google-deepmind/mujoco_menagerie",
+  "source_commit": "8161bba264d7fa7c99ca301e91e7fb44737676ad",
+  "generality_v2_freeze_sha": "b580c6275acc797c7433faa490cc712107b0adb5",
+  "robot_id": "menagerie_iiwa14",
+  "model_hash": "e6272a604e9cf9a9da0f657c5187c6ac221faedd73d5b442f245385f36cb42c5",
+  "robot_model_checksum": "ee7e6d796a9f8642de6097f95077281d15f43678dc5285beafeda99b84cf9ef5",
+  "provenance": {
+    "files": {
+      "CHANGELOG.md": "32fcfa98b81cc4f8a27babefd12fb47603c96dee109119a390dccc3607fbd854",
+      "LICENSE": "c0ddafa1e3b5f0edcb02b6ef477a9792e3e423b8fcd20abbd7654f4005e21ef8",
+      "README.md": "ea93a6da6960921563494c8e0b2d544f9b473c96508aad45bca9d35f7841a42a",
+      "assets/band.obj": "02cf16a93140489da3b05ce6bb30c5498bedaa5e5a77e56850ddbedb8d1ed23e",
+      "assets/kuka.obj": "204a82d597d450f2a207731f8e3c17089f2de5a54c0d61feac454e96e325b834",
+      "assets/link_0.obj": "6b607f6b5a601874863897ebfbb9821eb0c831c3115bca8350bf7856db6aaeee",
+      "assets/link_1.obj": "47a82247b647639c3e1f384ce5b980d374323ca737d6ebc87447667a71981798",
+      "assets/link_2_grey.obj": "842b8c3a9148b2fdf9c57ddfd80b595f8251792f94b71276dc9ce9a16674ba1a",
+      "assets/link_2_orange.obj": "0d2d8829d89aa888ee04b0d97bed5f215fa0d9fd03d0d4cee2b2e0c8dd3c0124",
+      "assets/link_3.obj": "b02d157e8090d82bfb78e7fd4dcd351033e0a5d7bb1937da01e66e7ff91a03a8",
+      "assets/link_4_grey.obj": "e4555ea6954fffa40174baee25e6dd1b9efcc3eaf830b6e91d13e2ddc10b414a",
+      "assets/link_4_orange.obj": "ef4cf2102e9df98636ff03b82d49d914a6e730b299b0a982d64947f038136cb7",
+      "assets/link_5.obj": "f0eef60cddf06e46bd943abcc49ada87510f095f2840bc9c117ed7a2b1a6a787",
+      "assets/link_6_grey.obj": "5b5f9883d4fc181c7aa06cb2037debfa4ca857fa0c3a5d55f8fd3e34d38c3100",
+      "assets/link_6_orange.obj": "54aa0141e7f48497302f45daf074fd5c69320c620618c12fa76e8841c2a8a9fc",
+      "assets/link_7.obj": "7307d0c852715ea234e575a0617ea2d8faf053469e7b823ac0c7c6c4dff36dad",
+      "iiwa14.xml": "ee7e6d796a9f8642de6097f95077281d15f43678dc5285beafeda99b84cf9ef5",
+      "iiwa_14.png": "a5807fe5b9788ef49f0a9901a58d93f179d603c2fac24bc68d0a955495de51db",
+      "scene.xml": "46491c7cd161130b684bd8724060cca2777573e431eda04d6becd7e8a1a98045"
+    },
+    "import_timestamp": "2026-09-11T14:28:33Z",
+    "model_path": "kuka_iiwa_14",
+    "source_commit": "8161bba264d7fa7c99ca301e91e7fb44737676ad",
+    "source_repository": "https://github.com/google-deepmind/mujoco_menagerie",
+    "tarball_sha256": "c0d6b373d0fffc6698443f7d79715f251308b888ab7d990aca4bf10fb2cdab65"
+  },
+  "diagnostics": [
+    {
+      "code": "lost_feature",
+      "detail": "autolimits_depend_on_compiler_flags"
+    },
+    {
+      "code": "missing_inertia",
+      "detail": "world"
+    }
+  ],
+  "capabilities": [
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [],
+      "name": "joint_position_control",
+      "resource": null,
+      "status": "supported",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [],
+      "name": "joint_velocity_control",
+      "resource": null,
+      "status": "unsupported",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [],
+      "name": "joint_effort_control",
+      "resource": null,
+      "status": "unsupported",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [
+        "joint_position_control"
+      ],
+      "evidence": [],
+      "name": "cartesian_position_control",
+      "resource": null,
+      "status": "partially_supported",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [],
+      "name": "fixed_base_manipulation",
+      "resource": null,
+      "status": "supported",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [],
+      "name": "mobile_base",
+      "resource": null,
+      "status": "not_applicable",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [],
+      "name": "floating_base",
+      "resource": null,
+      "status": "not_applicable",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [],
+      "name": "grasping",
+      "resource": null,
+      "status": "unsupported",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [],
+      "name": "parallel_gripper",
+      "resource": null,
+      "status": "unsupported",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [
+        "covered:7/7"
+      ],
+      "name": "joint_position_control",
+      "resource": "chain:tool0",
+      "status": "supported",
+      "unsupported_reason": null
+    }
+  ],
+  "fk": {
+    "robot_id": "menagerie_iiwa14",
+    "samples": 100,
+    "mean_position_error": 8.586122915620279e-16,
+    "max_position_error": 1.716587549445839e-15,
+    "mean_orientation_error": 0.0,
+    "max_orientation_error": 0.0,
+    "worst_q": [
+      2.618614298091754,
+      -0.5263144879043102,
+      -2.5961803185557573,
+      -0.5453326624631882,
+      -0.8423690508446282,
+      -0.1668188599720597,
+      -1.3597889504144156
+    ],
+    "worst_position_error": 1.716587549445839e-15
+  },
+  "fk_error": null,
+  "target_procedure": "sample_10_privileged_ee_world_points_zgt0.05_xygt0.08_rlt1.4",
+  "targets": [
+    [
+      -0.7272049026913796,
+      0.20554356502294513,
+      0.7141870257122629
+    ],
+    [
+      0.17687689131151982,
+      -0.4159570996746335,
+      0.6076441545506218
+    ],
+    [
+      0.10306523239072628,
+      -0.6744748046982771,
+      0.33604142993746716
+    ],
+    [
+      -0.1807000643619499,
+      -0.7060901511645578,
+      0.9592337640256788
+    ],
+    [
+      0.3409454086799205,
+      0.20737112043031003,
+      0.894936552480764
+    ],
+    [
+      0.2362878423809515,
+      0.6050122534243477,
+      0.7690926190034003
+    ],
+    [
+      -0.046341649131649634,
+      -0.523790419784888,
+      0.5782435854335501
+    ],
+    [
+      -0.1873775493795332,
+      0.6305706486024719,
+      0.0847652172159311
+    ],
+    [
+      -0.7962446917359005,
+      0.03392497620287997,
+      0.15565568398294585
+    ],
+    [
+      -0.16262875356251674,
+      -0.4883697332347696,
+      0.9610150449666528
+    ]
+  ],
+  "results": [
+    {
+      "robot_id": "menagerie_iiwa14",
+      "model_hash": "e6272a604e9cf9a9da0f657c5187c6ac221faedd73d5b442f245385f36cb42c5",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.02952863624274656,
+      "ik_residual": 1.714829306972733e-8,
+      "max_joint_move": 0.9096743729290302,
+      "joint_delta_norm": 1.142323010433262,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        -0.20344405565141657,
+        -0.590920109688149,
+        -0.1254083590632929,
+        0.9096743729290302,
+        -0.010295064652618846,
+        -0.26643027363380767,
+        2.858276804431673e-17
+      ]
+    },
+    {
+      "robot_id": "menagerie_iiwa14",
+      "model_hash": "e6272a604e9cf9a9da0f657c5187c6ac221faedd73d5b442f245385f36cb42c5",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.007195565418500644,
+      "ik_residual": 1.069613355726891e-7,
+      "max_joint_move": 1.8472556642079363,
+      "joint_delta_norm": 2.1286582995681154,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        -0.28803187311880646,
+        -0.10447934343753096,
+        -0.8242210039173187,
+        -1.8472556642079363,
+        -0.11239328155019893,
+        0.577045805112865,
+        1.2973277685026037e-17
+      ]
+    },
+    {
+      "robot_id": "menagerie_iiwa14",
+      "model_hash": "e6272a604e9cf9a9da0f657c5187c6ac221faedd73d5b442f245385f36cb42c5",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.020090338053224525,
+      "ik_residual": 1.1192576456687277e-7,
+      "max_joint_move": 1.5145146603337658,
+      "joint_delta_norm": 2.203817755932891,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        -0.7266862077376338,
+        1.0243147775160812,
+        -0.9739866377868501,
+        -1.5145146603337658,
+        -0.15982188299764272,
+        0.10757059158065775,
+        -1.0459258602546526e-17
+      ]
+    },
+    {
+      "robot_id": "menagerie_iiwa14",
+      "model_hash": "e6272a604e9cf9a9da0f657c5187c6ac221faedd73d5b442f245385f36cb42c5",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.03128555070600458,
+      "ik_residual": 7.294443588825993e-7,
+      "max_joint_move": 1.2347626440615331,
+      "joint_delta_norm": 1.7957230338723689,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        1.2347626440615331,
+        -0.8365057028844035,
+        0.9845231274447495,
+        0.15135034561330304,
+        0.08261092800126461,
+        0.03497649547539035,
+        -9.168219201223971e-18
+      ]
+    },
+    {
+      "robot_id": "menagerie_iiwa14",
+      "model_hash": "e6272a604e9cf9a9da0f657c5187c6ac221faedd73d5b442f245385f36cb42c5",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.00824253257685002,
+      "ik_residual": 7.422491833764156e-9,
+      "max_joint_move": 1.4356396451463167,
+      "joint_delta_norm": 1.581992890582106,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        0.2265770191762591,
+        -0.2457819015511535,
+        0.2442523733377074,
+        -1.4356396451463167,
+        0.022755099576981914,
+        0.5193432486802186,
+        -2.9082058877453916e-17
+      ]
+    },
+    {
+      "robot_id": "menagerie_iiwa14",
+      "model_hash": "e6272a604e9cf9a9da0f657c5187c6ac221faedd73d5b442f245385f36cb42c5",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.019278920169614484,
+      "ik_residual": 1.3458667598153941e-8,
+      "max_joint_move": 1.167716648916301,
+      "joint_delta_norm": 1.6397734801613497,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        0.5966663491479748,
+        0.4082090070380821,
+        0.8342355760813625,
+        -1.167716648916301,
+        0.08372361064924073,
+        0.31573870379098373,
+        7.80062437390141e-17
+      ]
+    },
+    {
+      "robot_id": "menagerie_iiwa14",
+      "model_hash": "e6272a604e9cf9a9da0f657c5187c6ac221faedd73d5b442f245385f36cb42c5",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.008648891549326574,
+      "ik_residual": 2.0731775593193944e-7,
+      "max_joint_move": 1.7588194088883293,
+      "joint_delta_norm": 2.2216764746185014,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        0.3937035372215709,
+        -0.273541311303396,
+        1.194276465168238,
+        1.7588194088883293,
+        0.1620996028029772,
+        -0.40000095512013056,
+        -3.2901325908500984e-17
+      ]
+    },
+    {
+      "robot_id": "menagerie_iiwa14",
+      "model_hash": "e6272a604e9cf9a9da0f657c5187c6ac221faedd73d5b442f245385f36cb42c5",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.02301638904500369,
+      "ik_residual": 5.407061657355053e-8,
+      "max_joint_move": 1.4136938799580776,
+      "joint_delta_norm": 2.205683557511153,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        -0.7463624699268228,
+        -1.3378386286765742,
+        -0.6960264614485648,
+        1.4136938799580776,
+        -0.1406157796058794,
+        -0.1241563701099061,
+        4.895241619667661e-17
+      ]
+    },
+    {
+      "robot_id": "menagerie_iiwa14",
+      "model_hash": "e6272a604e9cf9a9da0f657c5187c6ac221faedd73d5b442f245385f36cb42c5",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.034158759095427316,
+      "ik_residual": 1.6687070359408615e-8,
+      "max_joint_move": 1.2445396049184607,
+      "joint_delta_norm": 1.5984210675354322,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        -0.032039088123864704,
+        -1.2445396049184607,
+        -0.018586357917646592,
+        0.9776732434968236,
+        -0.001996048407038042,
+        -0.22102074518745515,
+        -1.1734423695761897e-18
+      ]
+    },
+    {
+      "robot_id": "menagerie_iiwa14",
+      "model_hash": "e6272a604e9cf9a9da0f657c5187c6ac221faedd73d5b442f245385f36cb42c5",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.012177604626515768,
+      "ik_residual": 2.239987819412431e-8,
+      "max_joint_move": 1.0737060488634818,
+      "joint_delta_norm": 1.482111509037478,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        0.5022182686035743,
+        -0.08951228373243121,
+        0.8197613173731197,
+        1.0737060488634818,
+        0.07508837714948036,
+        -0.3254647841977649,
+        1.4485766011871976e-18
+      ]
+    }
+  ],
+  "n_compile": 10,
+  "n_execute": 10,
+  "n_succeed": 10,
+  "failure_reasons": []
+}
