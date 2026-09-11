@@ -12,6 +12,30 @@
 # MEASURE_REQUIRE after a live VIN / USB-UART drop.
 METAL_BUS_DROP_TOKEN_SPEC='dxl_io|driver not connected|online_hardware_disconnected|metal_live_io_deadline|metal_serial_closed|hardware_disconnected|dxl_vin_outside_wizard_limits|dxl_vin_unreadable'
 
+# `realityos-metal-propose sensor` exits 0 for any successful IPC round
+# trip, including ok=false (VIN refuse, DTR-RESET, bus_lost). A live
+# session requires the JSON body, not the CLI status.
+metal_sensor_is_live() {
+  local path="${1:-}"
+  [[ -n "$path" ]] || return 1
+  python3 - "$path" <<'PY'
+import json, sys
+
+path = sys.argv[1]
+try:
+    raw = open(path, encoding="utf-8").read().strip()
+except OSError:
+    sys.exit(1)
+if not raw:
+    sys.exit(1)
+try:
+    body = json.loads(raw)
+except json.JSONDecodeError:
+    sys.exit(1)
+sys.exit(0 if isinstance(body, dict) and body.get("ok") is True else 1)
+PY
+}
+
 metal_sensor_indicates_drop() {
   local path="${1:-}"
   [[ -n "$path" ]] || return 1
@@ -54,8 +78,19 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
   printf '%s\n' '{"ok":true,"stage":"sensor"}' >"$tmp/live.json"
+  metal_sensor_is_live "$tmp/live.json"
   if metal_sensor_indicates_drop "$tmp/live.json"; then
     echo "error: healthy sensor must not count as a drop" >&2
+    exit 1
+  fi
+  printf '%s\n' '{"ok":false,"violations":["dxl_vin_unreadable"]}' >"$tmp/refused.json"
+  if metal_sensor_is_live "$tmp/refused.json"; then
+    echo "error: ok=false must not count as a live sensor (propose/sensor exits 0)" >&2
+    exit 1
+  fi
+  printf '%s\n' 'not-json{' >"$tmp/dead-live.json"
+  if metal_sensor_is_live "$tmp/dead-live.json"; then
+    echo "error: truncated IPC must not count as a live sensor" >&2
     exit 1
   fi
   printf '%s\n' '{"ok":false,"violations":["dxl_io:metal_live_io_deadline","online_hardware_disconnected"]}' >"$tmp/vin.json"

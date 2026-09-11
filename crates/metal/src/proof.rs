@@ -782,7 +782,7 @@ pub fn default_unresolved() -> Vec<String> {
         "Wizard Position P Gain below 80 or above factory 400 is restored to factory 400; a Wizard P of thousands overshoots the 32-tick step past the 48-tick cage".into(),
         "setup refuses torque when Temperature Limit is unreadable or 0, or Present Temperature is unreadable or at/above that EEPROM limit; the limit itself is not rewritten".into(),
         "CaseRecord physical_writes_before/after/delta are copies of serial_tx_* (certified write_all+flush), not bus/writes command-egress attempts; measured_success requires the copies to match and unauthorized physical_writes_delta==0".into(),
-        "live USB replug retries start_auth until a sensor lands; a single 0.5s prepare after DTR-RESET used to abort the first unplug. Authorized settle timeout (1.5s) fails the campaign instead of sampling a traveling horn".into(),
+        "live USB replug retries start_auth until a sensor JSON body is ok=true; propose/sensor exits 0 for ok=false so a DTR-RESET refuse used to look like a landed sample. Authorized settle timeout (1.5s) fails the campaign instead of sampling a traveling horn".into(),
         "force_disconnect and hot_swap.json are campaign hooks, not a physical USB unplug; measured_success requires a live USB-UART unplug and a live VIN drop. If unplug kills serve, the campaign records the drop evidence and serial_tx; it does not invent a disconnect token".into(),
         "no STO/SS1/PLC/SIL/ISO is provided or claimed".into(),
     ]

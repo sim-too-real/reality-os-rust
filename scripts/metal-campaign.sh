@@ -1764,8 +1764,11 @@ print("uid-probes-ok")
 PY
 
 # Sample once so valid_hold has a before-present (zero-motion baseline).
-if ! as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null; then
+# Propose/sensor exits 0 for ok=false; require a live JSON body.
+if ! as_autonomy "$PROP" --root "$ROOT" sensor >"$ROOT/pre_hold_sensor.json" \
+  || ! metal_sensor_is_live "$ROOT/pre_hold_sensor.json"; then
   echo "error: pre-hold sensor sample failed; session is not live" >&2
+  cat "$ROOT/pre_hold_sensor.json" >&2 || true
   cat "$ROOT/serve.err" >&2 || true
   exit 1
 fi
@@ -2167,10 +2170,11 @@ start_auth_after_usb_replug() {
   for attempt in 1 2 3 4 5 6; do
     echo "metal-campaign: post-replug serve attempt $attempt (DTR-RESET window)" >&2
     if start_auth 0; then
-      if as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1; then
+      if as_autonomy "$PROP" --root "$ROOT" sensor >"$ROOT/replug_sensor.json" 2>/dev/null \
+        && metal_sensor_is_live "$ROOT/replug_sensor.json"; then
         return 0
       fi
-      echo "metal-campaign: post-replug serve bound but sensor refused; retry" >&2
+      echo "metal-campaign: post-replug serve bound but sensor is not live (ok!=true); retry" >&2
       stop_auth || true
     fi
     sleep 0.8
