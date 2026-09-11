@@ -18,10 +18,11 @@ use realityos_plant::{
 use serialport::SerialPort;
 
 use crate::config::{
-    cage_allows_inbound_nudge_after_hold_still, candidate_bauds, candidate_servo_ids,
-    chosen_nudge_survives_slack, discover_baud_attempts, pick_inbound_nudge_action, MetalConfig,
-    BUS_DIR, CAGE_EVIDENCE_FILE, CANDIDATE_BAUDS, GOAL_FILE, HOLD_STILL_HEADROOM_TICKS, LOCK_FILE,
-    MOVING_FILE, NUDGE_PRESENT_SLACK_TICKS, PRESENT_FILE, PWM_EVIDENCE_FILE, VIN_FILE,
+    baud_too_slow_for_live_io, cage_allows_inbound_nudge_after_hold_still, candidate_bauds,
+    candidate_servo_ids, chosen_nudge_survives_slack, discover_baud_attempts,
+    pick_inbound_nudge_action, MetalConfig, BUS_DIR, CAGE_EVIDENCE_FILE, CANDIDATE_BAUDS,
+    CONFIG_FILE, FACTORY_BAUD, GOAL_FILE, HOLD_STILL_HEADROOM_TICKS, LOCK_FILE, MOVING_FILE,
+    NUDGE_PRESENT_SLACK_TICKS, PRESENT_FILE, PWM_EVIDENCE_FILE, VIN_FILE,
 };
 use crate::egress::EgressLog;
 use crate::identity::{
@@ -31,22 +32,22 @@ use crate::identity::{
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
     instruction_ok, is_xl330_model, le_i16, le_i32, le_u16, le_u32, pwm_limit_percent,
-    unique_status_ids, ProtocolError, ADDR_BUS_WATCHDOG, ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE,
-    ADDR_FEEDFORWARD_1ST, ADDR_FEEDFORWARD_2ND, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION,
-    ADDR_GOAL_PWM, ADDR_HARDWARE_ERROR, ADDR_HOMING_OFFSET, ADDR_ID, ADDR_MAX_POSITION_LIMIT,
-    ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER,
-    ADDR_MOVING, ADDR_MOVING_THRESHOLD, ADDR_OPERATING_MODE, ADDR_POSITION_D_GAIN,
-    ADDR_POSITION_I_GAIN, ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION, ADDR_PRESENT_TEMPERATURE,
-    ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_PROTOCOL_TYPE,
-    ADDR_PWM_LIMIT, ADDR_PWM_SLOPE, ADDR_REALTIME_TICK, ADDR_SECONDARY_ID,
-    ADDR_STARTUP_CONFIGURATION, ADDR_STATUS_RETURN_LEVEL, ADDR_TEMPERATURE_LIMIT,
-    ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN,
-    BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN,
-    FACTORY_PWM_SLOPE, FACTORY_STARTUP_CONFIGURATION, FACTORY_VELOCITY_I_GAIN,
-    FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN, MIN_PWM_SLOPE, MIN_VELOCITY_I_GAIN,
-    MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION, PROTOCOL_TYPE_2, SECONDARY_ID_DISABLED,
-    STATUS_ALERT, STATUS_RETURN_ALL, XL330_POSITION_MODE_MAX, XL330_POSITION_MODE_MIN,
-    XL330_PWM_LIMIT_MAX,
+    unique_status_ids, ProtocolError, ADDR_BAUD_RATE, ADDR_BUS_WATCHDOG, ADDR_CURRENT_LIMIT,
+    ADDR_DRIVE_MODE, ADDR_FEEDFORWARD_1ST, ADDR_FEEDFORWARD_2ND, ADDR_FIRMWARE_VERSION,
+    ADDR_GOAL_POSITION, ADDR_GOAL_PWM, ADDR_HARDWARE_ERROR, ADDR_HOMING_OFFSET, ADDR_ID,
+    ADDR_MAX_POSITION_LIMIT, ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT,
+    ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER, ADDR_MOVING, ADDR_MOVING_THRESHOLD,
+    ADDR_OPERATING_MODE, ADDR_POSITION_D_GAIN, ADDR_POSITION_I_GAIN, ADDR_POSITION_P_GAIN,
+    ADDR_PRESENT_POSITION, ADDR_PRESENT_TEMPERATURE, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL,
+    ADDR_PROFILE_VELOCITY, ADDR_PROTOCOL_TYPE, ADDR_PWM_LIMIT, ADDR_PWM_SLOPE, ADDR_REALTIME_TICK,
+    ADDR_SECONDARY_ID, ADDR_STARTUP_CONFIGURATION, ADDR_STATUS_RETURN_LEVEL,
+    ADDR_TEMPERATURE_LIMIT, ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT,
+    ADDR_VELOCITY_P_GAIN, BAUD_INDEX_57600, BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED,
+    FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN, FACTORY_PWM_SLOPE,
+    FACTORY_STARTUP_CONFIGURATION, FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN,
+    MIN_POSITION_P_GAIN, MIN_PWM_SLOPE, MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN,
+    OPERATING_MODE_POSITION, PROTOCOL_TYPE_2, SECONDARY_ID_DISABLED, STATUS_ALERT,
+    STATUS_RETURN_ALL, XL330_POSITION_MODE_MAX, XL330_POSITION_MODE_MIN, XL330_PWM_LIMIT_MAX,
 };
 
 pub struct Xl330Driver {
@@ -370,6 +371,10 @@ impl Xl330Driver {
         self.last_goal
     }
 
+    pub fn applied_baud(&self) -> u32 {
+        self.cfg.baud
+    }
+
     pub fn applied_velocity_limit(&self) -> u32 {
         self.velocity_limit
     }
@@ -567,7 +572,7 @@ impl Xl330Driver {
             self.connected = false;
             return Err(e);
         }
-        match self.ping_and_identify() {
+        match self.identify_or_recover_factory_baud() {
             Ok(()) => {
                 self.connected = true;
                 Ok(())
@@ -604,7 +609,7 @@ impl Xl330Driver {
             let port = self.port.take().expect("adopted serial");
             return Err((e, port));
         }
-        match self.ping_and_identify() {
+        match self.identify_or_recover_factory_baud() {
             Ok(()) => {
                 self.connected = true;
                 Ok(())
@@ -614,6 +619,43 @@ impl Xl330Driver {
                 let port = self.port.take().expect("adopted serial");
                 Err((e, port))
             }
+        }
+    }
+
+    /// Probe may bind Wizard 9 600. Serve then writes factory 57 600 so
+    /// the 40 ms live deadline can finish a motion-block read. A crash
+    /// after that EEPROM write, before metal.json is rewritten, leaves
+    /// the next open speaking 9 600 at a 57 600 servo. Retune the held
+    /// fd; do not close+open (DTR-RESET).
+    fn identify_or_recover_factory_baud(&mut self) -> io::Result<()> {
+        match self.ping_and_identify() {
+            Ok(()) => Ok(()),
+            Err(first) if baud_too_slow_for_live_io(self.cfg.baud) => {
+                let slow = self.cfg.baud;
+                {
+                    let port = self
+                        .port
+                        .as_mut()
+                        .ok_or_else(|| io::Error::other("metal_serial_closed"))?;
+                    retune_held_baud(&mut **port, &self.cfg.device, FACTORY_BAUD).map_err(|e| {
+                        io::Error::other(format!("dxl_baud_retune:{e}:after:{first}"))
+                    })?;
+                }
+                match self.ping_and_identify() {
+                    Ok(()) => {
+                        self.cfg.baud = FACTORY_BAUD;
+                        self.persist_measured_baud();
+                        Ok(())
+                    }
+                    Err(second) => {
+                        if let Some(port) = self.port.as_mut() {
+                            let _ = retune_held_baud(&mut **port, &self.cfg.device, slow);
+                        }
+                        Err(second)
+                    }
+                }
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -812,6 +854,12 @@ impl Xl330Driver {
                 )));
             }
         }
+        // Wizard 9 600 is in the probe scan. A 26-byte motion-block read
+        // at that rate cannot finish inside the 40 ms live deadline, so
+        // the first hold's sensor used to miss as metal_live_io_deadline.
+        // Probe does not write this EEPROM. Persist factory 57 600 before
+        // later setup work so crash-replay serve opens at the live rate.
+        self.apply_factory_baud_if_live_io_too_slow()?;
         let mut eeprom_changed = false;
         let secondary = self
             .read_reg(ADDR_SECONDARY_ID, 1)
@@ -1510,6 +1558,70 @@ impl Xl330Driver {
         self.ping_and_identify()
             .map_err(|e| PlantError::refused(format!("dxl_reboot_identify:{e}")))?;
         self.write_torque_off_verified(torque_off_why)
+    }
+
+    /// Leftover Wizard 9 600 cannot host live I/O. Write factory baud
+    /// index 1, take status at the old rate, then retune the held fd.
+    /// Readback must be at 57 600. A dropped write retunes back and
+    /// refuses so serve cannot enter_live_io on a silent 9 600 bus.
+    fn apply_factory_baud_if_live_io_too_slow(&mut self) -> PlantResult<()> {
+        if !baud_too_slow_for_live_io(self.cfg.baud) {
+            return Ok(());
+        }
+        let got = self
+            .read_reg(ADDR_BAUD_RATE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if got != Some(BAUD_INDEX_57600) {
+            self.write_reg(
+                ADDR_BAUD_RATE,
+                &[BAUD_INDEX_57600],
+                "setup_baud_factory",
+                None,
+                false,
+            )?;
+        }
+        let slow = self.cfg.baud;
+        {
+            let port = self
+                .port
+                .as_mut()
+                .ok_or_else(|| PlantError::refused("metal_serial_closed"))?;
+            retune_held_baud(&mut **port, &self.cfg.device, FACTORY_BAUD)
+                .map_err(|e| PlantError::refused(format!("dxl_baud_retune:{e}")))?;
+        }
+        let got = self
+            .read_reg(ADDR_BAUD_RATE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if got != Some(BAUD_INDEX_57600) {
+            if let Some(port) = self.port.as_mut() {
+                let _ = retune_held_baud(&mut **port, &self.cfg.device, slow);
+            }
+            return Err(PlantError::refused(format!(
+                "dxl_baud_unverified:{}",
+                got.map(|v| v.to_string())
+                    .unwrap_or_else(|| "unread".into())
+            )));
+        }
+        self.cfg.baud = FACTORY_BAUD;
+        self.persist_measured_baud();
+        Ok(())
+    }
+
+    fn persist_measured_baud(&self) {
+        let Some(root) = self.bus.parent() else {
+            return;
+        };
+        let path = root.join(CONFIG_FILE);
+        let Ok(mut cfg) = MetalConfig::load(&path) else {
+            return;
+        };
+        if cfg.baud == self.cfg.baud {
+            return;
+        }
+        cfg.baud = self.cfg.baud;
+        let _ = cfg.save(&path);
     }
 
     fn write_torque_off_verified(&mut self, why: &'static str) -> PlantResult<()> {

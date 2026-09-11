@@ -20,6 +20,10 @@ pub const XL330_M288_MODEL: u16 = 1200;
 pub const ADDR_MODEL_NUMBER: u16 = 0;
 pub const ADDR_FIRMWARE_VERSION: u16 = 6;
 pub const ADDR_ID: u16 = 7;
+/// EEPROM. Wizard index 0 is 9 600; factory index 1 is 57 600.
+pub const ADDR_BAUD_RATE: u16 = 8;
+pub const BAUD_INDEX_9600: u8 = 0;
+pub const BAUD_INDEX_57600: u8 = 1;
 /// EEPROM. Bit2=1 is time-based profile (Wizard); 0 = velocity-based.
 pub const ADDR_DRIVE_MODE: u16 = 10;
 pub const DRIVE_MODE_VELOCITY_BASED: u8 = 0;

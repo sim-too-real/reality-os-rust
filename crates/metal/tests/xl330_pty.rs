@@ -1203,6 +1203,51 @@ fn xl330_pty_reboots_when_torque_off_present_is_multi_turn() {
 }
 
 #[test]
+fn xl330_pty_upgrades_wizard_9600_so_live_io_fits_deadline() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_BAUD_9600", "1")]);
+    let root = metal_test_root("pty-baud-9600");
+    let mut cfg = MetalConfig::example(&tty);
+    cfg.baud = 9_600;
+    cfg.save(root.join(CONFIG_FILE)).unwrap();
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("Wizard 9600 must be rewritten to factory 57600 before enter_live_io");
+    assert_eq!(
+        driver.applied_baud(),
+        57_600,
+        "serve must not stay at a rate whose motion-block xfer misses 40 ms"
+    );
+    let saved = MetalConfig::load(root.join(CONFIG_FILE)).expect("metal.json after baud upgrade");
+    assert_eq!(
+        saved.baud, 57_600,
+        "crash-replay serve must open at factory baud, not leftover 9600"
+    );
+    driver
+        .read_sensor(0.0)
+        .expect("live sensor after 9600→57600 upgrade");
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_factory_baud_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_BAUD_9600", "1"),
+        ("REALITYOS_METAL_PTY_DROP_BAUD", "1"),
+    ]);
+    let root = metal_test_root("pty-baud-9600-drop");
+    let mut cfg = MetalConfig::example(&tty);
+    cfg.baud = 9_600;
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped baud write must not enter_live_io at 9600"),
+        Err(e) => e,
+    };
+    assert!(err.to_string().contains("dxl_baud_unverified"), "got {err}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_refuses_when_multi_turn_present_survives_reboot() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[

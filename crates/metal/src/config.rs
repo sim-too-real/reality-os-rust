@@ -9,7 +9,37 @@ use sha2::{Digest, Sha256};
 /// Wizard 9 600 last. 1 Mbps and Wizard 2 / 3 / 4 Mbps can wedge a
 /// CH340/CP2102 (datasheet max ~2 Mbps) after a DTR-RESET miss, so those
 /// opens must not follow a factory miss without another 57 600 retry.
-pub const CANDIDATE_BAUDS: &[u32] = &[57_600, 115_200, 1_000_000, 9_600];
+pub const FACTORY_BAUD: u32 = 57_600;
+/// Wizard baud index 0. A 26-byte motion-block read cannot finish inside
+/// the 40 ms live I/O deadline at this rate (8N1 + 1.5 ms turnaround).
+pub const WIZARD_SLOW_BAUD: u32 = 9_600;
+pub const CANDIDATE_BAUDS: &[u32] = &[FACTORY_BAUD, 115_200, 1_000_000, WIZARD_SLOW_BAUD];
+/// Protocol 2.0 READ of Realtime Tick through VIN: 14-byte instruction
+/// plus 37-byte status, plus the 1.5 ms half-duplex turnaround.
+pub const LIVE_MOTION_BLOCK_TX_BYTES: u64 = 14;
+pub const LIVE_MOTION_BLOCK_RX_BYTES: u64 = 37;
+pub const LIVE_IO_DEADLINE_US: u64 = 40_000;
+pub const HALF_DUPLEX_TURNAROUND_US: u64 = 1_500;
+
+/// 8N1 microseconds for a motion-block xfer at `baud`, or None if baud is 0.
+pub fn live_motion_block_budget_us(baud: u32) -> Option<u64> {
+    if baud == 0 {
+        return None;
+    }
+    let byte_us = 10_000_000u64.div_ceil(u64::from(baud));
+    Some(
+        LIVE_MOTION_BLOCK_TX_BYTES * byte_us
+            + HALF_DUPLEX_TURNAROUND_US
+            + LIVE_MOTION_BLOCK_RX_BYTES * byte_us,
+    )
+}
+
+/// Serve must not stay at a leftover rate whose motion-block xfer exceeds
+/// the 40 ms live deadline. Probe may still *find* that rate.
+pub fn baud_too_slow_for_live_io(baud: u32) -> bool {
+    live_motion_block_budget_us(baud).is_some_and(|us| us > LIVE_IO_DEADLINE_US)
+}
+
 /// Only added when configured or `REALITYOS_METAL_BAUD` is already 2 Mbps.
 pub const FAST_WIZARD_BAUDS: &[u32] = &[2_000_000];
 /// Only added when configured or `REALITYOS_METAL_BAUD` is already 3 or 4 Mbps.
@@ -613,6 +643,24 @@ mod tests {
         let two = hi.iter().position(|&x| x == 2_000_000).unwrap();
         let slow = hi.iter().position(|&x| x == 9_600).unwrap();
         assert!(two < slow, "2 Mbps must be tried before Wizard 9600");
+    }
+
+    #[test]
+    fn wizard_9600_exceeds_live_motion_block_deadline() {
+        let slow = live_motion_block_budget_us(WIZARD_SLOW_BAUD).expect("9600");
+        let factory = live_motion_block_budget_us(FACTORY_BAUD).expect("57600");
+        assert!(
+            slow > LIVE_IO_DEADLINE_US,
+            "Wizard 9600 motion-block xfer must miss the 40 ms live deadline: {slow} us"
+        );
+        assert!(
+            factory < LIVE_IO_DEADLINE_US,
+            "factory 57600 must stay inside the live deadline: {factory} us"
+        );
+        assert!(baud_too_slow_for_live_io(WIZARD_SLOW_BAUD));
+        assert!(!baud_too_slow_for_live_io(FACTORY_BAUD));
+        assert!(!baud_too_slow_for_live_io(115_200));
+        assert!(!baud_too_slow_for_live_io(1_000_000));
     }
 
     #[test]

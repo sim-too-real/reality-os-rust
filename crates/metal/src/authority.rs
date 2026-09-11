@@ -67,6 +67,13 @@ impl MetalAuthority {
         }
         let key = load_or_create_key(&root)?;
         let driver = Xl330Driver::open(cfg.clone(), &root)?;
+        // Serve may have rewritten leftover Wizard 9 600 to factory 57 600
+        // so live I/O fits the 40 ms deadline. start_online hashes baud;
+        // crash-replay must open at the same rate the journal recorded.
+        if driver.applied_baud() != cfg.baud {
+            cfg.baud = driver.applied_baud();
+            cfg.save(&cfg_path)?;
+        }
         let measured = driver.measured();
         if measured.serial != cfg.expected_serial {
             anyhow::bail!(

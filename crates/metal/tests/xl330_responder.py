@@ -135,6 +135,8 @@ def init_regs() -> bytearray:
     except ValueError:
         own = 1
     regs[7] = own if own != 254 else 1
+    # Factory baud index 1 = 57 600. Wizard index 0 = 9 600.
+    regs[8] = 0 if os.environ.get("REALITYOS_METAL_PTY_BAUD_9600") == "1" else 1
     regs[12] = 255
     if os.environ.get("REALITYOS_METAL_PTY_SECONDARY") == "1":
         regs[12] = 7
@@ -499,6 +501,8 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         if addr == 12 and os.environ.get("REALITYOS_METAL_PTY_DROP_SECONDARY_ID") == "1":
             return b"", 0
         if addr == 20 and os.environ.get("REALITYOS_METAL_PTY_DROP_HOMING_OFFSET") == "1":
+            return b"", 0
+        if addr == 8 and os.environ.get("REALITYOS_METAL_PTY_DROP_BAUD") == "1":
             return b"", 0
         if addr == 24 and os.environ.get("REALITYOS_METAL_PTY_DROP_MOVING_THRESHOLD") == "1":
             return b"", 0
