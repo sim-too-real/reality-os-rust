@@ -907,6 +907,21 @@ impl Xl330Driver {
             None,
             false,
         )?;
+        let prof_v = self
+            .read_reg(ADDR_PROFILE_VELOCITY, 4)
+            .ok()
+            .and_then(|b| le_u32(&b));
+        let prof_a = self
+            .read_reg(ADDR_PROFILE_ACCEL, 4)
+            .ok()
+            .and_then(|b| le_u32(&b));
+        if prof_v != Some(self.cfg.max_profile_velocity)
+            || prof_a != Some(self.cfg.max_profile_acceleration)
+        {
+            return Err(PlantError::refused(format!(
+                "dxl_profile_unverified:vel={prof_v:?}:accel={prof_a:?}"
+            )));
+        }
         let got_mt = self
             .read_reg(ADDR_MOVING_THRESHOLD, 4)
             .ok()
@@ -944,8 +959,19 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.position_p_gain = FACTORY_POSITION_P_GAIN;
         }
+        let p_got = self
+            .read_reg(ADDR_POSITION_P_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        let Some(p_ok) =
+            p_got.filter(|p| (MIN_POSITION_P_GAIN..=FACTORY_POSITION_P_GAIN).contains(p))
+        else {
+            return Err(PlantError::refused(format!(
+                "dxl_position_p_unverified:{p_got:?}"
+            )));
+        };
+        self.position_p_gain = p_ok;
         let got_i = self
             .read_reg(ADDR_POSITION_I_GAIN, 2)
             .ok()
@@ -1040,8 +1066,20 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.pwm_slope = FACTORY_PWM_SLOPE;
         }
+        let slope_got = self
+            .read_reg(ADDR_PWM_SLOPE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        let Some(slope_ok) = slope_got.filter(|s| *s >= MIN_PWM_SLOPE) else {
+            return Err(PlantError::refused(format!(
+                "dxl_pwm_slope_unverified:{}",
+                slope_got
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unread".into())
+            )));
+        };
+        self.pwm_slope = slope_ok;
         let ff2 = self
             .read_reg(ADDR_FEEDFORWARD_2ND, 2)
             .ok()

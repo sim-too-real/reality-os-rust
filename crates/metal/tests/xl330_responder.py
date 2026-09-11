@@ -414,6 +414,14 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         # Protocol 2.0 access error: EEPROM (0–63) is read-only while torque is on.
         if addr < 64 and regs[64] == 1:
             return b"", 0x40
+        # ACK but do not store: setup used to trust write_reg Ok and lie
+        # about applied PWM Slope / Position P / profile.
+        if addr == 62 and os.environ.get("REALITYOS_METAL_PTY_DROP_PWM_SLOPE") == "1":
+            return b"", 0
+        if addr == 84 and os.environ.get("REALITYOS_METAL_PTY_DROP_POSITION_P") == "1":
+            return b"", 0
+        if addr in (108, 112) and os.environ.get("REALITYOS_METAL_PTY_DROP_PROFILE") == "1":
+            return b"", 0
         if addr == 20 and len(data) >= 4:
             old = struct.unpack_from("<i", regs, 20)[0]
             new = struct.unpack_from("<i", data)[0]

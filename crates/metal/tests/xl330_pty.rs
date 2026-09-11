@@ -384,6 +384,63 @@ fn xl330_pty_restores_factory_pwm_slope_when_wizard_too_low() {
 }
 
 #[test]
+fn xl330_pty_refuses_when_pwm_slope_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_ZERO_PWM_SLOPE", "1"),
+        ("REALITYOS_METAL_PTY_DROP_PWM_SLOPE", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-pwm-slope");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped PWM Slope write must not look like factory 140"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_pwm_slope_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_position_p_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_HIGH_P", "1"),
+        ("REALITYOS_METAL_PTY_DROP_POSITION_P", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-position-p");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped Position P write must not look like factory 400"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_position_p_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_profile_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_DROP_PROFILE", "1")]);
+    let root = metal_test_root("pty-drop-profile");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped profile write must not look like vel=20 accel=10"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_profile_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_zeros_wizard_feedforward_so_nudge_stays_bounded() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[
