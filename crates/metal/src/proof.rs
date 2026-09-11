@@ -442,6 +442,9 @@ pub struct MetalProof {
     pub unauthorized_physical_device_writes: u64,
     pub direct_device_open_attempts: u64,
     pub direct_device_open_successes: u64,
+    /// Autonomy UID writes that reached the device node. Measured, not invented.
+    #[serde(default)]
+    pub direct_device_write_successes: u64,
     pub duplicate_writes_after_restart: u64,
     pub identity_mismatch_refusals: u64,
     pub disconnect_refusals: u64,
@@ -513,6 +516,7 @@ impl MetalProof {
             && before_prep_ok
             && crash_tx_ok
             && meta.direct_device_open_successes == 0
+            && meta.direct_device_write_successes == 0
             && meta.direct_device_open_attempts > 0
             && cutoff_live
             && unplug_live
@@ -538,6 +542,7 @@ impl MetalProof {
             unauthorized_physical_device_writes: a.unauthorized_physical_writes,
             direct_device_open_attempts: meta.direct_device_open_attempts,
             direct_device_open_successes: meta.direct_device_open_successes,
+            direct_device_write_successes: meta.direct_device_write_successes,
             duplicate_writes_after_restart: a.duplicate_writes_after_restart,
             identity_mismatch_refusals: a.identity_mismatch_refusals,
             disconnect_refusals: a.disconnect_refusals,
@@ -589,7 +594,7 @@ impl MetalProof {
              3. **HardwareDriverPort.** used_hardware_driver_port={port}. One XL330 port: open, sidecar+tty exclusive, probe_identity, sensor, certified write, ack, disconnect, close, torque-off stop.\n\
              4. **Measured identity.** {id}\n\
              5. **Composition.** used_os_monotonic_clock={clock}. `realityos-metal-smoke serve` uses `RuntimeSession<..., OnlineLocked>::start_online` and `OsMonotonicClock`, not HIL `Authority` / `FakeClock`.\n\
-             6. **Two-UID attacks.** authority={auth} autonomy={auto}. direct_device_open_attempts={att} successes={succ} (must be attempts>0 and successes==0).\n\
+             6. **Two-UID attacks.** authority={auth} autonomy={auto}. direct_device_open_attempts={att} open_successes={succ} write_successes={write_succ} (must be attempts>0 and open/write successes==0).\n\
              7. **Zero-motion baseline.** valid_hold serial_tx_delta={hold_tx} ack={hold_ack} present_after={hold_present:?} motion={hold_motion}\n\
              8. **Bounded one-axis motion.** valid_nudge serial_tx_delta={nudge_tx} ack={nudge_ack} present_after={nudge_present:?} motion={nudge_motion}\n\
              9. **Hostile campaign.** hostile_cases={hostile} unauthorized_certified_serial_tx={unauth} unauthorized_device_ack={unauth_ack} (required 0).\n\
@@ -620,6 +625,7 @@ impl MetalProof {
             auto = self.autonomy_uid,
             att = self.direct_device_open_attempts,
             succ = self.direct_device_open_successes,
+            write_succ = self.direct_device_write_successes,
             hold_tx = hold.map(|c| c.serial_tx_delta).unwrap_or(0),
             hold_ack = hold.map(|c| c.device_acknowledgement).unwrap_or(false),
             hold_present = hold.and_then(|c| c.observed_present_after),
@@ -683,6 +689,8 @@ pub struct ProofMeta {
     pub startup_present: Option<i32>,
     pub direct_device_open_attempts: u64,
     pub direct_device_open_successes: u64,
+    #[serde(default)]
+    pub direct_device_write_successes: u64,
     pub duplicate_writes_after_restart: u64,
     #[serde(default)]
     pub sensor_source: String,
@@ -892,6 +900,7 @@ mod tests {
             startup_present: None,
             direct_device_open_attempts: 0,
             direct_device_open_successes: 0,
+            direct_device_write_successes: 0,
             duplicate_writes_after_restart: 0,
             sensor_source: String::new(),
             device_capture_s: None,
@@ -1050,6 +1059,7 @@ mod tests {
             startup_present: Some(2048),
             direct_device_open_attempts: 1,
             direct_device_open_successes: 0,
+            direct_device_write_successes: 0,
             duplicate_writes_after_restart: 0,
             sensor_source: "xl330 tick".into(),
             device_capture_s: Some(1.2),
@@ -1286,5 +1296,29 @@ mod tests {
             "measured_incomplete_or_failed"
         );
         assert!(!incomplete.used_os_monotonic_clock);
+    }
+
+    #[test]
+    fn hardcoded_driver_port_flag_without_serve_record_prevents_success() {
+        let mut meta = ok_meta(true);
+        meta.used_hardware_driver_port = false;
+        let incomplete = MetalProof::from_measured(meta, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+        assert!(!incomplete.used_hardware_driver_port);
+    }
+
+    #[test]
+    fn measured_direct_device_write_success_prevents_success() {
+        let mut meta = ok_meta(true);
+        meta.direct_device_write_successes = 1;
+        let incomplete = MetalProof::from_measured(meta, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+        assert_eq!(incomplete.direct_device_write_successes, 1);
     }
 }

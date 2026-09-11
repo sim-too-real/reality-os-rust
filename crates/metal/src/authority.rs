@@ -238,6 +238,7 @@ impl MetalAuthority {
             "freshness_threshold_s": self.cfg.freshness_threshold_s,
             "enforced_sensor_stale_s": self.session.governor.config().sensor_stale_s,
             "clock": "OsMonotonicClock",
+            "driver_port": "HardwareDriverPort+Xl330Driver",
             "acquisition": "authority acquire_sensor on propose/sensor; autonomy cannot ingest",
             "vin_0.1v": vin,
             "firmware_id_latched": self.cfg.expected_firmware,

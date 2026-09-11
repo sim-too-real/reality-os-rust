@@ -175,5 +175,7 @@ First-contact script invariants (found on the PTY sequence, would fail the first
 * Live-drop `MEASURE_REQUIRE` omitted `metal_serial_closed`. The driver emits that when the exclusive fd is gone; wait saw the drop and propose-id then aborted the first real unplug.
 * If USB-UART unplug kills serve, propose-id returns `ipc:error` with no drop token. Do not invent `online_hardware_disconnected`. Record measured serial_tx (must stay 0) and the drop evidence file. Empty IPC counts as a drop only when `ipc.sock` or the smoke pid is actually gone.
 * A live bench without `REALITYOS_METAL_UNPLUG_LIVE=1` and `REALITYOS_METAL_CUTOFF_LIVE=1` used to run hold/nudge/hostile/crash and then refuse `measured_success`. Require both flags before torque on a real UART.
+* `used_hardware_driver_port` was hardcoded `true` in proof meta. It is now `true` only when `bus/sensor_freshness.json` records `driver_port=HardwareDriverPort+Xl330Driver` from the live serve process.
+* Autonomy direct-device **write** successes were asserted in the campaign script but omitted from `realityos.metal_proof/1`. The proof now copies `direct_device_write_successes` from os-probe and refuses `measured_success` if it is not 0.
 
 This Cloud Agent VM has **no** USB/serial actuator and **no** self-hosted worker. Attach a Cursor self-hosted worker (`cursor worker start`) on the bench host that can see `/dev/ttyUSB*` / `/dev/ttyACM*` / `/dev/ttyCH341*`. Until that happens, the experiment is blocked. That is not a software-architecture remaining task.

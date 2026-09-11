@@ -2358,6 +2358,8 @@ cutoff_attested = os.environ.get("REALITYOS_METAL_CUTOFF_TESTED","0") == "1"
 cutoff_live = os.environ.get("REALITYOS_METAL_CUTOFF_LIVE_OBSERVED","0") == "1"
 unplug_live = os.environ.get("REALITYOS_METAL_UNPLUG_LIVE_OBSERVED","0") == "1"
 used_clock = fresh.get("clock") == "OsMonotonicClock"
+used_port = fresh.get("driver_port") == "HardwareDriverPort+Xl330Driver"
+write_succ = int(p.get("direct_device_write_successes") or 0)
 try:
     pwm = json.load(open(pwm_p))
 except Exception:
@@ -2388,7 +2390,7 @@ meta = {
   "test_date": date,
   "hardware_present": True,
   "used_os_monotonic_clock": used_clock,
-  "used_hardware_driver_port": True,
+  "used_hardware_driver_port": used_port,
   "unplug_live_observed": unplug_live,
   "cutoff_mechanism": "bench PSU switch or SPST on servo 5V VIN, independent of Reality OS (not STO/SS1/PL/SIL)",
   "cutoff_tested": cutoff_attested,
@@ -2401,6 +2403,7 @@ meta = {
   "startup_present": cage.get("startup_present"),
   "direct_device_open_attempts": int(p.get("direct_device_open_attempts") or 0),
   "direct_device_open_successes": int(p.get("direct_device_open_successes") or 0),
+  "direct_device_write_successes": write_succ,
   "duplicate_writes_after_restart": dup,
   "sensor_source": fresh.get("sensor_source") or "xl330 registers + realtime tick",
   "device_capture_s": fresh.get("device_capture_s"),
@@ -2421,6 +2424,7 @@ assert r["unauthorized_physical_device_writes"] == 0, r
 assert r["valid_physical_device_writes"] >= 2, r
 assert r["direct_device_open_attempts"] > 0, r
 assert r["direct_device_open_successes"] == 0, r
+assert int(r.get("direct_device_write_successes") or 0) == 0, r
 assert r["duplicate_writes_after_restart"] == 0, r
 assert r["identity_mismatch_refusals"] > 0, r
 assert r["disconnect_refusals"] > 0, r
