@@ -140,6 +140,9 @@ def init_regs() -> bytearray:
     regs[13] = 20 if os.environ.get("REALITYOS_METAL_PTY_PROTOCOL_RC") == "1" else 2
     regs[10] = 4 if os.environ.get("REALITYOS_METAL_PTY_TIME_BASED") == "1" else 0
     regs[11] = 3
+    regs[31] = 80 if os.environ.get("REALITYOS_METAL_PTY_HOT") == "1" else (
+        0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_TEMP_LIMIT") == "1" else 70
+    )
     regs[32:34] = struct.pack("<H", 70)
     regs[34:36] = struct.pack("<H", 60 if os.environ.get("REALITYOS_METAL_PTY_HIGH_MINVIN") == "1" else 35)
     pwm = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_PWM") == "1" else 885
@@ -164,7 +167,10 @@ def init_regs() -> bytearray:
         # Startup Configuration can re-enable torque; EEPROM then needs torque off.
         regs[70] = 4
         regs[11] = 16
-    p_gain = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_P") == "1" else 400
+    if os.environ.get("REALITYOS_METAL_PTY_HIGH_P") == "1":
+        p_gain = 8000
+    else:
+        p_gain = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_P") == "1" else 400
     regs[84:86] = struct.pack("<H", p_gain)
     if os.environ.get("REALITYOS_METAL_PTY_WIZARD_PID") == "1":
         # Wizard position I/D. Factory is 0. High I/D overshoots a 32-tick step.
@@ -199,6 +205,7 @@ def init_regs() -> bytearray:
         regs[20:24] = struct.pack("<i", 10000)
         regs[132:136] = struct.pack("<i", 12048)
     regs[144:146] = struct.pack("<H", 0 if os.environ.get("REALITYOS_METAL_PTY_NO_VIN") == "1" else 50)
+    regs[146] = 80 if os.environ.get("REALITYOS_METAL_PTY_HOT") == "1" else 25
     return regs
 
 
@@ -377,17 +384,23 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             if p_gain > 0 and pwm_limit > 0 and vel_p > 0:
                 old_present = struct.unpack_from("<i", regs, 132)[0]
                 new_goal = struct.unpack_from("<i", data)[0]
+                # Wizard P above factory 400 overshoots a 32-tick step
+                # past the 48-tick cage. Setup must cap P first.
+                landed = new_goal
+                if p_gain > 400 and new_goal != old_present:
+                    step = new_goal - old_present
+                    landed = new_goal + (32 if step >= 0 else -32)
                 if (
                     new_goal != old_present
                     and os.environ.get("REALITYOS_METAL_PTY_DELAY_MOTION") == "1"
                 ):
                     global _travel_from, _travel_to, _travel_reads
                     _travel_from = old_present
-                    _travel_to = new_goal
+                    _travel_to = landed
                     _travel_reads = 0
                     regs[122] = 0
                 else:
-                    regs[132:136] = data[:4]
+                    regs[132:136] = struct.pack("<i", landed)
                     if new_goal != old_present:
                         regs[122] = 1
         return b"", 0

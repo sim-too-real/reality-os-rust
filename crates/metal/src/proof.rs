@@ -39,6 +39,14 @@ pub struct CaseRecord {
     /// Certified command frames that passed write_all+flush. Not setup/sensor.
     #[serde(default)]
     pub serial_tx_delta: u64,
+    /// Same counters as serial_tx_*. Named for the success criterion:
+    /// physical_writes_before/after/delta from actual driver egress.
+    #[serde(default)]
+    pub physical_writes_before: u64,
+    #[serde(default)]
+    pub physical_writes_after: u64,
+    #[serde(default)]
+    pub physical_writes_delta: u64,
     #[serde(default)]
     pub device_ack_delta: u64,
     #[serde(default)]
@@ -90,6 +98,9 @@ impl CaseRecord {
             serial_tx_before: 0,
             serial_tx_after: 0,
             serial_tx_delta: 0,
+            physical_writes_before: 0,
+            physical_writes_after: 0,
+            physical_writes_delta: 0,
             device_ack_delta: 0,
             unauthorized_device_ack_delta: 0,
             observed_present_after: None,
@@ -123,6 +134,9 @@ impl CaseRecord {
         self.serial_tx_before = serial_tx_before;
         self.serial_tx_after = serial_tx_after;
         self.serial_tx_delta = serial_tx_after.saturating_sub(serial_tx_before);
+        self.physical_writes_before = serial_tx_before;
+        self.physical_writes_after = serial_tx_after;
+        self.physical_writes_delta = self.serial_tx_delta;
         self.device_ack_delta = ack_after.saturating_sub(ack_before);
         self.unauthorized_device_ack_delta = if self.expected_authorization {
             0
@@ -287,9 +301,22 @@ fn motion_toward_goal(present_before: i32, present_after: i32, goal: i32) -> boo
     need != 0 && got.signum() == need.signum() && i64::from(got.abs()) > HOLD_STILL_MAX_ABS_TICKS
 }
 
+/// Named physical_writes_* must be copies of serial_tx_* (certified
+/// write_all+flush), not bus/writes command-egress attempts.
+fn physical_writes_match_serial_tx(c: &CaseRecord) -> bool {
+    c.physical_writes_before == c.serial_tx_before
+        && c.physical_writes_after == c.serial_tx_after
+        && c.physical_writes_delta == c.serial_tx_delta
+        && c.physical_writes_delta
+            == c.physical_writes_after
+                .saturating_sub(c.physical_writes_before)
+}
+
 fn certified_command_ok(c: &CaseRecord) -> bool {
     c.expected_authorization
         && c.serial_tx_delta == 1
+        && c.physical_writes_delta == 1
+        && physical_writes_match_serial_tx(c)
         && c.device_acknowledgement
         && c.device_ack_delta >= 1
 }
@@ -358,13 +385,18 @@ fn post_tx_pre_status_no_retransmit(cases: &[CaseRecord]) -> bool {
         c.name.contains("after_serial_tx_before_status")
             && c.name.contains("restart")
             && c.serial_tx_delta == 0
+            && c.physical_writes_delta == 0
+            && physical_writes_match_serial_tx(c)
     })
 }
 
 fn before_prepare_no_retransmit(cases: &[CaseRecord]) -> bool {
-    cases
-        .iter()
-        .any(|c| c.name.contains("crash_restart_before_prepare") && c.serial_tx_delta == 0)
+    cases.iter().any(|c| {
+        c.name.contains("crash_restart_before_prepare")
+            && c.serial_tx_delta == 0
+            && c.physical_writes_delta == 0
+            && physical_writes_match_serial_tx(c)
+    })
 }
 
 fn crash_restarts_have_zero_serial_tx(cases: &[CaseRecord]) -> bool {
@@ -373,7 +405,7 @@ fn crash_restarts_have_zero_serial_tx(cases: &[CaseRecord]) -> bool {
         .filter(|c| {
             c.blocking_layer == BlockingLayer::CrashRecoveryBlocked && c.name.contains("restart")
         })
-        .all(|c| c.serial_tx_delta == 0)
+        .all(|c| c.serial_tx_delta == 0 && c.physical_writes_delta == 0)
 }
 
 fn unauthorized_ack_delta(cases: &[CaseRecord]) -> u64 {
@@ -506,8 +538,15 @@ impl MetalProof {
         let before_prep_ok = before_prepare_no_retransmit(&cases);
         let crash_tx_ok = crash_restarts_have_zero_serial_tx(&cases);
         let unauth_ack = unauthorized_ack_delta(&cases);
+        let physical_named = cases.iter().all(physical_writes_match_serial_tx);
+        let unauth_physical_named = cases
+            .iter()
+            .filter(|c| !c.expected_authorization)
+            .all(|c| c.physical_writes_delta == 0);
         let measured_success = a.unauthorized_physical_writes == 0
             && unauth_ack == 0
+            && physical_named
+            && unauth_physical_named
             && has_hold
             && has_nudge
             && pwm_ok
@@ -595,9 +634,9 @@ impl MetalProof {
              4. **Measured identity.** {id}\n\
              5. **Composition.** used_os_monotonic_clock={clock}. `realityos-metal-smoke serve` uses `RuntimeSession<..., OnlineLocked>::start_online` and `OsMonotonicClock`, not HIL `Authority` / `FakeClock`.\n\
              6. **Two-UID attacks.** authority={auth} autonomy={auto}. direct_device_open_attempts={att} open_successes={succ} write_successes={write_succ} (must be attempts>0 and open/write successes==0).\n\
-             7. **Zero-motion baseline.** valid_hold serial_tx_delta={hold_tx} ack={hold_ack} present_after={hold_present:?} motion={hold_motion}\n\
-             8. **Bounded one-axis motion.** valid_nudge serial_tx_delta={nudge_tx} ack={nudge_ack} present_after={nudge_present:?} motion={nudge_motion}\n\
-             9. **Hostile campaign.** hostile_cases={hostile} unauthorized_certified_serial_tx={unauth} unauthorized_device_ack={unauth_ack} (required 0).\n\
+             7. **Zero-motion baseline.** valid_hold serial_tx_delta={hold_tx} physical_writes_delta={hold_phys} ack={hold_ack} present_after={hold_present:?} motion={hold_motion}\n\
+             8. **Bounded one-axis motion.** valid_nudge serial_tx_delta={nudge_tx} physical_writes_delta={nudge_phys} ack={nudge_ack} present_after={nudge_present:?} motion={nudge_motion}\n\
+             9. **Hostile campaign.** hostile_cases={hostile} unauthorized_certified_serial_tx={unauth} unauthorized_physical_writes_delta_sum={unauth} unauthorized_device_ack={unauth_ack} (required 0; physical_writes_* are copies of serial_tx_* egress).\n\
              10. **Crash/restart.** duplicate_writes_after_restart={crash} (required 0; after_serial_tx_before_status and other ambiguous restarts must not retransmit).\n\
              11. **Disconnect / identity fail-closed.** identity_mismatch_refusals={idm} disconnect_refusals={disc}. Live USB-UART unplug observed: {unplug_live}. Campaign hooks are not a physical unplug.\n\
              12. **Sensor freshness.** source={src}; device_capture_s={cap:?}; authority_receive_s={recv:?}; freshness_threshold_s={thr:?}. Capture is device Realtime Tick; freshness anchor is authority monotonic receive time.\n\
@@ -627,12 +666,14 @@ impl MetalProof {
             succ = self.direct_device_open_successes,
             write_succ = self.direct_device_write_successes,
             hold_tx = hold.map(|c| c.serial_tx_delta).unwrap_or(0),
+            hold_phys = hold.map(|c| c.physical_writes_delta).unwrap_or(0),
             hold_ack = hold.map(|c| c.device_acknowledgement).unwrap_or(false),
             hold_present = hold.and_then(|c| c.observed_present_after),
             hold_motion = hold
                 .and_then(|c| c.observed_motion.clone())
                 .unwrap_or_else(|| "missing_valid_hold_case".into()),
             nudge_tx = nudge.map(|c| c.serial_tx_delta).unwrap_or(0),
+            nudge_phys = nudge.map(|c| c.physical_writes_delta).unwrap_or(0),
             nudge_ack = nudge.map(|c| c.device_acknowledgement).unwrap_or(false),
             nudge_present = nudge.and_then(|c| c.observed_present_after),
             nudge_motion = nudge
@@ -738,6 +779,9 @@ pub fn default_unresolved() -> Vec<String> {
         "Wizard Position I/D Gain is restored to factory 0 when non-zero; a Wizard PID tune overshoots the 32-tick certified step past the 48-tick session cage".into(),
         "live acquire refuses Present Input Voltage 0 or outside Wizard min/max and latches vin_fault so a cutoff wait cannot be followed by a certified goal write; ESTOP/close still torque-off on the live fd".into(),
         "Wizard PWM Slope 0 is restored to factory 140; a zero slope can stall PWM so the 32-tick nudge never leaves the hold-still band".into(),
+        "Wizard Position P Gain below 80 or above factory 400 is restored to factory 400; a Wizard P of thousands overshoots the 32-tick step past the 48-tick cage".into(),
+        "setup refuses torque when Temperature Limit is unreadable or 0, or Present Temperature is unreadable or at/above that EEPROM limit; the limit itself is not rewritten".into(),
+        "CaseRecord physical_writes_before/after/delta are copies of serial_tx_* (certified write_all+flush), not bus/writes command-egress attempts; measured_success requires the copies to match and unauthorized physical_writes_delta==0".into(),
         "force_disconnect and hot_swap.json are campaign hooks, not a physical USB unplug; measured_success requires a live USB-UART unplug and a live VIN drop. If unplug kills serve, the campaign records the drop evidence and serial_tx; it does not invent a disconnect token".into(),
         "no STO/SS1/PLC/SIL/ISO is provided or claimed".into(),
     ]
@@ -827,6 +871,34 @@ mod tests {
         assert_eq!(a.valid_physical_writes, 2);
         assert_eq!(a.hostile_cases, 1);
         assert_eq!(a.unauthorized_physical_writes, 0);
+        assert_eq!(cases[0].physical_writes_before, cases[0].serial_tx_before);
+        assert_eq!(cases[0].physical_writes_after, cases[0].serial_tx_after);
+        assert_eq!(cases[0].physical_writes_delta, cases[0].serial_tx_delta);
+        assert_eq!(cases[1].physical_writes_delta, 1);
+    }
+
+    #[test]
+    fn measured_success_requires_physical_writes_to_copy_serial_tx() {
+        let mut mismatched = ok_cases();
+        mismatched[0].physical_writes_delta = 0;
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), mismatched, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status, "measured_incomplete_or_failed",
+            "physical_writes_* must copy serial_tx_*; omitting them cannot mint success"
+        );
+        let mut hostile_tx = ok_cases();
+        hostile_tx[2].physical_writes_delta = 1;
+        hostile_tx[2].serial_tx_delta = 1;
+        hostile_tx[2].physical_writes_after = hostile_tx[2].physical_writes_before + 1;
+        hostile_tx[2].serial_tx_after = hostile_tx[2].serial_tx_before + 1;
+        hostile_tx[2].unauthorized_write = true;
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), hostile_tx, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status, "measured_incomplete_or_failed",
+            "unauthorized physical_writes_delta must stay 0"
+        );
     }
 
     #[test]

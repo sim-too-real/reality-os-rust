@@ -391,6 +391,32 @@ fn xl330_pty_raises_wizard_zero_p_gain_so_nudge_can_track() {
 }
 
 #[test]
+fn xl330_pty_caps_wizard_high_p_gain_so_nudge_stays_in_cage() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_HIGH_P", "1")]);
+    let root = metal_test_root("pty-high-p");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver =
+        Xl330Driver::open(cfg, &root).expect("cap Wizard Position P Gain 8000 to factory 400");
+    assert_eq!(driver.applied_position_p_gain(), 400);
+    driver.read_sensor(0.0).expect("sensor");
+    let before = driver.last_present_position();
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("nudge after capping high P");
+    driver.read_sensor(0.1).expect("sensor");
+    let after = driver.last_present_position();
+    assert_ne!(after, before, "factory P must still track the 32-tick goal");
+    let traveled = (i64::from(after) - i64::from(before)).abs();
+    assert!(
+        traveled <= 48,
+        "Wizard P=8000 must not throw present past the 48-tick cage: {before}->{after}"
+    );
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_writes_configured_pwm_cap_never_factory_885() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_PWM", "1")]);
@@ -641,6 +667,41 @@ fn xl330_pty_refuses_torque_when_vin_cannot_be_read() {
     };
     assert!(
         err.to_string().contains("dxl_vin_unreadable_before_torque"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_torque_when_present_temperature_at_limit() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_HOT", "1")]);
+    let root = metal_test_root("pty-hot");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("present temperature at the EEPROM limit must not torque-on"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("dxl_present_temperature_at_or_above_limit"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_torque_when_temperature_limit_is_zero() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_TEMP_LIMIT", "1")]);
+    let root = metal_test_root("pty-zero-tlim");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("Wizard temperature limit 0 must not torque-on"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_temperature_limit_zero"),
         "got {err}"
     );
     let _ = std::fs::remove_dir_all(&root);

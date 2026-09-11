@@ -64,6 +64,11 @@ pub const XL330_POSITION_MODE_MIN: i32 = 0;
 pub const XL330_POSITION_MODE_MAX: i32 = 4095;
 /// EEPROM. Unit ≈ 0.229 rpm. 0 or 1 makes a 32-tick nudge still Moving=0 at the old present.
 pub const ADDR_VELOCITY_LIMIT: u16 = 44;
+/// EEPROM. Factory 70 °C. Wizard 0 trips Shutdown on any present sample.
+pub const ADDR_TEMPERATURE_LIMIT: u16 = 31;
+pub const FACTORY_TEMPERATURE_LIMIT: u8 = 70;
+/// RAM. Unit 1 °C. Not in the motion block (that block ends at VIN 144).
+pub const ADDR_PRESENT_TEMPERATURE: u16 = 146;
 /// EEPROM. Factory max 4095 / min 0. Wizard can shrink this window.
 pub const ADDR_MAX_POSITION_LIMIT: u16 = 48;
 pub const ADDR_MIN_POSITION_LIMIT: u16 = 52;

@@ -1862,6 +1862,9 @@ rec = {
     "serial_tx_before": txb,
     "serial_tx_after": txa,
     "serial_tx_delta": tx_delta,
+    "physical_writes_before": txb,
+    "physical_writes_after": txa,
+    "physical_writes_delta": tx_delta,
     "device_ack_delta": ack_delta,
     "unauthorized_device_ack_delta": 0 if expected else ack_delta,
     "observed_present_after": pa_i,
@@ -1963,6 +1966,9 @@ print(json.dumps({
     "serial_tx_before": tx,
     "serial_tx_after": tx,
     "serial_tx_delta": 0,
+    "physical_writes_before": tx,
+    "physical_writes_after": tx,
+    "physical_writes_delta": 0,
     "device_ack_delta": 0,
     "unauthorized_device_ack_delta": 0,
     "observed_present_after": None,
@@ -2055,6 +2061,9 @@ print(json.dumps({
     "serial_tx_before": before,
     "serial_tx_after": after,
     "serial_tx_delta": max(0, after-before),
+    "physical_writes_before": before,
+    "physical_writes_after": after,
+    "physical_writes_delta": max(0, after-before),
     "device_ack_delta": 0,
     "unauthorized_device_ack_delta": 0,
     "observed_present_after": None,
@@ -2207,6 +2216,9 @@ print(json.dumps({
     "serial_tx_before": txb,
     "serial_tx_after": txa,
     "serial_tx_delta": 0,
+    "physical_writes_before": txb,
+    "physical_writes_after": txa,
+    "physical_writes_delta": 0,
     "device_ack_delta": 0,
     "unauthorized_device_ack_delta": 0,
     "observed_present_after": None,
@@ -2277,6 +2289,9 @@ print(json.dumps({
     "serial_tx_before": tx,
     "serial_tx_after": tx,
     "serial_tx_delta": 0,
+    "physical_writes_before": tx,
+    "physical_writes_after": tx,
+    "physical_writes_delta": 0,
     "device_ack_delta": 0,
     "unauthorized_device_ack_delta": 0,
     "observed_present_after": None,
@@ -2436,13 +2451,14 @@ def case(name):
     return next((x for x in (r.get("cases") or []) if x.get("name") == name), None)
 hold = case("valid_hold")
 nudge = case("valid_nudge")
-assert hold and int(hold.get("serial_tx_delta") or 0) == 1 and hold.get("device_acknowledgement"), r
-assert nudge and int(nudge.get("serial_tx_delta") or 0) == 1 and nudge.get("device_acknowledgement"), r
-assert all(int(c.get("serial_tx_delta") or 0) == 0 for c in (r.get("cases") or []) if not c.get("expected_authorization")), r
+assert hold and int(hold.get("serial_tx_delta") or 0) == 1 and int(hold.get("physical_writes_delta") or 0) == 1 and hold.get("device_acknowledgement"), r
+assert nudge and int(nudge.get("serial_tx_delta") or 0) == 1 and int(nudge.get("physical_writes_delta") or 0) == 1 and nudge.get("device_acknowledgement"), r
+assert all(int(c.get("serial_tx_delta") or 0) == int(c.get("physical_writes_delta") or 0) and int(c.get("serial_tx_before") or 0) == int(c.get("physical_writes_before") or 0) and int(c.get("serial_tx_after") or 0) == int(c.get("physical_writes_after") or 0) for c in (r.get("cases") or [])), r
+assert all(int(c.get("serial_tx_delta") or 0) == 0 and int(c.get("physical_writes_delta") or 0) == 0 for c in (r.get("cases") or []) if not c.get("expected_authorization")), r
 assert all(int(c.get("unauthorized_device_ack_delta") or 0) == 0 for c in (r.get("cases") or []) if not c.get("expected_authorization")), r
-assert any(c.get("name") == "crash_restart_after_serial_tx_before_status" and int(c.get("serial_tx_delta") or 0) == 0 for c in r.get("cases") or []), r
-assert any(c.get("name") == "crash_restart_before_prepare" and int(c.get("serial_tx_delta") or 0) == 0 for c in r.get("cases") or []), r
-assert any(c.get("name") == "inf_action" and not c.get("expected_authorization") and int(c.get("serial_tx_delta") or 0) == 0 for c in r.get("cases") or []), r
+assert any(c.get("name") == "crash_restart_after_serial_tx_before_status" and int(c.get("serial_tx_delta") or 0) == 0 and int(c.get("physical_writes_delta") or 0) == 0 for c in r.get("cases") or []), r
+assert any(c.get("name") == "crash_restart_before_prepare" and int(c.get("serial_tx_delta") or 0) == 0 and int(c.get("physical_writes_delta") or 0) == 0 for c in r.get("cases") or []), r
+assert any(c.get("name") == "inf_action" and not c.get("expected_authorization") and int(c.get("serial_tx_delta") or 0) == 0 and int(c.get("physical_writes_delta") or 0) == 0 for c in r.get("cases") or []), r
 def present_delta(c):
     import re
     m = re.search(r"delta=([-\d]+|None)", (c or {}).get("observed_motion") or "")

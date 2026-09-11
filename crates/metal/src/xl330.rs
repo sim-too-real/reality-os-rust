@@ -35,14 +35,15 @@ use crate::protocol::{
     ADDR_HOMING_OFFSET, ADDR_ID, ADDR_MAX_POSITION_LIMIT, ADDR_MAX_VOLTAGE_LIMIT,
     ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER, ADDR_MOVING,
     ADDR_MOVING_THRESHOLD, ADDR_OPERATING_MODE, ADDR_POSITION_D_GAIN, ADDR_POSITION_I_GAIN,
-    ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL,
-    ADDR_PROFILE_VELOCITY, ADDR_PROTOCOL_TYPE, ADDR_PWM_LIMIT, ADDR_PWM_SLOPE, ADDR_REALTIME_TICK,
-    ADDR_SECONDARY_ID, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN,
-    ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN, BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED,
-    FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN, FACTORY_PWM_SLOPE, FACTORY_VELOCITY_I_GAIN,
-    FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN, MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN,
-    OPERATING_MODE_POSITION, PROTOCOL_TYPE_2, SECONDARY_ID_DISABLED, STATUS_ALERT,
-    STATUS_RETURN_ALL, XL330_POSITION_MODE_MAX, XL330_POSITION_MODE_MIN, XL330_PWM_LIMIT_MAX,
+    ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION, ADDR_PRESENT_TEMPERATURE, ADDR_PRESENT_VOLTAGE,
+    ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_PROTOCOL_TYPE, ADDR_PWM_LIMIT, ADDR_PWM_SLOPE,
+    ADDR_REALTIME_TICK, ADDR_SECONDARY_ID, ADDR_STATUS_RETURN_LEVEL, ADDR_TEMPERATURE_LIMIT,
+    ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN,
+    BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN,
+    FACTORY_PWM_SLOPE, FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN,
+    MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION, PROTOCOL_TYPE_2,
+    SECONDARY_ID_DISABLED, STATUS_ALERT, STATUS_RETURN_ALL, XL330_POSITION_MODE_MAX,
+    XL330_POSITION_MODE_MIN, XL330_PWM_LIMIT_MAX,
 };
 
 pub struct Xl330Driver {
@@ -741,7 +742,10 @@ impl Xl330Driver {
             .and_then(|b| le_u16(&b))
             .unwrap_or(0);
         self.position_p_gain = got_p;
-        if got_p < MIN_POSITION_P_GAIN {
+        // Factory 400. Below 80 the 32-tick step never tracks. Above
+        // factory a Wizard PID tune overshoots past the 48-tick cage
+        // (same class as I/D and feedforward).
+        if got_p < MIN_POSITION_P_GAIN || got_p > FACTORY_POSITION_P_GAIN {
             self.write_reg(
                 ADDR_POSITION_P_GAIN,
                 &FACTORY_POSITION_P_GAIN.to_le_bytes(),
@@ -892,6 +896,26 @@ impl Xl330Driver {
         if vin < min_v || vin > max_v {
             return Err(PlantError::refused(format!(
                 "dxl_vin_outside_wizard_limits:vin_0.1v={vin}:min={min_v}:max={max_v}"
+            )));
+        }
+        let temp_limit = self
+            .read_reg(ADDR_TEMPERATURE_LIMIT, 1)
+            .ok()
+            .and_then(|b| b.first().copied())
+            .ok_or_else(|| PlantError::refused("dxl_temperature_limit_unreadable_before_torque"))?;
+        let present_temp = self
+            .read_reg(ADDR_PRESENT_TEMPERATURE, 1)
+            .ok()
+            .and_then(|b| b.first().copied())
+            .ok_or_else(|| {
+                PlantError::refused("dxl_present_temperature_unreadable_before_torque")
+            })?;
+        if temp_limit == 0 {
+            return Err(PlantError::refused("dxl_temperature_limit_zero"));
+        }
+        if present_temp >= temp_limit {
+            return Err(PlantError::refused(format!(
+                "dxl_present_temperature_at_or_above_limit:present={present_temp}:limit={temp_limit}"
             )));
         }
         // Wizard Bus Watchdog (20 ms units). Non-zero trips after a quiet
