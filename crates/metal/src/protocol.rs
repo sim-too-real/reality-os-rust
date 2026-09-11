@@ -72,6 +72,10 @@ pub const ADDR_PRESENT_TEMPERATURE: u16 = 146;
 /// EEPROM. Factory max 4095 / min 0. Wizard can shrink this window.
 pub const ADDR_MAX_POSITION_LIMIT: u16 = 48;
 pub const ADDR_MIN_POSITION_LIMIT: u16 = 52;
+/// EEPROM. Factory 0. Bit 0 = torque on at boot / DTR-RESET.
+/// A Wizard-set bit tracks Goal Position (RAM initial 0) before host I/O.
+pub const ADDR_STARTUP_CONFIGURATION: u16 = 60;
+pub const FACTORY_STARTUP_CONFIGURATION: u8 = 0;
 /// EEPROM. Factory 140. Unit 1.977 mV/msec. Range 1..=255 (e-Manual).
 /// Wizard 0 is outside that range. Wizard 1..=19 is legal but ramps PWM
 /// too slowly for the 32-tick nudge to leave the hold-still band in 1.5 s.

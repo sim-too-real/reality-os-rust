@@ -6,7 +6,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nix::sys::termios::{tcgetattr, tcsetattr, ControlFlags, SetArg};
 
@@ -37,13 +37,14 @@ use crate::protocol::{
     ADDR_MOVING_THRESHOLD, ADDR_OPERATING_MODE, ADDR_POSITION_D_GAIN, ADDR_POSITION_I_GAIN,
     ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION, ADDR_PRESENT_TEMPERATURE, ADDR_PRESENT_VOLTAGE,
     ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_PROTOCOL_TYPE, ADDR_PWM_LIMIT, ADDR_PWM_SLOPE,
-    ADDR_REALTIME_TICK, ADDR_SECONDARY_ID, ADDR_STATUS_RETURN_LEVEL, ADDR_TEMPERATURE_LIMIT,
-    ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN,
-    BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN,
-    FACTORY_PWM_SLOPE, FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN,
-    MIN_PWM_SLOPE, MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION,
-    PROTOCOL_TYPE_2, SECONDARY_ID_DISABLED, STATUS_ALERT, STATUS_RETURN_ALL,
-    XL330_POSITION_MODE_MAX, XL330_POSITION_MODE_MIN, XL330_PWM_LIMIT_MAX,
+    ADDR_REALTIME_TICK, ADDR_SECONDARY_ID, ADDR_STARTUP_CONFIGURATION, ADDR_STATUS_RETURN_LEVEL,
+    ADDR_TEMPERATURE_LIMIT, ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT,
+    ADDR_VELOCITY_P_GAIN, BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_MOVING_THRESHOLD,
+    FACTORY_POSITION_P_GAIN, FACTORY_PWM_SLOPE, FACTORY_STARTUP_CONFIGURATION,
+    FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN, MIN_PWM_SLOPE,
+    MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION, PROTOCOL_TYPE_2,
+    SECONDARY_ID_DISABLED, STATUS_ALERT, STATUS_RETURN_ALL, XL330_POSITION_MODE_MAX,
+    XL330_POSITION_MODE_MIN, XL330_PWM_LIMIT_MAX,
 };
 
 pub struct Xl330Driver {
@@ -103,6 +104,7 @@ pub struct Xl330Driver {
     feedforward_1st: u16,
     feedforward_2nd: u16,
     pwm_slope: u8,
+    startup_configuration: u8,
     min_voltage: u16,
     max_voltage: u16,
     /// Live VIN outside Wizard min/max (or unreadable 0) is a supply
@@ -193,6 +195,7 @@ impl Xl330Driver {
             feedforward_1st: 0,
             feedforward_2nd: 0,
             pwm_slope: 0,
+            startup_configuration: 0,
             min_voltage: 0,
             max_voltage: 0,
             vin_fault: false,
@@ -403,6 +406,10 @@ impl Xl330Driver {
         self.homing_offset
     }
 
+    pub fn applied_startup_configuration(&self) -> u8 {
+        self.startup_configuration
+    }
+
     pub fn applied_bus_watchdog(&self) -> u8 {
         self.bus_watchdog
     }
@@ -608,6 +615,9 @@ impl Xl330Driver {
         // WRITE have no status and identify/setup fail. Poke 2 without
         // requiring an ack — there may be no status packet to read.
         self.force_status_return_all()?;
+        // Startup Configuration can already be tracking a stale goal.
+        // Identify READs used to run while torque was on.
+        self.force_torque_off_no_egress()?;
         let model_pkt = self.xfer(&encode_read(self.cfg.servo_id, ADDR_MODEL_NUMBER, 2), true)?;
         let model = le_u16(&model_pkt.params).unwrap_or(0);
         let fw_pkt = self.xfer(
@@ -671,6 +681,34 @@ impl Xl330Driver {
         Ok(())
     }
 
+    /// Directed torque-off before identify READs. Not command egress.
+    /// `write_reg` needs `connected`, which is only set after identify.
+    fn force_torque_off_no_egress(&mut self) -> io::Result<()> {
+        let frame = encode_write(self.cfg.servo_id, ADDR_TORQUE_ENABLE, &[0]);
+        let port = self
+            .port
+            .as_mut()
+            .ok_or_else(|| io::Error::other("metal_serial_closed"))?;
+        let saved = port.timeout();
+        let _ = port.clear(serialport::ClearBuffer::Input);
+        port.write_all(&frame).map_err(io::Error::other)?;
+        port.flush().map_err(io::Error::other)?;
+        half_duplex_turnaround(&self.cfg.device);
+        port.set_timeout(Duration::from_millis(25))
+            .map_err(io::Error::other)?;
+        let mut tmp = [0u8; 64];
+        let end = Instant::now() + Duration::from_millis(25);
+        while Instant::now() < end {
+            if port.read(&mut tmp).is_err() {
+                break;
+            }
+        }
+        let _ = port.clear(serialport::ClearBuffer::Input);
+        port.set_timeout(saved).map_err(io::Error::other)?;
+        self.torque_enabled = false;
+        Ok(())
+    }
+
     fn apply_bench_limits(&mut self) -> PlantResult<()> {
         self.cfg
             .validate_xl330_limits()
@@ -726,6 +764,26 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
+            eeprom_changed = true;
+        }
+        let startup = self
+            .read_reg(ADDR_STARTUP_CONFIGURATION, 1)
+            .ok()
+            .and_then(|b| b.first().copied())
+            .unwrap_or(0);
+        self.startup_configuration = startup;
+        // Bit 0 torque-on at boot. A DTR-RESET then tracks Goal (RAM 0)
+        // during the next open settle before any certified command.
+        // Factory 0. Probe must not write this EEPROM.
+        if startup != FACTORY_STARTUP_CONFIGURATION {
+            self.write_reg(
+                ADDR_STARTUP_CONFIGURATION,
+                &[FACTORY_STARTUP_CONFIGURATION],
+                "setup_startup_configuration_off",
+                None,
+                false,
+            )?;
+            self.startup_configuration = FACTORY_STARTUP_CONFIGURATION;
             eeprom_changed = true;
         }
         let proto = self
@@ -2154,12 +2212,46 @@ fn half_duplex_turnaround(device: &Path) {
     std::thread::sleep(Duration::from_micros(1500));
 }
 
-fn open_settle(device: &Path) {
+fn early_broadcast_torque_off(port: &mut dyn SerialPort, device: &Path) {
+    let frame = encode_write(BROADCAST_ID, ADDR_TORQUE_ENABLE, &[0]);
+    let _ = port.clear(serialport::ClearBuffer::Input);
+    let _ = port.write_all(&frame);
+    let _ = port.flush();
+    half_duplex_turnaround(device);
+    let saved = port.timeout();
+    let _ = port.set_timeout(Duration::from_millis(10));
+    let mut tmp = [0u8; 64];
+    let end = Instant::now() + Duration::from_millis(10);
+    while Instant::now() < end {
+        if port.read(&mut tmp).is_err() {
+            break;
+        }
+    }
+    let _ = port.set_timeout(saved);
+}
+
+fn open_settle_and_quiesce(port: &mut dyn SerialPort, device: &Path) {
     // Cheap FTDI/CP2102 DTR-RESET plus low VIN can exceed 300 ms. Robotis
     // documents ~100–300 ms; 500 ms covers the first-open reboot window.
     // PTY has no DTR; keep tests fast.
-    let ms = if is_pty_path(device) { 100 } else { 500 };
-    std::thread::sleep(Duration::from_millis(ms));
+    //
+    // Do not sit silent for that whole window. Startup Configuration bit 0
+    // torque-ons after reboot and tracks Goal (RAM initial 0). Broadcast
+    // torque-off as soon as the servo might answer, then keep retrying.
+    let total_ms = if is_pty_path(device) { 100 } else { 500 };
+    let step_ms = if is_pty_path(device) { 20 } else { 50 };
+    let end = Instant::now() + Duration::from_millis(total_ms);
+    early_broadcast_torque_off(port, device);
+    while Instant::now() < end {
+        let remain = end.saturating_duration_since(Instant::now());
+        if remain.is_zero() {
+            break;
+        }
+        std::thread::sleep(remain.min(Duration::from_millis(step_ms)));
+        if Instant::now() < end {
+            early_broadcast_torque_off(port, device);
+        }
+    }
 }
 
 fn open_xl330_serial(device: &Path, baud: u32) -> io::Result<Box<dyn SerialPort>> {
@@ -2201,6 +2293,9 @@ impl HeldDiscover {
         match retune_held_baud(&mut *self.port, device, baud) {
             Ok(()) => {
                 self.baud = baud;
+                // This rate may be the live one. Broadcast now; do not wait
+                // for identify while Startup Configuration tracks a stale goal.
+                early_broadcast_torque_off(&mut *self.port, device);
                 Ok(())
             }
             Err(_) => {
@@ -2222,7 +2317,7 @@ fn open_xl330_serial_with(
     // Real UART takes exclusive on the first open, then clears HUPCL on
     // that fd. PTY skips TIOCEXCL (`process::exit` leaves it on pts).
     let take_exclusive = exclusive && !is_pty_path(device);
-    let port = serialport::new(device.to_string_lossy(), baud)
+    let mut port = serialport::new(device.to_string_lossy(), baud)
         .timeout(Duration::from_millis(150))
         .exclusive(take_exclusive)
         .open_native()
@@ -2233,7 +2328,7 @@ fn open_xl330_serial_with(
     // U2D2/FTDI often drops the first packet if we ping immediately after
     // open. Discover tries each baud/id pair once; a cold miss on the real
     // pair never comes back.
-    open_settle(device);
+    open_settle_and_quiesce(&mut port, device);
     Ok(Box::new(port))
 }
 

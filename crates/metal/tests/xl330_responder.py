@@ -9,6 +9,7 @@ import signal
 import struct
 import sys
 import termios
+import time
 import tty
 
 # Host crash_if after write_all+flush closes the slave while we emit status.
@@ -189,6 +190,10 @@ def init_regs() -> bytearray:
         regs[98] = 0xFF  # tripped; Goal Position is read-only until written 0
     if os.environ.get("REALITYOS_METAL_PTY_STARTUP_TORQUE") == "1":
         regs[64] = 1
+        regs[60] = 1
+    if os.environ.get("REALITYOS_METAL_PTY_STARTUP_YANK") == "1":
+        regs[64] = 1
+        regs[60] = 1
     if os.environ.get("REALITYOS_METAL_PTY_ZERO_PWM_SLOPE") == "1":
         regs[62] = 0
     elif os.environ.get("REALITYOS_METAL_PTY_LOW_PWM_SLOPE") == "1":
@@ -231,6 +236,22 @@ _silent_next_status = False
 _travel_reads = 0
 _travel_from: int | None = None
 _travel_to: int | None = None
+_boot = time.monotonic()
+
+
+def maybe_startup_yank(regs: bytearray) -> None:
+    """Startup Configuration tracks Goal after DTR-RESET without a host write.
+    After 80 ms (inside the 100 ms PTY open settle) copy goal→present while
+    torque is still on. Open must broadcast torque-off during settle or the
+    stale Wizard goal (0) slams present away from 2048."""
+    if os.environ.get("REALITYOS_METAL_PTY_STARTUP_YANK") != "1":
+        return
+    if regs[64] != 1:
+        return
+    if time.monotonic() - _boot < 0.08:
+        return
+    if regs[116:120] != regs[132:136]:
+        regs[132:136] = regs[116:120]
 
 
 def advance_delayed_travel(regs: bytearray) -> None:
@@ -257,6 +278,7 @@ def advance_delayed_travel(regs: bytearray) -> None:
 
 def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
     global _motion_block_reads
+    maybe_startup_yank(regs)
     if inst == INST_PING:
         return b"", 0
     if inst == INST_READ and len(params) >= 4:

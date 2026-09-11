@@ -931,6 +931,38 @@ fn xl330_pty_discover_finds_wizard_id_zero() {
 }
 
 #[test]
+fn xl330_pty_quiesces_startup_torque_during_open_settle() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_STARTUP_TORQUE", "1"),
+        ("REALITYOS_METAL_PTY_STARTUP_YANK", "1"),
+    ]);
+    let root = metal_test_root("pty-startup-yank");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("Startup Configuration torque-on must not slam present to goal 0");
+    assert_eq!(
+        driver.applied_startup_configuration(),
+        0,
+        "serve must clear EEPROM torque-on-boot so the next DTR-RESET does not yank"
+    );
+    assert_eq!(
+        driver.startup_present(),
+        2048,
+        "stale goal 0 must not yank during the open-settle / identify window"
+    );
+    driver.read_sensor(0.0).expect("sensor");
+    assert_eq!(driver.last_present_position(), 2048);
+    assert_eq!(
+        recorded_writes(root.join("bus")),
+        0,
+        "settle / identify torque-off is not command egress"
+    );
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_discover_quiesces_startup_torque_without_command_egress() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_STARTUP_TORQUE", "1")]);
