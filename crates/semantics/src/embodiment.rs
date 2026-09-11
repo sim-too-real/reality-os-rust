@@ -1,4 +1,5 @@
 use crate::provenance::Provenanced;
+use crate::transform::Se3;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -37,6 +38,7 @@ pub struct Body {
     pub mass_kg: Provenanced<f64>,
     pub com: Provenanced<[f64; 3]>,
     pub inertia: Provenanced<[f64; 6]>,
+    pub local_pose: Provenanced<Se3>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -52,6 +54,11 @@ pub struct Joint {
     pub q_max: Provenanced<f64>,
     pub dq_max: Provenanced<f64>,
     pub effort_max: Provenanced<f64>,
+    pub origin_in_child: Provenanced<[f64; 3]>,
+    pub parent_to_joint: Provenanced<Se3>,
+    pub joint_to_child: Provenanced<Se3>,
+    pub qpos_adr: Option<i32>,
+    pub dof_adr: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -70,6 +77,15 @@ pub struct ModelFrame {
     pub kind: FrameKind,
     pub parent_body: String,
     pub translation: Provenanced<[f64; 3]>,
+    pub rotation: Provenanced<[f64; 4]>,
+}
+
+impl ModelFrame {
+    pub fn pose(&self) -> Option<Se3> {
+        let xyz = self.translation.value?;
+        let quat = self.rotation.value?;
+        Se3::try_new(xyz, quat).ok()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -163,6 +179,80 @@ impl EmbodimentModel {
             .iter()
             .filter(|a| a.control_mode == "position")
     }
+
+    pub fn actuator_for_joint(&self, joint: &str) -> Option<&Actuator> {
+        self.actuators.iter().find(|a| a.target_joint == joint)
+    }
+
+    pub fn validate_transforms(&self) -> Vec<ModelDiagnostic> {
+        let mut out = Vec::new();
+        for body in &self.bodies {
+            if let Some(pose) = body.local_pose.value {
+                if Se3::try_new(pose.xyz, pose.quat_wxyz).is_err() {
+                    out.push(ModelDiagnostic {
+                        code: "invalid_body_transform".into(),
+                        detail: body.name.clone(),
+                    });
+                }
+            }
+        }
+        for joint in &self.joints {
+            if let Some(axis) = joint.axis.value {
+                if axis.iter().all(|v| *v == 0.0) || !axis.iter().all(|v| v.is_finite()) {
+                    out.push(ModelDiagnostic {
+                        code: "invalid_joint_axis".into(),
+                        detail: joint.name.clone(),
+                    });
+                }
+            }
+            if let Some(origin) = joint.origin_in_child.value {
+                if !origin.iter().all(|v| v.is_finite()) {
+                    out.push(ModelDiagnostic {
+                        code: "invalid_joint_origin".into(),
+                        detail: joint.name.clone(),
+                    });
+                }
+            }
+        }
+        for frame in &self.frames {
+            if let (Some(xyz), Some(quat)) = (frame.translation.value, frame.rotation.value) {
+                if Se3::try_new(xyz, quat).is_err() {
+                    out.push(ModelDiagnostic {
+                        code: "invalid_frame_transform".into(),
+                        detail: frame.name.clone(),
+                    });
+                }
+            }
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for body in &self.bodies {
+            let mut cur = body.parent.clone();
+            let mut guard = 0;
+            while let Some(name) = cur {
+                if name == body.name || guard > self.bodies.len() + 2 {
+                    out.push(ModelDiagnostic {
+                        code: "invalid_transform_topology".into(),
+                        detail: body.name.clone(),
+                    });
+                    break;
+                }
+                if !seen.insert(format!("{}:{}", body.name, name)) {
+                    break;
+                }
+                cur = self
+                    .bodies
+                    .iter()
+                    .find(|b| b.name == name)
+                    .and_then(|b| b.parent.clone());
+                guard += 1;
+            }
+        }
+        out
+    }
+}
+
+pub fn unknown_se3(source: &str) -> Provenanced<Se3> {
+    Provenanced::unknown(source, 0.0)
 }
 
 #[cfg(test)]
@@ -179,6 +269,7 @@ mod tests {
             mass_kg: Provenanced::unknown("bundle", 0.0),
             com: Provenanced::unknown("bundle", 0.0),
             inertia: Provenanced::unknown("bundle", 0.0),
+            local_pose: unknown_se3("bundle"),
         });
         m.joints.push(Joint {
             name: "j_ball".into(),
@@ -192,6 +283,11 @@ mod tests {
             q_max: Provenanced::unknown("bundle", 0.0),
             dq_max: Provenanced::unknown("bundle", 0.0),
             effort_max: Provenanced::unknown("bundle", 0.0),
+            origin_in_child: Provenanced::unknown("bundle", 0.0),
+            parent_to_joint: unknown_se3("bundle"),
+            joint_to_child: unknown_se3("bundle"),
+            qpos_adr: None,
+            dof_adr: None,
         });
         m.diagnostics.push(ModelDiagnostic {
             code: "unsupported_joint".into(),

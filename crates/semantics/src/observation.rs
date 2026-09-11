@@ -1,6 +1,7 @@
 use crate::sensor::SensorClass;
 use realityos_kernel::{KernelResult, ObservationEvidence};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SensorObservation {
@@ -64,19 +65,108 @@ impl SensorObservation {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JointStateSample {
+    pub joint_name: String,
+    pub q: f64,
+    pub dq: Option<f64>,
+    pub capture_s: f64,
+    pub receive_s: f64,
+    pub sensor_id: String,
+    pub calibration_id: String,
+    pub transform_epoch: String,
+    pub digest: String,
+}
+
+impl JointStateSample {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        joint_name: impl Into<String>,
+        q: f64,
+        dq: Option<f64>,
+        capture_s: f64,
+        receive_s: f64,
+        sensor_id: impl Into<String>,
+        calibration_id: impl Into<String>,
+        transform_epoch: impl Into<String>,
+    ) -> Self {
+        let joint_name = joint_name.into();
+        let sensor_id = sensor_id.into();
+        let calibration_id = calibration_id.into();
+        let transform_epoch = transform_epoch.into();
+        let digest = joint_sample_digest(
+            &joint_name,
+            q,
+            &sensor_id,
+            &calibration_id,
+            &transform_epoch,
+        );
+        Self {
+            joint_name,
+            q,
+            dq,
+            capture_s,
+            receive_s,
+            sensor_id,
+            calibration_id,
+            transform_epoch,
+            digest,
+        }
+    }
+
+    pub fn stale(&self, now_s: f64, freshness_s: f64) -> bool {
+        now_s - self.receive_s > freshness_s
+    }
+}
+
+pub fn joint_sample_digest(
+    joint_name: &str,
+    q: f64,
+    sensor_id: &str,
+    calibration_id: &str,
+    epoch: &str,
+) -> String {
+    let mut h = Sha256::new();
+    h.update(b"realityos.joint_state_sample/1\0");
+    h.update(joint_name.as_bytes());
+    h.update(q.to_le_bytes());
+    h.update(sensor_id.as_bytes());
+    h.update(calibration_id.as_bytes());
+    h.update(epoch.as_bytes());
+    hex::encode(h.finalize())
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObservationFrame {
     pub frame_id: String,
     pub transform_epoch: String,
     pub observations: Vec<SensorObservation>,
+    pub joint_state: Vec<JointStateSample>,
     pub as_of_s: f64,
 }
 
 impl ObservationFrame {
     pub fn required_stale(&self, now_s: f64, freshness_s: f64) -> bool {
-        self.observations.iter().any(|obs| {
+        let encoders_stale = self.observations.iter().any(|obs| {
             obs.class == SensorClass::JointEncoder
                 && (now_s - obs.receive_s > freshness_s || now_s > obs.expires_at_s)
-        })
+        });
+        let joints_stale = self.joint_state.iter().any(|s| s.stale(now_s, freshness_s));
+        encoders_stale || joints_stale
+    }
+
+    pub fn joint_q(&self, name: &str) -> Option<f64> {
+        self.joint_state
+            .iter()
+            .find(|s| s.joint_name == name)
+            .map(|s| s.q)
+    }
+
+    pub fn missing_required(&self, names: &[String]) -> bool {
+        names.iter().any(|n| self.joint_q(n).is_none())
+    }
+
+    pub fn wrong_epoch(&self, epoch: &str) -> bool {
+        self.joint_state.iter().any(|s| s.transform_epoch != epoch)
     }
 }
 
@@ -93,6 +183,7 @@ mod tests {
             frame_id: "f1".into(),
             transform_epoch: "e0".into(),
             observations: vec![obs],
+            joint_state: vec![],
             as_of_s: 1.0,
         };
         assert!(frame.required_stale(2.0, 0.25));

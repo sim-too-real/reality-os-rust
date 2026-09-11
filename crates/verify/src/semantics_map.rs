@@ -3,10 +3,11 @@
 use crate::bundle::{BaseType, NamedRef, RobotBundle};
 use crate::normalize::RobotManifest;
 use realityos_semantics::embodiment::{
-    Actuator, BaseKind, Body, EmbodimentModel, EndEffector, FrameKind, Gripper, Joint, JointKind,
-    ModelDiagnostic, ModelFrame, Transmission,
+    unknown_se3, Actuator, BaseKind, Body, EmbodimentModel, EndEffector, FrameKind, Gripper, Joint,
+    JointKind, ModelDiagnostic, ModelFrame, Transmission,
 };
 use realityos_semantics::provenance::Provenanced;
+use realityos_semantics::transform::Se3;
 
 const SOURCE: &str = "verify.manifest";
 
@@ -23,7 +24,7 @@ pub fn embodiment_from_manifest(bundle: &RobotBundle, manifest: &RobotManifest) 
     model.bodies = manifest.bodies.iter().map(map_body).collect();
     model.joints = manifest.joints.iter().map(map_joint).collect();
     model.actuators = manifest.actuators.iter().map(map_actuator).collect();
-    model.frames = map_ee_frames(bundle, manifest);
+    model.frames = map_frames(bundle, manifest);
     model.end_effectors = map_end_effectors(bundle, manifest);
     model.grippers = bundle.manifest.grippers.iter().map(map_gripper).collect();
     model.transmissions = manifest
@@ -36,6 +37,7 @@ pub fn embodiment_from_manifest(bundle: &RobotBundle, manifest: &RobotManifest) 
         })
         .collect();
     model.diagnostics = map_diagnostics(manifest);
+    model.diagnostics.extend(model.validate_transforms());
     model
 }
 
@@ -72,6 +74,7 @@ fn map_body(b: &crate::normalize::BodyRecord) -> Body {
         mass_kg,
         com: Provenanced::unknown(SOURCE, 0.0),
         inertia,
+        local_pose: pose_from_parts(b.pos, b.quat),
     }
 }
 
@@ -101,7 +104,12 @@ fn map_joint(j: &crate::normalize::JointRecord) -> Joint {
     Joint {
         name: j.name.clone(),
         kind: map_joint_kind(&j.joint_type),
-        axis: Provenanced::unknown(SOURCE, 0.0),
+        axis: match j.axis {
+            Some(a) if a.iter().any(|v| *v != 0.0) && a.iter().all(|v| v.is_finite()) => {
+                Provenanced::simulator_derived(a, SOURCE, 0.0)
+            }
+            _ => Provenanced::unknown(SOURCE, 0.0),
+        },
         qpos_dim: j.qpos_dim.max(0) as usize,
         dof_dim: j.dof_dim.max(0) as usize,
         parent_body: j.parent_body.clone(),
@@ -110,6 +118,16 @@ fn map_joint(j: &crate::normalize::JointRecord) -> Joint {
         q_max,
         dq_max: Provenanced::unknown(SOURCE, 0.0),
         effort_max: Provenanced::unknown(SOURCE, 0.0),
+        origin_in_child: match j.pos {
+            Some(p) if p.iter().all(|v| v.is_finite()) => {
+                Provenanced::simulator_derived(p, SOURCE, 0.0)
+            }
+            _ => Provenanced::unknown(SOURCE, 0.0),
+        },
+        parent_to_joint: unknown_se3(SOURCE),
+        joint_to_child: unknown_se3(SOURCE),
+        qpos_adr: Some(j.qpos_address),
+        dof_adr: Some(j.velocity_address),
     }
 }
 
@@ -149,28 +167,75 @@ fn site_parent_body(manifest: &RobotManifest, site: &str) -> String {
         .unwrap_or_default()
 }
 
-fn map_ee_frames(bundle: &RobotBundle, manifest: &RobotManifest) -> Vec<ModelFrame> {
-    bundle
-        .manifest
-        .end_effectors
-        .iter()
-        .map(|ee| {
-            let frame = ee_frame_name(ee);
-            let parent_body = ee
-                .site
-                .as_ref()
-                .map(|s| site_parent_body(manifest, s))
-                .filter(|p| !p.is_empty())
-                .or_else(|| ee.body.clone())
-                .unwrap_or_default();
-            ModelFrame {
-                name: frame,
-                kind: FrameKind::Ee,
-                parent_body,
-                translation: Provenanced::unknown(SOURCE, 0.0),
-            }
-        })
-        .collect()
+fn pose_from_parts(pos: Option<[f64; 3]>, quat: Option<[f64; 4]>) -> Provenanced<Se3> {
+    match (pos, quat) {
+        (Some(xyz), Some(q)) => match Se3::try_new(xyz, q) {
+            Ok(pose) => Provenanced::simulator_derived(pose, SOURCE, 0.0),
+            Err(_) => Provenanced::unknown(SOURCE, 0.0),
+        },
+        (Some(xyz), None) => match Se3::translation(xyz) {
+            Ok(pose) => Provenanced::simulator_derived(pose, SOURCE, 0.0),
+            Err(_) => Provenanced::unknown(SOURCE, 0.0),
+        },
+        _ => unknown_se3(SOURCE),
+    }
+}
+
+fn map_frames(bundle: &RobotBundle, manifest: &RobotManifest) -> Vec<ModelFrame> {
+    let mut frames = Vec::new();
+    for ee in &bundle.manifest.end_effectors {
+        let frame = ee_frame_name(ee);
+        let parent_body = ee
+            .site
+            .as_ref()
+            .map(|s| site_parent_body(manifest, s))
+            .filter(|p| !p.is_empty())
+            .or_else(|| ee.body.clone())
+            .unwrap_or_default();
+        let site = ee
+            .site
+            .as_ref()
+            .and_then(|name| manifest.site_records.iter().find(|s| s.name == *name));
+        let (translation, rotation) = match site {
+            Some(s) => (
+                match s.pos {
+                    Some(p) => Provenanced::simulator_derived(p, SOURCE, 0.0),
+                    None => Provenanced::unknown(SOURCE, 0.0),
+                },
+                match s.quat {
+                    Some(q) => Provenanced::simulator_derived(q, SOURCE, 0.0),
+                    None => Provenanced::unknown(SOURCE, 0.0),
+                },
+            ),
+            None => (
+                Provenanced::unknown(SOURCE, 0.0),
+                Provenanced::unknown(SOURCE, 0.0),
+            ),
+        };
+        frames.push(ModelFrame {
+            name: frame,
+            kind: FrameKind::Ee,
+            parent_body,
+            translation,
+            rotation,
+        });
+    }
+    for cam in &manifest.cameras {
+        frames.push(ModelFrame {
+            name: cam.name.clone(),
+            kind: FrameKind::Camera,
+            parent_body: cam.parent_body.clone(),
+            translation: match cam.pos {
+                Some(p) => Provenanced::simulator_derived(p, SOURCE, 0.0),
+                None => Provenanced::unknown(SOURCE, 0.0),
+            },
+            rotation: match cam.quat {
+                Some(q) => Provenanced::simulator_derived(q, SOURCE, 0.0),
+                None => Provenanced::unknown(SOURCE, 0.0),
+            },
+        });
+    }
+    frames
 }
 
 fn joint_chain_for_ee(
@@ -238,6 +303,14 @@ fn map_diagnostics(manifest: &RobotManifest) -> Vec<ModelDiagnostic> {
             });
         }
     }
+    for j in &manifest.joints {
+        if matches!(j.joint_type.as_str(), "ball" | "free") {
+            out.push(ModelDiagnostic {
+                code: "MODEL_FEATURE_UNSUPPORTED".into(),
+                detail: format!("{}:{}", j.joint_type, j.name),
+            });
+        }
+    }
     out
 }
 
@@ -265,7 +338,12 @@ mod tests {
         assert!(m
             .joints
             .iter()
-            .all(|j| j.axis.provenance == Provenance::Unknown));
+            .all(|j| j.axis.value.is_some() && j.axis.provenance == Provenance::SimulatorDerived));
+        assert!(m.bodies.iter().all(|b| b.local_pose.value.is_some()));
+        assert!(m
+            .frames
+            .iter()
+            .any(|f| f.name == "ee" && f.pose().is_some()));
     }
 
     #[test]

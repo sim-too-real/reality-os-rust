@@ -52,7 +52,11 @@ pub struct VerifierTruth {
     pub ctrl: Vec<f64>,
     pub actuator_force: Vec<f64>,
     pub xpos: BTreeMap<String, Vec<f64>>,
+    #[serde(default)]
+    pub xquat: BTreeMap<String, Vec<f64>>,
     pub named_pos: BTreeMap<String, Vec<f64>>,
+    #[serde(default)]
+    pub site_xquat: BTreeMap<String, Vec<f64>>,
     pub contacts: Vec<ContactTruth>,
     pub kinetic_energy: f64,
     pub com: Vec<f64>,
@@ -91,7 +95,19 @@ impl VerifierTruth {
                 xpos.insert(k.clone(), crate::mujoco_exec::json_f64_vec(v));
             }
         }
+        let mut xquat = BTreeMap::new();
+        if let Some(obj) = state.get("xquat").and_then(|v| v.as_object()) {
+            for (k, v) in obj {
+                xquat.insert(k.clone(), crate::mujoco_exec::json_f64_vec(v));
+            }
+        }
         let mut named = BTreeMap::new();
+        let mut site_xquat = BTreeMap::new();
+        if let Some(obj) = state.get("site_xquat").and_then(|v| v.as_object()) {
+            for (k, v) in obj {
+                site_xquat.insert(k.clone(), crate::mujoco_exec::json_f64_vec(v));
+            }
+        }
         if let Some(obj) = state.get("sites").and_then(|v| v.as_object()) {
             for (k, v) in obj {
                 named.insert(k.clone(), crate::mujoco_exec::json_f64_vec(v));
@@ -128,7 +144,9 @@ impl VerifierTruth {
             ctrl: crate::mujoco_exec::json_f64_vec(&state["ctrl"]),
             actuator_force: crate::mujoco_exec::json_f64_vec(&state["actuator_force"]),
             xpos,
+            xquat,
             named_pos: named,
+            site_xquat,
             contacts,
             kinetic_energy: state["kinetic_energy"].as_f64().unwrap_or(0.0),
             com: crate::mujoco_exec::json_f64_vec(&state["subtree_com"]),
@@ -251,6 +269,7 @@ mod tests {
             cameras: vec![],
             bodies: vec![],
             sites: vec![],
+            site_records: vec![],
             derived: crate::normalize::DerivedInterface {
                 base_type: crate::bundle::BaseType::Fixed,
                 actuated_dofs: vec![],

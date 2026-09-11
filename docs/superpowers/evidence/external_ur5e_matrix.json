@@ -1,0 +1,1557 @@
+{
+  "source_repository": "https://github.com/google-deepmind/mujoco_menagerie",
+  "source_commit": "8161bba264d7fa7c99ca301e91e7fb44737676ad",
+  "robot_id": "menagerie_ur5e",
+  "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+  "fk": {
+    "robot_id": "menagerie_ur5e",
+    "samples": 100,
+    "mean_position_error": 3.3838657292532904e-16,
+    "max_position_error": 9.38778750585887e-16,
+    "mean_orientation_error": 2.1073424255447016e-10,
+    "max_orientation_error": 2.1073424255447017e-8,
+    "worst_q": [
+      5.723464777793418,
+      1.7822654565048692,
+      0.87249144637445,
+      4.867851255974732,
+      -2.6574662547382153,
+      1.0447218179345503
+    ],
+    "worst_position_error": 9.38778750585887e-16
+  },
+  "reachable": [
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.006996443095087747,
+      "ik_residual": 1.1858090782118481e-8,
+      "max_joint_move": 2.5544027273334082,
+      "joint_delta_norm": 3.671734604801924,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        -1.41882386813693,
+        -0.864814104858788,
+        2.5544027273334082,
+        -0.2807522576096247,
+        -2.019127356008268,
+        0.1999999999999999
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.00806948937332841,
+      "ik_residual": 6.867824718320269e-7,
+      "max_joint_move": 2.688497388752578,
+      "joint_delta_norm": 4.139296540898342,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        -2.688497388752578,
+        0.35426683296099487,
+        -2.6674941888421415,
+        -0.472378445277673,
+        1.5553411240489312,
+        0.1499999999999999
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.022886326603060753,
+      "ik_residual": 4.862879352194498e-7,
+      "max_joint_move": 0.8974698500528089,
+      "joint_delta_norm": 1.2905137184785376,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        0.8776709769583604,
+        -0.8974698500528089,
+        0.14873466403349697,
+        0.15273938429290937,
+        0.06492967143851666,
+        0.19999999999999987
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.014154967641386901,
+      "ik_residual": 1.364935993492989e-7,
+      "max_joint_move": 1.6435692275904905,
+      "joint_delta_norm": 2.7841305862508317,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        1.5377324306763722,
+        -1.6211643447200539,
+        -1.6435692275904905,
+        0.10206708467694318,
+        0.21645037467069173,
+        2.6242873122247115e-17
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.021963643416126923,
+      "ik_residual": 2.3472387267686174e-7,
+      "max_joint_move": 2.3093112440447334,
+      "joint_delta_norm": 2.8062549748759,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        -2.3093112440447334,
+        -1.0003268641330012,
+        1.1546112855737662,
+        -0.13601868240832585,
+        0.4091044173554453,
+        0.15000000000000002
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.008938202256173441,
+      "ik_residual": 4.0828654506100614e-8,
+      "max_joint_move": 2.396484565675501,
+      "joint_delta_norm": 3.0853142236256255,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        -1.8438996932336382,
+        0.34067574309162435,
+        -2.396484565675501,
+        -0.1283012584906021,
+        0.4701471380507296,
+        0.15000000000000005
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.011986296155127233,
+      "ik_residual": 8.748882590902456e-8,
+      "max_joint_move": 1.5238708142552433,
+      "joint_delta_norm": 2.209422744454045,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        0.7192592162208156,
+        -1.5238708142552433,
+        -1.404816438802836,
+        0.07131859107440072,
+        0.25186745897357493,
+        3.25266692666143e-17
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.07737696620435418,
+      "ik_residual": 3.2280196227565286e-8,
+      "max_joint_move": 2.809122877712148,
+      "joint_delta_norm": 3.8515042536371213,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        1.5805399003619032,
+        0.3398782955757877,
+        2.809122877712148,
+        -0.2291983870109691,
+        2.0656132601847594,
+        0.10000000000000007
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.013241717203361949,
+      "ik_residual": 2.698904026548072e-8,
+      "max_joint_move": 1.935067657374134,
+      "joint_delta_norm": 2.809852784639556,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        1.543983074637345,
+        -1.306913210467319,
+        -1.935067657374134,
+        0.2251419378851599,
+        0.09050450859475792,
+        -7.945017112717581e-18
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.01338446938823754,
+      "ik_residual": 5.185823293910427e-8,
+      "max_joint_move": 2.1081438333217632,
+      "joint_delta_norm": 2.6187246479902946,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        1.2499334781845852,
+        -2.1081438333217632,
+        -0.5748733646987474,
+        -0.3020569091053639,
+        0.6552838303776114,
+        9.513785295064178e-17
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.012836505866661636,
+      "ik_residual": 9.403779154511713e-8,
+      "max_joint_move": 1.792117744061884,
+      "joint_delta_norm": 2.798069835694039,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        1.2903795844795665,
+        -1.7018037752209214,
+        -1.792117744061884,
+        0.11518354921471495,
+        0.2074270605101298,
+        4.852373564310585e-17
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.011039811257247222,
+      "ik_residual": 5.152407782384323e-8,
+      "max_joint_move": 1.5139706193475755,
+      "joint_delta_norm": 2.1987884733949064,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        0.18134971088933305,
+        -1.044610560412281,
+        -1.5139706193475755,
+        0.13538932959352595,
+        -1.183272793295921,
+        2.8132576188071914e-16
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.01145749169634204,
+      "ik_residual": 2.5101171413725662e-8,
+      "max_joint_move": 1.8296861094589432,
+      "joint_delta_norm": 2.1527151782616536,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        0.6371497578401338,
+        -1.8296861094589432,
+        -0.8107548841259996,
+        -0.2226823084346493,
+        0.3886652454637681,
+        0.15000000000000008
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.011330917031395615,
+      "ik_residual": 6.667751467802411e-8,
+      "max_joint_move": 2.2861656992747483,
+      "joint_delta_norm": 3.5845164993489145,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        2.0577565446212147,
+        1.8136852012414708,
+        2.2861656992747483,
+        0.08604153381042451,
+        0.2616978752110733,
+        0.15000000000000002
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.009103896784244071,
+      "ik_residual": 4.99722688513837e-8,
+      "max_joint_move": 1.7983941656640272,
+      "joint_delta_norm": 2.0368798356159608,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        -0.3245300237440934,
+        -0.48636348709991406,
+        1.7983941656640272,
+        0.4034564133731137,
+        -0.6082858162552066,
+        0.19999999999999993
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.03270788539102025,
+      "ik_residual": 1.7869097511583232e-7,
+      "max_joint_move": 1.9488888255729078,
+      "joint_delta_norm": 2.2497295922727236,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        -1.9488888255729078,
+        -0.3496822426708767,
+        -0.3189494425355321,
+        -0.48420872166909,
+        0.8843930574304466,
+        0.14999999999999986
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.008291686783145805,
+      "ik_residual": 8.011281374973219e-7,
+      "max_joint_move": 2.3185772299918237,
+      "joint_delta_norm": 2.582876949555585,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        0.7352512738856715,
+        -0.6259563409029884,
+        2.3185772299918237,
+        0.25078803833473234,
+        -0.51004171248052,
+        0.2
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.013871434099971982,
+      "ik_residual": 8.890678368366068e-8,
+      "max_joint_move": 2.5093441120099724,
+      "joint_delta_norm": 2.9038123292648232,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        0.9938190477270307,
+        -2.5093441120099724,
+        -0.9002074301180087,
+        -0.2014299282278377,
+        0.5446966479249528,
+        1.6323550799573252e-17
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.01833701732787874,
+      "ik_residual": 5.5621319700998457e-8,
+      "max_joint_move": 2.2956111642478985,
+      "joint_delta_norm": 2.9718818471676203,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        -2.2956111642478985,
+        0.3098000991578779,
+        -1.8021584394359327,
+        -0.09354105586825454,
+        0.43272395901255395,
+        0.14999999999999997
+      ]
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": true,
+      "skill_refuse": null,
+      "ctrl_writes": 1,
+      "replay_write_delta": null,
+      "authority_decisions": [
+        "Allowed:allow"
+      ],
+      "seed": 0,
+      "cartesian_residual": 0.01638243068046267,
+      "ik_residual": 4.075489305497387e-8,
+      "max_joint_move": 1.8438235285310265,
+      "joint_delta_norm": 2.622186814475887,
+      "initial_q": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "target_q": [
+        0.20014986887869143,
+        1.8391759408821515,
+        1.8438235285310265,
+        0.06339901353519496,
+        0.22255547442705845,
+        5.486889546294349e-18
+      ]
+    }
+  ],
+  "unreachable": [
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": false,
+      "skill_refuse": "UNREACHABLE",
+      "ctrl_writes": 0,
+      "replay_write_delta": null,
+      "authority_decisions": [],
+      "seed": 0,
+      "cartesian_residual": null,
+      "ik_residual": null,
+      "max_joint_move": null,
+      "joint_delta_norm": null,
+      "initial_q": [],
+      "target_q": []
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": false,
+      "skill_refuse": "UNREACHABLE",
+      "ctrl_writes": 0,
+      "replay_write_delta": null,
+      "authority_decisions": [],
+      "seed": 0,
+      "cartesian_residual": null,
+      "ik_residual": null,
+      "max_joint_move": null,
+      "joint_delta_norm": null,
+      "initial_q": [],
+      "target_q": []
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": false,
+      "skill_refuse": "UNREACHABLE",
+      "ctrl_writes": 0,
+      "replay_write_delta": null,
+      "authority_decisions": [],
+      "seed": 0,
+      "cartesian_residual": null,
+      "ik_residual": null,
+      "max_joint_move": null,
+      "joint_delta_norm": null,
+      "initial_q": [],
+      "target_q": []
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": false,
+      "skill_refuse": "UNREACHABLE",
+      "ctrl_writes": 0,
+      "replay_write_delta": null,
+      "authority_decisions": [],
+      "seed": 0,
+      "cartesian_residual": null,
+      "ik_residual": null,
+      "max_joint_move": null,
+      "joint_delta_norm": null,
+      "initial_q": [],
+      "target_q": []
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": false,
+      "skill_refuse": "UNREACHABLE",
+      "ctrl_writes": 0,
+      "replay_write_delta": null,
+      "authority_decisions": [],
+      "seed": 0,
+      "cartesian_residual": null,
+      "ik_residual": null,
+      "max_joint_move": null,
+      "joint_delta_norm": null,
+      "initial_q": [],
+      "target_q": []
+    }
+  ],
+  "stale": [
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": false,
+      "skill_refuse": "REFUSE",
+      "ctrl_writes": 0,
+      "replay_write_delta": null,
+      "authority_decisions": [],
+      "seed": 0,
+      "cartesian_residual": null,
+      "ik_residual": null,
+      "max_joint_move": null,
+      "joint_delta_norm": null,
+      "initial_q": [],
+      "target_q": []
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": false,
+      "skill_refuse": "REFUSE",
+      "ctrl_writes": 0,
+      "replay_write_delta": null,
+      "authority_decisions": [],
+      "seed": 0,
+      "cartesian_residual": null,
+      "ik_residual": null,
+      "max_joint_move": null,
+      "joint_delta_norm": null,
+      "initial_q": [],
+      "target_q": []
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": false,
+      "skill_refuse": "REFUSE",
+      "ctrl_writes": 0,
+      "replay_write_delta": null,
+      "authority_decisions": [],
+      "seed": 0,
+      "cartesian_residual": null,
+      "ik_residual": null,
+      "max_joint_move": null,
+      "joint_delta_norm": null,
+      "initial_q": [],
+      "target_q": []
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": false,
+      "skill_refuse": "REFUSE",
+      "ctrl_writes": 0,
+      "replay_write_delta": null,
+      "authority_decisions": [],
+      "seed": 0,
+      "cartesian_residual": null,
+      "ik_residual": null,
+      "max_joint_move": null,
+      "joint_delta_norm": null,
+      "initial_q": [],
+      "target_q": []
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": false,
+      "skill_refuse": "REFUSE",
+      "ctrl_writes": 0,
+      "replay_write_delta": null,
+      "authority_decisions": [],
+      "seed": 0,
+      "cartesian_residual": null,
+      "ik_residual": null,
+      "max_joint_move": null,
+      "joint_delta_norm": null,
+      "initial_q": [],
+      "target_q": []
+    }
+  ],
+  "wrong_epoch": [
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": false,
+      "skill_refuse": "REFUSE",
+      "ctrl_writes": 0,
+      "replay_write_delta": null,
+      "authority_decisions": [],
+      "seed": 0,
+      "cartesian_residual": null,
+      "ik_residual": null,
+      "max_joint_move": null,
+      "joint_delta_norm": null,
+      "initial_q": [],
+      "target_q": []
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": false,
+      "skill_refuse": "REFUSE",
+      "ctrl_writes": 0,
+      "replay_write_delta": null,
+      "authority_decisions": [],
+      "seed": 0,
+      "cartesian_residual": null,
+      "ik_residual": null,
+      "max_joint_move": null,
+      "joint_delta_norm": null,
+      "initial_q": [],
+      "target_q": []
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": false,
+      "skill_refuse": "REFUSE",
+      "ctrl_writes": 0,
+      "replay_write_delta": null,
+      "authority_decisions": [],
+      "seed": 0,
+      "cartesian_residual": null,
+      "ik_residual": null,
+      "max_joint_move": null,
+      "joint_delta_norm": null,
+      "initial_q": [],
+      "target_q": []
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": false,
+      "skill_refuse": "REFUSE",
+      "ctrl_writes": 0,
+      "replay_write_delta": null,
+      "authority_decisions": [],
+      "seed": 0,
+      "cartesian_residual": null,
+      "ik_residual": null,
+      "max_joint_move": null,
+      "joint_delta_norm": null,
+      "initial_q": [],
+      "target_q": []
+    },
+    {
+      "robot_id": "menagerie_ur5e",
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "skill": "REACH",
+      "adapter_id": "chain_ik_position_pd",
+      "adaptation": "CONFIGURED",
+      "metal": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "task_success": false,
+      "skill_refuse": "REFUSE",
+      "ctrl_writes": 0,
+      "replay_write_delta": null,
+      "authority_decisions": [],
+      "seed": 0,
+      "cartesian_residual": null,
+      "ik_residual": null,
+      "max_joint_move": null,
+      "joint_delta_norm": null,
+      "initial_q": [],
+      "target_q": []
+    }
+  ],
+  "success_rate": 1.0,
+  "zero_write_invalid": true,
+  "embodiment_summary": {
+    "actuators": [
+      {
+        "control_mode": "position",
+        "name": "shoulder_pan",
+        "target_joint": "shoulder_pan_joint"
+      },
+      {
+        "control_mode": "position",
+        "name": "shoulder_lift",
+        "target_joint": "shoulder_lift_joint"
+      },
+      {
+        "control_mode": "position",
+        "name": "elbow",
+        "target_joint": "elbow_joint"
+      },
+      {
+        "control_mode": "position",
+        "name": "wrist_1",
+        "target_joint": "wrist_1_joint"
+      },
+      {
+        "control_mode": "position",
+        "name": "wrist_2",
+        "target_joint": "wrist_2_joint"
+      },
+      {
+        "control_mode": "position",
+        "name": "wrist_3",
+        "target_joint": "wrist_3_joint"
+      }
+    ],
+    "base": "Fixed",
+    "bodies": [
+      {
+        "local_pose": {
+          "quat_wxyz": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "xyz": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "name": "world",
+        "parent": null
+      },
+      {
+        "local_pose": {
+          "quat_wxyz": [
+            0.0,
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "xyz": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "name": "base",
+        "parent": null
+      },
+      {
+        "local_pose": {
+          "quat_wxyz": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "xyz": [
+            0.0,
+            0.0,
+            0.163
+          ]
+        },
+        "name": "shoulder_link",
+        "parent": "base"
+      },
+      {
+        "local_pose": {
+          "quat_wxyz": [
+            0.7071067811865476,
+            0.0,
+            0.7071067811865476,
+            0.0
+          ],
+          "xyz": [
+            0.0,
+            0.138,
+            0.0
+          ]
+        },
+        "name": "upper_arm_link",
+        "parent": "shoulder_link"
+      },
+      {
+        "local_pose": {
+          "quat_wxyz": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "xyz": [
+            0.0,
+            -0.131,
+            0.425
+          ]
+        },
+        "name": "forearm_link",
+        "parent": "upper_arm_link"
+      },
+      {
+        "local_pose": {
+          "quat_wxyz": [
+            0.7071067811865476,
+            0.0,
+            0.7071067811865476,
+            0.0
+          ],
+          "xyz": [
+            0.0,
+            0.0,
+            0.392
+          ]
+        },
+        "name": "wrist_1_link",
+        "parent": "forearm_link"
+      },
+      {
+        "local_pose": {
+          "quat_wxyz": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "xyz": [
+            0.0,
+            0.127,
+            0.0
+          ]
+        },
+        "name": "wrist_2_link",
+        "parent": "wrist_1_link"
+      },
+      {
+        "local_pose": {
+          "quat_wxyz": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "xyz": [
+            0.0,
+            0.0,
+            0.1
+          ]
+        },
+        "name": "wrist_3_link",
+        "parent": "wrist_2_link"
+      }
+    ],
+    "diagnostics": [
+      {
+        "code": "lost_feature",
+        "detail": "autolimits_depend_on_compiler_flags"
+      },
+      {
+        "code": "missing_inertia",
+        "detail": "world"
+      }
+    ],
+    "end_effectors": [
+      {
+        "chain": [
+          "shoulder_pan_joint",
+          "shoulder_lift_joint",
+          "elbow_joint",
+          "wrist_1_joint",
+          "wrist_2_joint",
+          "wrist_3_joint"
+        ],
+        "frame": "attachment_site",
+        "name": "tool0"
+      }
+    ],
+    "frames": [
+      {
+        "name": "attachment_site",
+        "parent_body": "wrist_3_link",
+        "rotation": [
+          -0.7071067811865475,
+          0.7071067811865475,
+          0.0,
+          0.0
+        ],
+        "translation": [
+          0.0,
+          0.1,
+          0.0
+        ]
+      }
+    ],
+    "joints": [
+      {
+        "axis": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "child": "shoulder_link",
+        "kind": "Hinge",
+        "name": "shoulder_pan_joint",
+        "origin_in_child": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "parent": "base",
+        "q_max": 6.28319,
+        "q_min": -6.28319,
+        "qpos_adr": 0
+      },
+      {
+        "axis": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "child": "upper_arm_link",
+        "kind": "Hinge",
+        "name": "shoulder_lift_joint",
+        "origin_in_child": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "parent": "shoulder_link",
+        "q_max": 6.28319,
+        "q_min": -6.28319,
+        "qpos_adr": 1
+      },
+      {
+        "axis": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "child": "forearm_link",
+        "kind": "Hinge",
+        "name": "elbow_joint",
+        "origin_in_child": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "parent": "upper_arm_link",
+        "q_max": 3.1415,
+        "q_min": -3.1415,
+        "qpos_adr": 2
+      },
+      {
+        "axis": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "child": "wrist_1_link",
+        "kind": "Hinge",
+        "name": "wrist_1_joint",
+        "origin_in_child": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "parent": "forearm_link",
+        "q_max": 6.28319,
+        "q_min": -6.28319,
+        "qpos_adr": 3
+      },
+      {
+        "axis": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "child": "wrist_2_link",
+        "kind": "Hinge",
+        "name": "wrist_2_joint",
+        "origin_in_child": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "parent": "wrist_1_link",
+        "q_max": 6.28319,
+        "q_min": -6.28319,
+        "qpos_adr": 4
+      },
+      {
+        "axis": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "child": "wrist_3_link",
+        "kind": "Hinge",
+        "name": "wrist_3_joint",
+        "origin_in_child": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "parent": "wrist_2_link",
+        "q_max": 6.28319,
+        "q_min": -6.28319,
+        "qpos_adr": 5
+      }
+    ],
+    "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+    "n_actuators": 6,
+    "n_bodies": 8,
+    "n_frames": 1,
+    "n_joints": 6,
+    "robot_id": "menagerie_ur5e"
+  },
+  "capabilities": [
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [
+        "sim_qualify"
+      ],
+      "name": "joint_position_control",
+      "resource": null,
+      "status": "proven",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [],
+      "name": "joint_velocity_control",
+      "resource": null,
+      "status": "unsupported",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [],
+      "name": "joint_effort_control",
+      "resource": null,
+      "status": "unsupported",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [
+        "joint_position_control"
+      ],
+      "evidence": [],
+      "name": "cartesian_position_control",
+      "resource": null,
+      "status": "partially_supported",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [],
+      "name": "fixed_base_manipulation",
+      "resource": null,
+      "status": "supported",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [],
+      "name": "mobile_base",
+      "resource": null,
+      "status": "not_applicable",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [],
+      "name": "floating_base",
+      "resource": null,
+      "status": "not_applicable",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [],
+      "name": "grasping",
+      "resource": null,
+      "status": "unsupported",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [],
+      "name": "parallel_gripper",
+      "resource": null,
+      "status": "unsupported",
+      "unsupported_reason": null
+    },
+    {
+      "confidence": null,
+      "dependencies": [],
+      "evidence": [
+        "covered:6/6"
+      ],
+      "name": "joint_position_control",
+      "resource": "chain:tool0",
+      "status": "supported",
+      "unsupported_reason": null
+    }
+  ],
+  "provenance": {
+    "files": {
+      "CHANGELOG.md": "ef67f701df8698fb2e1a77a5de5d9a39aa22e7b4b101f68fc311d34e3ace87ed",
+      "LICENSE": "5ec71ccf66c8d03261448f2441a586765b97f2248c860a1ae19689fb1c45cee6",
+      "README.md": "435600d4f00cfdbd7edec4b60f0cd7fbb539f39abaefcd8bb3994beed3b1156a",
+      "assets/base_0.obj": "9a3b21f1524baef6af8a52d7af90b6e94b79f7e3c2b04a0f6581f74d22291b0b",
+      "assets/base_1.obj": "cf7d54691a2c1eeda280955ebd6bd83c2dbecfc46fb53c10198f05d107511b50",
+      "assets/forearm_0.obj": "64c049a55149c2ab355594d52302b53d3e34da3677ceaa1917c427cde7743146",
+      "assets/forearm_1.obj": "a96fe203015cf532b193f414cd01268c7c36795e51a837dd33afd122334f81f2",
+      "assets/forearm_2.obj": "05b436505fc595aeab26675590c2b56b88a65b2d52d6352096fed9f07cb4c4ca",
+      "assets/forearm_3.obj": "fa31af19cfad7a765b62e8a2d5931cb014b88de84195a7850b4e5ee902112e9a",
+      "assets/shoulder_0.obj": "477387a7e7312782a6040484a3c2c2fcee33f40109f419076e31b6f6e1692c68",
+      "assets/shoulder_1.obj": "8537bba02804640ddf6e260f79fe66e895b3229ed3d44298a95e8e027eb5d435",
+      "assets/shoulder_2.obj": "291714518416bb8f0bafbf123867db011ecbf5146a05245ca5893ee8c57d4e21",
+      "assets/upperarm_0.obj": "14143d4f1175a7dbacc8e2f2f98f1cac5a2b2e238cd46cd03654d31f2610eb53",
+      "assets/upperarm_1.obj": "272899e927f4a32b7c25e34560ec70654c0346cc8ed1c616c0555f3f53b32d14",
+      "assets/upperarm_2.obj": "86c05350d60eb0e7e28a81b544267478b7db997baba41cef19088ebbeffecfa1",
+      "assets/upperarm_3.obj": "b257dab441e6fab64ea03b4b87029d8a96554ad1a513cce944d56acba0ad948a",
+      "assets/wrist1_0.obj": "7ef0c59b5c5d56a9902435c9a058b27d2a38c85fe2bae02d00a9284dd1f4d519",
+      "assets/wrist1_1.obj": "ee6d5c562e6becef94109b0543329080d285d1aef521a01ed98e18a5bf1e8684",
+      "assets/wrist1_2.obj": "88c66dc64f15391287147d50add37729a3f41dadd80b1f859cf2cb6d45daf32a",
+      "assets/wrist2_0.obj": "2ac2e2e39d8f7005bc3b3ab26cd61634be2e14930074615da5318b9ee7c569a8",
+      "assets/wrist2_1.obj": "a721d06dc61d3b3a8ec58c035c9e3358ed30d6991a72e077d8abf3c3c203b633",
+      "assets/wrist2_2.obj": "6df4335c8bd5e881fda2c224f770115ffe9ddd0cd321ebe3c0a4a310796f0987",
+      "assets/wrist3.obj": "0e51748f9c93bd66604360a5cf7e2e8a6e754550be64076333ff4fc19ec90c61",
+      "scene.xml": "e877852d40095926ff7db9cfb85e595b550e03da398bd6f6f58885d39038d1b6",
+      "ur5e.png": "90310086f1187fcda94252ff68f8c4f8be97f65bec8f4eea449179b0979da795",
+      "ur5e.xml": "ffd0a7b336d3c2d27c35a15cc0d4aaa95196769aca190ac8d6522d3318c345a0"
+    },
+    "import_timestamp": "2026-09-11T04:21:31Z",
+    "model_path": "universal_robots_ur5e",
+    "source_commit": "8161bba264d7fa7c99ca301e91e7fb44737676ad",
+    "source_repository": "https://github.com/google-deepmind/mujoco_menagerie",
+    "tarball_sha256": "c0d6b373d0fffc6698443f7d79715f251308b888ab7d990aca4bf10fb2cdab65"
+  }
+}

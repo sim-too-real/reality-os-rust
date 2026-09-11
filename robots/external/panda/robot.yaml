@@ -1,0 +1,26 @@
+robot_id: menagerie_panda
+model_format: mjcf
+model_file: model/panda.xml
+asset_roots:
+  - model
+expected_base_type: fixed
+joint_aliases: {}
+actuator_aliases: {}
+end_effectors:
+  - name: tool0
+    body: hand
+grippers:
+  - name: parallel_gripper
+    joint: actuator8
+feet: []
+cameras: []
+task_frames:
+  - name: tool0
+    body: hand
+collision_groups: {}
+default_controller_profile: pd_position
+source:
+  license: Apache-2.0
+  attribution: Official Google DeepMind MuJoCo Menagerie (franka_emika_panda). Derived from Franka Emika public URDF.
+  redistributable: true
+  notes: Pinned fetch of official Menagerie sources. Gripper/tendon left intact. Not rewritten as a Reality OS chain clone.

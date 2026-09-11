@@ -11,8 +11,13 @@ scratchpad/
 *.log
 graphify-out/
 verify-out/
+robots/external/.cache/
+robots/external/**/.cache/
+robots/external/ur5e/model/
+robots/external/panda/model/
 MUJOCO_LOG.TXT
 **/MUJOCO_LOG.TXT
 crates/plant/wip/
 crates/governor/wip/
 crates/reality-os/wip/
+target/
