@@ -20,7 +20,7 @@ use serialport::SerialPort;
 use crate::config::{
     cage_allows_inbound_nudge_after_hold_still, candidate_bauds, candidate_servo_ids,
     discover_baud_attempts, MetalConfig, BUS_DIR, CAGE_EVIDENCE_FILE, CANDIDATE_BAUDS, GOAL_FILE,
-    LOCK_FILE, MOVING_FILE, PRESENT_FILE, PWM_EVIDENCE_FILE, VIN_FILE,
+    HOLD_STILL_HEADROOM_TICKS, LOCK_FILE, MOVING_FILE, PRESENT_FILE, PWM_EVIDENCE_FILE, VIN_FILE,
 };
 use crate::egress::EgressLog;
 use crate::identity::{
@@ -1443,6 +1443,11 @@ impl Xl330Driver {
     /// room: the campaign picker then fails after hold, or `write_action`
     /// abort-latches ONLINE. EEPROM Min/Max are read-only while torque is
     /// on, so re-center with torque off. Do not widen the Wizard window.
+    ///
+    /// EEPROM writes are slow. Torque-off lets the horn settle; matching
+    /// Goal to the pre-off number yanks before any certified command.
+    /// Park the new cage on the live Present. A second wrap larger than
+    /// the hold-still band still refuses (do not loop).
     fn recenter_or_rematch_after_torque_present_reset(&mut self, after: i32) -> PlantResult<()> {
         let (wizard_min, wizard_max) = self.wizard_legal_window();
         if after < wizard_min || after > wizard_max {
@@ -1477,9 +1482,29 @@ impl Xl330Driver {
             return Ok(());
         }
         self.torque_off_setup("setup_torque_off_recenter_cage");
-        self.establish_startup_cage(after)?;
-        self.last_present = after;
-        self.write_and_verify_goal(after, "setup_goal_match_present_after_recenter")?;
+        let park = self.live_park_for_recenter()?;
+        self.establish_startup_cage(park)?;
+        let park = self.live_park_for_recenter()?;
+        if !self.in_experiment_cage(park) {
+            return Err(PlantError::refused(format!(
+                "dxl_present_outside_experiment_cage_after_recenter:present={park}:min={}:max={}",
+                self.experiment_min, self.experiment_max
+            )));
+        }
+        cage_allows_inbound_nudge_after_hold_still(
+            park,
+            self.experiment_min,
+            self.experiment_max,
+            self.cfg.max_position_delta_ticks,
+            self.cfg.tau_max,
+        )
+        .map_err(|e| PlantError::refused(format!("metal_experiment_cage_no_inbound_step:{e}")))?;
+        if park != self.startup_present {
+            self.startup_present = park;
+            self.persist_cage_evidence();
+        }
+        self.last_present = park;
+        self.write_and_verify_goal(park, "setup_goal_match_present_after_recenter")?;
         self.write_reg(
             ADDR_TORQUE_ENABLE,
             &[1],
@@ -1499,21 +1524,58 @@ impl Xl330Driver {
             )));
         }
         let again = self
-            .read_reg(ADDR_PRESENT_POSITION, 4)
-            .ok()
-            .and_then(|b| le_i32(&b))
-            .ok_or_else(|| {
+            .read_present_setup("dxl_present_unreadable_after_torque")
+            .map_err(|e| {
                 self.torque_off_setup("setup_torque_off_present_unread_recenter");
-                PlantError::refused("dxl_present_unreadable_after_torque")
+                e
             })?;
-        if again != after {
-            self.torque_off_setup("setup_torque_off_present_jumped_twice");
-            return Err(PlantError::refused(format!(
-                "dxl_present_jumped_twice_after_torque_recenter:first={after}:second={again}"
-            )));
+        if again != park {
+            let hunt = again.abs_diff(park);
+            let (wizard_min, wizard_max) = self.wizard_legal_window();
+            let still_legal = again >= wizard_min
+                && again <= wizard_max
+                && self.in_experiment_cage(again)
+                && hunt <= HOLD_STILL_HEADROOM_TICKS as u32;
+            if !still_legal {
+                self.torque_off_setup("setup_torque_off_present_jumped_twice");
+                return Err(PlantError::refused(format!(
+                    "dxl_present_jumped_twice_after_torque_recenter:first={park}:second={again}"
+                )));
+            }
+            if let Err(e) =
+                self.write_and_verify_goal(again, "setup_goal_match_present_after_recenter_hunt")
+            {
+                self.torque_off_setup("setup_torque_off_goal_unverified");
+                return Err(e);
+            }
+            self.last_present = again;
+            if again != self.startup_present {
+                self.startup_present = again;
+                self.persist_cage_evidence();
+            }
         }
         self.torque_enabled = true;
         Ok(())
+    }
+
+    fn read_present_setup(&mut self, unread: &'static str) -> PlantResult<i32> {
+        self.read_reg(ADDR_PRESENT_POSITION, 4)
+            .ok()
+            .and_then(|b| le_i32(&b))
+            .ok_or_else(|| PlantError::refused(unread))
+    }
+
+    /// Torque-off + EEPROM rewrite lets the horn settle. Use the live
+    /// Present, not the pre-off wrap, so Goal match cannot yank.
+    fn live_park_for_recenter(&mut self) -> PlantResult<i32> {
+        let park = self.read_present_setup("dxl_present_unreadable_after_torque")?;
+        let (wizard_min, wizard_max) = self.wizard_legal_window();
+        if park < wizard_min || park > wizard_max {
+            return Err(PlantError::refused(format!(
+                "dxl_present_outside_wizard_limits_after_torque:present={park}:min={wizard_min}:max={wizard_max}"
+            )));
+        }
+        Ok(park)
     }
 
     fn write_and_verify_goal(&mut self, present: i32, why: &'static str) -> PlantResult<()> {

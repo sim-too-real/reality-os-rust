@@ -431,6 +431,11 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
                     present_now = struct.unpack_from("<i", regs, 132)[0]
                     if present_now == 2048:
                         regs[132:136] = struct.pack("<i", present_now + 16)
+                if os.environ.get("REALITYOS_METAL_PTY_TORQUE_JUMP_EVERY_ENABLE") == "1":
+                    # A wrap that repeats on every torque-on. Recenter must
+                    # refuse rather than loop EEPROM rewrites.
+                    present_now = struct.unpack_from("<i", regs, 132)[0]
+                    regs[132:136] = struct.pack("<i", present_now + 16)
                 offset = struct.unpack_from("<i", regs, 20)[0]
                 if offset != 0:
                     # Leftover Homing Offset vs that reset throws Present

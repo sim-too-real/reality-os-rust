@@ -689,6 +689,56 @@ fn xl330_pty_rematches_goal_when_torque_on_resets_present() {
 }
 
 #[test]
+fn xl330_pty_recenters_on_live_present_after_torque_off_drift() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_TORQUE_JUMP_PRESENT", "1"),
+        ("REALITYOS_METAL_PTY_DRIFT_ON_TORQUE_OFF", "1"),
+    ]);
+    let root = metal_test_root("pty-tq-jump-drift");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("recenter must park on the post-torque-off present, not yank back to 2064");
+    assert_eq!(
+        driver.last_present_position(),
+        2084,
+        "torque-off settle +20 from the 2064 wrap must become the park"
+    );
+    assert_eq!(driver.last_goal_position(), Some(2084));
+    assert_eq!(driver.startup_present(), 2084);
+    let (emin, emax) = driver.experiment_cage();
+    assert_eq!(
+        (emin, emax),
+        (2036, 2132),
+        "cage around stale 2064 (2016..2112) leaves +32 from 2084 past 2112"
+    );
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("inbound +0.2 must fit the cage around the live park");
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_second_torque_wrap_after_recenter() {
+    let _serial = pty_serial();
+    let (_guard, tty) =
+        spawn_responder_env(&[("REALITYOS_METAL_PTY_TORQUE_JUMP_EVERY_ENABLE", "1")]);
+    let root = metal_test_root("pty-tq-jump-every");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("a wrap on every torque-on must not loop EEPROM rewrites"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("dxl_present_jumped_twice_after_torque_recenter"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_delayed_present_does_not_teleport_on_goal_write() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_DELAY_MOTION", "1")]);
