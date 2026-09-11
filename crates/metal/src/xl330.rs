@@ -36,10 +36,10 @@ use crate::protocol::{
     ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER, ADDR_MOVING,
     ADDR_MOVING_THRESHOLD, ADDR_OPERATING_MODE, ADDR_POSITION_D_GAIN, ADDR_POSITION_I_GAIN,
     ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL,
-    ADDR_PROFILE_VELOCITY, ADDR_PROTOCOL_TYPE, ADDR_PWM_LIMIT, ADDR_REALTIME_TICK,
+    ADDR_PROFILE_VELOCITY, ADDR_PROTOCOL_TYPE, ADDR_PWM_LIMIT, ADDR_PWM_SLOPE, ADDR_REALTIME_TICK,
     ADDR_SECONDARY_ID, ADDR_STATUS_RETURN_LEVEL, ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN,
     ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN, BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED,
-    FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN, FACTORY_VELOCITY_I_GAIN,
+    FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN, FACTORY_PWM_SLOPE, FACTORY_VELOCITY_I_GAIN,
     FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN, MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN,
     OPERATING_MODE_POSITION, PROTOCOL_TYPE_2, SECONDARY_ID_DISABLED, STATUS_ALERT,
     STATUS_RETURN_ALL, XL330_POSITION_MODE_MAX, XL330_POSITION_MODE_MIN, XL330_PWM_LIMIT_MAX,
@@ -101,6 +101,14 @@ pub struct Xl330Driver {
     protocol_type: u8,
     feedforward_1st: u16,
     feedforward_2nd: u16,
+    pwm_slope: u8,
+    min_voltage: u16,
+    max_voltage: u16,
+    /// Live VIN outside Wizard min/max (or unreadable 0) is a supply
+    /// fault / cutoff, not a healthy sample. Latch so write_action
+    /// cannot emit a certified goal after the campaign already saw
+    /// bus/vin drop.
+    vin_fault: bool,
 }
 
 impl Xl330Driver {
@@ -176,6 +184,10 @@ impl Xl330Driver {
             protocol_type: 0,
             feedforward_1st: 0,
             feedforward_2nd: 0,
+            pwm_slope: 0,
+            min_voltage: 0,
+            max_voltage: 0,
+            vin_fault: false,
             latched_usb_serial: None,
             latched_usb_fallback: None,
             latched_node: None,
@@ -349,6 +361,14 @@ impl Xl330Driver {
 
     pub fn applied_feedforward_2nd(&self) -> u16 {
         self.feedforward_2nd
+    }
+
+    pub fn applied_pwm_slope(&self) -> u8 {
+        self.pwm_slope
+    }
+
+    pub fn applied_voltage_limits(&self) -> (u16, u16) {
+        (self.min_voltage, self.max_voltage)
     }
 
     pub fn torque_is_enabled(&self) -> bool {
@@ -796,6 +816,24 @@ impl Xl330Driver {
             self.velocity_i_gain = FACTORY_VELOCITY_I_GAIN;
         }
         self.apply_pwm_output_cap()?;
+        let slope = self
+            .read_reg(ADDR_PWM_SLOPE, 1)
+            .ok()
+            .and_then(|b| b.first().copied())
+            .unwrap_or(0);
+        self.pwm_slope = slope;
+        // Factory 140. Wizard 0 is outside the e-Manual 1..=255 range
+        // and can stall PWM so the 32-tick nudge never leaves hunt.
+        if slope == 0 {
+            self.write_reg(
+                ADDR_PWM_SLOPE,
+                &[FACTORY_PWM_SLOPE],
+                "setup_pwm_slope_factory",
+                None,
+                false,
+            )?;
+            self.pwm_slope = FACTORY_PWM_SLOPE;
+        }
         let ff2 = self
             .read_reg(ADDR_FEEDFORWARD_2ND, 2)
             .ok()
@@ -848,6 +886,8 @@ impl Xl330Driver {
             .and_then(|b| le_u16(&b))
             .filter(|v| *v != 0)
             .ok_or_else(|| PlantError::refused("dxl_vin_unreadable_before_torque"))?;
+        self.min_voltage = min_v;
+        self.max_voltage = max_v;
         self.persist_vin(vin);
         if vin < min_v || vin > max_v {
             return Err(PlantError::refused(format!(
@@ -1576,6 +1616,8 @@ impl Xl330Driver {
         // this exclusive fd is still the live UART. That exists() miss
         // used to look like unplug and abort the first hold as disconnect.
         // A real unplug fails the next xfer and clears `connected`.
+        // VIN fault is a supply/cutoff latch, not a vanished fd — ESTOP
+        // / close must still be able to torque-off on this exclusive port.
         self.connected && self.port.is_some()
     }
 
@@ -1778,6 +1820,9 @@ impl HardwareDriverPort for Xl330Driver {
         if self.campaign_fail_sensor() {
             return Err(PlantError::refused("metal_sensor_missing"));
         }
+        if self.vin_fault {
+            return Err(PlantError::refused("dxl_vin_unreadable"));
+        }
         let t0 = std::time::Instant::now();
         let (pos, vel, cur, volt, tick) = self.read_motion_block()?;
         // Motion block has no model/fw. Re-read EEPROM so a physical swap on
@@ -1795,6 +1840,22 @@ impl HardwareDriverPort for Xl330Driver {
         }
         let err = self.last_hw_error;
         self.persist_vin(volt);
+        if self.live_io {
+            if volt == 0 {
+                self.vin_fault = true;
+                return Err(PlantError::refused("dxl_vin_unreadable"));
+            }
+            if self.min_voltage != 0
+                && self.max_voltage != 0
+                && (volt < self.min_voltage || volt > self.max_voltage)
+            {
+                self.vin_fault = true;
+                return Err(PlantError::refused(format!(
+                    "dxl_vin_outside_wizard_limits:vin_0.1v={volt}:min={}:max={}",
+                    self.min_voltage, self.max_voltage
+                )));
+            }
+        }
         self.last_tick_s = f64::from(tick) / 1000.0;
         self.seq = self.seq.saturating_add(1);
         let samples = vec![
@@ -1825,6 +1886,9 @@ impl HardwareDriverPort for Xl330Driver {
         }
         if !self.bus_up() {
             return Err(PlantError::Disconnected);
+        }
+        if self.vin_fault {
+            return Err(PlantError::refused("dxl_vin_unreadable"));
         }
         if !is_xl330_model(self.model) {
             return Err(PlantError::refused("metal_refuses_non_xl330_model"));

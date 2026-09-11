@@ -10,7 +10,7 @@
 
 # Keep in sync with metal_sensor_indicates_drop tokens and campaign
 # MEASURE_REQUIRE after a live VIN / USB-UART drop.
-METAL_BUS_DROP_TOKEN_SPEC='dxl_io|driver not connected|online_hardware_disconnected|metal_live_io_deadline|metal_serial_closed|hardware_disconnected'
+METAL_BUS_DROP_TOKEN_SPEC='dxl_io|driver not connected|online_hardware_disconnected|metal_live_io_deadline|metal_serial_closed|hardware_disconnected|dxl_vin_outside_wizard_limits|dxl_vin_unreadable'
 
 metal_sensor_indicates_drop() {
   local path="${1:-}"
@@ -26,6 +26,8 @@ tokens = (
     "metal_live_io_deadline",
     "metal_serial_closed",
     "hardware_disconnected",
+    "dxl_vin_outside_wizard_limits",
+    "dxl_vin_unreadable",
 )
 try:
     raw = open(path, encoding="utf-8").read().strip()
@@ -60,6 +62,10 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   metal_sensor_indicates_drop "$tmp/vin.json"
   printf '%s\n' '{"ok":false,"violations":["metal_serial_closed"]}' >"$tmp/closed.json"
   metal_sensor_indicates_drop "$tmp/closed.json"
+  printf '%s\n' '{"ok":false,"violations":["dxl_vin_outside_wizard_limits:vin_0.1v=20:min=35:max=70"]}' >"$tmp/brown.json"
+  metal_sensor_indicates_drop "$tmp/brown.json"
+  printf '%s\n' '{"ok":false,"violations":["dxl_vin_unreadable"]}' >"$tmp/novin.json"
+  metal_sensor_indicates_drop "$tmp/novin.json"
   printf '%s\n' '{"ok":false,"violations":["unsupported_action"]}' >"$tmp/other.json"
   if metal_sensor_indicates_drop "$tmp/other.json"; then
     echo "error: unrelated refuse must not count as a VIN drop" >&2

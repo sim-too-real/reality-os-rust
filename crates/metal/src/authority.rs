@@ -393,6 +393,8 @@ impl MetalAuthority {
         let e = err.to_ascii_lowercase();
         e.contains("driver not connected")
             || e.contains("dxl_io")
+            || e.contains("dxl_vin_outside_wizard_limits")
+            || e.contains("dxl_vin_unreadable")
             || e.contains("metal_live_io_deadline")
             || e.contains("metal_serial_closed")
     }

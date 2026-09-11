@@ -183,6 +183,7 @@ def init_regs() -> bytearray:
         regs[98] = 0xFF  # tripped; Goal Position is read-only until written 0
     if os.environ.get("REALITYOS_METAL_PTY_STARTUP_TORQUE") == "1":
         regs[64] = 1
+    regs[62] = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_PWM_SLOPE") == "1" else 140
     regs[68] = 0 if os.environ.get("REALITYOS_METAL_PTY_SRL0") == "1" else 2
     regs[120:122] = struct.pack("<H", 1234)
     regs[126:128] = struct.pack("<h", 0)
@@ -272,6 +273,20 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         if addr == 120:
             _motion_block_reads += 1
             advance_delayed_travel(regs)
+            # Setup reads Present Voltage at addr 144. Live I/O uses the
+            # motion block. Drop VIN only after the first healthy live
+            # sample so start_online can bind, then the next acquire
+            # must refuse instead of publishing a writable session.
+            if (
+                os.environ.get("REALITYOS_METAL_PTY_LIVE_LOW_VIN") == "1"
+                and _motion_block_reads >= 2
+            ):
+                regs[144:146] = struct.pack("<H", 0)
+            if (
+                os.environ.get("REALITYOS_METAL_PTY_LIVE_BROWN_VIN") == "1"
+                and _motion_block_reads >= 2
+            ):
+                regs[144:146] = struct.pack("<H", 20)
         chunk = bytearray(regs[addr : addr + ln])
         # After two motion-block reads, flip model/fw so live confirm_eeprom
         # sees a physical servo swap on the same UART (not just hot_swap.json).

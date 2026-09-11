@@ -290,6 +290,18 @@ fn xl330_pty_zeros_wizard_position_id_so_nudge_stays_in_cage() {
 }
 
 #[test]
+fn xl330_pty_restores_factory_pwm_slope_when_wizard_zero() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_PWM_SLOPE", "1")]);
+    let root = metal_test_root("pty-pwm-slope");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("restore factory PWM Slope 140");
+    assert_eq!(driver.applied_pwm_slope(), 140);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_zeros_wizard_feedforward_so_nudge_stays_bounded() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_FEEDFORWARD", "1")]);
@@ -631,6 +643,58 @@ fn xl330_pty_refuses_torque_when_vin_cannot_be_read() {
         err.to_string().contains("dxl_vin_unreadable_before_torque"),
         "got {err}"
     );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_live_vin_zero_refuses_and_does_not_write() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_LIVE_LOW_VIN", "1")]);
+    let root = metal_test_root("pty-live-vin0");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("setup VIN 5.0 V is in range");
+    assert_eq!(driver.applied_voltage_limits(), (35, 70));
+    driver
+        .read_sensor(0.0)
+        .expect("first live motion sample still has setup VIN");
+    let err = driver
+        .read_sensor(0.0)
+        .expect_err("VIN 0 on a later motion block is not a healthy sample");
+    assert!(err.to_string().contains("dxl_vin_unreadable"), "got {err}");
+    let tx_before = recorded_serial_tx(root.join("bus"));
+    let writes_before = recorded_writes(root.join("bus"));
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect_err("certified write must not follow a live VIN fault");
+    assert_eq!(recorded_serial_tx(root.join("bus")), tx_before);
+    assert_eq!(recorded_writes(root.join("bus")), writes_before);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_live_vin_below_wizard_min_refuses_and_does_not_write() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_LIVE_BROWN_VIN", "1")]);
+    let root = metal_test_root("pty-live-brown");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("setup VIN 5.0 V is in range");
+    driver
+        .read_sensor(0.0)
+        .expect("first live motion sample still has setup VIN");
+    let err = driver
+        .read_sensor(0.0)
+        .expect_err("VIN 2.0 V is below Wizard min 3.5 V");
+    assert!(
+        err.to_string().contains("dxl_vin_outside_wizard_limits"),
+        "got {err}"
+    );
+    let tx_before = recorded_serial_tx(root.join("bus"));
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect_err("cutoff-range VIN must not reach a certified goal write");
+    assert_eq!(recorded_serial_tx(root.join("bus")), tx_before);
+    driver.close();
     let _ = std::fs::remove_dir_all(&root);
 }
 

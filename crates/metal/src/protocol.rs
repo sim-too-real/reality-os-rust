@@ -67,6 +67,11 @@ pub const ADDR_VELOCITY_LIMIT: u16 = 44;
 /// EEPROM. Factory max 4095 / min 0. Wizard can shrink this window.
 pub const ADDR_MAX_POSITION_LIMIT: u16 = 48;
 pub const ADDR_MIN_POSITION_LIMIT: u16 = 52;
+/// EEPROM. Factory 140. Unit 1.977 mV/msec. Range 1..=255 (e-Manual).
+/// Wizard 0 is outside that range and can stall PWM output so the
+/// certified 32-tick nudge never leaves the hold-still band.
+pub const ADDR_PWM_SLOPE: u16 = 62;
+pub const FACTORY_PWM_SLOPE: u8 = 140;
 
 /// Raw PWM Limit → documented percentage (not a certified torque figure).
 pub fn pwm_limit_percent(raw: u16) -> f64 {
