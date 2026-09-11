@@ -2256,7 +2256,7 @@ fn broadcast_torque_off_at(
     early_broadcast_torque_off(port, device);
 }
 
-fn open_settle_and_quiesce(port: &mut dyn SerialPort, device: &Path, baud: u32) {
+fn open_settle_and_quiesce(port: &mut dyn SerialPort, device: &Path, baud: u32) -> io::Result<()> {
     // Cheap FTDI/CP2102 DTR-RESET plus low VIN can exceed 300 ms. Robotis
     // documents ~100–300 ms; 500 ms covers the first-open reboot window.
     // PTY has no DTR; keep tests fast.
@@ -2284,9 +2284,13 @@ fn open_settle_and_quiesce(port: &mut dyn SerialPort, device: &Path, baud: u32) 
             broadcast_torque_off_at(port, device, &mut current, bauds[step % bauds.len()]);
         }
     }
+    // HeldDiscover records the open baud. An ignored restore left the fd at
+    // 115 200 while sniff still thought 57 600, so a factory servo missed
+    // and the next automatic open was 1 Mbps (CH340 wedge).
     if current != baud {
-        let _ = retune_held_baud(port, device, baud);
+        retune_held_baud(port, device, baud)?;
     }
+    Ok(())
 }
 
 fn open_xl330_serial(device: &Path, baud: u32) -> io::Result<Box<dyn SerialPort>> {
@@ -2363,7 +2367,7 @@ fn open_xl330_serial_with(
     // U2D2/FTDI often drops the first packet if we ping immediately after
     // open. Discover tries each baud/id pair once; a cold miss on the real
     // pair never comes back.
-    open_settle_and_quiesce(&mut port, device, baud);
+    open_settle_and_quiesce(&mut port, device, baud)?;
     Ok(Box::new(port))
 }
 
@@ -2539,5 +2543,33 @@ mod tests {
         assert_eq!(wizard[0], 115_200);
         assert_eq!(wizard[1], 57_600);
         assert!(!wizard.contains(&1_000_000));
+    }
+
+    #[test]
+    fn settle_restores_factory_open_baud_after_115200_poke() {
+        let (_master, mut slave) = TTYPort::pair().expect("pty pair");
+        slave.set_baud_rate(57_600).expect("open baud");
+        let path = Path::new("/dev/pts/settle-restore");
+        assert!(is_pty_path(path));
+        open_settle_and_quiesce(&mut slave, path, 57_600).expect("settle");
+        assert_eq!(
+            slave.baud_rate().expect("read baud"),
+            57_600,
+            "HeldDiscover still records 57600; a leftover 115200 fd misses the factory servo"
+        );
+    }
+
+    #[test]
+    fn settle_restores_wizard_open_baud_after_factory_poke() {
+        let (_master, mut slave) = TTYPort::pair().expect("pty pair");
+        slave.set_baud_rate(115_200).expect("open baud");
+        let path = Path::new("/dev/pts/settle-restore-wizard");
+        assert!(is_pty_path(path));
+        open_settle_and_quiesce(&mut slave, path, 115_200).expect("settle");
+        assert_eq!(
+            slave.baud_rate().expect("read baud"),
+            115_200,
+            "open at Wizard 115200 must leave the fd at 115200 after the factory poke"
+        );
     }
 }
