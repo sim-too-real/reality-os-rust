@@ -2230,7 +2230,33 @@ fn early_broadcast_torque_off(port: &mut dyn SerialPort, device: &Path) {
     let _ = port.set_timeout(saved);
 }
 
-fn open_settle_and_quiesce(port: &mut dyn SerialPort, device: &Path) {
+/// Discover's first open is factory 57 600. Wizard 115 200 + Startup
+/// Configuration bit 0 tracks Goal 0 during that settle unless we also
+/// speak 115 200 on the held fd. Do not include 1 Mbps: a CH340 can wedge.
+fn settle_quiesce_bauds(open_baud: u32) -> [u32; 2] {
+    if open_baud == 115_200 {
+        [115_200, 57_600]
+    } else {
+        [open_baud, 115_200]
+    }
+}
+
+fn broadcast_torque_off_at(
+    port: &mut dyn SerialPort,
+    device: &Path,
+    current: &mut u32,
+    target: u32,
+) {
+    if *current != target {
+        if retune_held_baud(port, device, target).is_err() {
+            return;
+        }
+        *current = target;
+    }
+    early_broadcast_torque_off(port, device);
+}
+
+fn open_settle_and_quiesce(port: &mut dyn SerialPort, device: &Path, baud: u32) {
     // Cheap FTDI/CP2102 DTR-RESET plus low VIN can exceed 300 ms. Robotis
     // documents ~100–300 ms; 500 ms covers the first-open reboot window.
     // PTY has no DTR; keep tests fast.
@@ -2238,10 +2264,15 @@ fn open_settle_and_quiesce(port: &mut dyn SerialPort, device: &Path) {
     // Do not sit silent for that whole window. Startup Configuration bit 0
     // torque-ons after reboot and tracks Goal (RAM initial 0). Broadcast
     // torque-off as soon as the servo might answer, then keep retrying.
+    // Alternate the open baud with 115 200 so a Wizard-rate bus is not
+    // left tracking until the later discover retune.
     let total_ms = if is_pty_path(device) { 100 } else { 500 };
     let step_ms = if is_pty_path(device) { 20 } else { 50 };
     let end = Instant::now() + Duration::from_millis(total_ms);
-    early_broadcast_torque_off(port, device);
+    let bauds = settle_quiesce_bauds(baud);
+    let mut current = baud;
+    let mut step = 0usize;
+    broadcast_torque_off_at(port, device, &mut current, bauds[0]);
     while Instant::now() < end {
         let remain = end.saturating_duration_since(Instant::now());
         if remain.is_zero() {
@@ -2249,8 +2280,12 @@ fn open_settle_and_quiesce(port: &mut dyn SerialPort, device: &Path) {
         }
         std::thread::sleep(remain.min(Duration::from_millis(step_ms)));
         if Instant::now() < end {
-            early_broadcast_torque_off(port, device);
+            step += 1;
+            broadcast_torque_off_at(port, device, &mut current, bauds[step % bauds.len()]);
         }
+    }
+    if current != baud {
+        let _ = retune_held_baud(port, device, baud);
     }
 }
 
@@ -2328,7 +2363,7 @@ fn open_xl330_serial_with(
     // U2D2/FTDI often drops the first packet if we ping immediately after
     // open. Discover tries each baud/id pair once; a cold miss on the real
     // pair never comes back.
-    open_settle_and_quiesce(&mut port, device);
+    open_settle_and_quiesce(&mut port, device, baud);
     Ok(Box::new(port))
 }
 
@@ -2492,5 +2527,17 @@ mod tests {
                 .contains(ControlFlags::HUPCL),
             "serialport set_baud_rate must not restore HUPCL (discover retune would DTR-RESET on close)"
         );
+    }
+
+    #[test]
+    fn settle_quiesce_speaks_wizard_115200_without_one_megabit() {
+        let factory = settle_quiesce_bauds(57_600);
+        assert_eq!(factory[0], 57_600);
+        assert_eq!(factory[1], 115_200);
+        assert!(!factory.contains(&1_000_000));
+        let wizard = settle_quiesce_bauds(115_200);
+        assert_eq!(wizard[0], 115_200);
+        assert_eq!(wizard[1], 57_600);
+        assert!(!wizard.contains(&1_000_000));
     }
 }
