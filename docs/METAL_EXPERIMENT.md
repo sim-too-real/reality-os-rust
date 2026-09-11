@@ -77,11 +77,15 @@ Certified-command evidence counters (not setup/sensor traffic): `command_egress_
 
 ```text
 # 1) Operator-test the VIN cutoff first (servo loses holding torque).
-# 2) Close the cutoff again, then:
+# 2) Close the cutoff again.
+# 3) Build, then run. CUTOFF_TESTED is operator attestation only.
+#    measured_success also requires a live VIN drop during the campaign
+#    (open the same disconnect when prompted).
 cargo build -p realityos-metal --bins
 sudo -E env REALITYOS_METAL_DEVICE=/dev/ttyUSB0 \
   REALITYOS_METAL_BIN=$PWD/target/debug \
   REALITYOS_METAL_CUTOFF_TESTED=1 \
+  REALITYOS_METAL_CUTOFF_LIVE=1 \
   scripts/metal-campaign.sh
 ```
 
@@ -96,6 +100,8 @@ The campaign exits 2 before `init`/`probe` (which enable torque) unless `REALITY
 `scripts/metal-os-boundary.sh` (CI `os-users`) proves the 0751 / device-open counting path with a dummy 0600 file, then a two-UID `serve` + hold on the PTY Protocol 2.0 stand-in (`REALITYOS_METAL_ALLOW_PTY=1`). The IPC journal root is tmpfs (`/dev/shm` or a 32M mount); a GHA `/tmp` disk fsync >100 ms latched `software_watchdog_miss` on the first hold. That is **not** a substitute for the XL330 campaign and does not write `metal_proof.json`. `scripts/metal-pty-sequence.sh` runs the full campaign script against the same PTY responder (also CI `os-users`); it is a first-contact dry-run of restart/crash-replay, not metal evidence. It must finish with `experiment_status != measured_success` and must not install `docs/metal_proof.json`.
 
 First-contact script invariants (found on the PTY sequence, would fail the first XL330 run):
+
+* GNU `stat -c '%a'` prints `600` for mode `0600`. Comparing the raw string to `0600` failed after a correct `chmod` and aborted every real USB-UART owner claim (`usb_tty_owner_mode_ok` / `metal-deploy`). Compare octal values (`scripts/metal-unix-mode.sh`).
 
 * Empty `METAL_CMD_ID` must not override `--id`. Autonomy used to export the empty string; propose treated `is_ok()` as a set id, minted `metal-{now}`, and made the `metal-hold` replay look like a new write.
 * Planned `stop_auth` writes `$ROOT/stop_serve` so Drop torque-offs and releases the tty. SIGKILL skips Drop; a real XL330 would keep torque and the next open can get `EBUSY`.

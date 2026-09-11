@@ -13,6 +13,8 @@ DEVICE="${REALITYOS_METAL_DEVICE:-}"
 CUTOFF_TESTED="${REALITYOS_METAL_CUTOFF_TESTED:-0}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=metal-unix-mode.sh
+source "$SCRIPT_DIR/metal-unix-mode.sh"
 # Authority UID cannot write the repo `docs/` tree. Resolve against the
 # script's repo, not `$PWD`: `sudo ... /path/scripts/metal-campaign.sh`
 # from $HOME used to install ~/docs/metal_proof.json after a live run.
@@ -90,7 +92,7 @@ usb_tty_owner_mode_ok() {
   want_uid="$(id -u "$AUTHORITY_USER")"
   got_uid="$(stat -c '%u' "$real" 2>/dev/null || true)"
   mode="$(stat -c '%a' "$real" 2>/dev/null || true)"
-  [[ "$got_uid" == "$want_uid" && "$mode" == "0600" ]]
+  [[ "$got_uid" == "$want_uid" ]] && unix_mode_eq "$mode" 0600
 }
 
 # Live /dev/ttyUSB* (or ACM/CH341) after resolving by-id / by-path.
@@ -1731,8 +1733,11 @@ assert int(p["direct_device_open_attempts"]) > 0, p
 assert int(p["direct_device_open_successes"]) == 0, p
 assert p["read_signing_key"] is False
 assert p["write_signing_key"] is False
+assert p["chmod_signing_key"] is False
 assert p["modify_journal"] is False
+assert p["open_actuator_lock"] is False
 assert p["take_actuator_lock"] is False
+assert int(p.get("direct_device_write_successes") or 0) == 0, p
 assert p["proc_fd_device"] is False
 print("uid-probes-ok")
 PY
@@ -1865,7 +1870,8 @@ add_case "$(measure valid_hold 'verb=hold' NONE true "$PROP" --root "$ROOT" --id
 add_case "$(measure valid_nudge 'verb=drive action=0.2' NONE true "$PROP" --root "$ROOT" --id metal-nudge --verb drive --action 0.2 propose)"
 add_case "$(measure unsupported_action 'verb=dance' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" unsupported)"
 add_case "$(measure oversized_action 'action=1e6' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" oversized)"
-add_case "$(measure nan_action 'action=NaN' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" --id metal-nan --verb drive --action nan propose)"
+add_case "$(MEASURE_REQUIRE=bad_request measure nan_action 'action=[NaN]' PROTOCOL_BLOCKED false "$PROP" --root "$ROOT" '{"op":"propose","verb":"drive","command_id":"metal-nan","action":[NaN],"proposer":"autonomy"}' raw)"
+add_case "$(MEASURE_REQUIRE=bad_request measure inf_action 'action=[Infinity]' PROTOCOL_BLOCKED false "$PROP" --root "$ROOT" '{"op":"propose","verb":"drive","command_id":"metal-inf","action":[Infinity],"proposer":"autonomy"}' raw)"
 add_case "$(measure replay 'same command_id metal-hold' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-hold "$PROP" --root "$ROOT" replay)"
 add_case "$(measure malformed_json 'raw {not-json' PROTOCOL_BLOCKED false "$PROP" --root "$ROOT" raw)"
 add_case "$(measure hil_fault_refused 'hil_fault' PROTOCOL_BLOCKED false "$PROP" --root "$ROOT" hil_fault)"
@@ -1913,10 +1919,12 @@ as_authority rm -f "$ROOT/bus/force_disconnect"
 add_case "$(MEASURE_REQUIRE='hardware_session_requires_online_restart|dispatch_safe_state_latched' MEASURE_FORBID=software_watchdog_miss measure reconnect_after_disconnect 'cleared hook cannot revive instance' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-disc-re "$PROP" --root "$ROOT" propose-id)"
 
 BEFORE="$(writes)"
-PROBE_REC="$(python3 - "$ROOT/os_probe.json" "$BEFORE" <<'PY'
+TX_NOW="$(serial_tx)"
+PROBE_REC="$(python3 - "$ROOT/os_probe.json" "$BEFORE" "$TX_NOW" <<'PY'
 import json, sys
 p = json.load(open(sys.argv[1]))
 before = int(sys.argv[2])
+tx = int(sys.argv[3])
 print(json.dumps({
     "name": "autonomy_uid_direct_device",
     "expected_authorization": False,
@@ -1931,8 +1939,8 @@ print(json.dumps({
     "proposal": "open/write device, lock, key, journal, proc fd",
     "unauthorized_write": False,
     "egress_attempt_delta": 0,
-    "serial_tx_before": before,
-    "serial_tx_after": before,
+    "serial_tx_before": tx,
+    "serial_tx_after": tx,
     "serial_tx_delta": 0,
     "device_ack_delta": 0,
     "unauthorized_device_ack_delta": 0,
@@ -2034,6 +2042,7 @@ PY
   printf '%s\n' "$rec"
 }
 
+add_case "$(crash_replay before_prepare metal-crash-beforeprep)"
 add_case "$(crash_replay after_prepare_before_write metal-crash-prep)"
 add_case "$(crash_replay during_write metal-crash-during)"
 add_case "$(crash_replay after_serial_tx_before_status metal-crash-posttx)"
@@ -2113,9 +2122,10 @@ python3 - \
   "$DATE" \
   "$ROOT/bus/pwm_limit.json" \
   "$ROOT/bus/position_cage.json" \
+  "$CASES_FILE" \
   <<'PY'
 import json, os, sys
-probe_p, measured_p, fresh_p, out_p, commit, auth, auto, date, pwm_p, cage_p = sys.argv[1:11]
+probe_p, measured_p, fresh_p, out_p, commit, auth, auto, date, pwm_p, cage_p, cases_p = sys.argv[1:12]
 p = json.load(open(probe_p))
 try:
     measured = json.load(open(measured_p))
@@ -2160,6 +2170,18 @@ try:
     cage = json.load(open(cage_p))
 except Exception:
     cage = {}
+try:
+    cases = json.load(open(cases_p))
+except Exception:
+    cases = []
+dup = 0
+for c in cases:
+    if (
+        not c.get("expected_authorization")
+        and c.get("blocking_layer") == "CRASH_RECOVERY_BLOCKED"
+        and "restart" in c.get("name", "")
+    ):
+        dup += int(c.get("serial_tx_delta") or 0)
 meta = {
   "hardware_model": hardware_model,
   "controller_model": controller,
@@ -2182,7 +2204,7 @@ meta = {
   "startup_present": cage.get("startup_present"),
   "direct_device_open_attempts": int(p.get("direct_device_open_attempts") or 0),
   "direct_device_open_successes": int(p.get("direct_device_open_successes") or 0),
-  "duplicate_writes_after_restart": 0,
+  "duplicate_writes_after_restart": dup,
   "sensor_source": fresh.get("sensor_source") or "xl330 registers + realtime tick",
   "device_capture_s": fresh.get("device_capture_s"),
   "authority_receive_s": fresh.get("authority_receive_s"),
@@ -2218,6 +2240,8 @@ assert nudge and int(nudge.get("serial_tx_delta") or 0) == 1 and nudge.get("devi
 assert all(int(c.get("serial_tx_delta") or 0) == 0 for c in (r.get("cases") or []) if not c.get("expected_authorization")), r
 assert all(int(c.get("unauthorized_device_ack_delta") or 0) == 0 for c in (r.get("cases") or []) if not c.get("expected_authorization")), r
 assert any(c.get("name") == "crash_restart_after_serial_tx_before_status" and int(c.get("serial_tx_delta") or 0) == 0 for c in r.get("cases") or []), r
+assert any(c.get("name") == "crash_restart_before_prepare" and int(c.get("serial_tx_delta") or 0) == 0 for c in r.get("cases") or []), r
+assert any(c.get("name") == "inf_action" and not c.get("expected_authorization") and int(c.get("serial_tx_delta") or 0) == 0 for c in r.get("cases") or []), r
 def present_delta(c):
     import re
     m = re.search(r"delta=([-\d]+|None)", (c or {}).get("observed_motion") or "")

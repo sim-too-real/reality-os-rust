@@ -9,6 +9,9 @@ AUTONOMY_USER="${REALITYOS_AUTONOMY_USER:-realityos-autonomy}"
 IPC_GROUP="${REALITYOS_IPC_GROUP:-realityos-ipc}"
 ROOT="${REALITYOS_METAL_ROOT:-/tmp/realityos-metal}"
 DEVICE="${REALITYOS_METAL_DEVICE:-}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=metal-unix-mode.sh
+source "$SCRIPT_DIR/metal-unix-mode.sh"
 
 if ! id -u "$AUTHORITY_USER" >/dev/null 2>&1 || ! id -u "$AUTONOMY_USER" >/dev/null 2>&1; then
   echo "error: OS users $AUTHORITY_USER / $AUTONOMY_USER missing (exit 2; do not fake)" >&2
@@ -45,7 +48,7 @@ if [[ -n "$DEVICE" && -e "$DEVICE" ]]; then
   want_uid="$(id -u "$AUTHORITY_USER")"
   got_uid="$(stat -c '%u' "$DEVICE" 2>/dev/null || true)"
   mode="$(stat -c '%a' "$DEVICE" 2>/dev/null || true)"
-  if [[ "$got_uid" != "$want_uid" || "$mode" != "0600" ]]; then
+  if [[ "$got_uid" != "$want_uid" ]] || ! unix_mode_eq "$mode" 0600; then
     chown "$AUTHORITY_USER:$AUTHORITY_USER" "$DEVICE" 2>/dev/null || true
     chmod 0600 "$DEVICE" 2>/dev/null || true
   fi

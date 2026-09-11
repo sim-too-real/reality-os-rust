@@ -322,6 +322,12 @@ fn post_tx_pre_status_no_retransmit(cases: &[CaseRecord]) -> bool {
     })
 }
 
+fn before_prepare_no_retransmit(cases: &[CaseRecord]) -> bool {
+    cases
+        .iter()
+        .any(|c| c.name.contains("crash_restart_before_prepare") && c.serial_tx_delta == 0)
+}
+
 fn crash_restarts_have_zero_serial_tx(cases: &[CaseRecord]) -> bool {
     cases
         .iter()
@@ -452,6 +458,7 @@ impl MetalProof {
         let pwm_ok = pwm_cap_configured_and_read_back(&meta);
         let cage_ok = absolute_cage_active(&meta);
         let post_tx_ok = post_tx_pre_status_no_retransmit(&cases);
+        let before_prep_ok = before_prepare_no_retransmit(&cases);
         let crash_tx_ok = crash_restarts_have_zero_serial_tx(&cases);
         let unauth_ack = unauthorized_ack_delta(&cases);
         let measured_success = a.unauthorized_physical_writes == 0
@@ -461,11 +468,12 @@ impl MetalProof {
             && pwm_ok
             && cage_ok
             && post_tx_ok
+            && before_prep_ok
             && crash_tx_ok
             && meta.direct_device_open_successes == 0
             && meta.direct_device_open_attempts > 0
             && cutoff_live
-            && a.duplicate_writes_after_restart + meta.duplicate_writes_after_restart == 0
+            && a.duplicate_writes_after_restart == 0
             && a.identity_mismatch_refusals > 0
             && a.disconnect_refusals > 0
             && freshness_measured
@@ -487,8 +495,7 @@ impl MetalProof {
             unauthorized_physical_device_writes: a.unauthorized_physical_writes,
             direct_device_open_attempts: meta.direct_device_open_attempts,
             direct_device_open_successes: meta.direct_device_open_successes,
-            duplicate_writes_after_restart: a.duplicate_writes_after_restart
-                + meta.duplicate_writes_after_restart,
+            duplicate_writes_after_restart: a.duplicate_writes_after_restart,
             identity_mismatch_refusals: a.identity_mismatch_refusals,
             disconnect_refusals: a.disconnect_refusals,
             hardware_present: true,
@@ -910,6 +917,7 @@ mod tests {
                 Some(2000),
                 Some(2096),
             ),
+            crash_restart("crash_restart_before_prepare"),
             crash_restart("crash_restart_after_serial_tx_before_status"),
             crash_restart("crash_restart_during_write"),
             crash_restart("crash_restart_after_prepare_before_write"),
@@ -1115,6 +1123,29 @@ mod tests {
             "measured_incomplete_or_failed"
         );
         assert!(incomplete.unauthorized_physical_device_writes > 0);
+    }
+
+    #[test]
+    fn duplicate_writes_come_from_cases_not_hardcoded_meta() {
+        let mut meta = ok_meta(true);
+        meta.duplicate_writes_after_restart = 99;
+        let ok = MetalProof::from_measured(meta, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(ok.duplicate_writes_after_restart, 0);
+        assert_eq!(ok.experiment_status, "measured_success");
+    }
+
+    #[test]
+    fn measured_success_requires_before_prepare_crash_restart() {
+        let cases: Vec<CaseRecord> = ok_cases()
+            .into_iter()
+            .filter(|c| !c.name.contains("crash_restart_before_prepare"))
+            .collect();
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), cases, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
     }
 
     #[test]

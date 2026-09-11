@@ -11,6 +11,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+"$SCRIPT_DIR/metal-unix-mode.sh"
 BIN_DIR="${REALITYOS_METAL_BIN:-}"
 if [[ ! -x "${BIN_DIR:-}/realityos-metal-smoke" && ! -x "$REPO/target/debug/realityos-metal-smoke" && ! -x "$REPO/target/release/realityos-metal-smoke" ]]; then
   echo "error: build metal bins first (REALITYOS_METAL_BIN or $REPO/target/debug)" >&2

@@ -161,6 +161,19 @@ fn xl330_pty_alert_bit_is_not_instruction_failure() {
         .write_action(&[0.0], &ActionParams::empty())
         .expect("hold must accept STATUS_ALERT");
     assert_eq!(recorded_writes(root.join("bus")), 1);
+    let pkt = driver
+        .read_sensor(0.0)
+        .expect("sensor after ALERT goal write");
+    let hw = pkt
+        .samples
+        .iter()
+        .find(|(k, _)| k == "hw_error")
+        .map(|(_, v)| *v);
+    assert_eq!(
+        hw,
+        Some(4.0),
+        "live hw_error sample must re-read register 70 after STATUS_ALERT, not keep the setup-time 0"
+    );
     driver.close();
     let _ = std::fs::remove_dir_all(&root);
 }

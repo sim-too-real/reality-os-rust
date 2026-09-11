@@ -328,6 +328,9 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             regs[132:136] = struct.pack("<i", present - old + new)
             return b"", 0
         regs[addr : addr + len(data)] = data
+        if addr == 116 and os.environ.get("REALITYOS_METAL_PTY_ALERT") == "1":
+            # Do not latch at boot — setup reboots a non-zero Hardware Error Status.
+            regs[70] = 4
         if addr == 116 and len(data) >= 4:
             p_gain = struct.unpack_from("<H", regs, 84)[0]
             pwm_limit = struct.unpack_from("<H", regs, 36)[0]

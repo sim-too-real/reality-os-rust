@@ -41,7 +41,8 @@ use crate::protocol::{
     BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN,
     FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN, MIN_VELOCITY_I_GAIN,
     MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION, PROTOCOL_TYPE_2, SECONDARY_ID_DISABLED,
-    STATUS_RETURN_ALL, XL330_POSITION_MODE_MAX, XL330_POSITION_MODE_MIN, XL330_PWM_LIMIT_MAX,
+    STATUS_ALERT, STATUS_RETURN_ALL, XL330_POSITION_MODE_MAX, XL330_POSITION_MODE_MIN,
+    XL330_PWM_LIMIT_MAX,
 };
 
 pub struct Xl330Driver {
@@ -74,6 +75,10 @@ pub struct Xl330Driver {
     latched_node: Option<String>,
     latched_pty: bool,
     last_hw_error: u8,
+    /// STATUS_ALERT on a later packet means Hardware Error Status may
+    /// have changed since setup. Re-read register 70 before publishing
+    /// the `hw_error` sample; do not keep the setup-time latch forever.
+    hw_error_needs_refresh: bool,
     min_position: i32,
     max_position: i32,
     startup_present: i32,
@@ -146,6 +151,7 @@ impl Xl330Driver {
             torque_enabled: false,
             live_io: false,
             last_hw_error: 0,
+            hw_error_needs_refresh: false,
             min_position: XL330_POSITION_MODE_MIN,
             max_position: XL330_POSITION_MODE_MAX,
             startup_present: 0,
@@ -531,6 +537,7 @@ impl Xl330Driver {
         // Reboot once *before* RAM profile writes — reboot clears RAM.
         if let Ok(b) = self.read_reg(ADDR_HARDWARE_ERROR, 1) {
             self.last_hw_error = b.first().copied().unwrap_or(0);
+            self.hw_error_needs_refresh = false;
         }
         if self.last_hw_error != 0 {
             let _ = self.xfer(&encode_reboot(self.cfg.servo_id), true);
@@ -552,6 +559,7 @@ impl Xl330Driver {
                 .ok()
                 .and_then(|b| b.first().copied())
                 .unwrap_or(self.last_hw_error);
+            self.hw_error_needs_refresh = false;
             if self.last_hw_error != 0 {
                 return Err(PlantError::refused(format!(
                     "dxl_hardware_error_latched:{}",
@@ -905,6 +913,7 @@ impl Xl330Driver {
             return Err(PlantError::refused("dxl_hw_error_unreadable_after_torque"));
         };
         self.last_hw_error = hw;
+        self.hw_error_needs_refresh = false;
         if hw != 0 {
             let _ = self.write_reg(
                 ADDR_TORQUE_ENABLE,
@@ -1391,6 +1400,7 @@ impl Xl330Driver {
         }
         match self.recv_status(true) {
             Ok(st) => {
+                self.note_status_error(st.error);
                 let ok = instruction_ok(st.error);
                 if count_command_egress {
                     let _ = self
@@ -1421,11 +1431,17 @@ impl Xl330Driver {
         }
         let frame = encode_read(self.cfg.servo_id, addr, len);
         match self.xfer(&frame, true) {
-            Ok(st) if instruction_ok(st.error) => Ok(st.params),
-            Ok(st) => Err(PlantError::refused(format!(
-                "dxl_status_error:{}",
-                st.error
-            ))),
+            Ok(st) if instruction_ok(st.error) => {
+                self.note_status_error(st.error);
+                Ok(st.params)
+            }
+            Ok(st) => {
+                self.note_status_error(st.error);
+                Err(PlantError::refused(format!(
+                    "dxl_status_error:{}",
+                    st.error
+                )))
+            }
             Err(e) => {
                 self.connected = false;
                 Err(PlantError::refused(format!("dxl_io:{e}")))
@@ -1486,6 +1502,21 @@ impl Xl330Driver {
     }
 
     /// Intended goal before cage refuse. Does not clamp outbound steps inward.
+    fn note_status_error(&mut self, error: u8) {
+        if error & STATUS_ALERT != 0 {
+            self.hw_error_needs_refresh = true;
+        }
+    }
+
+    fn refresh_hw_error_status(&mut self) {
+        if let Ok(b) = self.read_reg(ADDR_HARDWARE_ERROR, 1) {
+            if let Some(v) = b.first().copied() {
+                self.last_hw_error = v;
+                self.hw_error_needs_refresh = false;
+            }
+        }
+    }
+
     fn intended_goal(&self, action: &[f64]) -> i32 {
         let ticks = self.ticks_from_action(action);
         if ticks == 0 {
@@ -1541,6 +1572,11 @@ impl HardwareDriverPort for Xl330Driver {
         // extra READ must not fail a good present sample (`bus_lost`).
         if self.live_io && t0.elapsed() < Duration::from_millis(15) {
             self.confirm_eeprom_identity();
+        }
+        if self.hw_error_needs_refresh
+            && (!self.live_io || t0.elapsed() < Duration::from_millis(15))
+        {
+            self.refresh_hw_error_status();
         }
         let err = self.last_hw_error;
         self.persist_vin(volt);
