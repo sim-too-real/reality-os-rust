@@ -302,6 +302,30 @@ fn xl330_pty_restores_factory_pwm_slope_when_wizard_zero() {
 }
 
 #[test]
+fn xl330_pty_restores_factory_pwm_slope_when_wizard_too_low() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_LOW_PWM_SLOPE", "1")]);
+    let root = metal_test_root("pty-low-pwm-slope");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver =
+        Xl330Driver::open(cfg, &root).expect("raise Wizard PWM Slope 1 to factory 140");
+    assert_eq!(driver.applied_pwm_slope(), 140);
+    driver.read_sensor(0.0).expect("sensor");
+    let before = driver.last_present_position();
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("nudge after restoring a legal-but-too-slow slope");
+    driver.read_sensor(0.1).expect("sensor");
+    let after = driver.last_present_position();
+    assert_ne!(
+        after, before,
+        "Wizard PWM Slope 1 must not leave present stuck after setup"
+    );
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_zeros_wizard_feedforward_so_nudge_stays_bounded() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_FEEDFORWARD", "1")]);

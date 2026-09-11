@@ -73,10 +73,12 @@ pub const ADDR_PRESENT_TEMPERATURE: u16 = 146;
 pub const ADDR_MAX_POSITION_LIMIT: u16 = 48;
 pub const ADDR_MIN_POSITION_LIMIT: u16 = 52;
 /// EEPROM. Factory 140. Unit 1.977 mV/msec. Range 1..=255 (e-Manual).
-/// Wizard 0 is outside that range and can stall PWM output so the
-/// certified 32-tick nudge never leaves the hold-still band.
+/// Wizard 0 is outside that range. Wizard 1..=19 is legal but ramps PWM
+/// too slowly for the 32-tick nudge to leave the hold-still band in 1.5 s.
 pub const ADDR_PWM_SLOPE: u16 = 62;
 pub const FACTORY_PWM_SLOPE: u8 = 140;
+/// Below this, restore factory 140. Same class as MIN_POSITION_P_GAIN.
+pub const MIN_PWM_SLOPE: u8 = 20;
 
 /// Raw PWM Limit → documented percentage (not a certified torque figure).
 pub fn pwm_limit_percent(raw: u16) -> f64 {

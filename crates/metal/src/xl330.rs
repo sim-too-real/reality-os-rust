@@ -41,9 +41,9 @@ use crate::protocol::{
     ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN,
     BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN,
     FACTORY_PWM_SLOPE, FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN,
-    MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION, PROTOCOL_TYPE_2,
-    SECONDARY_ID_DISABLED, STATUS_ALERT, STATUS_RETURN_ALL, XL330_POSITION_MODE_MAX,
-    XL330_POSITION_MODE_MIN, XL330_PWM_LIMIT_MAX,
+    MIN_PWM_SLOPE, MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION,
+    PROTOCOL_TYPE_2, SECONDARY_ID_DISABLED, STATUS_ALERT, STATUS_RETURN_ALL,
+    XL330_POSITION_MODE_MAX, XL330_POSITION_MODE_MIN, XL330_PWM_LIMIT_MAX,
 };
 
 pub struct Xl330Driver {
@@ -828,9 +828,10 @@ impl Xl330Driver {
             .and_then(|b| b.first().copied())
             .unwrap_or(0);
         self.pwm_slope = slope;
-        // Factory 140. Wizard 0 is outside the e-Manual 1..=255 range
-        // and can stall PWM so the 32-tick nudge never leaves hunt.
-        if slope == 0 {
+        // Factory 140. Wizard 0 is outside the e-Manual 1..=255 range.
+        // Wizard 1..=19 is legal but ramps too slowly for the 32-tick
+        // nudge to leave the hold-still band before settle timeout.
+        if slope < MIN_PWM_SLOPE {
             self.write_reg(
                 ADDR_PWM_SLOPE,
                 &[FACTORY_PWM_SLOPE],

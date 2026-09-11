@@ -189,7 +189,12 @@ def init_regs() -> bytearray:
         regs[98] = 0xFF  # tripped; Goal Position is read-only until written 0
     if os.environ.get("REALITYOS_METAL_PTY_STARTUP_TORQUE") == "1":
         regs[64] = 1
-    regs[62] = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_PWM_SLOPE") == "1" else 140
+    if os.environ.get("REALITYOS_METAL_PTY_ZERO_PWM_SLOPE") == "1":
+        regs[62] = 0
+    elif os.environ.get("REALITYOS_METAL_PTY_LOW_PWM_SLOPE") == "1":
+        regs[62] = 1
+    else:
+        regs[62] = 140
     regs[68] = 0 if os.environ.get("REALITYOS_METAL_PTY_SRL0") == "1" else 2
     regs[120:122] = struct.pack("<H", 1234)
     regs[126:128] = struct.pack("<h", 0)
@@ -381,7 +386,8 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             p_gain = struct.unpack_from("<H", regs, 84)[0]
             pwm_limit = struct.unpack_from("<H", regs, 36)[0]
             vel_p = struct.unpack_from("<H", regs, 78)[0]
-            if p_gain > 0 and pwm_limit > 0 and vel_p > 0:
+            slope = regs[62]
+            if p_gain > 0 and pwm_limit > 0 and vel_p > 0 and slope >= 20:
                 old_present = struct.unpack_from("<i", regs, 132)[0]
                 new_goal = struct.unpack_from("<i", data)[0]
                 # Wizard P above factory 400 overshoots a 32-tick step

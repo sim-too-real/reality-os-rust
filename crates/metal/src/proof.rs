@@ -778,7 +778,7 @@ pub fn default_unresolved() -> Vec<String> {
         "after serve open, a udev change can dangle /dev/serial/by-id or rename ttyUSB0 while the exclusive fd is still the live UART; bus_up / probe_identity must not treat that vanished path as unplug (a real unplug fails the next xfer)".into(),
         "Wizard Position I/D Gain is restored to factory 0 when non-zero; a Wizard PID tune overshoots the 32-tick certified step past the 48-tick session cage".into(),
         "live acquire refuses Present Input Voltage 0 or outside Wizard min/max and latches vin_fault so a cutoff wait cannot be followed by a certified goal write; ESTOP/close still torque-off on the live fd".into(),
-        "Wizard PWM Slope 0 is restored to factory 140; a zero slope can stall PWM so the 32-tick nudge never leaves the hold-still band".into(),
+        "Wizard PWM Slope below 20 is restored to factory 140; Wizard 0 is illegal and Wizard 1..=19 ramps too slowly for the 32-tick nudge to leave the hold-still band before settle timeout".into(),
         "Wizard Position P Gain below 80 or above factory 400 is restored to factory 400; a Wizard P of thousands overshoots the 32-tick step past the 48-tick cage".into(),
         "setup refuses torque when Temperature Limit is unreadable or 0, or Present Temperature is unreadable or at/above that EEPROM limit; the limit itself is not rewritten".into(),
         "CaseRecord physical_writes_before/after/delta are copies of serial_tx_* (certified write_all+flush), not bus/writes command-egress attempts; measured_success requires the copies to match and unauthorized physical_writes_delta==0".into(),
