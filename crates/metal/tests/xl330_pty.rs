@@ -245,7 +245,8 @@ fn xl330_pty_refuses_when_srl_poke_never_sticks() {
         Err(e) => e,
     };
     assert!(
-        err.to_string().contains("dxl_status_return_level_unverified"),
+        err.to_string()
+            .contains("dxl_status_return_level_unverified"),
         "got {err}"
     );
     let _ = std::fs::remove_dir_all(&root);
@@ -745,9 +746,8 @@ fn xl330_pty_retries_when_recenter_torque_off_does_not_stick() {
     ]);
     let root = metal_test_root("pty-tq-off-drop-once");
     let cfg = MetalConfig::example(&tty);
-    let mut driver = Xl330Driver::open(cfg, &root).expect(
-        "a dropped recenter torque-off must retry; EEPROM Min/Max then access-NAK 0x40",
-    );
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("a dropped recenter torque-off must retry; EEPROM Min/Max then access-NAK 0x40");
     assert_eq!(driver.startup_present(), 2064);
     let (emin, emax) = driver.experiment_cage();
     assert_eq!((emin, emax), (2016, 2112));
@@ -772,7 +772,8 @@ fn xl330_pty_refuses_when_recenter_torque_off_never_sticks() {
         Err(e) => e,
     };
     assert!(
-        err.to_string().contains("dxl_torque_still_on_before_eeprom"),
+        err.to_string()
+            .contains("dxl_torque_still_on_before_eeprom"),
         "got {err}"
     );
     let _ = std::fs::remove_dir_all(&root);
@@ -1174,6 +1175,49 @@ fn xl330_pty_refuses_torque_when_present_outside_wizard_limits() {
     assert!(
         err.to_string()
             .contains("dxl_present_outside_wizard_limits"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_reboots_when_torque_off_present_is_multi_turn() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_PRESENT_MULTITURN", "1")]);
+    let root = metal_test_root("pty-present-multiturn");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("torque-off Present 5000 must reboot-wrap into 0..=4095, not refuse first contact");
+    assert_eq!(
+        driver.startup_present(),
+        904,
+        "Robotis reboot maps 5000 to absolute-within-one-rotation (5000 rem 4096)"
+    );
+    let (min, max) = driver.experiment_cage();
+    assert!(
+        (0..=4095).contains(&min) && (0..=4095).contains(&max),
+        "cage after wrap must stay in Position Mode 0..=4095, got {min}..{max}"
+    );
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_multi_turn_present_survives_reboot() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_PRESENT_MULTITURN", "1"),
+        ("REALITYOS_METAL_PTY_NO_REBOOT_PRESENT_WRAP", "1"),
+    ]);
+    let root = metal_test_root("pty-present-multiturn-stuck");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("Present 5000 after reboot must not torque-on or loop"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("dxl_present_outside_position_mode_after_reboot"),
         "got {err}"
     );
     let _ = std::fs::remove_dir_all(&root);

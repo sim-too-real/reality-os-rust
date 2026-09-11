@@ -236,6 +236,10 @@ def init_regs() -> bytearray:
     regs[132:136] = struct.pack("<i", 2048)
     if os.environ.get("REALITYOS_METAL_PTY_PRESENT_OUTSIDE") == "1":
         regs[132:136] = struct.pack("<i", 100)
+    if os.environ.get("REALITYOS_METAL_PTY_PRESENT_MULTITURN") == "1":
+        # Torque-off Present is a 4-byte continuous encoder. A hand-turned
+        # horn sits outside 0–4095 until reboot / torque-on / mode change.
+        regs[132:136] = struct.pack("<i", 5000)
     if os.environ.get("REALITYOS_METAL_PTY_HIGH_MOVING_THRESHOLD") == "1":
         regs[24:28] = struct.pack("<I", 1023)
     else:
@@ -558,6 +562,10 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         regs[70] = 0
         regs[68] = 2  # RAM reset; factory Status Return Level
         regs[98] = 0
+        # Robotis: reboot resets Present to absolute-within-one-rotation.
+        if os.environ.get("REALITYOS_METAL_PTY_NO_REBOOT_PRESENT_WRAP") != "1":
+            present = struct.unpack_from("<i", regs, 132)[0]
+            regs[132:136] = struct.pack("<i", present % 4096)
         if os.environ.get("REALITYOS_METAL_PTY_HW_ERROR") == "1":
             regs[64] = 1  # Startup Configuration torque-on after reboot
         return b"", 0

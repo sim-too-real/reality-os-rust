@@ -779,6 +779,10 @@ impl Xl330Driver {
     }
 
     fn apply_bench_limits(&mut self) -> PlantResult<()> {
+        self.apply_bench_limits_pass(false)
+    }
+
+    fn apply_bench_limits_pass(&mut self, already_rebooted_for_multiturn: bool) -> PlantResult<()> {
         self.cfg
             .validate_xl330_limits()
             .map_err(PlantError::refused)?;
@@ -792,13 +796,9 @@ impl Xl330Driver {
             self.hw_error_needs_refresh = false;
         }
         if self.last_hw_error != 0 {
-            let _ = self.xfer(&encode_reboot(self.cfg.servo_id), true);
-            std::thread::sleep(Duration::from_millis(400));
-            self.ping_and_identify()
-                .map_err(|e| PlantError::refused(format!("dxl_reboot_identify:{e}")))?;
             // Startup Configuration can re-enable torque after reboot.
             // EEPROM writes then access-NAK, and a stale Wizard goal moves.
-            self.write_torque_off_verified("setup_torque_off_after_reboot")?;
+            self.reboot_clear_ram_and_reidentify("setup_torque_off_after_reboot")?;
             self.last_hw_error = self
                 .read_reg(ADDR_HARDWARE_ERROR, 1)
                 .ok()
@@ -1392,6 +1392,23 @@ impl Xl330Driver {
                 .and_then(|b| le_i32(&b))
                 .ok_or_else(|| PlantError::refused("dxl_present_unreadable_before_torque"))?;
         }
+        // Torque-off Present is a 4-byte continuous encoder (e-Manual).
+        // Robotis resets it to absolute-within-one-rotation on reboot,
+        // torque-on, or a change into Position Mode. A hand-turned bench
+        // horn is the normal first-contact state. Do not torque-on to
+        // wrap — stale Goal (often 0) would yank. Reboot once with
+        // Startup Configuration already 0 and torque off, then re-apply
+        // RAM. A tight Wizard leftover window still refuses below.
+        if present < XL330_POSITION_MODE_MIN || present > XL330_POSITION_MODE_MAX {
+            if !already_rebooted_for_multiturn {
+                self.reboot_clear_ram_and_reidentify("setup_torque_off_after_multiturn_reboot")?;
+                return self.apply_bench_limits_pass(true);
+            }
+            return Err(PlantError::refused(format!(
+                "dxl_present_outside_position_mode_after_reboot:present={present}:min={XL330_POSITION_MODE_MIN}:max={XL330_POSITION_MODE_MAX}:homing_offset={}",
+                self.homing_offset
+            )));
+        }
         // Do not yank present onto the Wizard window. Clamping then
         // torque-on would move before any certified command and break
         // the zero-motion baseline.
@@ -1485,6 +1502,14 @@ impl Xl330Driver {
             XL330_POSITION_MODE_MIN.max(min),
             XL330_POSITION_MODE_MAX.min(max),
         )
+    }
+
+    fn reboot_clear_ram_and_reidentify(&mut self, torque_off_why: &'static str) -> PlantResult<()> {
+        let _ = self.xfer(&encode_reboot(self.cfg.servo_id), true);
+        std::thread::sleep(Duration::from_millis(400));
+        self.ping_and_identify()
+            .map_err(|e| PlantError::refused(format!("dxl_reboot_identify:{e}")))?;
+        self.write_torque_off_verified(torque_off_why)
     }
 
     fn write_torque_off_verified(&mut self, why: &'static str) -> PlantResult<()> {
