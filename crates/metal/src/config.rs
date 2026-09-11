@@ -116,7 +116,9 @@ impl MetalConfig {
         }
     }
 
-    /// Init/probe: device path plus optional baud/id hints.
+    /// Device path plus optional baud/id hints. Do **not** use this on
+    /// `init` / `probe` persist: hints must stay scan extras until
+    /// `open_discovering` writes the measured pair.
     pub fn apply_process_env(&mut self) {
         self.apply_device_env();
         self.apply_bus_hint_env();
@@ -462,6 +464,15 @@ mod tests {
         assert!(ids.contains(&0), "Protocol 2.0 ID 0 is a valid Wizard ID");
         assert!(!ids.contains(&254));
         assert!(ids.contains(&1));
+    }
+
+    #[test]
+    fn apply_device_env_does_not_persist_bus_hints() {
+        let mut cfg = MetalConfig::example("/dev/ttyUSB0");
+        cfg.apply_device_path(Some("/dev/ttyUSB9"));
+        assert_eq!(cfg.baud, 57_600, "init/probe must not write a baud hint");
+        assert_eq!(cfg.servo_id, 1, "init/probe must not write a servo-id hint");
+        assert_eq!(cfg.device, PathBuf::from("/dev/ttyUSB9"));
     }
 
     #[test]

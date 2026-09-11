@@ -1547,10 +1547,11 @@ run_init_and_probe() {
 run_init_and_probe
 as_authority "$SMOKE" --root "$ROOT" bind-measured
 # Probe wrote the working baud/id. REALITYOS_METAL_BAUD is a probe
-# hint (2/3/4 Mbps only). A factory XL330 is 57 600; 1 Mbps is already
-# in the automatic scan after that. Serve must not reopen at the hint
-# (campaign used to pass the env through and apply_process_env
-# clobbered metal.json).
+# scan extra (2/3/4 Mbps only). init/probe must not persist the env
+# hint into metal.json before discover. A factory XL330 is 57 600;
+# 1 Mbps is already in the automatic scan after that. Serve must not
+# reopen at a leftover hint (campaign used to pass the env through
+# and apply_process_env clobbered metal.json).
 if [[ -f "$ROOT/metal.json" ]]; then
   eval "$(python3 - "$ROOT/metal.json" <<'PY'
 import json, sys

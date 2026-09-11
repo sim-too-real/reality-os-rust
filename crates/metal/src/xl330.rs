@@ -19,8 +19,8 @@ use serialport::SerialPort;
 
 use crate::config::{
     candidate_bauds, candidate_servo_ids, discover_baud_attempts, MetalConfig, BUS_DIR,
-    CAGE_EVIDENCE_FILE, GOAL_FILE, LOCK_FILE, MOVING_FILE, PRESENT_FILE, PWM_EVIDENCE_FILE,
-    VIN_FILE,
+    CAGE_EVIDENCE_FILE, CANDIDATE_BAUDS, GOAL_FILE, LOCK_FILE, MOVING_FILE, PRESENT_FILE,
+    PWM_EVIDENCE_FILE, VIN_FILE,
 };
 use crate::egress::EgressLog;
 use crate::identity::{
@@ -273,10 +273,12 @@ impl Xl330Driver {
                 }
             }
         }
-        // Configured pair is first, when the adapter is coldest. One more
-        // attempt after the scan has opened the tty — discover does not
-        // retry a pair, so a single cold first ping would skip the real bus.
-        let configured = cfg.clone();
+        // Factory 57 600 again after the scan has opened the tty. Do not
+        // retry a leftover 2/3/4 Mbps hint here: that open is after the
+        // factory rates and can wedge CH340 so a late identify never
+        // happens. The first scan rate is already retried immediately.
+        let mut configured = cfg.clone();
+        configured.baud = CANDIDATE_BAUDS[0];
         match Self::open_inner(configured.clone(), root.as_ref(), false) {
             Ok(driver) => Ok((driver, configured)),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(e),
