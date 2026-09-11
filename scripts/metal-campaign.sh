@@ -218,6 +218,10 @@ if [[ "$DEVICE_REAL" == /dev/pts/* ]]; then
   PTY_SEQUENCE_ACTIVE=1
   CUTOFF_TESTED=0
   export REALITYOS_METAL_CUTOFF_TESTED=0
+  export REALITYOS_METAL_CUTOFF_LIVE=0
+  export REALITYOS_METAL_CUTOFF_LIVE_OBSERVED=0
+  export REALITYOS_METAL_UNPLUG_LIVE=0
+  export REALITYOS_METAL_UNPLUG_LIVE_OBSERVED=0
   export REALITYOS_METAL_ALLOW_PTY=1
 fi
 # probe identifies (SRL poke only; no EEPROM, no torque). serve enables
@@ -228,6 +232,20 @@ if [[ "$PTY_SEQUENCE_ACTIVE" != "1" && "$CUTOFF_TESTED" != "1" ]]; then
   echo "error: open the VIN disconnect, confirm lost holding torque (USB/data may stay enumerated), then REALITYOS_METAL_CUTOFF_TESTED=1." >&2
   echo "error: that cutoff is not STO/SS1/PL/SIL unless the hardware's own documentation says it is." >&2
   exit 2
+fi
+# measured_success needs both live measurements. Do not torque a real
+# XL330 for ten minutes and then fail because the operator omitted a flag.
+if [[ "$PTY_SEQUENCE_ACTIVE" != "1" ]]; then
+  if [[ "${REALITYOS_METAL_UNPLUG_LIVE:-0}" != "1" ]]; then
+    echo "error: refuse to run the live XL330 campaign without REALITYOS_METAL_UNPLUG_LIVE=1." >&2
+    echo "error: force_disconnect is a campaign hook; measured_success requires a physical USB-UART unplug." >&2
+    exit 2
+  fi
+  if [[ "${REALITYOS_METAL_CUTOFF_LIVE:-0}" != "1" ]]; then
+    echo "error: refuse to run the live XL330 campaign without REALITYOS_METAL_CUTOFF_LIVE=1." >&2
+    echo "error: REALITYOS_METAL_CUTOFF_TESTED is operator attestation only and cannot mint measured_success." >&2
+    exit 2
+  fi
 fi
 if [[ -z "$ROOT" || "$ROOT" == "/" || "$ROOT" == "/tmp" || "$ROOT" == "/var" ]]; then
   echo "error: refusing to wipe unexpected REALITYOS_METAL_ROOT=$ROOT" >&2
@@ -2072,6 +2090,168 @@ add_case "$(crash_replay after_serial_tx_before_status metal-crash-posttx)"
 add_case "$(crash_replay after_write_before_ack metal-crash-ack)"
 add_case "$(crash_replay after_ack metal-crash-afterack)"
 
+wait_for_authority_bus_drop() {
+  local save="${1:-$ROOT/bus_drop_sensor.json}"
+  local check_vin="${2:-0}"
+  local respfile ipc_ok vin_now
+  for _ in $(seq 1 120); do
+    respfile="$(mktemp)"
+    if as_autonomy "$PROP" --root "$ROOT" sensor >"$respfile" 2>"$respfile.err"; then
+      ipc_ok=1
+    else
+      ipc_ok=0
+    fi
+    if metal_sensor_indicates_drop "$respfile"; then
+      cp "$respfile" "$save" || true
+      rm -f "$respfile" "$respfile.err"
+      return 0
+    fi
+    # Empty IPC counts only when serve actually died with the UART.
+    # A transient sudo/IPC miss while smoke is still bound is not a drop.
+    if [[ "$ipc_ok" != "1" ]] && [[ ! -s "$respfile" ]]; then
+      if [[ ! -S "$ROOT/ipc.sock" ]] || ! resolve_metal_smoke_pid "$ROOT" >/dev/null 2>&1; then
+        printf '%s\n' '{"ok":false,"stage":"ipc","status":"error","violations":[]}' >"$save"
+        rm -f "$respfile" "$respfile.err"
+        return 0
+      fi
+    fi
+    if [[ "$check_vin" == "1" ]]; then
+      vin_now="$(cat "$ROOT/bus/vin" 2>/dev/null || echo 999)"
+      if [[ "$vin_now" =~ ^[0-9]+$ ]] && [[ "$vin_now" -lt 20 ]]; then
+        rm -f "$respfile" "$respfile.err"
+        return 0
+      fi
+    fi
+    rm -f "$respfile" "$respfile.err"
+    sleep 0.5
+  done
+  return 1
+}
+
+wait_for_usb_replug() {
+  echo "Replug the USB-UART now (same recorded adapter identity)." >&2
+  local p
+  for _ in $(seq 1 120); do
+    if p="$(resolve_recorded_usb_tty "$DEVICE")"; then
+      DEVICE="$p"
+      export REALITYOS_METAL_DEVICE="$DEVICE"
+      sync_metal_device_config || true
+      echo "$DEVICE"
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "error: USB-UART did not reappear with the recorded identity within 60s" >&2
+  return 1
+}
+
+# After a confirmed VIN/UART drop, propose must refuse with a drop token
+# and serial_tx_delta=0. If unplug killed serve, propose-id cannot return
+# those tokens; record measured serial_tx and the drop evidence file.
+# Do not invent a disconnect violation.
+measure_after_confirmed_bus_drop() {
+  local name="$1"
+  local proposal="$2"
+  local evidence="$3"
+  local cid="$4"
+  local rec w_before w_after tx_before tx_after
+  w_before="$(writes)"
+  tx_before="$(serial_tx)"
+  if rec="$(MEASURE_REQUIRE="${METAL_BUS_DROP_TOKEN_SPEC}" MEASURE_FORBID=software_watchdog_miss \
+      measure "$name" "$proposal" AUTHORIZATION_BLOCKED false \
+      env METAL_CMD_ID="$cid" "$PROP" --root "$ROOT" propose-id)"; then
+    printf '%s\n' "$rec"
+    return 0
+  fi
+  w_after="$(writes)"
+  tx_after="$(serial_tx)"
+  if [[ "$tx_after" -ne "$tx_before" || "$w_after" -ne "$w_before" ]]; then
+    echo "error: $name: propose after bus drop changed certified egress (serial_tx $tx_before→$tx_after writes $w_before→$w_after)" >&2
+    return 1
+  fi
+  echo "metal-campaign: $name propose did not return a drop token (serve likely died with the UART); recording measured serial_tx and $evidence" >&2
+  python3 - "$name" "$proposal" "$evidence" "$w_before" "$w_after" "$tx_before" "$tx_after" "$ROOT/bus/position_cage.json" <<'PY'
+import json, sys
+name, proposal, evidence, wb, wa, txb, txa, cage_p = sys.argv[1:9]
+wb, wa, txb, txa = map(int, (wb, wa, txb, txa))
+violations = []
+decision = "ipc:dead_after_bus_drop"
+try:
+    body = json.load(open(evidence, encoding="utf-8"))
+except Exception:
+    body = {}
+if isinstance(body, dict):
+    violations = [str(v) for v in (body.get("violations") or [])]
+    stage = body.get("stage") or "ipc"
+    status = body.get("status") or "error"
+    if body.get("ok") is False:
+        decision = f"{stage}:{status}"
+try:
+    cage = json.load(open(cage_p))
+except Exception:
+    cage = {}
+print(json.dumps({
+    "name": name,
+    "expected_authorization": False,
+    "decision_result": decision,
+    "writes_before": wb,
+    "writes_after": wa,
+    "write_delta": 0,
+    "device_acknowledgement": False,
+    "observed_motion": None,
+    "blocking_layer": "AUTHORIZATION_BLOCKED",
+    "journal_result": "no_consume",
+    "proposal": proposal,
+    "unauthorized_write": False,
+    "egress_attempt_delta": 0,
+    "serial_tx_before": txb,
+    "serial_tx_after": txa,
+    "serial_tx_delta": 0,
+    "device_ack_delta": 0,
+    "unauthorized_device_ack_delta": 0,
+    "observed_present_after": None,
+    "commanded_goal": None,
+    "experiment_min": cage.get("experiment_min"),
+    "experiment_max": cage.get("experiment_max"),
+    "violations": violations,
+}))
+PY
+}
+
+if [[ "${REALITYOS_METAL_UNPLUG_LIVE:-0}" == "1" ]]; then
+  require_live_session
+  echo "Unplug the USB-UART now (VIN may stay on). This is a physical disconnect, not force_disconnect." >&2
+  if ! wait_for_authority_bus_drop "$ROOT/usb_unplug_sensor.json" 0; then
+    echo "error: USB-UART did not drop within 60s; live unplug test failed" >&2
+    exit 1
+  fi
+  export REALITYOS_METAL_UNPLUG_LIVE_OBSERVED=1
+  add_case "$(measure_after_confirmed_bus_drop usb_unplug_live 'propose after USB-UART unplug' "$ROOT/usb_unplug_sensor.json" metal-unplug)"
+  stop_auth
+  if ! wait_for_usb_replug; then
+    exit 1
+  fi
+  # Physical replug asserts DTR again. Cheap FTDI/CP2102 boards RESET the
+  # servo; identify during that reboot window fails the first start_auth.
+  sleep 0.5
+  if ! prepare_usb_serial_host "$DEVICE"; then
+    echo "error: USB-UART prepare after replug failed" >&2
+    exit 1
+  fi
+  if ! start_auth 0; then
+    echo "error: serve restart after USB replug failed" >&2
+    exit 1
+  fi
+  require_live_session
+  as_autonomy "$PROP" --root "$ROOT" --id metal-unplug-reset --verb hold propose >"$ROOT/reset-unplug.json" || true
+  python3 - "$ROOT/reset-unplug.json" <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1]))
+if not r.get("ok"):
+    sys.exit("error: reset hold after USB replug failed: %s" % (r,))
+PY
+fi
+
 VIN="$(cat "$ROOT/bus/vin" 2>/dev/null || echo "")"
 if [[ "$CUTOFF_TESTED" == "1" ]]; then
   CUTOFF_BEFORE="$(writes)"
@@ -2108,45 +2288,16 @@ PY
 fi
 
 if [[ "${REALITYOS_METAL_CUTOFF_LIVE:-0}" == "1" ]]; then
+  require_live_session
   echo "Open the independent VIN switch now (USB data may stay enumerated)." >&2
-  dropped=0
-  for _ in $(seq 1 120); do
-    respfile="$(mktemp)"
-    ipc_ok=1
-    if as_autonomy "$PROP" --root "$ROOT" sensor >"$respfile" 2>"$respfile.err"; then
-      ipc_ok=1
-    else
-      ipc_ok=0
-    fi
-    if metal_sensor_indicates_drop "$respfile"; then
-      dropped=1
-      cp "$respfile" "$ROOT/vin_cutoff_sensor.json" || true
-      rm -f "$respfile" "$respfile.err"
-      break
-    fi
-    if [[ "$ipc_ok" != "1" ]] && [[ ! -s "$respfile" ]]; then
-      # Socket gone after a real unplug/brownout that killed serve.
-      dropped=1
-      rm -f "$respfile" "$respfile.err"
-      break
-    fi
-    vin_now="$(cat "$ROOT/bus/vin" 2>/dev/null || echo 999)"
-    if [[ "$vin_now" =~ ^[0-9]+$ ]] && [[ "$vin_now" -lt 20 ]]; then
-      dropped=1
-      rm -f "$respfile" "$respfile.err"
-      break
-    fi
-    rm -f "$respfile" "$respfile.err"
-    sleep 0.5
-  done
-  if [[ "$dropped" != "1" ]]; then
+  if ! wait_for_authority_bus_drop "$ROOT/vin_cutoff_sensor.json" 1; then
     echo "error: VIN did not drop within 60s; cutoff live test failed" >&2
     exit 1
   fi
   export REALITYOS_METAL_CUTOFF_TESTED=1
   export REALITYOS_METAL_CUTOFF_LIVE_OBSERVED=1
   CUTOFF_TESTED=1
-  add_case "$(MEASURE_REQUIRE='dxl_io|driver not connected|online_hardware_disconnected|metal_live_io_deadline' MEASURE_FORBID=software_watchdog_miss measure vin_cutoff_live 'propose after VIN open' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-cutoff "$PROP" --root "$ROOT" propose-id)"
+  add_case "$(measure_after_confirmed_bus_drop vin_cutoff_live 'propose after VIN open' "$ROOT/vin_cutoff_sensor.json" metal-cutoff)"
 fi
 
 COMMIT="$(git -C "$REPO" -c safe.directory="$REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -2205,6 +2356,8 @@ else:
     controller = "Dynamixel Protocol 2.0 USB-UART (measured adapter serial)"
 cutoff_attested = os.environ.get("REALITYOS_METAL_CUTOFF_TESTED","0") == "1"
 cutoff_live = os.environ.get("REALITYOS_METAL_CUTOFF_LIVE_OBSERVED","0") == "1"
+unplug_live = os.environ.get("REALITYOS_METAL_UNPLUG_LIVE_OBSERVED","0") == "1"
+used_clock = fresh.get("clock") == "OsMonotonicClock"
 try:
     pwm = json.load(open(pwm_p))
 except Exception:
@@ -2234,8 +2387,9 @@ meta = {
   "autonomy_uid": auto,
   "test_date": date,
   "hardware_present": True,
-  "used_os_monotonic_clock": True,
+  "used_os_monotonic_clock": used_clock,
   "used_hardware_driver_port": True,
+  "unplug_live_observed": unplug_live,
   "cutoff_mechanism": "bench PSU switch or SPST on servo 5V VIN, independent of Reality OS (not STO/SS1/PL/SIL)",
   "cutoff_tested": cutoff_attested,
   "cutoff_operator_attested": cutoff_attested,
@@ -2307,6 +2461,7 @@ assert nudge.get("observed_present_after") is not None and nd is not None and ab
 pty_sequence = """$PTY_SEQUENCE_ACTIVE""" == "1"
 if pty_sequence:
     assert r.get("cutoff_live_observed") is False, r
+    assert r.get("unplug_live_observed") is False, r
     assert r["experiment_status"] != "measured_success", r
     assert r.get("hardware_present") is True
     print("pty-sequence-ok status=%s serial_tx=%s (not metal)" % (r["experiment_status"], r["valid_physical_device_writes"]))
@@ -2315,6 +2470,9 @@ else:
     if not r.get("cutoff_live_observed"):
         assert r["experiment_status"] != "measured_success", r
         raise SystemExit("error: live independent VIN cutoff was not observed; REALITYOS_METAL_CUTOFF_TESTED is operator attestation only and cannot mint measured_success")
+    if not r.get("unplug_live_observed"):
+        assert r["experiment_status"] != "measured_success", r
+        raise SystemExit("error: live USB-UART unplug was not observed; force_disconnect is a campaign hook and cannot mint measured_success")
     assert r["experiment_status"] == "measured_success", r
     print("metal-proof-ok status=%s serial_tx=%s" % (r["experiment_status"], r["valid_physical_device_writes"]))
 PY

@@ -211,6 +211,12 @@ impl MetalConfig {
                 self.max_total_excursion_ticks
             ));
         }
+        if !self.freshness_threshold_s.is_finite() || self.freshness_threshold_s <= 0.0 {
+            return Err(format!(
+                "metal_freshness_threshold_invalid:{}",
+                self.freshness_threshold_s
+            ));
+        }
         Ok(())
     }
 }
@@ -327,6 +333,7 @@ pub fn candidate_servo_ids(configured: u8, extra: Option<u8>) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use realityos_governor::GovernorConfig;
 
     #[test]
     fn candidate_bauds_keep_factory_first_and_dedup() {
@@ -489,6 +496,32 @@ mod tests {
         a.max_pwm_limit_raw = crate::protocol::CONSERVATIVE_PWM_LIMIT;
         a.max_total_excursion_ticks = 16;
         assert_ne!(h1, a.design_content_hash());
+    }
+
+    #[test]
+    fn freshness_threshold_must_be_positive_and_finite() {
+        let mut cfg = MetalConfig::example("/dev/ttyUSB0");
+        assert!(cfg.validate_xl330_limits().is_ok());
+        cfg.freshness_threshold_s = 0.0;
+        assert!(cfg
+            .validate_xl330_limits()
+            .unwrap_err()
+            .contains("metal_freshness_threshold_invalid"));
+        cfg.freshness_threshold_s = f64::NAN;
+        assert!(cfg
+            .validate_xl330_limits()
+            .unwrap_err()
+            .contains("metal_freshness_threshold_invalid"));
+    }
+
+    #[test]
+    fn freshness_default_matches_online_locked_sensor_stale() {
+        let cfg = MetalConfig::example("/dev/ttyUSB0");
+        let gov = GovernorConfig::online_locked();
+        assert_eq!(
+            cfg.freshness_threshold_s, gov.sensor_stale_s,
+            "metal.json freshness must match the locked ONLINE window; serve cannot config_mut after start_online"
+        );
     }
 
     #[test]

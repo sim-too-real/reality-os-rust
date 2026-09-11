@@ -455,6 +455,8 @@ pub struct MetalProof {
     #[serde(default)]
     pub cutoff_live_observed: bool,
     #[serde(default)]
+    pub unplug_live_observed: bool,
+    #[serde(default)]
     pub pwm_limit_requested: Option<u16>,
     #[serde(default)]
     pub pwm_limit_measured: Option<u16>,
@@ -494,6 +496,7 @@ impl MetalProof {
         let not_pty_stand_in = !identity_looks_like_pty_stand_in(&meta.real_device_identity);
         let cutoff_attested = meta.cutoff_operator_attested || meta.cutoff_tested;
         let cutoff_live = meta.cutoff_live_observed;
+        let unplug_live = meta.unplug_live_observed;
         let pwm_ok = pwm_cap_configured_and_read_back(&meta);
         let cage_ok = absolute_cage_active(&meta);
         let post_tx_ok = post_tx_pre_status_no_retransmit(&cases);
@@ -512,6 +515,7 @@ impl MetalProof {
             && meta.direct_device_open_successes == 0
             && meta.direct_device_open_attempts > 0
             && cutoff_live
+            && unplug_live
             && a.duplicate_writes_after_restart == 0
             && a.identity_mismatch_refusals > 0
             && a.disconnect_refusals > 0
@@ -544,6 +548,7 @@ impl MetalProof {
             cutoff_tested: cutoff_attested,
             cutoff_operator_attested: cutoff_attested,
             cutoff_live_observed: cutoff_live,
+            unplug_live_observed: unplug_live,
             pwm_limit_requested: meta.pwm_limit_requested,
             pwm_limit_measured: meta.pwm_limit_measured,
             experiment_min: meta.experiment_min,
@@ -589,7 +594,7 @@ impl MetalProof {
              8. **Bounded one-axis motion.** valid_nudge serial_tx_delta={nudge_tx} ack={nudge_ack} present_after={nudge_present:?} motion={nudge_motion}\n\
              9. **Hostile campaign.** hostile_cases={hostile} unauthorized_certified_serial_tx={unauth} unauthorized_device_ack={unauth_ack} (required 0).\n\
              10. **Crash/restart.** duplicate_writes_after_restart={crash} (required 0; after_serial_tx_before_status and other ambiguous restarts must not retransmit).\n\
-             11. **Disconnect / identity fail-closed.** identity_mismatch_refusals={idm} disconnect_refusals={disc}\n\
+             11. **Disconnect / identity fail-closed.** identity_mismatch_refusals={idm} disconnect_refusals={disc}. Live USB-UART unplug observed: {unplug_live}. Campaign hooks are not a physical unplug.\n\
              12. **Sensor freshness.** source={src}; device_capture_s={cap:?}; authority_receive_s={recv:?}; freshness_threshold_s={thr:?}. Capture is device Realtime Tick; freshness anchor is authority monotonic receive time.\n\
              13. **Proof artifact.** schema={schema} hardware_present={hp} commit={sha}. Separate from HIL proofs. Aggregates are certified serial-TX deltas, not write attempts.\n\
              14. **All success criteria.** experiment_status={status}\n\
@@ -602,6 +607,7 @@ impl MetalProof {
             cutoff = self.cutoff_mechanism,
             cutoff_attested = self.cutoff_operator_attested,
             cutoff_live = self.cutoff_live_observed,
+            unplug_live = self.unplug_live_observed,
             pwm_req = self.pwm_limit_requested,
             pwm_got = self.pwm_limit_measured,
             startup = self.startup_present,
@@ -664,6 +670,8 @@ pub struct ProofMeta {
     #[serde(default)]
     pub cutoff_live_observed: bool,
     #[serde(default)]
+    pub unplug_live_observed: bool,
+    #[serde(default)]
     pub pwm_limit_requested: Option<u16>,
     #[serde(default)]
     pub pwm_limit_measured: Option<u16>,
@@ -719,6 +727,7 @@ pub fn default_unresolved() -> Vec<String> {
         "campaign finds metal binaries in the script repo when REALITYOS_METAL_BIN=$PWD/target/debug points at the caller's cwd; sudo /path/scripts/metal-campaign.sh from another cwd used to exit 2 before probe".into(),
         "first USB prepare fails closed until the UART sysfs node has a non-empty USB serial or busnum:devpath:vid:pid, then waits briefly for iSerial and locks that identity; a dest-only bind still matches after iSerial appears. An empty CH340 serial file, a parent hub serial, inventing 0:nodevpath, waiting for idVendor alone, or preferring a late FTDI serial after a dest-only bind used to miss before hold. FTDI/U2D2 latency_timer must read back 1 after write; a silent failed set used to keep 16 ms and miss the 40 ms live deadline on the first hold. USB power/control on the UART device must read back on after write; a silent failed set used to keep autosuspend auto and miss that deadline after an idle gap. Campaign creates realityos-authority / realityos-autonomy / realityos-ipc and requires python3/timeout before first USB prepare; creating users after udev OWNER= or missing python3 after probe used to fail the first bench run. nscd/sssd can still hide a just-created user so chown/OWNER= fail; campaign flushes those caches and fails closed unless the USB tty inode uid is the authority uid and mode is 0600. Real USB-serial also requires fuser and udevadm; a missing fuser used to skip the holder check and open a UART ModemManager already had, and a missing /run/udev/rules.d used to skip ID_MM_DEVICE_IGNORE. Writing the ignore rule then udevadm control --reload || true used to announce success without loading it; a leftover 99-realityos-metal-*.rules from a SIGKILL'd run used to skip rewrite; fuser ran only before udevadm trigger --action=change, which can wake ModemManager. Reload must succeed, udevadm info must read ID_MM_DEVICE_IGNORE=1, the recorded USB identity is rematched after that trigger (FTDI/U2D2 can come back as ttyUSB1) before metal.json is rewritten, and the holder check runs again after that rematch. First prepare used to run only before journal tmpfs / staging / metal-deploy chown; that chown can emit a udev change that wakes ModemManager and resets FTDI latency_timer, so prepare runs again immediately before probe opens the UART. claim_usb_tty used to chown/chmod on every call even when the inode was already authority 0600, and metal-deploy always chowned the tty; the extra pre-probe claim then emitted another udev change and probe opened while ModemManager could still be waking (or FTDI came back as ttyUSB1 / latency_timer 16 ms). Claim, deploy, latency_timer, and power/control now skip a no-op write (a rewrite of 1/on still emits udev change). After a real claim/latency/power write, prepare settles udev, rematches the recorded USB identity, re-applies owner/latency/power only if they drifted, refuses holders, and fails closed unless latency_timer/power/control still read back 1/on. connect_serial skips a no-op chmod 0600 (that chmod can emit the same udev change and reset FTDI latency_timer before the first live hold). Campaign stty -F -hupcl before probe used to DTR-RESET cheap FTDI/CP2102; the driver clears HUPCL on the exclusive fd. Probe broadcast sniff takes exclusive on a real UART so ModemManager cannot AT-probe during the 500 ms open-settle. After serve open, claim/latency/power used to run inside if without || return so a failed latency_timer write was ignored (set -e is disabled in if) and the first hold could run at 16 ms; the campaign now settles and fails closed unless latency_timer/power/control still read back".into(),
         "after serve open, a udev change can dangle /dev/serial/by-id or rename ttyUSB0 while the exclusive fd is still the live UART; bus_up / probe_identity must not treat that vanished path as unplug (a real unplug fails the next xfer)".into(),
+        "force_disconnect and hot_swap.json are campaign hooks, not a physical USB unplug; measured_success requires a live USB-UART unplug and a live VIN drop. If unplug kills serve, the campaign records the drop evidence and serial_tx; it does not invent a disconnect token".into(),
         "no STO/SS1/PLC/SIL/ISO is provided or claimed".into(),
     ]
 }
@@ -875,6 +884,7 @@ mod tests {
             cutoff_tested: false,
             cutoff_operator_attested: false,
             cutoff_live_observed: false,
+            unplug_live_observed: false,
             pwm_limit_requested: None,
             pwm_limit_measured: None,
             experiment_min: None,
@@ -1032,6 +1042,7 @@ mod tests {
             cutoff_tested: cutoff,
             cutoff_operator_attested: cutoff,
             cutoff_live_observed: cutoff,
+            unplug_live_observed: cutoff,
             pwm_limit_requested: Some(200),
             pwm_limit_measured: Some(200),
             experiment_min: Some(2000),
@@ -1251,5 +1262,29 @@ mod tests {
         );
         assert!(incomplete.cutoff_operator_attested);
         assert!(!incomplete.cutoff_live_observed);
+    }
+
+    #[test]
+    fn synthetic_disconnect_without_live_unplug_prevents_success() {
+        let mut meta = ok_meta(true);
+        meta.unplug_live_observed = false;
+        let incomplete = MetalProof::from_measured(meta, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+        assert!(!incomplete.unplug_live_observed);
+    }
+
+    #[test]
+    fn hardcoded_clock_flag_without_os_monotonic_prevents_success() {
+        let mut meta = ok_meta(true);
+        meta.used_os_monotonic_clock = false;
+        let incomplete = MetalProof::from_measured(meta, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+        assert!(!incomplete.used_os_monotonic_clock);
     }
 }

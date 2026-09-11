@@ -8,6 +8,10 @@
 # last healthy sample because persist_vin runs only after a good motion
 # read. Parse the JSON.
 
+# Keep in sync with metal_sensor_indicates_drop tokens and campaign
+# MEASURE_REQUIRE after a live VIN / USB-UART drop.
+METAL_BUS_DROP_TOKEN_SPEC='dxl_io|driver not connected|online_hardware_disconnected|metal_live_io_deadline|metal_serial_closed|hardware_disconnected'
+
 metal_sensor_indicates_drop() {
   local path="${1:-}"
   [[ -n "$path" ]] || return 1
@@ -54,6 +58,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   fi
   printf '%s\n' '{"ok":false,"violations":["dxl_io:metal_live_io_deadline","online_hardware_disconnected"]}' >"$tmp/vin.json"
   metal_sensor_indicates_drop "$tmp/vin.json"
+  printf '%s\n' '{"ok":false,"violations":["metal_serial_closed"]}' >"$tmp/closed.json"
+  metal_sensor_indicates_drop "$tmp/closed.json"
   printf '%s\n' '{"ok":false,"violations":["unsupported_action"]}' >"$tmp/other.json"
   if metal_sensor_indicates_drop "$tmp/other.json"; then
     echo "error: unrelated refuse must not count as a VIN drop" >&2
