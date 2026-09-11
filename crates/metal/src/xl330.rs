@@ -1289,14 +1289,16 @@ impl Xl330Driver {
             .ok_or_else(|| PlantError::refused("dxl_present_unreadable_before_torque"))?;
         // Wizard Homing Offset shifts Present without moving the horn.
         // Limits stay 0–4095, so a "zeroed" horn is outside the window and
-        // goal=present would NAK. Clearing offset with torque off is not motion.
+        // goal=present would NAK. An in-window leftover still lets the
+        // torque-on Present reset throw past the 48-tick cage. Clearing
+        // offset with torque off is not motion. Do not treat a failed
+        // read as 0: that skipped the write.
         let offset = self
             .read_reg(ADDR_HOMING_OFFSET, 4)
             .ok()
-            .and_then(|b| le_i32(&b))
-            .unwrap_or(0);
-        self.homing_offset = offset;
-        if (present < self.min_position || present > self.max_position) && offset != 0 {
+            .and_then(|b| le_i32(&b));
+        self.homing_offset = offset.unwrap_or(i32::MAX);
+        if offset != Some(0) {
             self.write_reg(
                 ADDR_HOMING_OFFSET,
                 &0i32.to_le_bytes(),
@@ -1304,7 +1306,18 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.homing_offset = 0;
+        }
+        let offset_got = self
+            .read_reg(ADDR_HOMING_OFFSET, 4)
+            .ok()
+            .and_then(|b| le_i32(&b));
+        if offset_got != Some(0) {
+            return Err(PlantError::refused(format!(
+                "dxl_homing_offset_unverified:{offset_got:?}"
+            )));
+        }
+        self.homing_offset = 0;
+        if offset != Some(0) {
             std::thread::sleep(Duration::from_millis(50));
             present = self
                 .read_reg(ADDR_PRESENT_POSITION, 4)

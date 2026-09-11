@@ -222,6 +222,9 @@ def init_regs() -> bytearray:
     if os.environ.get("REALITYOS_METAL_PTY_HOMING") == "1":
         regs[20:24] = struct.pack("<i", 10000)
         regs[132:136] = struct.pack("<i", 12048)
+    if os.environ.get("REALITYOS_METAL_PTY_HOMING_IN_WINDOW") == "1":
+        regs[20:24] = struct.pack("<i", 1024)
+        regs[132:136] = struct.pack("<i", 2048)
     regs[144:146] = struct.pack("<H", 0 if os.environ.get("REALITYOS_METAL_PTY_NO_VIN") == "1" else 50)
     regs[146] = 80 if os.environ.get("REALITYOS_METAL_PTY_HOT") == "1" else 25
     return regs
@@ -410,6 +413,13 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
                     # on torque-on in Position Control.
                     jumped = struct.unpack_from("<i", regs, 132)[0] + 16
                     regs[132:136] = struct.pack("<i", jumped)
+                offset = struct.unpack_from("<i", regs, 20)[0]
+                if offset != 0:
+                    # Leftover Homing Offset vs that reset throws Present
+                    # past the 48-tick cage even when pre-torque Present
+                    # was still inside 0–4095.
+                    present = struct.unpack_from("<i", regs, 132)[0]
+                    regs[132:136] = struct.pack("<i", present + 64)
             return b"", 0
         # Protocol 2.0 access error: EEPROM (0–63) is read-only while torque is on.
         if addr < 64 and regs[64] == 1:
@@ -437,6 +447,8 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         if addr == 13 and os.environ.get("REALITYOS_METAL_PTY_DROP_PROTOCOL_TYPE") == "1":
             return b"", 0
         if addr == 12 and os.environ.get("REALITYOS_METAL_PTY_DROP_SECONDARY_ID") == "1":
+            return b"", 0
+        if addr == 20 and os.environ.get("REALITYOS_METAL_PTY_DROP_HOMING_OFFSET") == "1":
             return b"", 0
         if addr == 20 and len(data) >= 4:
             old = struct.unpack_from("<i", regs, 20)[0]

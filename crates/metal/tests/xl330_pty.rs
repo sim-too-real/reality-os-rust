@@ -791,6 +791,49 @@ fn xl330_pty_clears_wizard_homing_offset_so_present_is_in_window() {
 }
 
 #[test]
+fn xl330_pty_clears_in_window_homing_offset_so_torque_on_does_not_yank() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_HOMING_IN_WINDOW", "1")]);
+    let root = metal_test_root("pty-homing-in-window");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("in-window Homing Offset 1024 must be cleared before torque-on");
+    assert_eq!(driver.applied_homing_offset(), 0);
+    driver.read_sensor(0.0).expect("sensor");
+    assert_eq!(
+        driver.last_present_position(),
+        1024,
+        "clearing Homing Offset with torque off shifts present in encoder space, not by moving the horn"
+    );
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold after clearing in-window homing offset");
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_homing_offset_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_HOMING_IN_WINDOW", "1"),
+        ("REALITYOS_METAL_PTY_DROP_HOMING_OFFSET", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-homing");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped Homing Offset write must not reach torque-on"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_homing_offset_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_torque_off_after_hw_error_reboot_so_eeprom_can_write() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_HW_ERROR", "1")]);
