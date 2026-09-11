@@ -328,8 +328,13 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             regs[132:136] = struct.pack("<i", present - old + new)
             return b"", 0
         regs[addr : addr + len(data)] = data
-        if addr == 116 and os.environ.get("REALITYOS_METAL_PTY_ALERT") == "1":
-            # Do not latch at boot — setup reboots a non-zero Hardware Error Status.
+        if (
+            addr == 116
+            and os.environ.get("REALITYOS_METAL_PTY_ALERT") == "1"
+            and regs[64] == 1
+        ):
+            # Latch only after torque-on. Setup writes goal=present with
+            # torque off; a boot-time latch would reboot and fail open.
             regs[70] = 4
         if addr == 116 and len(data) >= 4:
             p_gain = struct.unpack_from("<H", regs, 84)[0]
