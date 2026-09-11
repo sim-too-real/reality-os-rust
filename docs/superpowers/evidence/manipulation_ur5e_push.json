@@ -1,0 +1,2400 @@
+{
+  "episodes": [
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "Allowed:allow:",
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "reach",
+          "step": 0,
+          "target": [
+            0.4297712490689373,
+            -0.0937987987445108,
+            0.5336386020138438
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 1,
+          "target": [
+            0.4297712490689373,
+            -0.0937987987445108,
+            0.4736386020138439
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 2,
+          "target": [
+            0.5084643456838104,
+            -0.09516691185501817,
+            0.4736386020138439
+          ]
+        }
+      ],
+      "contacts": [
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "table",
+          "fn": 327.19163539408225,
+          "ft": 68.65826696618444
+        },
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "obj0",
+          "fn": 128.18401404238125,
+          "ft": 55.645324032620174
+        },
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "obj0",
+          "fn": 36.08160450718486,
+          "ft": 23.50950399240423
+        }
+      ],
+      "ctrl_writes": 3,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "object_not_moved"
+      ],
+      "expected_refusal": true,
+      "failure_taxonomy": "OBJECT_NOT_MOVABLE",
+      "joint_state": [
+        0.2967518868283086,
+        -1.5291444556692018,
+        -1.8946457528027567,
+        0.09167005468512572,
+        0.1628266391522435,
+        -2.690234041241972e-6
+      ],
+      "metal": false,
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.7266674626722762,
+          "mass": 80.0,
+          "movable": false,
+          "name": "obj0",
+          "pos": [
+            0.4297712490689373,
+            -0.0937987987445108,
+            0.4536386020138439
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.03363860201384389,
+            0.03363860201384389,
+            0.03363860201384389
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": [
+          0.4297712490689373,
+          -0.0937987987445108,
+          0.4536386020138439
+        ]
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "UnsupportedResourceTopology",
+      "robot_id": "menagerie_ur5e",
+      "semantic_resource": "none",
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "fail",
+      "unauthorized_writes": 0,
+      "world_seed": 3000
+    },
+    {
+      "authority_decisions": [],
+      "commands": [],
+      "contacts": [],
+      "ctrl_writes": 0,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "expected_refusal": true,
+      "failure_taxonomy": "STALE_OBJECT",
+      "joint_state": [],
+      "metal": false,
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.4922767182321847,
+          "mass": 0.29016770753565674,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.43187424914901673,
+            -0.04854654289834617,
+            0.44430800054412595
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.024308000544125956,
+            0.024308000544125956,
+            0.024308000544125956
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": null,
+      "robot_id": "menagerie_ur5e",
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "world_seed": 3001
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "Allowed:allow:",
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "reach",
+          "step": 0,
+          "target": [
+            0.29999999999963184,
+            -0.11999999999999976,
+            0.5269784399869728
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 1,
+          "target": [
+            0.29999999999963184,
+            -0.11999999999999976,
+            0.4669784399869728
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 2,
+          "target": [
+            0.36897814762631953,
+            -0.12777266811409374,
+            0.4669784399869728
+          ]
+        }
+      ],
+      "contacts": [
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "table",
+          "fn": 478.4404533677105,
+          "ft": 139.21452507814345
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.2813174011984909,
+          "ft": 2.9226634302539945e-14
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.28131740119756055,
+          "ft": 2.9226624418078484e-14
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.28131740119849047,
+          "ft": 2.9226624418078484e-14
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.28131740119756016,
+          "ft": 2.9226634302539945e-14
+        }
+      ],
+      "ctrl_writes": 3,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "controlled_contact_established",
+        "object_displaced_along_direction"
+      ],
+      "expected_refusal": true,
+      "failure_taxonomy": null,
+      "joint_state": [
+        0.31880293887266326,
+        -1.265243985895363,
+        -2.1081418808455306,
+        0.2225223264544041,
+        0.042811681581227806,
+        -2.5465792271676126e-6,
+        0.4799999999971334,
+        0.020000000000001968,
+        0.4494050425499583,
+        1.0,
+        -9.075471817867758e-17,
+        -1.6876215984439757e-13,
+        -2.159725940448458e-17
+      ],
+      "metal": false,
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.9774988030664433,
+          "mass": 0.11470638173212044,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.4543387418841276,
+            0.04832055135494345,
+            0.44951279797017474
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.029512797970174743,
+            0.029512797970174743,
+            0.029512797970174743
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": [
+          0.4799999999971328,
+          0.020000000000001968,
+          0.4494050425499583
+        ]
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "UnsupportedResourceTopology",
+      "robot_id": "menagerie_ur5e",
+      "semantic_resource": "none",
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 3002
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "Allowed:allow:",
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "reach",
+          "step": 0,
+          "target": [
+            0.3,
+            -0.12,
+            0.5241436344598953
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 1,
+          "target": [
+            0.3,
+            -0.12,
+            0.4641436344598953
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 2,
+          "target": [
+            0.3514348103758357,
+            -0.11831348478016926,
+            0.4641436344598953
+          ]
+        }
+      ],
+      "contacts": [
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "table",
+          "fn": 479.57506646952856,
+          "ft": 136.99207658440852
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.20426375201136443,
+          "ft": 0.0
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.20426375201136443,
+          "ft": 0.0
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.20426375201136443,
+          "ft": 0.0
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.20426375201136443,
+          "ft": 0.0
+        }
+      ],
+      "ctrl_writes": 3,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "controlled_contact_established"
+      ],
+      "expected_refusal": true,
+      "failure_taxonomy": "SLIP_AROUND_OBJECT",
+      "joint_state": [
+        0.3597015623941417,
+        -1.245717800295306,
+        -2.120940686503494,
+        0.24038359532055376,
+        0.02275840963844324,
+        -2.534744566654203e-6,
+        0.3,
+        -0.12,
+        0.444569856012038,
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "metal": false,
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.6667529211533125,
+          "mass": 0.08328797227782439,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.5447196713748845,
+            -0.08768847507915556,
+            0.4446776114322545
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.024677611432254474,
+            0.024677611432254474,
+            0.024677611432254474
+          ],
+          "type": "box"
+        },
+        {
+          "mass": 2.0,
+          "movable": false,
+          "name": "obstacle",
+          "pos": [
+            0.6247196713748845,
+            -0.08768847507915556,
+            0.4446776114322545
+          ],
+          "size": [
+            0.03,
+            0.03,
+            0.03
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": [
+          0.3,
+          -0.12,
+          0.444569856012038
+        ]
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "UnsupportedResourceTopology",
+      "robot_id": "menagerie_ur5e",
+      "semantic_resource": "none",
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "fail",
+      "unauthorized_writes": 0,
+      "world_seed": 3003
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "Allowed:allow:",
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "reach",
+          "step": 0,
+          "target": [
+            0.3,
+            -0.12,
+            0.5212789006916713
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 1,
+          "target": [
+            0.3,
+            -0.12,
+            0.4612789006916713
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 2,
+          "target": [
+            0.3677261217205032,
+            -0.12154800043149752,
+            0.4612789006916713
+          ]
+        }
+      ],
+      "contacts": [
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "table",
+          "fn": 479.1336081747602,
+          "ft": 137.58485046251354
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.6773786298929126,
+          "ft": 1.2490132384537688e-14
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.6773786298917208,
+          "ft": 1.24900398665234e-14
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.6773786298929088,
+          "ft": 1.2490132384537688e-14
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.677378629891718,
+          "ft": 1.2462253451417382e-14
+        }
+      ],
+      "ctrl_writes": 3,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "controlled_contact_established"
+      ],
+      "expected_refusal": true,
+      "failure_taxonomy": "SLIP_AROUND_OBJECT",
+      "joint_state": [
+        0.3356338609398508,
+        -1.256860874189057,
+        -2.113683327886216,
+        0.22464965906956497,
+        0.038325397857106695,
+        -2.5525144457174275e-6,
+        0.2999999999966123,
+        -0.1199999999999994,
+        0.44214884499124263,
+        1.0,
+        -3.357232756193597e-16,
+        8.458080323019454e-14,
+        -3.9277944843678046e-16
+      ],
+      "metal": false,
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.01,
+          "mass": 0.27619923746883374,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.5336306391394692,
+            -0.09557940713778473,
+            0.4422566004114591
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.02225660041145911,
+            0.02225660041145911,
+            0.02225660041145911
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": [
+          0.2999999999966125,
+          -0.1199999999999994,
+          0.44214884499124263
+        ]
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "UnsupportedResourceTopology",
+      "robot_id": "menagerie_ur5e",
+      "semantic_resource": "none",
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "fail",
+      "unauthorized_writes": 0,
+      "world_seed": 3004
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "replay:Refused:refuse",
+        "Allowed:allow:",
+        "replay:Refused:refuse",
+        "Allowed:allow:",
+        "replay:Refused:refuse"
+      ],
+      "commands": [
+        {
+          "kind": "reach",
+          "step": 0,
+          "target": [
+            0.29999999999972876,
+            -0.11999999999999998,
+            0.5271592176163089
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 1,
+          "target": [
+            0.29999999999972876,
+            -0.11999999999999998,
+            0.4671592176163089
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 2,
+          "target": [
+            0.38531409487154056,
+            -0.1104700091412962,
+            0.4671592176163089
+          ]
+        }
+      ],
+      "contacts": [
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "table",
+          "fn": 479.9563229227972,
+          "ft": 136.6796127979684
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.35555126440771445,
+          "ft": 3.4694469519536138e-15
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.3555512644070753,
+          "ft": 3.4694469519536138e-15
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.35555126440771406,
+          "ft": 3.4972300627541136e-15
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.3555512644070749,
+          "ft": 3.4694469519536138e-15
+        }
+      ],
+      "ctrl_writes": 3,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "controlled_contact_established"
+      ],
+      "expected_refusal": true,
+      "failure_taxonomy": "SLIP_AROUND_OBJECT",
+      "joint_state": [
+        0.34764928848523574,
+        -1.252391943328392,
+        -2.1166179782073966,
+        0.21207437445587857,
+        0.05252691996622775,
+        -2.5498300087729486e-6,
+        0.29999999999903976,
+        -0.11999999999999998,
+        0.4498129122762653,
+        1.0,
+        -4.378631286779319e-17,
+        -7.646033902362072e-14,
+        -7.071168749009409e-17
+      ],
+      "metal": false,
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.45745146211916893,
+          "mass": 0.14497503135877457,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.49171519571598976,
+            0.029222179791501685,
+            0.4499206676964817
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.029920667696481724,
+            0.029920667696481724,
+            0.029920667696481724
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": [
+          0.29999999999903953,
+          -0.11999999999999998,
+          0.4498129122762653
+        ]
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "UnsupportedResourceTopology",
+      "robot_id": "menagerie_ur5e",
+      "semantic_resource": "none",
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "fail",
+      "unauthorized_writes": 0,
+      "world_seed": 3005
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "replay:Refused:refuse",
+        "Allowed:allow:",
+        "replay:Refused:refuse",
+        "Allowed:allow:",
+        "replay:Refused:refuse"
+      ],
+      "commands": [
+        {
+          "kind": "reach",
+          "step": 0,
+          "target": [
+            0.3000000000004612,
+            -0.12,
+            0.5291543281472603
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 1,
+          "target": [
+            0.3000000000004612,
+            -0.12,
+            0.4691543281472603
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 2,
+          "target": [
+            0.3453419819178315,
+            -0.11872883457349791,
+            0.4691543281472603
+          ]
+        }
+      ],
+      "contacts": [
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "table",
+          "fn": 479.6255403035366,
+          "ft": 137.4204371167385
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.2847827560468795,
+          "ft": 3.303030116266701e-15
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.28478275604586656,
+          "ft": 3.302913498259841e-15
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.2847827560468783,
+          "ft": 3.2751873246050504e-15
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.2847827560458653,
+          "ft": 3.2752755289039277e-15
+        }
+      ],
+      "ctrl_writes": 3,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "controlled_contact_established"
+      ],
+      "expected_refusal": true,
+      "failure_taxonomy": "SLIP_AROUND_OBJECT",
+      "joint_state": [
+        0.36498566809032257,
+        -1.2427545133137907,
+        -2.122854037052312,
+        0.2463245297841546,
+        0.018310003988425923,
+        -2.5213653412010535e-6,
+        0.30000000000204863,
+        -0.12,
+        0.4543142722575883,
+        1.0,
+        -1.5096729395179322e-16,
+        -1.3236408994530436e-13,
+        -5.182296332182492e-16
+      ],
+      "metal": false,
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.8735514511019415,
+          "mass": 0.11611937045723636,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.40518384886366304,
+            0.027591146764126412,
+            0.4544220276778047
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.03442202767780474,
+            0.03442202767780474,
+            0.03442202767780474
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": [
+          0.3000000000020482,
+          -0.12,
+          0.4543142722575883
+        ]
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "UnsupportedResourceTopology",
+      "robot_id": "menagerie_ur5e",
+      "semantic_resource": "none",
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "fail",
+      "unauthorized_writes": 0,
+      "world_seed": 3006
+    },
+    {
+      "authority_decisions": [],
+      "commands": [],
+      "contacts": [],
+      "ctrl_writes": 0,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "expected_refusal": true,
+      "failure_taxonomy": "CONTROLLER_FAILURE",
+      "joint_state": [],
+      "metal": false,
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.44644054950709666,
+          "mass": 0.19327705405062776,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.5061724578666628,
+            -0.030625618977307895,
+            0.45615587328856505
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.03615587328856506,
+            0.03615587328856506,
+            0.03615587328856506
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": null,
+      "robot_id": "menagerie_ur5e",
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "world_seed": 3007
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "Allowed:allow:",
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "reach",
+          "step": 0,
+          "target": [
+            0.3,
+            -0.12,
+            0.5250368352144142
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 1,
+          "target": [
+            0.3,
+            -0.12,
+            0.46503683521441425
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 2,
+          "target": [
+            0.3817366410098801,
+            -0.1340857547956447,
+            0.46503683521441425
+          ]
+        }
+      ],
+      "contacts": [
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "table",
+          "fn": 477.84527361861143,
+          "ft": 142.93132371258596
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.9737456520339232,
+          "ft": 7.850462293418876e-17
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.9737456520339234,
+          "ft": 5.551115123125783e-17
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.9737456520339232,
+          "ft": 5.551115123125783e-17
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.9737456520339234,
+          "ft": 5.551115123125783e-17
+        }
+      ],
+      "ctrl_writes": 3,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "controlled_contact_established"
+      ],
+      "expected_refusal": true,
+      "failure_taxonomy": "SLIP_AROUND_OBJECT",
+      "joint_state": [
+        0.2927833046709349,
+        -1.2761066754604502,
+        -2.100868668975872,
+        0.2094107191767293,
+        0.056458632700406935,
+        -2.5611942230862657e-6,
+        0.3,
+        -0.12,
+        0.4450843386516257,
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "metal": false,
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.6398790619174367,
+          "mass": 0.3970420599526694,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.41944100958074987,
+            0.019010168728303828,
+            0.4451920940718422
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.025192094071842194,
+            0.025192094071842194,
+            0.025192094071842194
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": [
+          0.3,
+          -0.12,
+          0.4450843386516257
+        ]
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "UnsupportedResourceTopology",
+      "robot_id": "menagerie_ur5e",
+      "semantic_resource": "none",
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "fail",
+      "unauthorized_writes": 0,
+      "world_seed": 3008
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "Allowed:allow:",
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "reach",
+          "step": 0,
+          "target": [
+            0.5084433034908217,
+            -0.05943391661961073,
+            0.5362185078317157
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 1,
+          "target": [
+            0.5084433034908217,
+            -0.05943391661961073,
+            0.4762185078317157
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 2,
+          "target": [
+            0.6016731193167452,
+            -0.05992801516497331,
+            0.4762185078317157
+          ]
+        }
+      ],
+      "contacts": [
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "table",
+          "fn": 310.3950205064967,
+          "ft": 128.93232281858278
+        },
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.6904143627955848,
+          "ft": 0.2346659413705399
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 1.025417661116813,
+          "ft": 0.7274784277524076
+        }
+      ],
+      "ctrl_writes": 3,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "controlled_contact_established"
+      ],
+      "expected_refusal": true,
+      "failure_taxonomy": "SLIP_AROUND_OBJECT",
+      "joint_state": [
+        0.2971079374208066,
+        -1.7560607494667948,
+        -1.6500541169673062,
+        0.0025178515991967033,
+        0.2527547767117334,
+        -2.766299933840486e-6,
+        0.5256040374936816,
+        -0.07012605501706771,
+        0.4562305197430527,
+        0.9986182968232176,
+        0.002587460577734342,
+        0.002240857229323914,
+        -0.0524383529159131
+      ],
+      "metal": false,
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.867314161120637,
+          "mass": 0.10319526406097446,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.5084433034908217,
+            -0.05943391661961073,
+            0.4562185078317157
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.036218507831715735,
+            0.036218507831715735,
+            0.036218507831715735
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": [
+          0.5255774602111777,
+          -0.07011147052204245,
+          0.45623100962138713
+        ]
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "UnsupportedResourceTopology",
+      "robot_id": "menagerie_ur5e",
+      "semantic_resource": "none",
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "fail",
+      "unauthorized_writes": 0,
+      "world_seed": 3009
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "Allowed:allow:",
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "reach",
+          "step": 0,
+          "target": [
+            0.29999999999905397,
+            -0.12000000000000031,
+            0.5315119357520005
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 1,
+          "target": [
+            0.29999999999905397,
+            -0.12000000000000031,
+            0.4715119357520005
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 2,
+          "target": [
+            0.3949141847492588,
+            -0.12175609408690069,
+            0.4715119357520005
+          ]
+        }
+      ],
+      "contacts": [
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "table",
+          "fn": 478.7324938031539,
+          "ft": 139.3521343146502
+        },
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "obj0",
+          "fn": 1.011669902584558,
+          "ft": 0.8500188897522107
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.8356388226769703,
+          "ft": 0.5920596857153798
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.5977125145605029,
+          "ft": 0.3705494177793251
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.540310954622335,
+          "ft": 0.38253057127466006
+        }
+      ],
+      "ctrl_writes": 3,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "controlled_contact_established"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": "SLIP_AROUND_OBJECT",
+      "joint_state": [
+        0.3132075765940131,
+        -1.2682804938010626,
+        -2.106144325695133,
+        0.20147961928262303,
+        0.06609705493954039,
+        -2.5532530151521755e-6,
+        0.3069638772962345,
+        -0.12869147351945898,
+        0.45969874043843334,
+        0.9999959816117248,
+        0.0007534389670037631,
+        0.00030545937379707793,
+        0.002715839593392606
+      ],
+      "metal": false,
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.2924124100191772,
+          "mass": 0.19280914168233507,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.42462236474877774,
+            -0.06633181783733369,
+            0.4597412520310437
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.039741252031043714,
+            0.039741252031043714,
+            0.039741252031043714
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": [
+          0.30695289284190524,
+          -0.12867845192120106,
+          0.4596980700631445
+        ]
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "UnsupportedResourceTopology",
+      "robot_id": "menagerie_ur5e",
+      "semantic_resource": "none",
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "fail",
+      "unauthorized_writes": 0,
+      "world_seed": 3010
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "Allowed:allow:",
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "reach",
+          "step": 0,
+          "target": [
+            0.2999999999999866,
+            -0.12000000000001602,
+            0.5294584624315691
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 1,
+          "target": [
+            0.2999999999999866,
+            -0.12000000000001602,
+            0.46945846243156913
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 2,
+          "target": [
+            0.35643187021833356,
+            -0.1091856929008263,
+            0.46945846243156913
+          ]
+        }
+      ],
+      "contacts": [
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "table",
+          "fn": 480.24748892463714,
+          "ft": 137.47810506057462
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.2258307744411412,
+          "ft": 1.8670460564667343e-14
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.2258307744404092,
+          "ft": 1.8679360620888485e-14
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.22583077444026553,
+          "ft": 1.8674909833858643e-14
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.22583077443953364,
+          "ft": 1.8668717183156373e-14
+        }
+      ],
+      "ctrl_writes": 3,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "controlled_contact_established"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": "SLIP_AROUND_OBJECT",
+      "joint_state": [
+        0.37915329841666234,
+        -1.2383438994457785,
+        -2.125673130222018,
+        0.23862221196202832,
+        0.0258132177660028,
+        -2.5246997129380144e-6,
+        0.29999999999901467,
+        -0.1200000000011793,
+        0.4550004587495635,
+        1.0,
+        1.5542767939647505e-13,
+        -1.2992342469782684e-13,
+        -1.9533025805550913e-17
+      ],
+      "metal": false,
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.48653086945711177,
+          "mass": 0.0920818652152243,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.42880707354049974,
+            -0.09302419904263975,
+            0.45510821416978
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.03510821416978,
+            0.03510821416978,
+            0.03510821416978
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": [
+          0.2999999999990142,
+          -0.12000000000117984,
+          0.4550004587495635
+        ]
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "UnsupportedResourceTopology",
+      "robot_id": "menagerie_ur5e",
+      "semantic_resource": "none",
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "fail",
+      "unauthorized_writes": 0,
+      "world_seed": 3011
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "Allowed:allow:",
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "reach",
+          "step": 0,
+          "target": [
+            0.3,
+            -0.1199999999999999,
+            0.5253540437562985
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 1,
+          "target": [
+            0.3,
+            -0.1199999999999999,
+            0.4653540437562985
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 2,
+          "target": [
+            0.36583203152019106,
+            -0.1144598192560023,
+            0.4653540437562985
+          ]
+        }
+      ],
+      "contacts": [
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "table",
+          "fn": 479.675932587047,
+          "ft": 136.40362215627815
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.644991481518544,
+          "ft": 5.551115123125783e-17
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.644991481518544,
+          "ft": 5.551115123125783e-17
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.6449914815185447,
+          "ft": 6.206335383118183e-17
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.6449914815185447,
+          "ft": 2.7755575615628914e-17
+        }
+      ],
+      "ctrl_writes": 3,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "controlled_contact_established"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": "SLIP_AROUND_OBJECT",
+      "joint_state": [
+        0.355738971367663,
+        -1.249229052078204,
+        -2.1186652442871896,
+        0.22847884564530535,
+        0.035194958819237586,
+        -2.541455121143289e-6,
+        0.3,
+        -0.1199999999999999,
+        0.4457539069165613,
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "metal": false,
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.23552272865198987,
+          "mass": 0.2629934685090899,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.4845946289426065,
+            -0.0855811579851983,
+            0.4458616623367777
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.025861662336777752,
+            0.025861662336777752,
+            0.025861662336777752
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": [
+          0.3,
+          -0.1199999999999999,
+          0.4457539069165613
+        ]
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "UnsupportedResourceTopology",
+      "robot_id": "menagerie_ur5e",
+      "semantic_resource": "none",
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "fail",
+      "unauthorized_writes": 0,
+      "world_seed": 3012
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "Allowed:allow:",
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "reach",
+          "step": 0,
+          "target": [
+            0.2999999999999997,
+            -0.11999999999976016,
+            0.5314101958178283
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 1,
+          "target": [
+            0.2999999999999997,
+            -0.11999999999976016,
+            0.47141019581782834
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 2,
+          "target": [
+            0.38089594948579875,
+            -0.10535589101364812,
+            0.47141019581782834
+          ]
+        }
+      ],
+      "contacts": [
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "table",
+          "fn": 480.3099294053444,
+          "ft": 136.37847539777857
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.7406249667100403,
+          "ft": 2.6256906561746735e-14
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.7406249667100397,
+          "ft": 2.6173566672016124e-14
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.7406249667091378,
+          "ft": 2.6229077698662522e-14
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.7406249667091374,
+          "ft": 2.6173522522169993e-14
+        }
+      ],
+      "ctrl_writes": 3,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "controlled_contact_established"
+      ],
+      "expected_refusal": true,
+      "failure_taxonomy": "SLIP_AROUND_OBJECT",
+      "joint_state": [
+        0.3643786000537595,
+        -1.246216461680778,
+        -2.120620497806405,
+        0.21740494175659164,
+        0.04805024614019701,
+        -2.537188913839958e-6,
+        0.2999999999999977,
+        -0.11999999999783596,
+        0.459403951399632,
+        1.0,
+        -4.7812132262865816e-14,
+        -6.733267996998982e-17,
+        -1.0291647770879354e-15
+      ],
+      "metal": false,
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.01,
+          "mass": 0.3019877540100258,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.4225345395599842,
+            0.02772488267556872,
+            0.45951170681984843
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.03951170681984844,
+            0.03951170681984844,
+            0.03951170681984844
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": [
+          0.2999999999999977,
+          -0.11999999999783575,
+          0.459403951399632
+        ]
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "UnsupportedResourceTopology",
+      "robot_id": "menagerie_ur5e",
+      "semantic_resource": "none",
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "fail",
+      "unauthorized_writes": 0,
+      "world_seed": 3013
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "replay:Refused:refuse",
+        "Allowed:allow:",
+        "replay:Refused:refuse",
+        "Allowed:allow:",
+        "replay:Refused:refuse"
+      ],
+      "commands": [
+        {
+          "kind": "reach",
+          "step": 0,
+          "target": [
+            0.3000000000006912,
+            -0.12000000000000008,
+            0.5301149725271714
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 1,
+          "target": [
+            0.3000000000006912,
+            -0.12000000000000008,
+            0.47011497252717144
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 2,
+          "target": [
+            0.373438754903417,
+            -0.1285809943226821,
+            0.47011497252717144
+          ]
+        }
+      ],
+      "contacts": [
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "table",
+          "fn": 478.18050238102626,
+          "ft": 139.51709022712208
+        },
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "obj0",
+          "fn": 1.4202350966056283,
+          "ft": 1.171899804061652
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 1.2492818641036572,
+          "ft": 0.8546933616249908
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.7904378723976568,
+          "ft": 0.5244397382134284
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.706338125005473,
+          "ft": 0.49992033968124183
+        }
+      ],
+      "ctrl_writes": 3,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "controlled_contact_established"
+      ],
+      "expected_refusal": true,
+      "failure_taxonomy": "SLIP_AROUND_OBJECT",
+      "joint_state": [
+        0.31324430186948743,
+        -1.2673121297885963,
+        -2.1067654938018996,
+        0.21849814491243108,
+        0.048035123928173835,
+        -2.544112675950752e-6,
+        0.30494302783110305,
+        -0.12575304061625983,
+        0.45654720654610553,
+        0.9999956055134364,
+        0.0010338615792855191,
+        0.0005340015109873694,
+        -0.0027267061514097456
+      ],
+      "metal": false,
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.5287027302268733,
+          "mass": 0.26604596302096023,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.4245537249792661,
+            0.057759088831460303,
+            0.4565894294838355
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.03658942948383553,
+            0.03658942948383553,
+            0.03658942948383553
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": [
+          0.3049313607962284,
+          -0.1257400151522075,
+          0.4565457841892734
+        ]
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "UnsupportedResourceTopology",
+      "robot_id": "menagerie_ur5e",
+      "semantic_resource": "none",
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "fail",
+      "unauthorized_writes": 0,
+      "world_seed": 3014
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "Allowed:allow:",
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "reach",
+          "step": 0,
+          "target": [
+            0.29999999999959226,
+            -0.12,
+            0.5269159813792448
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 1,
+          "target": [
+            0.29999999999959226,
+            -0.12,
+            0.46691598137924484
+          ]
+        },
+        {
+          "kind": "reach",
+          "step": 2,
+          "target": [
+            0.3656993404696358,
+            -0.1237253092549562,
+            0.46691598137924484
+          ]
+        }
+      ],
+      "contacts": [
+        {
+          "a": "wrist_2_link",
+          "available": true,
+          "b": "table",
+          "fn": 478.9309054873784,
+          "ft": 138.0968524568295
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.7437358605622371,
+          "ft": 4.205043903186595e-14
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.7437358605609224,
+          "ft": 4.205043903186595e-14
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.7437358605622266,
+          "ft": 4.2078368044695224e-14
+        },
+        {
+          "a": "table",
+          "available": true,
+          "b": "obj0",
+          "fn": 0.7437358605609131,
+          "ft": 4.205028330997371e-14
+        }
+      ],
+      "ctrl_writes": 3,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "controlled_contact_established"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": "SLIP_AROUND_OBJECT",
+      "joint_state": [
+        0.3319355086018108,
+        -1.2584589820889795,
+        -2.11263142386667,
+        0.22643921463244335,
+        0.03837786570936592,
+        -2.5424702586613948e-6,
+        0.29999999999714866,
+        -0.12,
+        0.4492641237021278,
+        1.0,
+        -4.3162147896545954e-16,
+        -5.599006887490459e-14,
+        5.791057023495493e-17
+      ],
+      "metal": false,
+      "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.3112137641421379,
+          "mass": 0.3032562122575228,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.46920957111114525,
+            0.01683829846058535,
+            0.4493718791223442
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.029371879122344263,
+            0.029371879122344263,
+            0.029371879122344263
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": [
+          0.2999999999971485,
+          -0.12,
+          0.4492641237021278
+        ]
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "UnsupportedResourceTopology",
+      "robot_id": "menagerie_ur5e",
+      "semantic_resource": "none",
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "fail",
+      "unauthorized_writes": 0,
+      "world_seed": 3015
+    }
+  ],
+  "evidence_status": "SIMULATION_ONLY",
+  "extra": {
+    "grasp": "NOT_APPLICABLE",
+    "robot": "menagerie_ur5e"
+  },
+  "metal": false,
+  "metrics": {
+    "authority_violations": 0,
+    "expected_refusals": 11,
+    "grasp_acquisition_success": 0,
+    "grasp_episodes": 0,
+    "grasp_slip": 0,
+    "grasp_verified_hold_success": 0,
+    "push_contact_establishment": 13,
+    "push_episodes": 16,
+    "push_task_success": 1,
+    "release_episodes": 0,
+    "release_success": 0,
+    "safe_completion": 16,
+    "unauthorized_writes": 0,
+    "unexpected_physical_violations": 0
+  },
+  "n_episodes": 16,
+  "perception": "PERFECT_PERCEPTION",
+  "simulation_only": true
+}

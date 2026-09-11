@@ -211,8 +211,18 @@ class Instance:
                 }
             )
         tendons = []
+        wrap_joint = int(getattr(mujoco.mjtWrap, "mjWRAP_JOINT", 1))
         for i in range(int(getattr(m, "ntendon", 0))):
-            tendons.append({"name": m.tendon(i).name or f"tendon_{i}"})
+            joints = []
+            adr = int(m.tendon_adr[i]) if hasattr(m, "tendon_adr") else 0
+            num = int(m.tendon_num[i]) if hasattr(m, "tendon_num") else 0
+            for k in range(num):
+                wrap = int(m.wrap_type[adr + k])
+                obj = int(m.wrap_objid[adr + k])
+                prm = float(m.wrap_prm[adr + k])
+                if wrap == wrap_joint and 0 <= obj < m.njnt:
+                    joints.append({"name": m.joint(obj).name or f"joint_{obj}", "coef": prm})
+            tendons.append({"name": m.tendon(i).name or f"tendon_{i}", "joints": joints})
         equalities = []
         for i in range(int(getattr(m, "neq", 0))):
             eq_type = int(m.eq_type[i])
@@ -310,9 +320,16 @@ class Instance:
             for i in range(d.ncon):
                 try:
                     mujoco.mj_contactForce(m, d, i, force)
-                    cfrc.append(float(math.sqrt(force[0] ** 2 + force[1] ** 2 + force[2] ** 2)))
+                    nrm = float(force[0])
+                    tan = float(math.sqrt(force[1] ** 2 + force[2] ** 2))
+                    mag = float(math.sqrt(force[0] ** 2 + force[1] ** 2 + force[2] ** 2))
+                    cfrc.append(mag)
+                    contacts[i]["normal_force"] = nrm
+                    contacts[i]["tangential_force"] = tan
+                    contacts[i]["force_available"] = True
                 except Exception:
                     cfrc.append(0.0)
+                    contacts[i]["force_available"] = False
         qacc = _jlist(d.qacc)
         nan = (not _finite(d.qpos)) or (not _finite(d.qvel)) or any(x is None for x in qacc)
         ke = _jf(d.energy[1]) if len(d.energy) > 1 else 0.0
@@ -437,7 +454,11 @@ def _add_scenario_objects(spec: Any, extras: list[dict[str, Any]]) -> None:
         rgba = obj.get("rgba", [0.8, 0.2, 0.2, 1])
         mass = float(obj.get("mass", 0.05))
         movable = bool(obj.get("movable", True))
-        body = spec.worldbody.add_body(name=name, pos=pos)
+        quat = obj.get("quat")
+        body_kwargs = {"name": name, "pos": pos}
+        if quat is not None:
+            body_kwargs["quat"] = quat
+        body = spec.worldbody.add_body(**body_kwargs)
         if movable and kind != "plane":
             body.add_freejoint()
         kwargs: dict[str, Any] = {"rgba": rgba, "mass": mass}
@@ -450,6 +471,12 @@ def _add_scenario_objects(spec: Any, extras: list[dict[str, Any]]) -> None:
             body.add_geom(
                 type=mujoco.mjtGeom.mjGEOM_CAPSULE,
                 size=[size[0], size[1] if len(size) > 1 else 0.1, 0],
+                **kwargs,
+            )
+        elif kind == "cylinder":
+            body.add_geom(
+                type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                size=[size[0], size[1] if len(size) > 1 else 0.04, 0],
                 **kwargs,
             )
         elif kind == "plane":

@@ -9,6 +9,7 @@ pub const MENAGERIE_SHA: &str = "8161bba264d7fa7c99ca301e91e7fb44737676ad";
 pub const DEVELOPMENT_RELPATH: &str = "universal_robots_ur5e";
 pub const HOLDOUT_RELPATH: &str = "franka_emika_panda";
 pub const V2_HOLDOUT_RELPATH: &str = "kuka_iiwa_14";
+pub const MANIPULATION_HOLDOUT_RELPATH: &str = "trossen_wx250s";
 
 pub fn external_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../robots/external")
@@ -53,6 +54,18 @@ pub fn v2_holdout_model_dir() -> PathBuf {
 
 pub fn ensure_v2_holdout_model() -> Result<Value, String> {
     fetch_rel(V2_HOLDOUT_RELPATH, &v2_holdout_model_dir())
+}
+
+pub fn manipulation_holdout_bundle_dir() -> PathBuf {
+    external_root().join("wx250s")
+}
+
+pub fn manipulation_holdout_model_dir() -> PathBuf {
+    manipulation_holdout_bundle_dir().join("model")
+}
+
+pub fn ensure_manipulation_holdout_model() -> Result<Value, String> {
+    fetch_rel(MANIPULATION_HOLDOUT_RELPATH, &manipulation_holdout_model_dir())
 }
 
 fn fetch_rel(rel: &str, dest: &Path) -> Result<Value, String> {

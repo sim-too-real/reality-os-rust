@@ -1,3 +1,5 @@
+use crate::contact::SupportRelation;
+use crate::object::{ObjectState, PerceptionKind};
 use crate::provenance::{Provenance, Provenanced};
 use crate::transform::Se3;
 use serde::{Deserialize, Serialize};
@@ -34,6 +36,12 @@ pub struct WorldState {
     pub as_of_s: f64,
     pub goal: ReachGoal,
     pub objects: Vec<ObjectHypothesis>,
+    #[serde(default)]
+    pub object_states: Vec<ObjectState>,
+    #[serde(default)]
+    pub support: Vec<SupportRelation>,
+    #[serde(default)]
+    pub perception: Option<PerceptionKind>,
 }
 
 impl WorldState {
@@ -51,7 +59,19 @@ impl WorldState {
                 success_radius: 0.05,
             },
             objects: Vec::new(),
+            object_states: Vec::new(),
+            support: Vec::new(),
+            perception: None,
         }
+    }
+
+    pub fn with_perfect_perception(mut self) -> Self {
+        self.perception = Some(PerceptionKind::PerfectPerception);
+        self
+    }
+
+    pub fn object(&self, id: &str) -> Option<&ObjectState> {
+        self.object_states.iter().find(|o| o.object_id == id)
     }
 
     pub fn end_effector(&self) -> &str {

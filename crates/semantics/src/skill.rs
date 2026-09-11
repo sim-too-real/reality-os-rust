@@ -1,6 +1,8 @@
 use crate::capability::CapName;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SkillName {
     Observe,
     LookAt,
@@ -57,6 +59,11 @@ pub enum SkillRefuse {
     MissingJointState,
     KinematicsUnsupported,
     ModelFeatureUnsupported,
+    ResourceUnsupported,
+    StaleGripperState,
+    StaleObject,
+    Blocked,
+    UnexpectedContact,
 }
 
 impl SkillRefuse {
@@ -111,7 +118,10 @@ impl SkillContract {
     }
 
     pub fn is_qualified(&self) -> bool {
-        self.name == SkillName::Reach && !self.required.is_empty()
+        matches!(
+            self.name,
+            SkillName::Reach | SkillName::Release | SkillName::Grasp | SkillName::Push
+        ) && !self.required.is_empty()
     }
 }
 
@@ -148,9 +158,9 @@ mod tests {
     }
 
     #[test]
-    fn only_reach_is_qualified() {
+    fn named_placeholder_is_not_qualified() {
         assert!(SkillContract::reach().is_qualified());
-        assert!(!SkillContract::named(SkillName::Grasp).is_qualified());
+        assert!(!SkillContract::named(SkillName::Place).is_qualified());
     }
 
     #[test]
@@ -169,6 +179,11 @@ mod tests {
             SkillRefuse::MissingJointState,
             SkillRefuse::KinematicsUnsupported,
             SkillRefuse::ModelFeatureUnsupported,
+            SkillRefuse::ResourceUnsupported,
+            SkillRefuse::StaleGripperState,
+            SkillRefuse::StaleObject,
+            SkillRefuse::Blocked,
+            SkillRefuse::UnexpectedContact,
         ] {
             assert!(!r.writes_allowed());
         }

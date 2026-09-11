@@ -139,6 +139,8 @@ pub struct EmbodimentModel {
     pub grippers: Vec<Gripper>,
     pub transmissions: Vec<Transmission>,
     pub diagnostics: Vec<ModelDiagnostic>,
+    #[serde(default)]
+    pub resources: Vec<crate::resource::ControlledResource>,
     pub metal: bool,
 }
 
@@ -165,6 +167,7 @@ impl EmbodimentModel {
             grippers: Vec::new(),
             transmissions: Vec::new(),
             diagnostics: Vec::new(),
+            resources: Vec::new(),
             metal: false,
         }
     }

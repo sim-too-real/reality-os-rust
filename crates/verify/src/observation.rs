@@ -75,7 +75,7 @@ pub struct VerifierTruth {
     pub last_ee_time: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ContactTruth {
     pub body1: String,
     pub body2: String,
@@ -85,6 +85,12 @@ pub struct ContactTruth {
     pub group1: i32,
     #[serde(default)]
     pub group2: i32,
+    #[serde(default)]
+    pub normal_force: Option<f64>,
+    #[serde(default)]
+    pub tangential_force: Option<f64>,
+    #[serde(default)]
+    pub force_available: bool,
 }
 
 impl VerifierTruth {
@@ -132,6 +138,9 @@ impl VerifierTruth {
                         force: forces.get(i).copied().unwrap_or(0.0),
                         group1: c["group1"].as_i64().unwrap_or(-1) as i32,
                         group2: c["group2"].as_i64().unwrap_or(-1) as i32,
+                        normal_force: c.get("normal_force").and_then(|v| v.as_f64()),
+                        tangential_force: c.get("tangential_force").and_then(|v| v.as_f64()),
+                        force_available: c["force_available"].as_bool().unwrap_or(false),
                     })
                     .collect()
             })

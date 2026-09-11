@@ -205,6 +205,37 @@ pub fn lower_named_targets(
     Ok(out)
 }
 
+pub fn lower_actuator_commands(
+    model: &EmbodimentModel,
+    commands: &crate::command::ActuatorCommandSet,
+    current_by_name: &std::collections::HashMap<String, f64>,
+) -> Result<Vec<(String, f64)>, SkillRefuse> {
+    let mut out = Vec::new();
+    for act in &model.actuators {
+        if let Some(c) = commands
+            .commands
+            .iter()
+            .find(|c| c.actuator_name == act.name)
+        {
+            out.push((act.name.clone(), c.value));
+        } else {
+            let hold = current_by_name
+                .get(&act.name)
+                .or_else(|| current_by_name.get(&act.target_joint))
+                .copied();
+            match commands.hold_outside {
+                HoldSemantics::KeepCurrent | HoldSemantics::ExplicitSafe => {
+                    out.push((act.name.clone(), hold.unwrap_or(0.0)));
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        return Err(SkillRefuse::MissingActuator);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 use crate::embodiment::{unknown_se3, Actuator, Body, EndEffector, FrameKind, Joint, ModelFrame};
 #[cfg(test)]

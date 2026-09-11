@@ -13,6 +13,9 @@ pub enum CapName {
     FloatingBase,
     Grasping,
     ParallelGripper,
+    GripperOpenClose,
+    ContactManipulation,
+    Pushing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -320,12 +323,81 @@ pub fn derive_capabilities(model: &EmbodimentModel, qualify_ok: Option<bool>) ->
             gripper_status,
             vec![],
             vec![],
+            gripper_reason.clone(),
+        ),
+        node(
+            CapName::GripperOpenClose,
+            gripper_status,
+            vec![],
+            vec![],
             gripper_reason,
+        ),
+        node(
+            CapName::ContactManipulation,
+            if has_ee {
+                CapStatus::PartiallySupported
+            } else {
+                CapStatus::Unsupported
+            },
+            vec![],
+            vec![],
+            None,
+        ),
+        node(
+            CapName::Pushing,
+            if has_ee {
+                CapStatus::PartiallySupported
+            } else {
+                CapStatus::NotApplicable
+            },
+            vec![],
+            vec![],
+            None,
         ),
     ];
     nodes.extend(scoped);
 
     CapabilityGraph { nodes }
+}
+
+pub fn apply_resource_qualification(
+    mut graph: CapabilityGraph,
+    gripper_open_close_proven: bool,
+    grasping_supported: bool,
+    pushing_supported: bool,
+) -> CapabilityGraph {
+    for n in &mut graph.nodes {
+        match n.name {
+            CapName::GripperOpenClose if gripper_open_close_proven => {
+                n.status = CapStatus::Proven;
+                n.evidence.push("resource_qualification".into());
+                n.unsupported_reason = None;
+            }
+            CapName::ParallelGripper if gripper_open_close_proven => {
+                if n.status != CapStatus::Unsupported && n.status != CapStatus::NotApplicable {
+                    n.status = CapStatus::Supported;
+                    n.evidence.push("resource_qualification".into());
+                }
+            }
+            CapName::Grasping if grasping_supported => {
+                if n.status != CapStatus::Unsupported && n.status != CapStatus::NotApplicable {
+                    n.status = CapStatus::Supported;
+                    n.evidence.push("resource_qualification".into());
+                }
+            }
+            CapName::Pushing | CapName::ContactManipulation if pushing_supported => {
+                if n.status != CapStatus::Unsupported {
+                    n.status = CapStatus::Supported;
+                    n.evidence.push("contact_ee_present".into());
+                }
+            }
+            _ => {}
+        }
+        if n.name == CapName::Grasping && n.status == CapStatus::Proven {
+            n.status = CapStatus::Supported;
+        }
+    }
+    graph
 }
 
 #[cfg(test)]
@@ -471,6 +543,13 @@ mod tests {
         );
         assert_ne!(g.get(CapName::Grasping).status, CapStatus::Proven);
         assert_ne!(g.get(CapName::Grasping).status, CapStatus::Supported);
+        let promoted = apply_resource_qualification(g, true, true, true);
+        assert_eq!(
+            promoted.get(CapName::GripperOpenClose).status,
+            CapStatus::Proven
+        );
+        assert_eq!(promoted.get(CapName::Grasping).status, CapStatus::Supported);
+        assert_ne!(promoted.get(CapName::Grasping).status, CapStatus::Proven);
     }
 
     #[test]

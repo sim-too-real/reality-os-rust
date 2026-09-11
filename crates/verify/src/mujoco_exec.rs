@@ -100,7 +100,7 @@ fn rpc_timeout() -> Duration {
     let ms = std::env::var("REALITYOS_RPC_TIMEOUT_MS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(30_000u64);
+        .unwrap_or(90_000u64);
     Duration::from_millis(ms.max(50))
 }
 
@@ -349,6 +349,16 @@ impl MujocoInstance {
 
     pub fn step(&mut self, n: u32) -> Result<Value, ExecError> {
         self.rpc(&json!({"cmd":"step","n": n}))
+    }
+
+    pub fn set_body_pos(&mut self, body: &str, pos: [f64; 3]) -> Result<Value, ExecError> {
+        let r = self.rpc(&json!({"cmd":"set_body_pos","body": body, "pos": pos}))?;
+        if r["ok"] != true {
+            return Err(ExecError::Msg(
+                r["error"].as_str().unwrap_or("set_body_pos").into(),
+            ));
+        }
+        Ok(r)
     }
 
     pub fn reset(

@@ -104,6 +104,42 @@ fn apply_resolved_to_task(resolved: &mut ResolvedScenario) {
     }
 }
 
+/// Shrink a failed manipulation episode over pose/mass/friction/push/grasp offset.
+pub fn minimize_manipulation(
+    seed: u64,
+    robot_id: &str,
+    model_hash: &str,
+    params: &std::collections::BTreeMap<String, f64>,
+    still_fails: impl Fn(&std::collections::BTreeMap<String, f64>) -> bool,
+) -> MinimalCounterexample {
+    let mut reduced = params.clone();
+    for key in ["object.x", "object.y", "object.z", "mass", "friction", "push.distance", "grasp.offset"]
+    {
+        if let Some(v) = reduced.get(key).copied() {
+            for scale in [0.5, 0.25, 0.1] {
+                let mut trial = reduced.clone();
+                trial.insert(key.into(), v * scale);
+                if still_fails(&trial) {
+                    reduced = trial;
+                    break;
+                }
+            }
+        }
+    }
+    MinimalCounterexample {
+        original_seed: seed,
+        family: "MANIPULATION".into(),
+        robot_id: robot_id.into(),
+        reduced: reduced.clone(),
+        fewer_objects: 0,
+        earlier_fail_s: None,
+        narrative: format!(
+            "manipulation seed {seed} reduced to {reduced:?}; robot={robot_id}"
+        ),
+        reproducible_from: format!("robot_hash={model_hash} seed={seed}"),
+    }
+}
+
 fn still_fails(e: &EpisodeEvidence) -> bool {
     !e.task_success
         || e.violations.iter().any(|v| v.code == "NAN_STATE")
@@ -171,5 +207,19 @@ mod tests {
         let m = minimize(&spec, &ev, |_| None);
         assert_eq!(m.original_seed, 18472);
         assert!(m.reproducible_from.contains("18472"));
+    }
+
+    #[test]
+    fn manipulation_reducer_keeps_seed() {
+        let mut params = std::collections::BTreeMap::new();
+        params.insert("mass".into(), 1.0);
+        params.insert("friction".into(), 0.8);
+        params.insert("push.distance".into(), 0.1);
+        let m = minimize_manipulation(9, "arm", "hash", &params, |p| {
+            p.get("mass").copied().unwrap_or(0.0) >= 0.1
+        });
+        assert_eq!(m.original_seed, 9);
+        assert!(m.reduced.get("mass").copied().unwrap() <= 1.0);
+        assert!(m.reproducible_from.contains("hash"));
     }
 }

@@ -16,6 +16,10 @@ pub mod format;
 pub mod foundation_report;
 pub mod held_out;
 pub mod honesty;
+pub mod manipulation;
+pub mod manipulation_holdout;
+pub mod manipulation_scenarios;
+pub mod manipulation_verify;
 pub mod menagerie;
 pub mod mujoco_exec;
 pub mod normalize;
@@ -24,6 +28,8 @@ pub mod policy;
 pub mod qualify;
 pub mod reach_foundation;
 pub mod reduce;
+pub mod resource_discover;
+pub mod resource_qualify;
 pub mod runner;
 pub mod scenario;
 pub mod semantics_map;
@@ -274,6 +280,7 @@ mod integration_tests {
                 force: 3.0,
                 group1: 0,
                 group2: 0,
+                ..Default::default()
             }],
             ..crate::observation::VerifierTruth::default()
         };

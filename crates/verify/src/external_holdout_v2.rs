@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 
+pub const GENERALITY_V2_FREEZE_SHA: &str = "b580c6275acc797c7433faa490cc712107b0adb5";
+
 pub const V2_TARGET_PROCEDURE: &str =
     "sample_10_privileged_ee_world_points_zgt0.05_xygt0.08_rlt1.4";
 

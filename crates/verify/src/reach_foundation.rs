@@ -587,6 +587,10 @@ fn refuse_string(err: SkillRefuse) -> String {
         SkillRefuse::MissingJointState => "PROBE".into(),
         SkillRefuse::KinematicsUnsupported => "KINEMATICS_UNSUPPORTED_FOR_ADAPTER".into(),
         SkillRefuse::ModelFeatureUnsupported => "MODEL_FEATURE_UNSUPPORTED".into(),
+        SkillRefuse::ResourceUnsupported => "RESOURCE_UNSUPPORTED".into(),
+        SkillRefuse::StaleGripperState | SkillRefuse::StaleObject => "REFUSE".into(),
+        SkillRefuse::Blocked => "BLOCKED".into(),
+        SkillRefuse::UnexpectedContact => "UNEXPECTED_CONTACT".into(),
     }
 }
 
