@@ -220,6 +220,42 @@ fn xl330_pty_outbound_nudge_at_cage_edge_is_refused() {
 }
 
 #[test]
+fn xl330_pty_refuses_setup_when_leftover_window_cannot_host_nudge() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_TIGHT_WINDOW", "1")]);
+    let root = metal_test_root("pty-tight-window");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("20-tick leftover Wizard window must not torque-on"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("metal_experiment_cage_no_inbound_step"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_setup_when_edge_window_is_eaten_by_hold_still() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_EDGE32", "1")]);
+    let root = metal_test_root("pty-edge32");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("32-tick leftover edge window must not torque-on; hold hunt eats the step"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("metal_experiment_cage_no_inbound_step"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_inbound_nudge_at_wizard_max_window_tracks() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_AT_MAX", "1")]);

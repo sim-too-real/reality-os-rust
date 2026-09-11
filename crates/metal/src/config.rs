@@ -213,6 +213,17 @@ impl MetalConfig {
                 self.max_total_excursion_ticks
             ));
         }
+        if self.max_position_delta_ticks > 0 {
+            let need = self
+                .max_position_delta_ticks
+                .saturating_add(HOLD_STILL_HEADROOM_TICKS);
+            if self.max_total_excursion_ticks < need {
+                return Err(format!(
+                    "metal_max_total_excursion_ticks_too_small_for_nudge:excursion={}:need={need}:delta={}:hold_still={HOLD_STILL_HEADROOM_TICKS}",
+                    self.max_total_excursion_ticks, self.max_position_delta_ticks
+                ));
+            }
+        }
         if !self.freshness_threshold_s.is_finite() || self.freshness_threshold_s <= 0.0 {
             return Err(format!(
                 "metal_freshness_threshold_invalid:{}",
@@ -350,6 +361,11 @@ pub fn candidate_servo_ids(configured: u8, extra: Option<u8>) -> Vec<u8> {
     out
 }
 
+/// No-load encoder hunt accepted as hold-still. Must match
+/// `proof::HOLD_STILL_MAX_ABS_TICKS`. A leftover Wizard window must still
+/// host the certified nudge after `valid_hold` hunts this far.
+pub const HOLD_STILL_HEADROOM_TICKS: i32 = 4;
+
 /// Prefer `+delta` ticks when that goal is inside the experiment cage.
 /// Only pick `-delta` when `+delta` would refuse.
 ///
@@ -383,6 +399,29 @@ pub fn pick_inbound_nudge_action(
     Err(format!(
         "metal_nudge_no_inbound_step:present={present}:delta={delta_ticks}:cage={experiment_min}..{experiment_max}"
     ))
+}
+
+/// Refuse a leftover Wizard window that cannot host the certified step
+/// after a hold-still hunt. Setup must fail before torque-on; the
+/// campaign picker after `valid_hold` is too late (horn already energized).
+/// Does not widen EEPROM limits against a fixture.
+pub fn cage_allows_inbound_nudge_after_hold_still(
+    present: i32,
+    experiment_min: i32,
+    experiment_max: i32,
+    delta_ticks: i32,
+    tau_max: f64,
+) -> Result<(), String> {
+    let lo = present
+        .saturating_sub(HOLD_STILL_HEADROOM_TICKS)
+        .max(experiment_min);
+    let hi = present
+        .saturating_add(HOLD_STILL_HEADROOM_TICKS)
+        .min(experiment_max);
+    for p in [present, lo, hi] {
+        pick_inbound_nudge_action(p, experiment_min, experiment_max, delta_ticks, tau_max)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -668,6 +707,45 @@ mod tests {
         );
         let err = pick_inbound_nudge_action(2048, 2048, 2048, delta, tau).unwrap_err();
         assert!(err.contains("metal_nudge_no_inbound_step"), "{err}");
+    }
+
+    #[test]
+    fn hold_still_headroom_matches_proof_band() {
+        assert_eq!(
+            i64::from(HOLD_STILL_HEADROOM_TICKS),
+            crate::proof::HOLD_STILL_MAX_ABS_TICKS
+        );
+    }
+
+    #[test]
+    fn leftover_wizard_window_must_survive_hold_still_then_nudge() {
+        let cfg = MetalConfig::example("/dev/ttyUSB0");
+        let delta = cfg.max_position_delta_ticks;
+        let tau = cfg.tau_max;
+        cage_allows_inbound_nudge_after_hold_still(2048, 2000, 2096, delta, tau)
+            .expect("factory ±48 mid-range hosts +32 after a 4-tick hunt");
+        cage_allows_inbound_nudge_after_hold_still(2048, 2000, 2048, delta, tau)
+            .expect("AT_MAX 48-tick inbound window still hosts -32 after hunt");
+        cage_allows_inbound_nudge_after_hold_still(0, 0, 48, delta, tau)
+            .expect("horn at 0 with ±48 hosts +32 after hunt");
+        let tight = cage_allows_inbound_nudge_after_hold_still(2048, 2040, 2060, delta, tau)
+            .expect_err("20-tick leftover window cannot host ±32");
+        assert!(tight.contains("metal_nudge_no_inbound_step"), "{tight}");
+        let edge32 = cage_allows_inbound_nudge_after_hold_still(2048, 2016, 2048, delta, tau)
+            .expect_err("exactly 32 ticks at max is eaten by hold-still hunt");
+        assert!(edge32.contains("metal_nudge_no_inbound_step"), "{edge32}");
+    }
+
+    #[test]
+    fn excursion_must_leave_hold_still_room_for_the_certified_step() {
+        let mut cfg = MetalConfig::example("/dev/ttyUSB0");
+        assert!(cfg.validate_xl330_limits().is_ok());
+        cfg.max_total_excursion_ticks = 16;
+        let err = cfg.validate_xl330_limits().unwrap_err();
+        assert!(
+            err.contains("metal_max_total_excursion_ticks_too_small_for_nudge"),
+            "{err}"
+        );
     }
 
     #[test]

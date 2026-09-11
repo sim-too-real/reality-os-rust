@@ -163,6 +163,15 @@ def init_regs() -> bytearray:
     regs[52:56] = struct.pack("<i", 0)
     if os.environ.get("REALITYOS_METAL_PTY_AT_MAX") == "1":
         regs[48:52] = struct.pack("<i", 2048)
+    if os.environ.get("REALITYOS_METAL_PTY_TIGHT_WINDOW") == "1":
+        # Wizard leftover ~20-tick window around present. Neither ±32 fits.
+        regs[48:52] = struct.pack("<i", 2060)
+        regs[52:56] = struct.pack("<i", 2040)
+    if os.environ.get("REALITYOS_METAL_PTY_EDGE32") == "1":
+        # Leftover max==present with exactly 32 inbound ticks. valid_hold
+        # hunt of 4 then makes -32 miss; setup must refuse before torque-on.
+        regs[48:52] = struct.pack("<i", 2048)
+        regs[52:56] = struct.pack("<i", 2016)
     if os.environ.get("REALITYOS_METAL_PTY_PRESENT_OUTSIDE") == "1":
         regs[48:52] = struct.pack("<i", 2100)
         regs[52:56] = struct.pack("<i", 2000)

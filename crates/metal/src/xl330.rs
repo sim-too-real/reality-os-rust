@@ -18,9 +18,9 @@ use realityos_plant::{
 use serialport::SerialPort;
 
 use crate::config::{
-    candidate_bauds, candidate_servo_ids, discover_baud_attempts, MetalConfig, BUS_DIR,
-    CAGE_EVIDENCE_FILE, CANDIDATE_BAUDS, GOAL_FILE, LOCK_FILE, MOVING_FILE, PRESENT_FILE,
-    PWM_EVIDENCE_FILE, VIN_FILE,
+    cage_allows_inbound_nudge_after_hold_still, candidate_bauds, candidate_servo_ids,
+    discover_baud_attempts, MetalConfig, BUS_DIR, CAGE_EVIDENCE_FILE, CANDIDATE_BAUDS, GOAL_FILE,
+    LOCK_FILE, MOVING_FILE, PRESENT_FILE, PWM_EVIDENCE_FILE, VIN_FILE,
 };
 use crate::egress::EgressLog;
 use crate::identity::{
@@ -1612,6 +1612,19 @@ impl Xl330Driver {
                 "metal_experiment_cage_empty:present={present}:min={experiment_min}:max={experiment_max}"
             )));
         }
+        // A leftover Wizard window tighter than the certified step (or only
+        // barely 32 ticks at the edge) used to pass setup, run valid_hold,
+        // then fail the inbound picker after the horn was already energized.
+        // Hold-still hunt of a few ticks then makes -32 miss a 32-tick edge
+        // window. Do not widen EEPROM against a fixture; refuse before write.
+        cage_allows_inbound_nudge_after_hold_still(
+            present,
+            experiment_min,
+            experiment_max,
+            self.cfg.max_position_delta_ticks,
+            self.cfg.tau_max,
+        )
+        .map_err(|e| PlantError::refused(format!("metal_experiment_cage_no_inbound_step:{e}")))?;
         self.startup_present = present;
         self.experiment_min = experiment_min;
         self.experiment_max = experiment_max;
