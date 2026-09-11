@@ -30,6 +30,8 @@ pub enum CapStatus {
 pub struct CapNode {
     pub name: CapName,
     pub status: CapStatus,
+    #[serde(default)]
+    pub resource: Option<String>,
     pub evidence: Vec<String>,
     pub confidence: Option<f64>,
     pub dependencies: Vec<CapName>,
@@ -79,9 +81,28 @@ fn node(
     dependencies: Vec<CapName>,
     unsupported_reason: Option<String>,
 ) -> CapNode {
+    scoped_node(
+        name,
+        None,
+        status,
+        evidence,
+        dependencies,
+        unsupported_reason,
+    )
+}
+
+fn scoped_node(
+    name: CapName,
+    resource: Option<String>,
+    status: CapStatus,
+    evidence: Vec<String>,
+    dependencies: Vec<CapName>,
+    unsupported_reason: Option<String>,
+) -> CapNode {
     CapNode {
         name,
         status,
+        resource,
         evidence,
         confidence: None,
         dependencies,
@@ -89,27 +110,83 @@ fn node(
     }
 }
 
-pub fn derive_capabilities(model: &EmbodimentModel, qualify_ok: Option<bool>) -> CapabilityGraph {
-    let has_position = model
-        .actuators
-        .iter()
-        .any(|a| a.control_mode == "position" && actuator_on_1dof_hinge_or_slide(model, a));
+fn chain_position_coverage(model: &EmbodimentModel, chain: &[String]) -> (usize, usize) {
+    let mut required = 0;
+    let mut covered = 0;
+    for name in chain {
+        let Some(joint) = model.joints.iter().find(|j| j.name == *name) else {
+            continue;
+        };
+        if !is_1dof_hinge_or_slide(joint) {
+            continue;
+        }
+        required += 1;
+        if model.actuators.iter().any(|a| {
+            a.target_joint == *name
+                && a.control_mode == "position"
+                && actuator_on_1dof_hinge_or_slide(model, a)
+        }) {
+            covered += 1;
+        }
+    }
+    (covered, required)
+}
 
-    let joint_position_status = if has_position {
+pub fn derive_capabilities(model: &EmbodimentModel, qualify_ok: Option<bool>) -> CapabilityGraph {
+    let mut chain_required = 0;
+    let mut chain_covered = 0;
+    let mut scoped = Vec::new();
+    for ee in &model.end_effectors {
+        let (covered, required) = chain_position_coverage(model, &ee.joint_chain);
+        chain_required += required;
+        chain_covered += covered;
+        let status = if required == 0 {
+            CapStatus::Unsupported
+        } else if covered == required {
+            CapStatus::Supported
+        } else if covered > 0 {
+            CapStatus::PartiallySupported
+        } else {
+            CapStatus::Unsupported
+        };
+        scoped.push(scoped_node(
+            CapName::JointPositionControl,
+            Some(format!("chain:{}", ee.name)),
+            status,
+            vec![format!("covered:{covered}/{required}")],
+            vec![],
+            None,
+        ));
+    }
+
+    let joint_position_status = if chain_required == 0 {
+        let has_any = model
+            .actuators
+            .iter()
+            .any(|a| a.control_mode == "position" && actuator_on_1dof_hinge_or_slide(model, a));
+        if has_any {
+            CapStatus::PartiallySupported
+        } else {
+            CapStatus::Unsupported
+        }
+    } else if chain_covered == chain_required {
         if qualify_ok == Some(true) {
             CapStatus::Proven
         } else {
             CapStatus::Supported
         }
+    } else if chain_covered > 0 {
+        CapStatus::PartiallySupported
     } else {
         CapStatus::Unsupported
     };
 
-    let joint_position_evidence = if qualify_ok == Some(true) && has_position {
-        vec!["sim_qualify".into()]
-    } else {
-        vec![]
-    };
+    let joint_position_evidence =
+        if qualify_ok == Some(true) && chain_covered == chain_required && chain_required > 0 {
+            vec!["sim_qualify".into()]
+        } else {
+            vec![]
+        };
 
     let has_velocity = model.actuators.iter().any(|a| {
         (a.control_mode == "velocity" || a.control_mode == "motor")
@@ -168,17 +245,14 @@ pub fn derive_capabilities(model: &EmbodimentModel, qualify_ok: Option<bool>) ->
         CapStatus::NotApplicable
     };
 
-    let has_valid_gripper = model
-        .grippers
-        .iter()
-        .any(|g| !g.actuator.is_empty() && g.opening_range.value.is_some());
-    let gripper_status = if has_valid_gripper {
-        CapStatus::Supported
+    let has_named_gripper = model.grippers.iter().any(|g| !g.actuator.is_empty());
+    let gripper_status = if has_named_gripper {
+        CapStatus::PartiallySupported
     } else {
         CapStatus::Unsupported
     };
 
-    let nodes = vec![
+    let mut nodes = vec![
         node(
             CapName::JointPositionControl,
             joint_position_status,
@@ -229,6 +303,7 @@ pub fn derive_capabilities(model: &EmbodimentModel, qualify_ok: Option<bool>) ->
             None,
         ),
     ];
+    nodes.extend(scoped);
 
     CapabilityGraph { nodes }
 }
@@ -252,6 +327,11 @@ mod tests {
             q_max: Provenanced::unknown("test", 0.0),
             dq_max: Provenanced::unknown("test", 0.0),
             effort_max: Provenanced::unknown("test", 0.0),
+            origin_in_child: Provenanced::unknown("test", 0.0),
+            parent_to_joint: crate::embodiment::unknown_se3("test"),
+            joint_to_child: crate::embodiment::unknown_se3("test"),
+            qpos_adr: None,
+            dof_adr: None,
         }
     }
 
@@ -352,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn gripper_supported_with_actuator_and_range() {
+    fn gripper_yaml_is_not_grasp_proven_or_supported() {
         let mut m = synth_fixed_position_arm();
         m.grippers.push(Gripper {
             name: "g0".into(),
@@ -360,8 +440,27 @@ mod tests {
             opening_range: Provenanced::declared([0.0, 0.08], "test", 0.0),
         });
         let g = derive_capabilities(&m, Some(true));
-        assert_eq!(g.get(CapName::Grasping).status, CapStatus::Supported);
-        assert_eq!(g.get(CapName::ParallelGripper).status, CapStatus::Supported);
+        assert_eq!(
+            g.get(CapName::Grasping).status,
+            CapStatus::PartiallySupported
+        );
+        assert_eq!(
+            g.get(CapName::ParallelGripper).status,
+            CapStatus::PartiallySupported
+        );
         assert_ne!(g.get(CapName::Grasping).status, CapStatus::Proven);
+        assert_ne!(g.get(CapName::Grasping).status, CapStatus::Supported);
+    }
+
+    #[test]
+    fn one_position_actuator_does_not_support_a_two_joint_chain() {
+        let mut m = synth_fixed_position_arm();
+        m.joints.push(synth_joint("j1"));
+        m.end_effectors[0].joint_chain = vec!["j0".into(), "j1".into()];
+        let g = derive_capabilities(&m, None);
+        assert_eq!(
+            g.get(CapName::JointPositionControl).status,
+            CapStatus::PartiallySupported
+        );
     }
 }

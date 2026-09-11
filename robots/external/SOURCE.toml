@@ -1,0 +1,7 @@
+repo = "https://github.com/google-deepmind/mujoco_menagerie"
+commit = "8161bba264d7fa7c99ca301e91e7fb44737676ad"
+development_relpath = "universal_robots_ur5e"
+development_model = "ur5e.xml"
+development_license = "BSD-3-Clause"
+development_license_attribution = "Copyright 2018 ROS Industrial Consortium"
+imported_at_note = "Pinned official DeepMind Menagerie commit. Fetched on demand; not a third-party fork."

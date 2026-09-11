@@ -2,7 +2,9 @@
 
 pub mod adapter;
 pub mod capability;
+pub mod command;
 pub mod embodiment;
+pub mod kinematics;
 pub mod observation;
 pub mod provenance;
 pub mod reach;
@@ -17,13 +19,26 @@ pub const SCHEMA_FAMILY: &str = "realityos.semantics/1";
 mod quarantine {
     #[test]
     fn semantics_sources_do_not_name_held_out_robot() {
-        let needle = ["wrist", "offset", "arm"].join("_");
+        let forbidden = [
+            ["wrist", "offset", "arm"].join("_"),
+            ["ur", "5e"].join(""),
+            ["ur", "5"].join(""),
+            ["pan", "da"].join(""),
+            ["fran", "ka"].join(""),
+        ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         for ent in std::fs::read_dir(root).unwrap() {
             let p = ent.unwrap().path();
             if p.extension().and_then(|e| e.to_str()) == Some("rs") {
                 let t = std::fs::read_to_string(&p).unwrap();
-                assert!(!t.contains(&needle), "{}", p.display());
+                let lower = t.to_ascii_lowercase();
+                for needle in &forbidden {
+                    assert!(
+                        !lower.contains(needle),
+                        "{} contains forbidden identifier {needle}",
+                        p.display()
+                    );
+                }
             }
         }
     }

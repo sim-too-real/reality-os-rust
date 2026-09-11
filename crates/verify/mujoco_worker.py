@@ -25,6 +25,7 @@ os.environ.setdefault("MUJOCO_LOG_FILE", os.devnull)
 
 try:
     import mujoco
+    import numpy as np
 except Exception as exc:  # pragma: no cover
     print(json.dumps({"ok": False, "error": f"MUJOCO_UNAVAILABLE:{exc}"}), flush=True)
     sys.exit(2)
@@ -105,6 +106,7 @@ class Instance:
                     "range": [float(m.jnt_range[i][0]), float(m.jnt_range[i][1])],
                     "limited": bool(m.jnt_limited[i]),
                     "axis": [float(x) for x in m.jnt_axis[i]],
+                    "pos": [float(x) for x in m.jnt_pos[i]],
                     "parent_body": m.body(parent_id).name or f"body_{parent_id}",
                     "child_body": m.body(child_id).name or f"body_{child_id}",
                     "parent_id": parent_id,
@@ -154,6 +156,8 @@ class Instance:
                 {
                     "name": c.name or f"camera_{i}",
                     "parent_body": m.body(int(m.cam_bodyid[i])).name,
+                    "pos": [float(x) for x in m.cam_pos[i]],
+                    "quat": [float(x) for x in m.cam_quat[i]],
                 }
             )
         bodies = []
@@ -170,6 +174,7 @@ class Instance:
                     "parent": m.body(parent).name if parent >= 0 else "",
                     "parent_id": parent,
                     "pos": [float(x) for x in m.body_pos[i]],
+                    "quat": [float(x) for x in m.body_quat[i]],
                     "ipos": [float(x) for x in m.body_ipos[i]],
                 }
             )
@@ -180,6 +185,7 @@ class Instance:
                     "name": m.site(i).name or f"site_{i}",
                     "body": m.body(int(m.site_bodyid[i])).name,
                     "pos": [float(x) for x in m.site_pos[i]],
+                    "quat": [float(x) for x in m.site_quat[i]],
                 }
             )
         geoms = []
@@ -229,11 +235,19 @@ class Instance:
         m, d = self.model, self.data
         assert m is not None and d is not None
         xpos = {}
+        xquat = {}
         for i in range(m.nbody):
-            xpos[m.body(i).name or f"body_{i}"] = _jlist(d.xpos[i])
+            name = m.body(i).name or f"body_{i}"
+            xpos[name] = _jlist(d.xpos[i])
+            xquat[name] = _jlist(d.xquat[i])
         sites = {}
+        site_xquat = {}
         for i in range(m.nsite):
-            sites[m.site(i).name or f"site_{i}"] = _jlist(d.site_xpos[i])
+            name = m.site(i).name or f"site_{i}"
+            sites[name] = _jlist(d.site_xpos[i])
+            q = np.zeros(4, dtype=float)
+            mujoco.mju_mat2Quat(q, d.site_xmat[i])
+            site_xquat[name] = [float(x) for x in q]
         contacts = []
         for i in range(d.ncon):
             c = d.contact[i]
@@ -253,8 +267,6 @@ class Instance:
             )
         cfrc = []
         if d.ncon:
-            import numpy as np
-
             force = np.zeros(6, dtype=np.float64)
             for i in range(d.ncon):
                 try:
@@ -274,7 +286,9 @@ class Instance:
             "actuator_force": _jlist(d.actuator_force),
             "sensordata": _jlist(d.sensordata),
             "xpos": xpos,
+            "xquat": xquat,
             "sites": sites,
+            "site_xquat": site_xquat,
             "contacts": contacts,
             "contact_forces": cfrc,
             "ncon": int(d.ncon),

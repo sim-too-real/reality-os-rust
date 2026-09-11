@@ -19,6 +19,10 @@ pub struct JointRecord {
     pub child_body: String,
     #[serde(default)]
     pub unsupported_reason: Option<String>,
+    #[serde(default)]
+    pub axis: Option<[f64; 3]>,
+    #[serde(default)]
+    pub pos: Option<[f64; 3]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -43,6 +47,20 @@ pub struct SensorRecord {
 pub struct CameraRecord {
     pub name: String,
     pub parent_body: String,
+    #[serde(default)]
+    pub pos: Option<[f64; 3]>,
+    #[serde(default)]
+    pub quat: Option<[f64; 4]>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SiteRecord {
+    pub name: String,
+    pub body: String,
+    #[serde(default)]
+    pub pos: Option<[f64; 3]>,
+    #[serde(default)]
+    pub quat: Option<[f64; 4]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -51,6 +69,10 @@ pub struct BodyRecord {
     pub mass: f64,
     pub inertia: [f64; 3],
     pub parent: String,
+    #[serde(default)]
+    pub pos: Option<[f64; 3]>,
+    #[serde(default)]
+    pub quat: Option<[f64; 4]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -97,6 +119,8 @@ pub struct RobotManifest {
     pub cameras: Vec<CameraRecord>,
     pub bodies: Vec<BodyRecord>,
     pub sites: Vec<(String, String)>,
+    #[serde(default)]
+    pub site_records: Vec<SiteRecord>,
     pub derived: DerivedInterface,
     pub model_hash: String,
     pub source_hash: String,
@@ -138,6 +162,8 @@ impl RobotManifest {
                             unsupported_reason: j["unsupported_reason"]
                                 .as_str()
                                 .map(|s| s.to_string()),
+                            axis: vec3_opt(&j["axis"]),
+                            pos: vec3_opt(&j["pos"]),
                         }
                     })
                     .collect()
@@ -194,6 +220,8 @@ impl RobotManifest {
                     .map(|c| CameraRecord {
                         name: c["name"].as_str().unwrap_or("").into(),
                         parent_body: c["parent_body"].as_str().unwrap_or("").into(),
+                        pos: vec3_opt(&c["pos"]),
+                        quat: vec4_opt(&c["quat"]),
                     })
                     .collect()
             })
@@ -212,24 +240,32 @@ impl RobotManifest {
                             b["inertia"][2].as_f64().unwrap_or(0.0),
                         ],
                         parent: b["parent"].as_str().unwrap_or("").into(),
+                        pos: vec3_opt(&b["pos"]),
+                        quat: vec4_opt(&b["quat"]),
                     })
                     .collect()
             })
             .unwrap_or_default();
-        let sites = inspect
+        let site_records: Vec<SiteRecord> = inspect
             .get("sites")
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
                     .filter_map(|s| {
-                        Some((
-                            s["name"].as_str()?.to_string(),
-                            s["body"].as_str()?.to_string(),
-                        ))
+                        Some(SiteRecord {
+                            name: s["name"].as_str()?.to_string(),
+                            body: s["body"].as_str()?.to_string(),
+                            pos: vec3_opt(&s["pos"]),
+                            quat: vec4_opt(&s["quat"]),
+                        })
                     })
                     .collect()
             })
             .unwrap_or_default();
+        let sites = site_records
+            .iter()
+            .map(|s| (s.name.clone(), s.body.clone()))
+            .collect();
 
         let actuated: Vec<String> = actuators
             .iter()
@@ -313,6 +349,7 @@ impl RobotManifest {
             cameras,
             bodies,
             sites,
+            site_records,
             derived: DerivedInterface {
                 base_type: inferred_base,
                 potentially_uncontrollable_joints: passive.clone(),
@@ -435,6 +472,27 @@ fn walk_body_chain(
         })
         .collect();
     (body_chain, joint_chain)
+}
+
+fn vec3_opt(v: &serde_json::Value) -> Option<[f64; 3]> {
+    let arr = v.as_array()?;
+    if arr.len() < 3 {
+        return None;
+    }
+    Some([arr[0].as_f64()?, arr[1].as_f64()?, arr[2].as_f64()?])
+}
+
+fn vec4_opt(v: &serde_json::Value) -> Option<[f64; 4]> {
+    let arr = v.as_array()?;
+    if arr.len() < 4 {
+        return None;
+    }
+    Some([
+        arr[0].as_f64()?,
+        arr[1].as_f64()?,
+        arr[2].as_f64()?,
+        arr[3].as_f64()?,
+    ])
 }
 
 fn joint_type_name(code: i64) -> String {

@@ -1,0 +1,25 @@
+robot_id: menagerie_ur5e
+model_format: mjcf
+model_file: model/ur5e.xml
+asset_roots:
+  - model
+expected_base_type: fixed
+joint_aliases: {}
+actuator_aliases: {}
+end_effectors:
+  - name: tool0
+    site: attachment_site
+    body: wrist_3_link
+grippers: []
+feet: []
+cameras: []
+task_frames:
+  - name: tool0
+    site: attachment_site
+collision_groups: {}
+default_controller_profile: pd_position
+source:
+  license: BSD-3-Clause
+  attribution: Official Google DeepMind MuJoCo Menagerie (universal_robots_ur5e). Copyright 2018 ROS Industrial Consortium.
+  redistributable: true
+  notes: Pinned fetch of official Menagerie sources. Not rewritten as a Reality OS chain clone.

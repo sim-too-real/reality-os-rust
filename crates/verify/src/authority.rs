@@ -475,6 +475,7 @@ mod tests {
             cameras: vec![],
             bodies: vec![],
             sites: vec![],
+            site_records: vec![],
             derived: DerivedInterface {
                 base_type: crate::bundle::BaseType::Fixed,
                 actuated_dofs: vec!["j0".into()],

@@ -54,6 +54,9 @@ pub enum SkillRefuse {
     EpochMismatch,
     MissingActuator,
     MissingTarget,
+    MissingJointState,
+    KinematicsUnsupported,
+    ModelFeatureUnsupported,
 }
 
 impl SkillRefuse {
@@ -163,6 +166,9 @@ mod tests {
             SkillRefuse::MissingActuator,
             SkillRefuse::MissingTarget,
             SkillRefuse::NotInIr,
+            SkillRefuse::MissingJointState,
+            SkillRefuse::KinematicsUnsupported,
+            SkillRefuse::ModelFeatureUnsupported,
         ] {
             assert!(!r.writes_allowed());
         }

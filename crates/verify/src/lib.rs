@@ -7,11 +7,14 @@ pub mod bundle;
 pub mod corpus;
 pub mod driver;
 pub mod evidence;
+pub mod external_generality;
 pub mod families;
+pub mod fk_oracle;
 pub mod format;
 pub mod foundation_report;
 pub mod held_out;
 pub mod honesty;
+pub mod menagerie;
 pub mod mujoco_exec;
 pub mod normalize;
 pub mod observation;
@@ -241,6 +244,7 @@ mod integration_tests {
             cameras: vec![],
             bodies: vec![],
             sites: vec![],
+            site_records: vec![],
             derived: crate::normalize::DerivedInterface {
                 base_type: crate::bundle::BaseType::Fixed,
                 actuated_dofs: vec![],
@@ -548,6 +552,7 @@ mod integration_tests {
             cameras: vec![],
             bodies: vec![],
             sites: vec![],
+            site_records: vec![],
             derived: crate::normalize::DerivedInterface::default(),
             model_hash: "h".into(),
             source_hash: "s".into(),
@@ -599,6 +604,7 @@ mod integration_tests {
             cameras: vec![],
             bodies: vec![],
             sites: vec![],
+            site_records: vec![],
             derived: crate::normalize::DerivedInterface::default(),
             model_hash: "h".into(),
             source_hash: "s".into(),

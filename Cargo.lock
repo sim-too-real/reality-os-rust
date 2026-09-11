@@ -1008,9 +1008,11 @@ dependencies = [
 name = "realityos-semantics"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "realityos-kernel",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
 ]
 

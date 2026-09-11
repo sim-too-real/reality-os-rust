@@ -12,23 +12,22 @@ use crate::runner::load_and_normalize;
 use crate::semantics_map::embodiment_from_manifest;
 use crate::task::TaskSpec;
 use realityos_plant::HardwareBackedPlant;
-use realityos_semantics::adapter::{ChainIkPositionPdAdapter, CompiledCtrl};
+use realityos_semantics::adapter::{lower_named_targets, ChainIkPositionPdAdapter, CompiledCtrl};
 use realityos_semantics::capability::derive_capabilities;
-use realityos_semantics::embodiment::{EmbodimentModel, FrameKind, ModelFrame};
-use realityos_semantics::observation::{ObservationFrame, SensorObservation};
-use realityos_semantics::provenance::{Provenance, Provenanced};
+use realityos_semantics::embodiment::EmbodimentModel;
+use realityos_semantics::observation::{JointStateSample, ObservationFrame, SensorObservation};
+use realityos_semantics::provenance::Provenance;
 use realityos_semantics::reach::compile_reach;
 use realityos_semantics::skill::SkillRefuse;
+use realityos_semantics::transform::{Se3, TransformEdge, TransformGraph};
 use realityos_semantics::world::WorldState;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 const ADAPTER_ID: &str = "chain_ik_position_pd";
-const INSPECT_SOURCE: &str = "verify.inspect";
-const HORIZON_S: f64 = 0.5;
+const HORIZON_S: f64 = 1.0;
 const CONTROL_HZ: f64 = 50.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,6 +45,18 @@ pub struct FoundationReachReport {
     pub replay_write_delta: Option<i64>,
     pub authority_decisions: Vec<String>,
     pub seed: u64,
+    #[serde(default)]
+    pub cartesian_residual: Option<f64>,
+    #[serde(default)]
+    pub ik_residual: Option<f64>,
+    #[serde(default)]
+    pub max_joint_move: Option<f64>,
+    #[serde(default)]
+    pub joint_delta_norm: Option<f64>,
+    #[serde(default)]
+    pub initial_q: Vec<f64>,
+    #[serde(default)]
+    pub target_q: Vec<f64>,
 }
 
 pub fn run_foundation_reach(
@@ -58,11 +69,40 @@ pub fn run_foundation_reach(
     force_stale: bool,
     replay: bool,
 ) -> Result<FoundationReachReport, String> {
+    let (inst, manifest) = load_and_normalize(bundle, &[], 0)?;
+    let (report, inst) = run_foundation_reach_on(
+        bundle,
+        inst,
+        &manifest,
+        target,
+        radius,
+        now_s,
+        freshness_s,
+        expected_hash,
+        force_stale,
+        replay,
+    )?;
+    checkin_worker(inst);
+    Ok(report)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_foundation_reach_on(
+    bundle: &RobotBundle,
+    mut inst: crate::mujoco_exec::MujocoInstance,
+    manifest: &RobotManifest,
+    target: [f64; 3],
+    radius: f64,
+    now_s: f64,
+    freshness_s: f64,
+    expected_hash: Option<&str>,
+    force_stale: bool,
+    replay: bool,
+) -> Result<(FoundationReachReport, crate::mujoco_exec::MujocoInstance), String> {
     let seed = 0u64;
-    let (mut inst, manifest) = load_and_normalize(bundle, &[], seed)?;
-    let inspect = inst.inspect.clone();
-    let mut model = embodiment_from_manifest(bundle, &manifest);
-    let mut caps = derive_capabilities(&model, None);
+    let _ = inst.reset(None, None);
+    let model = embodiment_from_manifest(bundle, manifest);
+    let caps = derive_capabilities(&model, None);
 
     let initial = inst.step(0).map_err(|e| e.to_string()).and_then(|st| {
         st.get("state")
@@ -78,33 +118,44 @@ pub fn run_foundation_reach(
     } else {
         now_s + freshness_s
     };
-    let ik_target = fk_frame_target(&initial, &manifest, target);
-    let world = WorldState::empty(&epoch, now_s).with_target(
-        "ee",
-        ik_target,
-        expires,
+    let ee = semantic_ee(bundle);
+    let world = WorldState::empty(&epoch, now_s)
+        .with_target_in_frame(
+            &ee,
+            "world",
+            target,
+            expires,
+            &epoch,
+            now_s,
+            Provenance::UserDeclared,
+        )
+        .with_success_radius(radius);
+    let obs_frame = build_observation_frame(
+        &model,
+        &initial.qpos,
         &epoch,
         now_s,
-        Provenance::UserDeclared,
+        freshness_s,
+        force_stale,
     );
-    let obs_frame = build_observation_frame(&initial.qpos, &epoch, now_s, freshness_s, force_stale);
+    let transforms = graph_from_truth(&model, &initial, &epoch, now_s);
 
-    let compile = try_compile_reach(
-        &mut model,
-        &mut caps,
-        &inspect,
+    let compile = compile_reach(
+        &model,
+        &caps,
         &world,
         &obs_frame,
+        &transforms,
         hash,
         now_s,
         freshness_s,
+        &ChainIkPositionPdAdapter,
     );
 
     let base = base_report(&model, seed);
     let ctrl = match compile {
         Err(refuse) => {
-            checkin_worker(inst);
-            return Ok(error_report(base, refuse_string(refuse)));
+            return Ok((error_report(base, refuse_string(refuse)), inst));
         }
         Ok(ctrl) => ctrl,
     };
@@ -120,30 +171,42 @@ pub fn run_foundation_reach(
     let plant =
         HardwareBackedPlant::new(port, &manifest.robot_id, manifest.nu.max(1) as usize, max_a);
     let journal = std::env::temp_dir().join(format!(
-        "realityos-foundation-reach-{}-{}.jsonl",
+        "realityos-foundation-reach-{}-{}-{}.jsonl",
         manifest.robot_id,
-        std::process::id()
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
     ));
     let _ = std::fs::remove_file(&journal);
     let _ = std::fs::remove_file(journal.with_extension("lease.json"));
 
-    let mut auth = SimAuthority::open_with_journal(plant, &manifest, now_s, Some(journal))?;
+    let mut auth = SimAuthority::open_with_journal(plant, manifest, now_s, Some(journal))?;
     auth.freshness_s = freshness_s;
-    auth.command_lifetime_s = 1.0;
+    auth.command_lifetime_s = HORIZON_S + 0.5;
 
     let episode_id = format!("foundation-reach-{}", manifest.robot_id);
     let observation_id = "obs-0".to_string();
     let policy_obs = build_policy_observation(
-        &manifest,
+        manifest,
         &episode_id,
         &observation_id,
         &initial,
         target,
         now_s,
     );
-    let proposal = action_proposal_from_ctrl(&policy_obs, &ctrl, now_s, auth.command_lifetime_s);
+    let current_by_joint = current_joint_map(&model, &initial.qpos);
+    let proposal = action_proposal_from_ctrl(
+        &policy_obs,
+        &ctrl,
+        &model,
+        &current_by_joint,
+        now_s,
+        auth.command_lifetime_s,
+    )?;
     let task = TaskSpec::Reach {
-        end_effector: "ee".into(),
+        end_effector: privileged_ee(bundle),
         target,
         radius,
     };
@@ -152,7 +215,7 @@ pub fn run_foundation_reach(
     let mut decisions = Vec::new();
     let rec = auth.decide_and_maybe_write(
         &proposal,
-        &manifest,
+        manifest,
         &task,
         &policy_obs,
         now_s,
@@ -166,7 +229,7 @@ pub fn run_foundation_reach(
         let before = shared.probe.snapshot().policy_ctrl_writes;
         let replay_rec = auth.decide_and_maybe_write(
             &proposal,
-            &manifest,
+            manifest,
             &task,
             &policy_obs,
             now_s + 0.001,
@@ -191,30 +254,60 @@ pub fn run_foundation_reach(
     }
 
     let ctrl_writes = shared.probe.snapshot().policy_ctrl_writes;
-    let task_success = task.evaluate(&truth, &manifest);
+    let task_success = task.evaluate(&truth, manifest);
+    let ee_site = privileged_ee(bundle);
+    let cartesian_residual = truth.named_pos.get(&ee_site).and_then(|p| {
+        if p.len() < 3 {
+            None
+        } else {
+            let dx = p[0] - target[0];
+            let dy = p[1] - target[1];
+            let dz = p[2] - target[2];
+            Some((dx * dx + dy * dy + dz * dz).sqrt())
+        }
+    });
 
     drop(auth);
-    if let Ok(owned) = Arc::try_unwrap(shared) {
-        if let Ok(inst) = owned.inst.into_inner() {
-            checkin_worker(inst);
-        }
-    }
+    let inst = match Arc::try_unwrap(shared) {
+        Ok(owned) => owned
+            .inst
+            .into_inner()
+            .map_err(|_| "mujoco mutex poisoned".to_string())?,
+        Err(_) => return Err("shared mujoco still referenced".into()),
+    };
 
-    Ok(FoundationReachReport {
-        robot_id: model.robot_id,
-        model_hash: model.model_hash,
-        skill: "REACH".into(),
-        adapter_id: ctrl.adapter_id,
-        adaptation: "CONFIGURED".into(),
-        metal: false,
-        evidence_status: SIMULATION_ONLY.into(),
-        task_success,
-        skill_refuse: None,
-        ctrl_writes,
-        replay_write_delta,
-        authority_decisions: decisions,
-        seed,
-    })
+    Ok((
+        FoundationReachReport {
+            robot_id: model.robot_id,
+            model_hash: model.model_hash,
+            skill: "REACH".into(),
+            adapter_id: ctrl.adapter_id,
+            adaptation: "CONFIGURED".into(),
+            metal: false,
+            evidence_status: SIMULATION_ONLY.into(),
+            task_success,
+            skill_refuse: None,
+            ctrl_writes,
+            replay_write_delta,
+            authority_decisions: decisions,
+            seed,
+            cartesian_residual,
+            ik_residual: ctrl.ik.as_ref().map(|t| t.residual),
+            max_joint_move: ctrl.ik.as_ref().map(|t| t.max_joint_move),
+            joint_delta_norm: ctrl.ik.as_ref().map(|t| t.joint_delta_norm),
+            initial_q: ctrl
+                .ik
+                .as_ref()
+                .map(|t| t.initial_q.clone())
+                .unwrap_or_default(),
+            target_q: ctrl
+                .ik
+                .as_ref()
+                .map(|t| t.target_q.clone())
+                .unwrap_or_default(),
+        },
+        inst,
+    ))
 }
 
 pub fn run_foundation_reach_missing_target(
@@ -235,13 +328,15 @@ pub fn run_foundation_reach_missing_target(
     let now_s = 10.0;
     let freshness_s = 0.25;
     let world = WorldState::empty(&epoch, now_s);
-    let obs_frame = build_observation_frame(&initial, &epoch, now_s, freshness_s, false);
+    let obs_frame = build_observation_frame(&model, &initial, &epoch, now_s, freshness_s, false);
+    let transforms = TransformGraph::new(&epoch);
 
     let err = compile_reach(
         &model,
         &caps,
         &world,
         &obs_frame,
+        &transforms,
         &model.model_hash,
         now_s,
         freshness_s,
@@ -253,165 +348,82 @@ pub fn run_foundation_reach_missing_target(
     Ok(error_report(base_report(&model, seed), refuse_string(err)))
 }
 
-fn try_compile_reach(
-    model: &mut EmbodimentModel,
-    caps: &mut realityos_semantics::capability::CapabilityGraph,
-    inspect: &Value,
-    world: &WorldState,
-    obs: &ObservationFrame,
-    hash: &str,
-    now_s: f64,
-    freshness_s: f64,
-) -> Result<CompiledCtrl, SkillRefuse> {
-    match compile_reach(
-        model,
-        caps,
-        world,
-        obs,
-        hash,
-        now_s,
-        freshness_s,
-        &ChainIkPositionPdAdapter,
-    ) {
-        Ok(ctrl) => Ok(ctrl),
-        Err(SkillRefuse::Unreachable) => {
-            fill_from_inspect(model, inspect);
-            *caps = derive_capabilities(model, None);
-            compile_reach(
-                model,
-                caps,
-                world,
-                obs,
-                hash,
-                now_s,
-                freshness_s,
-                &ChainIkPositionPdAdapter,
-            )
-        }
-        Err(e) => Err(e),
-    }
-}
-
-fn fill_from_inspect(model: &mut EmbodimentModel, inspect: &Value) {
-    let joint_axes = joint_axis_map(inspect);
-    let body_pos = body_pos_map(inspect);
-    let site_pos = site_pos_map(inspect);
-
-    for joint in &mut model.joints {
-        if joint.axis.value.is_none() {
-            if let Some(axis) = joint_axes.get(&joint.name) {
-                joint.axis = Provenanced::simulator_derived(*axis, INSPECT_SOURCE, 0.0);
-            }
-        }
-    }
-
-    for joint in model.joints.clone() {
-        let frame_name = format!("link_{}", joint.name);
-        let pos = body_pos.get(&joint.child_body).copied();
-        if let Some(pos) = pos {
-            if let Some(frame) = model
-                .frames
-                .iter_mut()
-                .find(|f| f.name == frame_name && f.parent_body == joint.parent_body)
-            {
-                if frame.translation.value.is_none() {
-                    frame.translation = Provenanced::simulator_derived(pos, INSPECT_SOURCE, 0.0);
-                }
-            } else {
-                model.frames.push(ModelFrame {
-                    name: frame_name,
-                    kind: FrameKind::Task,
-                    parent_body: joint.parent_body.clone(),
-                    translation: Provenanced::simulator_derived(pos, INSPECT_SOURCE, 0.0),
-                });
-            }
-        }
-    }
-
-    for frame in &mut model.frames {
-        if frame.translation.value.is_none() {
-            if let Some(pos) = site_pos.get(&frame.name) {
-                frame.translation = Provenanced::simulator_derived(*pos, INSPECT_SOURCE, 0.0);
-            }
-        }
-    }
-}
-
-fn joint_axis_map(inspect: &Value) -> HashMap<String, [f64; 3]> {
-    let mut out = HashMap::new();
-    if let Some(arr) = inspect.get("joints").and_then(|v| v.as_array()) {
-        for j in arr {
-            let name = j["name"].as_str().unwrap_or("").to_string();
-            if name.is_empty() {
-                continue;
-            }
-            if let Some(axis) = vec3_from_json(&j["axis"]) {
-                out.insert(name, axis);
-            }
-        }
-    }
-    out
-}
-
-fn body_pos_map(inspect: &Value) -> HashMap<String, [f64; 3]> {
-    let mut out = HashMap::new();
-    if let Some(arr) = inspect.get("bodies").and_then(|v| v.as_array()) {
-        for b in arr {
-            let name = b["name"].as_str().unwrap_or("").to_string();
-            if name.is_empty() {
-                continue;
-            }
-            if let Some(pos) = vec3_from_json(&b["pos"]) {
-                out.insert(name, pos);
-            }
-        }
-    }
-    out
-}
-
-fn site_pos_map(inspect: &Value) -> HashMap<String, [f64; 3]> {
-    let mut out = HashMap::new();
-    if let Some(arr) = inspect.get("sites").and_then(|v| v.as_array()) {
-        for s in arr {
-            let name = s["name"].as_str().unwrap_or("").to_string();
-            if name.is_empty() {
-                continue;
-            }
-            if let Some(pos) = vec3_from_json(&s["pos"]) {
-                out.insert(name, pos);
-            }
-        }
-    }
-    out
-}
-
-fn vec3_from_json(v: &Value) -> Option<[f64; 3]> {
-    let arr = v.as_array()?;
-    if arr.len() < 3 {
-        return None;
-    }
-    Some([arr[0].as_f64()?, arr[1].as_f64()?, arr[2].as_f64()?])
-}
-
-fn fk_frame_target(truth: &VerifierTruth, manifest: &RobotManifest, target: [f64; 3]) -> [f64; 3] {
-    let base_name = manifest
-        .derived
-        .end_effector_joint_chains
+fn semantic_ee(bundle: &RobotBundle) -> String {
+    bundle
+        .manifest
+        .end_effectors
         .first()
-        .and_then(|chain| chain.first())
-        .and_then(|j| manifest.joints.iter().find(|x| x.name == *j))
-        .map(|j| j.parent_body.as_str())
-        .unwrap_or("base");
-    let origin = truth
-        .xpos
-        .get(base_name)
-        .map(|p| [p[0], p[1], p[2]])
-        .unwrap_or([0.0, 0.0, 0.0]);
-    [
-        target[0] - origin[0],
-        target[1] - origin[1],
-        target[2] - origin[2],
-    ]
+        .map(|e| e.name.clone())
+        .unwrap_or_else(|| "ee".into())
+}
+
+fn privileged_ee(bundle: &RobotBundle) -> String {
+    bundle
+        .manifest
+        .end_effectors
+        .first()
+        .and_then(|e| e.site.clone().or_else(|| e.body.clone()))
+        .unwrap_or_else(|| "ee".into())
+}
+
+fn graph_from_truth(
+    model: &EmbodimentModel,
+    truth: &VerifierTruth,
+    epoch: &str,
+    now_s: f64,
+) -> TransformGraph {
+    let mut g = TransformGraph::new(epoch);
+    for (name, pos) in &truth.xpos {
+        if name == "world" || pos.len() < 3 {
+            continue;
+        }
+        let quat = truth
+            .xquat
+            .get(name)
+            .filter(|q| q.len() >= 4)
+            .map(|q| [q[0], q[1], q[2], q[3]]);
+        let Some(quat) = quat else {
+            continue;
+        };
+        let Ok(pose) = Se3::try_new([pos[0], pos[1], pos[2]], quat) else {
+            continue;
+        };
+        let _ = g.insert(TransformEdge::from_se3(
+            "world",
+            name,
+            pose,
+            epoch,
+            now_s,
+            "verify.privileged_fk",
+        ));
+    }
+    if g.lookup("world", "base").is_none() {
+        if let Some(base) = model.bodies.iter().find(|b| b.parent.is_none()) {
+            if let Some(pose) = base.local_pose.value {
+                let _ = g.insert(TransformEdge::from_se3(
+                    "world",
+                    &base.name,
+                    pose,
+                    epoch,
+                    now_s,
+                    "verify.model_base",
+                ));
+            }
+        }
+    }
+    g
+}
+
+fn current_joint_map(model: &EmbodimentModel, qpos: &[f64]) -> HashMap<String, f64> {
+    let mut out = HashMap::new();
+    for joint in &model.joints {
+        if let Some(adr) = joint.qpos_adr {
+            if let Some(q) = qpos.get(adr as usize) {
+                out.insert(joint.name.clone(), *q);
+            }
+        }
+    }
+    out
 }
 
 fn qpos_digest(qpos: &[f64]) -> String {
@@ -424,6 +436,7 @@ fn qpos_digest(qpos: &[f64]) -> String {
 }
 
 fn build_observation_frame(
+    model: &EmbodimentModel,
     qpos: &[f64],
     epoch: &str,
     now_s: f64,
@@ -435,6 +448,24 @@ fn build_observation_frame(
     } else {
         (now_s, now_s + freshness_s)
     };
+    let joint_state = model
+        .joints
+        .iter()
+        .filter_map(|j| {
+            let adr = j.qpos_adr? as usize;
+            let q = *qpos.get(adr)?;
+            Some(JointStateSample::new(
+                &j.name,
+                q,
+                None,
+                receive_s,
+                receive_s,
+                format!("enc.{}", j.name),
+                "sim_cal",
+                epoch,
+            ))
+        })
+        .collect();
     ObservationFrame {
         frame_id: "foundation-obs".into(),
         transform_epoch: epoch.to_string(),
@@ -449,6 +480,7 @@ fn build_observation_frame(
             qpos_digest(qpos),
             expires_at_s,
         )],
+        joint_state,
         as_of_s: receive_s,
     }
 }
@@ -466,7 +498,7 @@ fn build_policy_observation(
         episode_id,
         observation_id,
         &TaskSpec::Reach {
-            end_effector: "ee".into(),
+            end_effector: manifest.end_effector_name().unwrap_or_else(|| "ee".into()),
             target,
             radius: 0.0,
         },
@@ -482,23 +514,28 @@ fn build_policy_observation(
 fn action_proposal_from_ctrl(
     obs: &PolicyObservation,
     ctrl: &CompiledCtrl,
+    model: &EmbodimentModel,
+    current_by_joint: &HashMap<String, f64>,
     now_s: f64,
     horizon_s: f64,
-) -> ActionProposal {
-    ActionProposal {
+) -> Result<ActionProposal, String> {
+    let lowered = lower_named_targets(model, &ctrl.targets, current_by_joint)
+        .map_err(|e| format!("lower targets: {e:?}"))?;
+    let action = lowered.into_iter().map(|(_, v)| v).collect();
+    Ok(ActionProposal {
         robot_id: obs.robot_id.clone(),
         model_hash: obs.model_hash.clone(),
         episode_id: obs.episode_id.clone(),
         observation_id: obs.observation_id.clone(),
         observation_timestamp: now_s,
         task_id: obs.task_id.clone(),
-        action: ctrl.action.clone(),
+        action,
         control_mode: ctrl.control_mode.clone(),
         requested_horizon_s: horizon_s,
         confidence: Some(1.0),
         policy_id: ctrl.adapter_id.clone(),
         policy_version: ctrl.adapter_version.clone(),
-    }
+    })
 }
 
 fn base_report(model: &EmbodimentModel, seed: u64) -> FoundationReachReport {
@@ -516,6 +553,12 @@ fn base_report(model: &EmbodimentModel, seed: u64) -> FoundationReachReport {
         replay_write_delta: None,
         authority_decisions: Vec::new(),
         seed,
+        cartesian_residual: None,
+        ik_residual: None,
+        max_joint_move: None,
+        joint_delta_norm: None,
+        initial_q: Vec::new(),
+        target_q: Vec::new(),
     }
 }
 
@@ -537,6 +580,9 @@ fn refuse_string(err: SkillRefuse) -> String {
         | SkillRefuse::WrongModelHash
         | SkillRefuse::EpochMismatch
         | SkillRefuse::Refuse => "REFUSE".into(),
+        SkillRefuse::MissingJointState => "PROBE".into(),
+        SkillRefuse::KinematicsUnsupported => "KINEMATICS_UNSUPPORTED_FOR_ADAPTER".into(),
+        SkillRefuse::ModelFeatureUnsupported => "MODEL_FEATURE_UNSUPPORTED".into(),
     }
 }
 
@@ -567,7 +613,10 @@ mod tests {
             assert_eq!(r.adaptation, "CONFIGURED");
             assert!(r.skill_refuse.is_none(), "{id} {:?}", r.skill_refuse);
             assert!(r.ctrl_writes > 0, "{id}");
-            assert!(r.task_success, "{id} must reach under privileged verifier");
+            assert!(
+                r.task_success,
+                "{id} must reach under privileged verifier {r:?}"
+            );
         }
     }
 
