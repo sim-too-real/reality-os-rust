@@ -172,6 +172,11 @@ def init_regs() -> bytearray:
         # hunt of 4 then makes -32 miss; setup must refuse before torque-on.
         regs[48:52] = struct.pack("<i", 2048)
         regs[52:56] = struct.pack("<i", 2016)
+    if os.environ.get("REALITYOS_METAL_PTY_EDGE36") == "1":
+        # delta+hold_still=36. Hold to 2044 still picks -0.2; propose then
+        # hunts one more tick and write_action abort-latches ONLINE.
+        regs[48:52] = struct.pack("<i", 2048)
+        regs[52:56] = struct.pack("<i", 2012)
     if os.environ.get("REALITYOS_METAL_PTY_PRESENT_OUTSIDE") == "1":
         regs[48:52] = struct.pack("<i", 2100)
         regs[52:56] = struct.pack("<i", 2000)

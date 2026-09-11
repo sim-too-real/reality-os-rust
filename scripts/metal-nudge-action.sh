@@ -82,16 +82,32 @@ if not math.isfinite(tau_max) or tau_max <= 0:
     sys.exit("metal_nudge_tau_max_invalid:%s" % (tau_max,))
 plus = present + delta_ticks
 if experiment_min <= plus <= experiment_max:
-    print("%g" % (tau_max,))
-    sys.exit(0)
-minus = present - delta_ticks
-if experiment_min <= minus <= experiment_max:
-    print("%g" % (-tau_max,))
-    sys.exit(0)
-sys.exit(
-    "metal_nudge_no_inbound_step:present=%s:delta=%s:cage=%s..%s"
-    % (present, delta_ticks, experiment_min, experiment_max)
-)
+    action = tau_max
+    step = delta_ticks
+elif experiment_min <= present - delta_ticks <= experiment_max:
+    action = -tau_max
+    step = -delta_ticks
+else:
+    sys.exit(
+        "metal_nudge_no_inbound_step:present=%s:delta=%s:cage=%s..%s"
+        % (present, delta_ticks, experiment_min, experiment_max)
+    )
+# propose() re-acquires last_present. write_action does not clamp.
+# The chosen sign must still fit after a hold-still hunt.
+slack = 4
+for p in (present, present - slack, present + slack):
+    if p < experiment_min:
+        p = experiment_min
+    if p > experiment_max:
+        p = experiment_max
+    goal = p + step
+    if goal < experiment_min or goal > experiment_max:
+        sys.exit(
+            "metal_nudge_eaten_by_present_slack:present=%s:p=%s:goal=%s:delta=%s:cage=%s..%s:slack=%s"
+            % (present, p, goal, delta_ticks, experiment_min, experiment_max, slack)
+        )
+print("%g" % (action,))
+sys.exit(0)
 PY
 }
 
@@ -117,6 +133,14 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   [[ "$(metal_nudge_action_from_bus "$tmp")" == "0.2" ]]
   if metal_nudge_action_from_values 2048 2048 2048 32 0.2 2>/dev/null; then
     echo "error: empty cage must not invent a nudge" >&2
+    exit 1
+  fi
+  # Post-hold present 2044 in a 36-tick leftover max window: raw pick is
+  # -0.2, but present-4 then misses and write_action abort-latches.
+  printf '%s\n' '2044' >"$tmp/bus/present"
+  printf '%s\n' '{"experiment_min":2012,"experiment_max":2048}' >"$tmp/bus/position_cage.json"
+  if metal_nudge_action_from_bus "$tmp" 2>/dev/null; then
+    echo "error: 36-tick leftover after hold must not propose -0.2" >&2
     exit 1
   fi
   echo "metal-nudge-action-ok"

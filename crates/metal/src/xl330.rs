@@ -1613,10 +1613,9 @@ impl Xl330Driver {
             )));
         }
         // A leftover Wizard window tighter than the certified step (or only
-        // barely 32 ticks at the edge) used to pass setup, run valid_hold,
-        // then fail the inbound picker after the horn was already energized.
-        // Hold-still hunt of a few ticks then makes -32 miss a 32-tick edge
-        // window. Do not widen EEPROM against a fixture; refuse before write.
+        // barely 32/36 ticks at the edge) used to pass setup, run valid_hold,
+        // then miss after propose re-acquires last_present and abort-latch
+        // ONLINE. Do not widen EEPROM against a fixture; refuse before write.
         cage_allows_inbound_nudge_after_hold_still(
             present,
             experiment_min,

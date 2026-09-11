@@ -238,6 +238,26 @@ fn xl330_pty_refuses_setup_when_leftover_window_cannot_host_nudge() {
 }
 
 #[test]
+fn xl330_pty_refuses_setup_when_edge36_would_abort_latch_after_propose() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_EDGE36", "1")]);
+    let root = metal_test_root("pty-edge36");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!(
+            "36-tick leftover edge window must not torque-on; hold+propose hunt abort-latches"
+        ),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("metal_experiment_cage_no_inbound_step"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_refuses_setup_when_edge_window_is_eaten_by_hold_still() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_EDGE32", "1")]);

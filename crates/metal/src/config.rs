@@ -216,10 +216,10 @@ impl MetalConfig {
         if self.max_position_delta_ticks > 0 {
             let need = self
                 .max_position_delta_ticks
-                .saturating_add(HOLD_STILL_HEADROOM_TICKS);
+                .saturating_add(NUDGE_PRESENT_SLACK_TICKS);
             if self.max_total_excursion_ticks < need {
                 return Err(format!(
-                    "metal_max_total_excursion_ticks_too_small_for_nudge:excursion={}:need={need}:delta={}:hold_still={HOLD_STILL_HEADROOM_TICKS}",
+                    "metal_max_total_excursion_ticks_too_small_for_nudge:excursion={}:need={need}:delta={}:slack={NUDGE_PRESENT_SLACK_TICKS}",
                     self.max_total_excursion_ticks, self.max_position_delta_ticks
                 ));
             }
@@ -362,9 +362,15 @@ pub fn candidate_servo_ids(configured: u8, extra: Option<u8>) -> Vec<u8> {
 }
 
 /// No-load encoder hunt accepted as hold-still. Must match
-/// `proof::HOLD_STILL_MAX_ABS_TICKS`. A leftover Wizard window must still
-/// host the certified nudge after `valid_hold` hunts this far.
+/// `proof::HOLD_STILL_MAX_ABS_TICKS`.
 pub const HOLD_STILL_HEADROOM_TICKS: i32 = 4;
+/// Hold-still hunt plus the extra hunt between the campaign picker and
+/// `write_action` (`propose` re-acquires `last_present`). A leftover
+/// window of exactly `delta + hold_still` used to pass setup, pick `-0.2`
+/// after hold at `present-4`, then miss the cage by one tick and
+/// abort-latch ONLINE. Setup uses this wider slack; the campaign picker
+/// re-checks `HOLD_STILL_HEADROOM_TICKS` around the post-hold present.
+pub const NUDGE_PRESENT_SLACK_TICKS: i32 = HOLD_STILL_HEADROOM_TICKS * 2;
 
 /// Prefer `+delta` ticks when that goal is inside the experiment cage.
 /// Only pick `-delta` when `+delta` would refuse.
@@ -401,9 +407,50 @@ pub fn pick_inbound_nudge_action(
     ))
 }
 
+/// The chosen signed step must still land inside the cage after present
+/// hunts `slack` ticks either way. `write_action` uses live `last_present`
+/// from the propose acquire, not the picker's sampled present, and does
+/// not clamp an outbound goal inward.
+pub fn chosen_nudge_survives_slack(
+    present: i32,
+    experiment_min: i32,
+    experiment_max: i32,
+    delta_ticks: i32,
+    action: f64,
+    slack: i32,
+) -> Result<(), String> {
+    if !action.is_finite() || action == 0.0 {
+        return Err(format!("metal_nudge_action_invalid:{action}"));
+    }
+    if delta_ticks <= 0 {
+        return Err(format!(
+            "metal_nudge_delta_ticks_not_positive:{delta_ticks}"
+        ));
+    }
+    if slack < 0 {
+        return Err(format!("metal_nudge_slack_negative:{slack}"));
+    }
+    let step = if action > 0.0 {
+        delta_ticks
+    } else {
+        -delta_ticks
+    };
+    let lo = present.saturating_sub(slack).max(experiment_min);
+    let hi = present.saturating_add(slack).min(experiment_max);
+    for p in [present, lo, hi] {
+        let goal = p.saturating_add(step);
+        if goal < experiment_min || goal > experiment_max {
+            return Err(format!(
+                "metal_nudge_eaten_by_present_slack:present={present}:p={p}:goal={goal}:delta={delta_ticks}:cage={experiment_min}..{experiment_max}:slack={slack}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Refuse a leftover Wizard window that cannot host the certified step
-/// after a hold-still hunt. Setup must fail before torque-on; the
-/// campaign picker after `valid_hold` is too late (horn already energized).
+/// after hold-still plus the propose-acquire hunt. Setup must fail before
+/// torque-on; a post-hold picker miss abort-latches ONLINE.
 /// Does not widen EEPROM limits against a fixture.
 pub fn cage_allows_inbound_nudge_after_hold_still(
     present: i32,
@@ -412,16 +459,21 @@ pub fn cage_allows_inbound_nudge_after_hold_still(
     delta_ticks: i32,
     tau_max: f64,
 ) -> Result<(), String> {
-    let lo = present
-        .saturating_sub(HOLD_STILL_HEADROOM_TICKS)
-        .max(experiment_min);
-    let hi = present
-        .saturating_add(HOLD_STILL_HEADROOM_TICKS)
-        .min(experiment_max);
-    for p in [present, lo, hi] {
-        pick_inbound_nudge_action(p, experiment_min, experiment_max, delta_ticks, tau_max)?;
-    }
-    Ok(())
+    let action = pick_inbound_nudge_action(
+        present,
+        experiment_min,
+        experiment_max,
+        delta_ticks,
+        tau_max,
+    )?;
+    chosen_nudge_survives_slack(
+        present,
+        experiment_min,
+        experiment_max,
+        delta_ticks,
+        action,
+        NUDGE_PRESENT_SLACK_TICKS,
+    )
 }
 
 #[cfg(test)]
@@ -723,17 +775,33 @@ mod tests {
         let delta = cfg.max_position_delta_ticks;
         let tau = cfg.tau_max;
         cage_allows_inbound_nudge_after_hold_still(2048, 2000, 2096, delta, tau)
-            .expect("factory ±48 mid-range hosts +32 after a 4-tick hunt");
+            .expect("factory ±48 mid-range hosts +32 after hold+propose hunt");
         cage_allows_inbound_nudge_after_hold_still(2048, 2000, 2048, delta, tau)
-            .expect("AT_MAX 48-tick inbound window still hosts -32 after hunt");
+            .expect("AT_MAX 48-tick inbound window still hosts -32 after slack");
         cage_allows_inbound_nudge_after_hold_still(0, 0, 48, delta, tau)
-            .expect("horn at 0 with ±48 hosts +32 after hunt");
+            .expect("horn at 0 with ±48 hosts +32 after slack");
+        cage_allows_inbound_nudge_after_hold_still(2048, 2008, 2048, delta, tau)
+            .expect("40-tick leftover at max is the setup minimum");
         let tight = cage_allows_inbound_nudge_after_hold_still(2048, 2040, 2060, delta, tau)
             .expect_err("20-tick leftover window cannot host ±32");
         assert!(tight.contains("metal_nudge_no_inbound_step"), "{tight}");
         let edge32 = cage_allows_inbound_nudge_after_hold_still(2048, 2016, 2048, delta, tau)
             .expect_err("exactly 32 ticks at max is eaten by hold-still hunt");
-        assert!(edge32.contains("metal_nudge_no_inbound_step"), "{edge32}");
+        assert!(
+            edge32.contains("metal_nudge_no_inbound_step")
+                || edge32.contains("metal_nudge_eaten_by_present_slack"),
+            "{edge32}"
+        );
+        let edge36 = cage_allows_inbound_nudge_after_hold_still(2048, 2012, 2048, delta, tau)
+            .expect_err("36-tick leftover at max: hold to 2044 then propose to 2043 misses");
+        assert!(
+            edge36.contains("metal_nudge_eaten_by_present_slack"),
+            "{edge36}"
+        );
+        let action = pick_inbound_nudge_action(2044, 2012, 2048, delta, tau).unwrap();
+        assert!(action < 0.0);
+        chosen_nudge_survives_slack(2044, 2012, 2048, delta, action, HOLD_STILL_HEADROOM_TICKS)
+            .expect_err("campaign picker at post-hold 2044 must not propose -0.2");
     }
 
     #[test]
@@ -745,6 +813,11 @@ mod tests {
         assert!(
             err.contains("metal_max_total_excursion_ticks_too_small_for_nudge"),
             "{err}"
+        );
+        cfg.max_total_excursion_ticks = 40;
+        assert!(
+            cfg.validate_xl330_limits().is_ok(),
+            "default delta 32 + slack 8 must be the config minimum"
         );
     }
 
