@@ -1525,9 +1525,8 @@ impl Xl330Driver {
         }
         let again = self
             .read_present_setup("dxl_present_unreadable_after_torque")
-            .map_err(|e| {
+            .inspect_err(|_| {
                 self.torque_off_setup("setup_torque_off_present_unread_recenter");
-                e
             })?;
         if again != park {
             let hunt = again.abs_diff(park);
