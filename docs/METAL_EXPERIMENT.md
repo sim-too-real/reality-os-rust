@@ -102,6 +102,7 @@ The campaign exits 2 before `init`/`probe` (which enable torque) unless `REALITY
 First-contact script invariants (found on the PTY sequence, would fail the first XL330 run):
 
 * GNU `stat -c '%a'` prints `600` for mode `0600`. Comparing the raw string to `0600` failed after a correct `chmod` and aborted every real USB-UART owner claim (`usb_tty_owner_mode_ok` / `metal-deploy`). Compare octal values (`scripts/metal-unix-mode.sh`).
+* `before_prepare` never reaches durable prepare. Restart must not auto-retransmit. Replaying that command ID after restart is a new journal command, not a duplicate of a hardware write. Measure serial TX across crash+restart only; do not treat a later same-ID propose as the ambiguous-execution retry invariant.
 
 * Empty `METAL_CMD_ID` must not override `--id`. Autonomy used to export the empty string; propose treated `is_ok()` as a set id, minted `metal-{now}`, and made the `metal-hold` replay look like a new write.
 * Planned `stop_auth` writes `$ROOT/stop_serve` so Drop torque-offs and releases the tty. SIGKILL skips Drop; a real XL330 would keep torque and the next open can get `EBUSY`.

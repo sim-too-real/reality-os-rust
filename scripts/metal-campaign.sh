@@ -1959,6 +1959,8 @@ crash_replay() {
     echo "error: crash serve did not bind for $point" >&2
     exit 1
   fi
+  local before_crash
+  before_crash="$(serial_tx)"
   as_autonomy "$PROP" --root "$ROOT" --id "$cid" --verb hold propose >/tmp/metal-"$cid".json || true
   # crash_if is process::exit on the smoke child. after_prepare / after_write /
   # after_ack live in execute_certified_command; during_write is in the XL330
@@ -1988,10 +1990,24 @@ crash_replay() {
     echo "error: restart after $point crash failed" >&2
     exit 1
   fi
-  local before after
-  before="$(serial_tx)"
-  as_autonomy env METAL_CMD_ID="$cid" "$PROP" --root "$ROOT" replay >/tmp/metal-"$cid"-replay.json || true
-  after="$(serial_tx)"
+  local before after after_restart
+  after_restart="$(serial_tx)"
+  # before_prepare never reaches durable prepare. Restart must not
+  # auto-retransmit (serial_tx stays). Replaying that ID is a *new*
+  # command from the journal, not a duplicate of a hardware write —
+  # do not treat that as the ambiguous-execution retry invariant.
+  if [[ "$point" == "before_prepare" ]]; then
+    before="$before_crash"
+    after="$after_restart"
+    if [[ "$after" -gt "$before" ]]; then
+      echo "error: crash/restart $point wrote or auto-retried (serial_tx $before→$after)" >&2
+      exit 1
+    fi
+  else
+    before="$(serial_tx)"
+    as_autonomy env METAL_CMD_ID="$cid" "$PROP" --root "$ROOT" replay >/tmp/metal-"$cid"-replay.json || true
+    after="$(serial_tx)"
+  fi
   rec="$(python3 - <<PY
 import json, sys
 before=int("$before"); after=int("$after")
@@ -2008,7 +2024,11 @@ print(json.dumps({
     "observed_motion": None,
     "blocking_layer": "CRASH_RECOVERY_BLOCKED",
     "journal_result": "not_retried",
-    "proposal": "same command_id after $point crash/restart",
+    "proposal": (
+        "crash at before_prepare; restart must not auto-retransmit (ID never prepared)"
+        if "$point" == "before_prepare"
+        else "same command_id after $point crash/restart"
+    ),
     "unauthorized_write": after>before,
     "egress_attempt_delta": 0,
     "serial_tx_before": before,
