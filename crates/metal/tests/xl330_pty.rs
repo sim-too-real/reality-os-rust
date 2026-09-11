@@ -334,9 +334,6 @@ fn xl330_pty_at_max_restart_after_inbound_nudge_still_hosts_step() {
     let (emin, emax) = second.experiment_cage();
     assert_eq!((emin, emax), (1968, 2048));
     second
-        .write_action(&[0.2], &ActionParams::empty())
-        .expect_err("raw +0.2 still refuses; slack would abort-latch ONLINE");
-    second
         .write_action(&[-0.2], &ActionParams::empty())
         .expect("inbound -0.2 must still fit after AT_MAX restart");
     second.close();

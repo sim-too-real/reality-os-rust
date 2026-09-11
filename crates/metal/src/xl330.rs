@@ -19,8 +19,9 @@ use serialport::SerialPort;
 
 use crate::config::{
     cage_allows_inbound_nudge_after_hold_still, candidate_bauds, candidate_servo_ids,
-    discover_baud_attempts, MetalConfig, BUS_DIR, CAGE_EVIDENCE_FILE, CANDIDATE_BAUDS, GOAL_FILE,
-    HOLD_STILL_HEADROOM_TICKS, LOCK_FILE, MOVING_FILE, PRESENT_FILE, PWM_EVIDENCE_FILE, VIN_FILE,
+    chosen_nudge_survives_slack, discover_baud_attempts, pick_inbound_nudge_action, MetalConfig,
+    BUS_DIR, CAGE_EVIDENCE_FILE, CANDIDATE_BAUDS, GOAL_FILE, HOLD_STILL_HEADROOM_TICKS, LOCK_FILE,
+    MOVING_FILE, NUDGE_PRESENT_SLACK_TICKS, PRESENT_FILE, PWM_EVIDENCE_FILE, VIN_FILE,
 };
 use crate::egress::EgressLog;
 use crate::identity::{
@@ -1463,15 +1464,30 @@ impl Xl330Driver {
                 self.experiment_min, self.experiment_max
             )));
         }
-        let old_cage_ok = cage_allows_inbound_nudge_after_hold_still(
+        // Rematch-only when the preferred +delta still survives slack.
+        // Either-sign cage_allows would keep 2000..2096 after a 16-tick
+        // wrap (minus still fits) and skip the live-park recenter.
+        let old_plus_ok = pick_inbound_nudge_action(
             after,
             self.experiment_min,
             self.experiment_max,
             self.cfg.max_position_delta_ticks,
             self.cfg.tau_max,
         )
-        .is_ok();
-        if old_cage_ok {
+        .ok()
+        .is_some_and(|action| {
+            action > 0.0
+                && chosen_nudge_survives_slack(
+                    after,
+                    self.experiment_min,
+                    self.experiment_max,
+                    self.cfg.max_position_delta_ticks,
+                    action,
+                    NUDGE_PRESENT_SLACK_TICKS,
+                )
+                .is_ok()
+        });
+        if old_plus_ok {
             if let Err(e) =
                 self.write_and_verify_goal(after, "setup_goal_match_present_after_torque")
             {
