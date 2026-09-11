@@ -27,7 +27,22 @@ pub enum BaseType {
     Mobile,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum FrameReference {
+    Site {
+        site: String,
+    },
+    Body {
+        body: String,
+    },
+    BodyOffset {
+        body: String,
+        xyz: [f64; 3],
+        quat_wxyz: [f64; 4],
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NamedRef {
     pub name: String,
     #[serde(default)]
@@ -36,6 +51,29 @@ pub struct NamedRef {
     pub body: Option<String>,
     #[serde(default)]
     pub joint: Option<String>,
+    #[serde(default)]
+    pub xyz: Option<[f64; 3]>,
+    #[serde(default)]
+    pub quat: Option<[f64; 4]>,
+}
+
+impl NamedRef {
+    pub fn semantic_frame_name(&self) -> String {
+        format!("ee:{}", self.name)
+    }
+
+    pub fn frame_reference(&self) -> Option<FrameReference> {
+        match (&self.site, &self.body, self.xyz, self.quat) {
+            (Some(site), _, None, None) => Some(FrameReference::Site { site: site.clone() }),
+            (None, Some(body), None, None) => Some(FrameReference::Body { body: body.clone() }),
+            (None, Some(body), Some(xyz), quat) => Some(FrameReference::BodyOffset {
+                body: body.clone(),
+                xyz,
+                quat_wxyz: quat.unwrap_or([1.0, 0.0, 0.0, 0.0]),
+            }),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -184,11 +184,20 @@ pub fn lower_named_targets(
         } else {
             match targets.hold_outside {
                 HoldSemantics::KeepCurrent | HoldSemantics::ExplicitSafe => {
-                    let hold = current_by_joint
-                        .get(&act.target_joint)
-                        .copied()
-                        .ok_or(SkillRefuse::MissingJointState)?;
-                    out.push((act.name.clone(), hold));
+                    if act.targets_joint() {
+                        let hold = current_by_joint
+                            .get(&act.target_joint)
+                            .copied()
+                            .ok_or(SkillRefuse::MissingJointState)?;
+                        out.push((act.name.clone(), hold));
+                    } else {
+                        let hold = current_by_joint
+                            .get(&act.name)
+                            .or_else(|| current_by_joint.get(&act.target_joint))
+                            .copied()
+                            .unwrap_or(0.0);
+                        out.push((act.name.clone(), hold));
+                    }
                 }
             }
         }
@@ -284,6 +293,7 @@ pub(crate) fn synth_planar_two_link() -> EmbodimentModel {
         name: "a0".into(),
         target_joint: "j0".into(),
         control_mode: "position".into(),
+        transmission_kind: "joint".into(),
         ctrlrange: Provenanced::unknown("test", 0.0),
         forcerange: Provenanced::unknown("test", 0.0),
         gear: Provenanced::unknown("test", 0.0),
@@ -292,6 +302,7 @@ pub(crate) fn synth_planar_two_link() -> EmbodimentModel {
         name: "a1".into(),
         target_joint: "j1".into(),
         control_mode: "position".into(),
+        transmission_kind: "joint".into(),
         ctrlrange: Provenanced::unknown("test", 0.0),
         forcerange: Provenanced::unknown("test", 0.0),
         gear: Provenanced::unknown("test", 0.0),
@@ -482,10 +493,7 @@ mod tests {
                 0.25,
             )
             .unwrap_err();
-        assert!(matches!(
-            err,
-            SkillRefuse::Unsupported | SkillRefuse::Unreachable
-        ));
+        assert_eq!(err, SkillRefuse::ModelFeatureUnsupported);
     }
 
     #[test]
@@ -495,6 +503,7 @@ mod tests {
             name: "grip".into(),
             target_joint: "finger".into(),
             control_mode: "position".into(),
+            transmission_kind: "joint".into(),
             ctrlrange: Provenanced::unknown("test", 0.0),
             forcerange: Provenanced::unknown("test", 0.0),
             gear: Provenanced::unknown("test", 0.0),
@@ -524,6 +533,49 @@ mod tests {
             .unwrap();
         assert!(!out.targets.contains_joint("finger"));
         assert_eq!(out.targets.targets.len(), 2);
+    }
+
+    #[test]
+    fn tendon_actuator_is_held_without_requiring_joint_state() {
+        let mut m = synth_planar_two_link();
+        m.actuators.push(Actuator {
+            name: "split".into(),
+            target_joint: "split".into(),
+            control_mode: "position".into(),
+            transmission_kind: "tendon".into(),
+            ctrlrange: Provenanced::unknown("test", 0.0),
+            forcerange: Provenanced::unknown("test", 0.0),
+            gear: Provenanced::unknown("test", 0.0),
+        });
+        let caps = derive_capabilities(&m, None);
+        let world = WorldState::empty("e0", 1.0).with_target(
+            "ee",
+            [0.2, 0.0, 0.0],
+            5.0,
+            "e0",
+            1.0,
+            Provenance::UserDeclared,
+        );
+        let obs = zero_joint_obs(&m, "e0", 1.0);
+        let g = identity_base_graph("e0");
+        let out = ChainIkPositionPdAdapter
+            .compile(
+                &SkillContract::reach(),
+                &m,
+                &caps,
+                &world,
+                &obs,
+                &g,
+                1.0,
+                0.25,
+            )
+            .expect("arm REACH must compile without the tendon actuator");
+        assert!(!out.targets.contains_joint("split"));
+        let mut current = std::collections::HashMap::new();
+        current.insert("j0".into(), 0.0);
+        current.insert("j1".into(), 0.0);
+        let lowered = lower_named_targets(&m, &out.targets, &current).expect("hold tendon");
+        assert!(lowered.iter().any(|(n, _)| n == "split"));
     }
 
     #[test]

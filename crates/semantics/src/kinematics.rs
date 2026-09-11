@@ -101,18 +101,81 @@ fn body_local(model: &EmbodimentModel, name: &str) -> Result<Se3, SkillRefuse> {
     body.local_pose.value.ok_or(SkillRefuse::Unsupported)
 }
 
+fn last_joint_child(model: &EmbodimentModel, chain: &[String]) -> Result<String, SkillRefuse> {
+    let last = chain.last().ok_or(SkillRefuse::Unsupported)?;
+    let joint = model
+        .joints
+        .iter()
+        .find(|j| j.name == *last)
+        .ok_or(SkillRefuse::Unsupported)?;
+    Ok(joint.child_body.clone())
+}
+
+fn ee_parent_body(model: &EmbodimentModel, ee: &str) -> Result<String, SkillRefuse> {
+    let ee_def = model
+        .end_effectors
+        .iter()
+        .find(|e| e.name == ee)
+        .ok_or(SkillRefuse::ModelFeatureUnsupported)?;
+    let frame = model
+        .frames
+        .iter()
+        .find(|f| f.name == ee_def.frame)
+        .ok_or(SkillRefuse::ModelFeatureUnsupported)?;
+    if frame.parent_body.is_empty() {
+        return Err(SkillRefuse::ModelFeatureUnsupported);
+    }
+    Ok(frame.parent_body.clone())
+}
+
+/// Compose declared body local poses from `from` (exclusive) down to `to` (inclusive).
+fn compose_body_path(model: &EmbodimentModel, from: &str, to: &str) -> Result<Se3, SkillRefuse> {
+    if from == to {
+        return Ok(Se3::identity());
+    }
+    let mut names = Vec::new();
+    let mut cur = Some(to.to_string());
+    let mut reached = false;
+    let mut guard = 0;
+    while let Some(name) = cur {
+        if name == from {
+            reached = true;
+            break;
+        }
+        if name == "world" || guard > model.bodies.len() + 2 {
+            return Err(SkillRefuse::ModelFeatureUnsupported);
+        }
+        names.push(name.clone());
+        cur = model
+            .bodies
+            .iter()
+            .find(|b| b.name == name)
+            .and_then(|b| b.parent.clone());
+        guard += 1;
+    }
+    if !reached && from != "world" {
+        return Err(SkillRefuse::ModelFeatureUnsupported);
+    }
+    names.reverse();
+    let mut t = Se3::identity();
+    for name in names {
+        t = t.compose(body_local(model, &name)?);
+    }
+    Ok(t)
+}
+
 fn ee_pose(model: &EmbodimentModel, ee: &str) -> Result<Se3, SkillRefuse> {
     let ee_def = model
         .end_effectors
         .iter()
         .find(|e| e.name == ee)
-        .ok_or(SkillRefuse::Unsupported)?;
+        .ok_or(SkillRefuse::ModelFeatureUnsupported)?;
     let frame = model
         .frames
         .iter()
         .find(|f| f.name == ee_def.frame)
-        .ok_or(SkillRefuse::Unsupported)?;
-    frame.pose().ok_or(SkillRefuse::Unsupported)
+        .ok_or(SkillRefuse::ModelFeatureUnsupported)?;
+    frame.pose().ok_or(SkillRefuse::ModelFeatureUnsupported)
 }
 
 pub fn forward_kinematics(
@@ -154,8 +217,11 @@ pub fn forward_kinematics(
         t = before.compose(motion);
     }
 
+    let tip = last_joint_child(model, chain)?;
+    let parent = ee_parent_body(model, ee)?;
+    let to_parent = compose_body_path(model, &tip, &parent)?;
     let ee_local = ee_pose(model, ee)?;
-    let ee_world = t.compose(ee_local);
+    let ee_world = t.compose(to_parent).compose(ee_local);
     if !ee_world.xyz.iter().all(|v| v.is_finite()) {
         return Err(SkillRefuse::Unreachable);
     }
@@ -417,48 +483,58 @@ pub fn solve_ik(
 
     let mut precise: Option<(Vec<f64>, f64, f64)> = None;
     let mut best_effort: Option<(Vec<f64>, f64, f64)> = None;
+    let mut structural = None;
     for seed in seeds {
-        if let Ok((q, err)) = solve_from_seed(model, chain, &joints, ee, target, seed) {
-            if !q
-                .iter()
-                .enumerate()
-                .all(|(i, qi)| in_limits(&joints[i], *qi))
-            {
+        let solved = match solve_from_seed(model, chain, &joints, ee, target, seed) {
+            Ok(v) => v,
+            Err(
+                e @ (SkillRefuse::ModelFeatureUnsupported | SkillRefuse::KinematicsUnsupported),
+            ) => {
+                structural = Some(e);
                 continue;
             }
-            let dist = distance_from_current(&q, current_q);
-            if err <= IK_ACCEPT {
-                let better = match &precise {
-                    None => true,
-                    Some((_, best_dist, best_err)) => {
-                        dist + 1e-6 < *best_dist
-                            || ((dist - *best_dist).abs() <= 1e-6 && err < *best_err)
-                    }
-                };
-                if better {
-                    precise = Some((q.clone(), dist, err));
-                }
-            }
-            let better_effort = match &best_effort {
+            Err(_) => continue,
+        };
+        let (q, err) = solved;
+        if !q
+            .iter()
+            .enumerate()
+            .all(|(i, qi)| in_limits(&joints[i], *qi))
+        {
+            continue;
+        }
+        let dist = distance_from_current(&q, current_q);
+        if err <= IK_ACCEPT {
+            let better = match &precise {
                 None => true,
                 Some((_, best_dist, best_err)) => {
-                    err + 1e-9 < *best_err || ((err - *best_err).abs() <= 1e-9 && dist < *best_dist)
+                    dist + 1e-6 < *best_dist
+                        || ((dist - *best_dist).abs() <= 1e-6 && err < *best_err)
                 }
             };
-            if better_effort {
-                best_effort = Some((q, dist, err));
+            if better {
+                precise = Some((q.clone(), dist, err));
             }
-            if precise
-                .as_ref()
-                .is_some_and(|(_, best_dist, _)| *best_dist < 1e-9)
-            {
-                break;
+        }
+        let better_effort = match &best_effort {
+            None => true,
+            Some((_, best_dist, best_err)) => {
+                err + 1e-9 < *best_err || ((err - *best_err).abs() <= 1e-9 && dist < *best_dist)
             }
+        };
+        if better_effort {
+            best_effort = Some((q, dist, err));
+        }
+        if precise
+            .as_ref()
+            .is_some_and(|(_, best_dist, _)| *best_dist < 1e-9)
+        {
+            break;
         }
     }
     let best = precise.or(best_effort);
 
-    let (q, _dist, residual) = best.ok_or(SkillRefuse::Unreachable)?;
+    let (q, _dist, residual) = best.ok_or(structural.unwrap_or(SkillRefuse::Unreachable))?;
     let mut max_move: f64 = 0.0;
     let mut sumsq = 0.0;
     for (a, b) in q.iter().zip(current_q.iter()) {
@@ -583,5 +659,48 @@ mod tests {
         assert!(distance_from_current(&q, &current) < 0.15);
         assert!(trace.residual < 1e-4);
         assert_eq!(trace.initial_q, current);
+    }
+
+    #[test]
+    fn fk_walks_from_last_joint_child_to_declared_ee_body() {
+        use crate::embodiment::{Body, EndEffector, FrameKind, ModelFrame};
+        use crate::provenance::Provenanced;
+        let mut m = synth_planar_two_link();
+        m.bodies.push(Body {
+            name: "palm".into(),
+            parent: Some("link2".into()),
+            mass_kg: Provenanced::unknown("test", 0.0),
+            com: Provenanced::unknown("test", 0.0),
+            inertia: Provenanced::unknown("test", 0.0),
+            local_pose: Provenanced::declared(
+                Se3::try_new([0.0, 0.0, 0.11], [0.9238795325, 0.0, 0.0, 0.3826834324]).unwrap(),
+                "test",
+                0.0,
+            ),
+        });
+        m.frames.clear();
+        m.frames.push(ModelFrame {
+            name: "ee:tool0".into(),
+            kind: FrameKind::Ee,
+            parent_body: "palm".into(),
+            translation: Provenanced::declared([0.0, 0.0, 0.0], "BUNDLE_DECLARED_BODY_FRAME", 0.0),
+            rotation: Provenanced::declared(
+                [1.0, 0.0, 0.0, 0.0],
+                "BUNDLE_DECLARED_BODY_FRAME",
+                0.0,
+            ),
+        });
+        m.end_effectors.clear();
+        m.end_effectors.push(EndEffector {
+            name: "tool0".into(),
+            frame: "ee:tool0".into(),
+            joint_chain: vec!["j0".into(), "j1".into()],
+        });
+        let fk = forward_kinematics(&m, &["j0".into(), "j1".into()], "tool0", &[0.0, 0.0]).unwrap();
+        assert!(
+            (fk.ee.xyz[2] - 0.11).abs() < 1e-9,
+            "must compose distal body offset, got z={}",
+            fk.ee.xyz[2]
+        );
     }
 }

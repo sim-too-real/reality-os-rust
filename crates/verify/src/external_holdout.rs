@@ -121,10 +121,29 @@ pub fn run_holdout_first_score() -> Result<HoldoutFirstScore, String> {
     })
 }
 
+pub fn historical_first_score_path() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/superpowers/evidence/external_holdout_first_score.json")
+}
+
+pub fn historical_first_score_sha256() -> Result<String, String> {
+    let bytes = std::fs::read(historical_first_score_path()).map_err(|e| e.to_string())?;
+    use sha2::{Digest, Sha256};
+    Ok(format!("{:x}", Sha256::digest(&bytes)))
+}
+
 pub fn write_first_score(score: &HoldoutFirstScore, out_dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(score).map_err(|e| e.to_string())?;
     std::fs::write(out_dir.join("external_holdout_first_score.json"), json)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn write_postfix_score(score: &HoldoutFirstScore, out_dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(score).map_err(|e| e.to_string())?;
+    std::fs::write(out_dir.join("external_holdout_postfix_score.json"), json)
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -135,19 +154,40 @@ mod tests {
     use crate::mujoco_exec::ensure_mujoco_or_skip;
 
     #[test]
-    fn holdout_first_score_is_recorded_without_prescore_tuning() {
+    fn historical_first_score_artifact_is_unchanged() {
+        let p = historical_first_score_path();
+        let raw = std::fs::read_to_string(&p).expect("historical first score");
+        let score: HoldoutFirstScore = serde_json::from_str(&raw).expect("parse first score");
+        assert_eq!(score.generality_freeze_sha, GENERALITY_FREEZE_SHA);
+        assert_eq!(score.fk_error.as_deref(), Some("Unsupported"));
+        assert_eq!(score.n_compile, 0);
+        assert_eq!(score.n_execute, 0);
+        assert_eq!(score.n_succeed, 0);
+        assert!(!score.semantic_code_changed_after_first_score);
+        let _ = historical_first_score_sha256().expect("hash first score");
+    }
+
+    #[test]
+    fn holdout_postfix_score_does_not_rewrite_first_score() {
         if !ensure_mujoco_or_skip() {
             return;
         }
         if ensure_holdout_model().is_err() {
             return;
         }
-        let score = run_holdout_first_score().expect("holdout first score");
-        assert_eq!(score.source_commit, MENAGERIE_SHA);
-        assert_eq!(score.generality_freeze_sha, GENERALITY_FREEZE_SHA);
-        assert_eq!(score.targets.len(), 10);
-        assert!(!score.semantic_code_changed_after_first_score);
+        let before = historical_first_score_sha256().expect("hash before");
+        let mut score = run_holdout_first_score().expect("postfix score");
+        score.semantic_code_changed_after_first_score = true;
+        let evidence =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/superpowers/evidence");
         let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../verify-out");
-        write_first_score(&score, &out).expect("write first score");
+        write_postfix_score(&score, &evidence).expect("write postfix evidence");
+        write_postfix_score(&score, &out).expect("write postfix verify-out");
+        let after = historical_first_score_sha256().expect("hash after");
+        assert_eq!(
+            before, after,
+            "historical first-score artifact must stay byte-identical"
+        );
+        assert_eq!(score.targets, PREDECLARED_TARGETS);
     }
 }

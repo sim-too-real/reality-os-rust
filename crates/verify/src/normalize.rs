@@ -34,6 +34,8 @@ pub struct ActuatorRecord {
     pub ctrllimited: bool,
     pub force_range: Option<[f64; 2]>,
     pub actuator_type: String,
+    #[serde(default)]
+    pub transmission_kind: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -177,6 +179,10 @@ impl RobotManifest {
                     .map(|a| ActuatorRecord {
                         name: a["name"].as_str().unwrap_or("").into(),
                         transmission_target: a["target"].as_str().unwrap_or("").into(),
+                        transmission_kind: a["transmission_kind"]
+                            .as_str()
+                            .unwrap_or("joint")
+                            .into(),
                         control_dimensions: 1,
                         ctrlrange: [
                             a["ctrlrange"][0].as_f64().unwrap_or(0.0),
@@ -289,7 +295,14 @@ impl RobotManifest {
         };
         let mut ee_chains = Vec::new();
         let mut ee_joint_chains = Vec::new();
-        if let Some(arr) = inspect
+        if !bundle.manifest.end_effectors.is_empty() {
+            for ee in &bundle.manifest.end_effectors {
+                let tip = declared_ee_tip(ee, &site_records);
+                let (bodies, jnts) = walk_body_chain(&bodies, &joints, &tip);
+                ee_chains.push(bodies);
+                ee_joint_chains.push(jnts);
+            }
+        } else if let Some(arr) = inspect
             .get("end_effector_chains")
             .and_then(|v| v.as_array())
         {
@@ -318,15 +331,9 @@ impl RobotManifest {
                 }
             }
         }
-        if ee_chains.is_empty() {
-            for ee in &bundle.manifest.end_effectors {
-                let tip = ee.body.clone().unwrap_or_else(|| ee.name.clone());
-                let (bodies, jnts) = walk_body_chain(&bodies, &joints, &tip);
-                ee_chains.push(bodies);
-                ee_joint_chains.push(jnts);
-            }
-        }
         let inferred_base = infer_base(&joints, bundle.manifest.expected_base_type);
+        let mut lost_features = bundle.format.lost_or_unreliable.clone();
+        lost_features.extend(coupled_lost_features(inspect, &actuators));
         let nq = inspect["nq"].as_i64().unwrap_or(0) as i32;
         let nv = inspect["nv"].as_i64().unwrap_or(0) as i32;
         let nu = inspect["nu"].as_i64().unwrap_or(0) as i32;
@@ -368,7 +375,7 @@ impl RobotManifest {
                 ModelFormat::Usd => "usd".into(),
                 other => format!("{other:?}").to_ascii_lowercase(),
             },
-            lost_features: bundle.format.lost_or_unreliable.clone(),
+            lost_features,
             support_bodies: bundle
                 .manifest
                 .feet
@@ -440,6 +447,44 @@ fn joint_dims(jtype: &str) -> (i32, i32) {
         "ball" => (4, 3),
         _ => (1, 1),
     }
+}
+
+fn coupled_lost_features(inspect: &serde_json::Value, actuators: &[ActuatorRecord]) -> Vec<String> {
+    let mut lost = Vec::new();
+    if let Some(arr) = inspect.get("tendons").and_then(|v| v.as_array()) {
+        for t in arr {
+            if let Some(name) = t.get("name").and_then(|v| v.as_str()) {
+                lost.push(format!("TENDON_PRESENT:{name}"));
+            }
+        }
+    }
+    for a in actuators {
+        if a.transmission_kind == "tendon" {
+            lost.push(format!("ACTUATOR_TARGETS_TENDON:{}", a.name));
+        }
+    }
+    if let Some(arr) = inspect.get("equalities").and_then(|v| v.as_array()) {
+        for eq in arr {
+            let kind = eq.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let a = eq.get("obj1").and_then(|v| v.as_str()).unwrap_or("");
+            let b = eq.get("obj2").and_then(|v| v.as_str()).unwrap_or("");
+            if kind == "joint" && (!a.is_empty() || !b.is_empty()) {
+                lost.push(format!("JOINT_EQUALITY_CONSTRAINT:{a}+{b}"));
+                lost.push(format!("COUPLED_JOINTS:{a}+{b}"));
+            }
+        }
+    }
+    lost
+}
+
+fn declared_ee_tip(ee: &crate::bundle::NamedRef, sites: &[SiteRecord]) -> String {
+    if let Some(site) = &ee.site {
+        if let Some(s) = sites.iter().find(|s| s.name == *site) {
+            return s.body.clone();
+        }
+        return site.clone();
+    }
+    ee.body.clone().unwrap_or_else(|| ee.name.clone())
 }
 
 fn walk_body_chain(

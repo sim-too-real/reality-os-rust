@@ -62,6 +62,16 @@ impl<T> Provenanced<T> {
             uncertainty: None,
         }
     }
+
+    pub fn user_declared(value: T, source: impl Into<String>, as_of_s: f64) -> Self {
+        Self {
+            value: Some(value),
+            provenance: Provenance::UserDeclared,
+            source: source.into(),
+            as_of_s,
+            uncertainty: None,
+        }
+    }
 }
 
 #[cfg(test)]

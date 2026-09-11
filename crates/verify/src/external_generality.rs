@@ -43,18 +43,29 @@ pub fn sample_reachable_world_targets(
     n: usize,
     seed: u64,
 ) -> Result<Vec<[f64; 3]>, String> {
+    sample_reachable_world_targets_with_bounds(bundle, n, seed, 0.05, 0.12, 1.2)
+}
+
+pub fn sample_reachable_world_targets_with_bounds(
+    bundle: &RobotBundle,
+    n: usize,
+    seed: u64,
+    z_min: f64,
+    xy_min: f64,
+    r_max: f64,
+) -> Result<Vec<[f64; 3]>, String> {
     let (mut inst, manifest) = load_and_normalize(bundle, &[], seed)?;
     let model = embodiment_from_manifest(bundle, &manifest);
     let ee = bundle
         .manifest
         .end_effectors
         .first()
-        .and_then(|e| e.site.clone())
+        .and_then(|e| e.site.clone().or_else(|| e.body.clone()))
         .unwrap_or_else(|| "ee".into());
     let mut rng = seed;
     let mut out = Vec::new();
     let mut qpos = vec![0.0; manifest.nq.max(0) as usize];
-    for _ in 0..n * 4 {
+    for _ in 0..n * 8 {
         if out.len() >= n {
             break;
         }
@@ -73,11 +84,11 @@ pub fn sample_reachable_world_targets(
             .reset(Some(&qpos), Some(&vec![0.0; manifest.nv.max(0) as usize]))
             .map_err(|e| e.to_string())?;
         let truth = VerifierTruth::from_mujoco_state(st.get("state").unwrap_or(&st));
-        if let Some(p) = truth.named_pos.get(&ee) {
+        if let Some(p) = truth.named_pos.get(&ee).or_else(|| truth.xpos.get(&ee)) {
             if p.len() >= 3 && p.iter().all(|v| v.is_finite()) {
                 let r = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
                 let xy = (p[0] * p[0] + p[1] * p[1]).sqrt();
-                if p[2] > 0.05 && xy > 0.12 && r < 1.2 {
+                if p[2] > z_min && xy > xy_min && r < r_max {
                     out.push([p[0], p[1], p[2]]);
                 }
             }

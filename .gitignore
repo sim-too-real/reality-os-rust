@@ -15,6 +15,7 @@ robots/external/.cache/
 robots/external/**/.cache/
 robots/external/ur5e/model/
 robots/external/panda/model/
+robots/external/iiwa14/model/
 MUJOCO_LOG.TXT
 **/MUJOCO_LOG.TXT
 crates/plant/wip/

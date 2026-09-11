@@ -66,9 +66,17 @@ pub struct Actuator {
     pub name: String,
     pub target_joint: String,
     pub control_mode: String,
+    #[serde(default)]
+    pub transmission_kind: String,
     pub ctrlrange: Provenanced<[f64; 2]>,
     pub forcerange: Provenanced<[f64; 2]>,
     pub gear: Provenanced<f64>,
+}
+
+impl Actuator {
+    pub fn targets_joint(&self) -> bool {
+        self.transmission_kind.is_empty() || self.transmission_kind == "joint"
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
