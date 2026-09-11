@@ -220,6 +220,45 @@ fn xl330_pty_outbound_nudge_at_cage_edge_is_refused() {
 }
 
 #[test]
+fn xl330_pty_inbound_nudge_at_wizard_max_window_tracks() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_AT_MAX", "1")]);
+    let root = metal_test_root("pty-at-max-inbound");
+    let cfg = MetalConfig::example(&tty);
+    let action = realityos_metal::config::pick_inbound_nudge_action(
+        2048,
+        2000,
+        2048,
+        cfg.max_position_delta_ticks,
+        cfg.tau_max,
+    )
+    .expect("Wizard leftover max==present still has inbound room");
+    assert!(action < 0.0, "plus 32 ticks is outbound of max=2048");
+    let mut driver = Xl330Driver::open(cfg, &root).expect("identify at Wizard max");
+    driver
+        .read_sensor(0.0)
+        .expect("sensor before inbound nudge");
+    assert_eq!(driver.last_present_position(), 2048);
+    let (emin, emax) = driver.experiment_cage();
+    assert_eq!((emin, emax), (2000, 2048));
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect_err("hardcoded +0.2 must still refuse; do not clamp inward");
+    driver
+        .write_action(&[action], &ActionParams::empty())
+        .expect("inbound -0.2 must write the 32-tick step");
+    driver.read_sensor(0.0).expect("sensor after inbound nudge");
+    let after = driver.last_present_position();
+    assert_eq!(after, 2016, "PTY lands on the inbound 32-tick goal");
+    assert!(
+        after >= emin && after <= emax,
+        "inbound present {after} escaped cage {emin}..{emax}"
+    );
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_pwm_operating_mode_is_forced_to_position() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_PWM", "1")]);

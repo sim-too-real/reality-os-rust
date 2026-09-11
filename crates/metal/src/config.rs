@@ -350,6 +350,41 @@ pub fn candidate_servo_ids(configured: u8, extra: Option<u8>) -> Vec<u8> {
     out
 }
 
+/// Prefer `+delta` ticks when that goal is inside the experiment cage.
+/// Only pick `-delta` when `+delta` would refuse.
+///
+/// `write_action` does not clamp an outbound step inward. `plant.act` Err
+/// after `ledger.prepare` is `CommandOutcome::Unknown` and abort-latches
+/// the ONLINE instance, so the campaign cannot retry the other sign.
+/// Keep in sync with `scripts/metal-nudge-action.sh`.
+pub fn pick_inbound_nudge_action(
+    present: i32,
+    experiment_min: i32,
+    experiment_max: i32,
+    delta_ticks: i32,
+    tau_max: f64,
+) -> Result<f64, String> {
+    if delta_ticks <= 0 {
+        return Err(format!(
+            "metal_nudge_delta_ticks_not_positive:{delta_ticks}"
+        ));
+    }
+    if !tau_max.is_finite() || tau_max <= 0.0 {
+        return Err(format!("metal_nudge_tau_max_invalid:{tau_max}"));
+    }
+    let plus = present.saturating_add(delta_ticks);
+    if plus >= experiment_min && plus <= experiment_max {
+        return Ok(tau_max);
+    }
+    let minus = present.saturating_sub(delta_ticks);
+    if minus >= experiment_min && minus <= experiment_max {
+        return Ok(-tau_max);
+    }
+    Err(format!(
+        "metal_nudge_no_inbound_step:present={present}:delta={delta_ticks}:cage={experiment_min}..{experiment_max}"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,5 +640,82 @@ mod tests {
         cfg.max_pwm_limit_raw = 886;
         let err = cfg.validate_xl330_limits().unwrap_err();
         assert!(err.contains("metal_pwm_limit_raw_out_of_range"), "{err}");
+    }
+
+    #[test]
+    fn inbound_nudge_prefers_plus_and_only_flips_when_plus_misses_cage() {
+        let cfg = MetalConfig::example("/dev/ttyUSB0");
+        let delta = cfg.max_position_delta_ticks;
+        let tau = cfg.tau_max;
+        assert_eq!(
+            pick_inbound_nudge_action(2048, 2000, 2096, delta, tau).unwrap(),
+            tau,
+            "mid-range +32 must stay the historical campaign default"
+        );
+        assert_eq!(
+            pick_inbound_nudge_action(2048, 2000, 2048, delta, tau).unwrap(),
+            -tau,
+            "Wizard leftover max==present: +32 is outbound"
+        );
+        assert_eq!(
+            pick_inbound_nudge_action(4090, 4042, 4095, delta, tau).unwrap(),
+            -tau,
+            "horn near 4095: +32 is past Position Mode max"
+        );
+        assert_eq!(
+            pick_inbound_nudge_action(10, 0, 58, delta, tau).unwrap(),
+            tau
+        );
+        let err = pick_inbound_nudge_action(2048, 2048, 2048, delta, tau).unwrap_err();
+        assert!(err.contains("metal_nudge_no_inbound_step"), "{err}");
+    }
+
+    #[test]
+    fn inbound_nudge_script_matches_rust() {
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/metal-nudge-action.sh");
+        let cases = [
+            (2048, 2000, 2096, "0.2"),
+            (2048, 2000, 2048, "-0.2"),
+            (4090, 4042, 4095, "-0.2"),
+            (10, 0, 58, "0.2"),
+        ];
+        for (present, min, max, want) in cases {
+            assert_eq!(
+                pick_inbound_nudge_action(present, min, max, 32, 0.2).unwrap(),
+                want.parse::<f64>().unwrap()
+            );
+            let out = std::process::Command::new("bash")
+                .arg(&script)
+                .output()
+                .expect("metal-nudge-action.sh self-test");
+            assert!(
+                out.status.success(),
+                "metal-nudge-action.sh: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let picked = std::process::Command::new("bash")
+                .args([
+                    "-c",
+                    "source \"$1\" && metal_nudge_action_from_values \"$2\" \"$3\" \"$4\" 32 0.2",
+                    "nudge",
+                    script.to_str().unwrap(),
+                    &present.to_string(),
+                    &min.to_string(),
+                    &max.to_string(),
+                ])
+                .output()
+                .expect("source metal-nudge-action.sh");
+            assert!(
+                picked.status.success(),
+                "{}",
+                String::from_utf8_lossy(&picked.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&picked.stdout).trim(),
+                want,
+                "present={present} cage={min}..{max}"
+            );
+        }
     }
 }

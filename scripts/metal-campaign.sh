@@ -17,6 +17,8 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/metal-unix-mode.sh"
 # shellcheck source=metal-sensor-drop.sh
 source "$SCRIPT_DIR/metal-sensor-drop.sh"
+# shellcheck source=metal-nudge-action.sh
+source "$SCRIPT_DIR/metal-nudge-action.sh"
 # Authority UID cannot write the repo `docs/` tree. Resolve against the
 # script's repo, not `$PWD`: `sudo ... /path/scripts/metal-campaign.sh`
 # from $HOME used to install ~/docs/metal_proof.json after a live run.
@@ -1825,8 +1827,11 @@ measure() {
   fi
   # bus/present is the pre-write sample. After an authorized goal write,
   # wait until present is inside the hold-still band of the new goal (not
-  # merely Moving=0 — a real XL330 is still parked then). action=0.2 uses
-  # the full 32-tick cap; plastic-gear backlash can hide an 8-tick step.
+  # merely Moving=0 — a real XL330 is still parked then). The inbound
+  # nudge uses the full 32-tick cap (±tau_max); plastic-gear backlash
+  # can hide an 8-tick step. Sign is chosen so the goal stays inside
+  # the experiment cage (hardcoded +0.2 abort-latched a Wizard-max
+  # leftover or a horn near 4095).
   if [[ "$expected" == "true" ]] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("ok") else 1)' "$respfile"; then
     if ! settle_after_write; then
       echo "error: authorized $name did not settle; refuse to sample a traveling or stuck horn as a proof case" >&2
@@ -1931,7 +1936,14 @@ open(path, "w").write(json.dumps(a))
 }
 
 add_case "$(measure valid_hold 'verb=hold' NONE true "$PROP" --root "$ROOT" --id metal-hold --verb hold propose)"
-add_case "$(measure valid_nudge 'verb=drive action=0.2' NONE true "$PROP" --root "$ROOT" --id metal-nudge --verb drive --action 0.2 propose)"
+# Pick the sign before propose. An outbound +32 is experiment_cage_violation;
+# that plant.act Err abort-latches ONLINE, so a retry of -0.2 cannot run.
+NUDGE_ACTION="$(metal_nudge_action_from_bus "$ROOT")" || {
+  echo "error: no inbound 32-tick nudge fits the experiment cage (present/cage unreadable or leftover window tighter than the step)" >&2
+  exit 1
+}
+echo "metal-campaign: valid_nudge action=$NUDGE_ACTION (inbound 32-tick step)" >&2
+add_case "$(measure valid_nudge "verb=drive action=$NUDGE_ACTION" NONE true "$PROP" --root "$ROOT" --id metal-nudge --verb drive --action "$NUDGE_ACTION" propose)"
 add_case "$(measure unsupported_action 'verb=dance' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" unsupported)"
 add_case "$(measure oversized_action 'action=1e6' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" oversized)"
 add_case "$(MEASURE_REQUIRE=bad_request measure nan_action 'action=[NaN]' PROTOCOL_BLOCKED false "$PROP" --root "$ROOT" '{"op":"propose","verb":"drive","command_id":"metal-nan","action":[NaN],"proposer":"autonomy"}' raw)"
