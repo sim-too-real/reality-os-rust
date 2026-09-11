@@ -1419,35 +1419,100 @@ impl Xl330Driver {
             }
         };
         if after != self.last_present {
-            if after < self.experiment_min || after > self.experiment_max {
-                let _ = self.write_reg(
-                    ADDR_TORQUE_ENABLE,
-                    &[0],
-                    "setup_torque_off_present_jump",
-                    None,
-                    false,
-                );
-                self.torque_enabled = false;
-                return Err(PlantError::refused(format!(
-                    "dxl_present_outside_experiment_cage_after_torque:present={after}:min={}:max={}",
-                    self.experiment_min, self.experiment_max
-                )));
-            }
+            self.recenter_or_rematch_after_torque_present_reset(after)?;
+        }
+        Ok(())
+    }
+
+    fn wizard_legal_window(&self) -> (i32, i32) {
+        let min = self.eeprom_min_saved.unwrap_or(self.min_position);
+        let max = self.eeprom_max_saved.unwrap_or(self.max_position);
+        (
+            XL330_POSITION_MODE_MIN.max(min),
+            XL330_POSITION_MODE_MAX.min(max),
+        )
+    }
+
+    fn torque_off_setup(&mut self, why: &'static str) {
+        let _ = self.write_reg(ADDR_TORQUE_ENABLE, &[0], why, None, false);
+        self.torque_enabled = false;
+    }
+
+    /// Robotis Present reset is a register wrap, not certified excursion.
+    /// A cage built around the pre-reset number leaves too little inbound
+    /// room: the campaign picker then fails after hold, or `write_action`
+    /// abort-latches ONLINE. EEPROM Min/Max are read-only while torque is
+    /// on, so re-center with torque off. Do not widen the Wizard window.
+    fn recenter_or_rematch_after_torque_present_reset(&mut self, after: i32) -> PlantResult<()> {
+        let (wizard_min, wizard_max) = self.wizard_legal_window();
+        if after < wizard_min || after > wizard_max {
+            self.torque_off_setup("setup_torque_off_present_jump");
+            return Err(PlantError::refused(format!(
+                "dxl_present_outside_wizard_limits_after_torque:present={after}:min={wizard_min}:max={wizard_max}"
+            )));
+        }
+        if !self.in_experiment_cage(after) {
+            self.torque_off_setup("setup_torque_off_present_jump");
+            return Err(PlantError::refused(format!(
+                "dxl_present_outside_experiment_cage_after_torque:present={after}:min={}:max={}",
+                self.experiment_min, self.experiment_max
+            )));
+        }
+        let old_cage_ok = cage_allows_inbound_nudge_after_hold_still(
+            after,
+            self.experiment_min,
+            self.experiment_max,
+            self.cfg.max_position_delta_ticks,
+            self.cfg.tau_max,
+        )
+        .is_ok();
+        if old_cage_ok {
             if let Err(e) =
                 self.write_and_verify_goal(after, "setup_goal_match_present_after_torque")
             {
-                let _ = self.write_reg(
-                    ADDR_TORQUE_ENABLE,
-                    &[0],
-                    "setup_torque_off_goal_unverified",
-                    None,
-                    false,
-                );
-                self.torque_enabled = false;
+                self.torque_off_setup("setup_torque_off_goal_unverified");
                 return Err(e);
             }
             self.last_present = after;
+            return Ok(());
         }
+        self.torque_off_setup("setup_torque_off_recenter_cage");
+        self.establish_startup_cage(after)?;
+        self.last_present = after;
+        self.write_and_verify_goal(after, "setup_goal_match_present_after_recenter")?;
+        self.write_reg(
+            ADDR_TORQUE_ENABLE,
+            &[1],
+            "setup_torque_on_after_recenter",
+            None,
+            false,
+        )?;
+        let still_on = self
+            .read_reg(ADDR_TORQUE_ENABLE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if still_on != Some(1) {
+            self.torque_enabled = false;
+            return Err(PlantError::refused(format!(
+                "dxl_torque_dropped_after_recenter:{}",
+                still_on.unwrap_or(0)
+            )));
+        }
+        let again = self
+            .read_reg(ADDR_PRESENT_POSITION, 4)
+            .ok()
+            .and_then(|b| le_i32(&b))
+            .ok_or_else(|| {
+                self.torque_off_setup("setup_torque_off_present_unread_recenter");
+                PlantError::refused("dxl_present_unreadable_after_torque")
+            })?;
+        if again != after {
+            self.torque_off_setup("setup_torque_off_present_jumped_twice");
+            return Err(PlantError::refused(format!(
+                "dxl_present_jumped_twice_after_torque_recenter:first={after}:second={again}"
+            )));
+        }
+        self.torque_enabled = true;
         Ok(())
     }
 

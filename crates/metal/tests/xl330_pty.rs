@@ -664,12 +664,26 @@ fn xl330_pty_rematches_goal_when_torque_on_resets_present() {
         Xl330Driver::open(cfg, &root).expect("rematch goal after torque-on present reset");
     assert_eq!(driver.last_present_position(), 2064);
     assert_eq!(driver.last_goal_position(), Some(2064));
+    assert_eq!(
+        driver.startup_present(),
+        2064,
+        "register wrap is not certified excursion; cage must follow the parked present"
+    );
+    let (emin, emax) = driver.experiment_cage();
+    assert_eq!(
+        (emin, emax),
+        (2016, 2112),
+        "pre-reset cage 2000..2096 leaves +32+slack past 2096 and abort-latches"
+    );
     driver.read_sensor(0.0).expect("sensor");
     assert_eq!(
         driver.last_present_position(),
         2064,
         "goal must already match the post-torque present so the horn does not yank"
     );
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("inbound +0.2 must fit the recentered cage");
     driver.close();
     let _ = std::fs::remove_dir_all(&root);
 }

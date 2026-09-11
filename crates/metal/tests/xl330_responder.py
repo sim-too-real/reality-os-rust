@@ -426,9 +426,11 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
                     regs[132:136] = regs[116:120]
                 if os.environ.get("REALITYOS_METAL_PTY_TORQUE_JUMP_PRESENT") == "1":
                     # Robotis resets Present to absolute-within-one-rotation
-                    # on torque-on in Position Control.
-                    jumped = struct.unpack_from("<i", regs, 132)[0] + 16
-                    regs[132:136] = struct.pack("<i", jumped)
+                    # on torque-on in Position Control. Once, not +16 every
+                    # enable — setup may torque-off and re-center the cage.
+                    present_now = struct.unpack_from("<i", regs, 132)[0]
+                    if present_now == 2048:
+                        regs[132:136] = struct.pack("<i", present_now + 16)
                 offset = struct.unpack_from("<i", regs, 20)[0]
                 if offset != 0:
                     # Leftover Homing Offset vs that reset throws Present
