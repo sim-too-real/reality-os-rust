@@ -208,6 +208,18 @@ const DISCONNECT_TOKENS: &[&str] = &[
     "metal_serial_closed",
 ];
 
+/// Independent VIN cutoff. USB-UART death is the unplug case — not VIN.
+const VIN_DROP_TOKENS: &[&str] = &["dxl_vin_outside_wizard_limits", "dxl_vin_unreadable"];
+
+fn live_vin_cutoff_measured(cases: &[CaseRecord]) -> bool {
+    cases.iter().any(|c| {
+        !c.expected_authorization
+            && c.serial_tx_delta == 0
+            && c.physical_writes_delta == 0
+            && refusal_has_token(c, VIN_DROP_TOKENS)
+    })
+}
+
 fn refusal_evidence(c: &CaseRecord) -> String {
     let mut blob = c.decision_result.to_ascii_lowercase();
     for v in &c.violations {
@@ -558,6 +570,7 @@ impl MetalProof {
             && meta.direct_device_write_successes == 0
             && meta.direct_device_open_attempts > 0
             && cutoff_live
+            && live_vin_cutoff_measured(&cases)
             && unplug_live
             && a.duplicate_writes_after_restart == 0
             && a.identity_mismatch_refusals > 0
@@ -790,7 +803,7 @@ pub fn default_unresolved() -> Vec<String> {
         "setup refuses torque when Temperature Limit is unreadable or 0, or Present Temperature is unreadable or at/above that EEPROM limit; the limit itself is not rewritten".into(),
         "CaseRecord physical_writes_before/after/delta are copies of serial_tx_* (certified write_all+flush), not bus/writes command-egress attempts; measured_success requires the copies to match and unauthorized physical_writes_delta==0".into(),
         "every campaign restart (first serve, disconnect restart, crash-replay bind/restart/reset-hold, live USB replug) retries start_auth until a sensor JSON body is ok=true; propose/sensor exits 0 for ok=false so a DTR-RESET refuse used to look like a landed sample. Authorized settle timeout (1.5s) fails the campaign instead of sampling a traveling horn".into(),
-        "force_disconnect and hot_swap.json are campaign hooks, not a physical USB unplug; measured_success requires a live USB-UART unplug and a live VIN drop. If unplug kills serve, the campaign records the drop evidence and serial_tx; it does not invent a disconnect token".into(),
+        "force_disconnect and hot_swap.json are campaign hooks, not a physical USB unplug; measured_success requires a live USB-UART unplug and a live VIN drop whose measured case carries dxl_vin_unreadable / dxl_vin_outside_wizard_limits. A cutoff_live_observed boolean with only UART-death tokens is not independent power-cutoff evidence. If unplug kills serve, the campaign records the drop evidence and serial_tx; it does not invent a disconnect token".into(),
         "no STO/SS1/PLC/SIL/ISO is provided or claimed".into(),
     ]
 }
@@ -1109,6 +1122,31 @@ mod tests {
                 Some(2000),
                 Some(2096),
             ),
+            CaseRecord::measure(
+                "vin_cutoff_live",
+                "propose after VIN open",
+                "authorize:refuse",
+                BlockingLayer::AuthorizationBlocked,
+                2,
+                2,
+                false,
+                false,
+                None,
+                "no_consume",
+            )
+            .with_violations(vec!["dxl_vin_unreadable".into()])
+            .with_certified_transport(
+                2,
+                2,
+                2,
+                2,
+                2,
+                2,
+                None,
+                None,
+                Some(2000),
+                Some(2096),
+            ),
             crash_restart("crash_restart_before_prepare"),
             crash_restart("crash_restart_after_serial_tx_before_status"),
             crash_restart("crash_restart_during_write"),
@@ -1339,6 +1377,48 @@ mod tests {
         assert_eq!(
             incomplete.experiment_status,
             "measured_incomplete_or_failed"
+        );
+    }
+
+    #[test]
+    fn cutoff_live_flag_without_vin_token_prevents_success() {
+        let cases: Vec<CaseRecord> = ok_cases()
+            .into_iter()
+            .filter(|c| c.name != "vin_cutoff_live")
+            .collect();
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), cases, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed",
+            "cutoff_live_observed without a VIN-token case is USB-UART death, not cutoff"
+        );
+        assert!(incomplete.cutoff_live_observed);
+        let uart_named = CaseRecord::measure(
+            "vin_cutoff_live",
+            "propose after VIN open",
+            "authorize:refuse",
+            BlockingLayer::AuthorizationBlocked,
+            2,
+            2,
+            false,
+            false,
+            None,
+            "no_consume",
+        )
+        .with_violations(vec!["metal_serial_closed".into()])
+        .with_certified_transport(2, 2, 2, 2, 2, 2, None, None, Some(2000), Some(2096));
+        let mut uart_only = ok_cases()
+            .into_iter()
+            .filter(|c| c.name != "vin_cutoff_live")
+            .collect::<Vec<_>>();
+        uart_only.push(uart_named);
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), uart_only, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed",
+            "a vin_cutoff_live name with only UART tokens must not mint success"
         );
     }
 
