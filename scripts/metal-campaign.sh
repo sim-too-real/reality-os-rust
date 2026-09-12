@@ -17,6 +17,8 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/metal-unix-mode.sh"
 # shellcheck source=metal-sensor-drop.sh
 source "$SCRIPT_DIR/metal-sensor-drop.sh"
+# shellcheck source=metal-online-journal.sh
+source "$SCRIPT_DIR/metal-online-journal.sh"
 # shellcheck source=metal-nudge-action.sh
 source "$SCRIPT_DIR/metal-nudge-action.sh"
 # Authority UID cannot write the repo `docs/` tree. Resolve against the
@@ -1643,6 +1645,11 @@ start_auth() {
   # prepare_usb_serial_host → stabilize waits up to 4 s for a CH340
   # re-enum and refuses a recycled ttyUSB0 whose USB identity drifted.
   for attempt in 1 2 3 4 5; do
+    # start_online with first_online=true refuses an existing journal/seal.
+    # A DTR-RESET / watchdog-miss bind that created driver.jsonl must
+    # resume with --restart. Deleting the journal to retry --first-online
+    # would look like first boot and hide the crash-replay invariant.
+    first="$(metal_serve_first_online_flag "$first" "$ROOT")"
     rm -f "$ROOT/ipc.sock" "$ROOT/serve.err"
     # After crash_if / process::exit the USB-serial node can still look
     # held for a beat. Do not exit 2 here — that skipped the open retry
@@ -1736,6 +1743,9 @@ start_auth_until_live() {
   local sensor_path="${3:-$ROOT/live_sensor.json}"
   local attempt
   for attempt in 1 2 3 4 5 6; do
+    # Same journal flip as start_auth so the log matches the flag serve
+    # actually gets after a not-yet-live first bind.
+    first="$(metal_serve_first_online_flag "$first" "$ROOT")"
     echo "metal-campaign: serve attempt $attempt (DTR-RESET window first=$first crash=${crash:-none})" >&2
     if start_auth "$first" "$crash"; then
       if as_autonomy "$PROP" --root "$ROOT" sensor >"$sensor_path" 2>/dev/null \
