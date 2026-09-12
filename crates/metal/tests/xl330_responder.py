@@ -188,9 +188,11 @@ def init_regs() -> bytearray:
     if os.environ.get("REALITYOS_METAL_PTY_PWM") == "1":
         regs[11] = 16
     if os.environ.get("REALITYOS_METAL_PTY_HW_ERROR") == "1":
-        # Latched Hardware Error Status. Reboot clears it and (on XL330)
-        # Startup Configuration can re-enable torque; EEPROM then needs torque off.
+        # Latched Hardware Error Status plus leftover Wizard bit 0.
+        # Reboot clears the error; bit 0 torque-ons onto Goal 0 unless
+        # setup writes factory Startup Configuration first.
         regs[70] = 4
+        regs[60] = 1
         regs[11] = 16
     if os.environ.get("REALITYOS_METAL_PTY_HIGH_P") == "1":
         p_gain = 8000
@@ -569,12 +571,19 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         regs[70] = 0
         regs[68] = 2  # RAM reset; factory Status Return Level
         regs[98] = 0
+        # RAM Goal defaults to 0 after reboot.
+        regs[116:120] = struct.pack("<i", 0)
         # Robotis: reboot resets Present to absolute-within-one-rotation.
         if os.environ.get("REALITYOS_METAL_PTY_NO_REBOOT_PRESENT_WRAP") != "1":
             present = struct.unpack_from("<i", regs, 132)[0]
             regs[132:136] = struct.pack("<i", present % 4096)
-        if os.environ.get("REALITYOS_METAL_PTY_HW_ERROR") == "1":
-            regs[64] = 1  # Startup Configuration torque-on after reboot
+        # Bit 0 torque-ons and tracks Goal 0. Key off the EEPROM bit,
+        # not PTY_HW_ERROR: setup must clear it before INST_REBOOT.
+        if regs[60] & 1:
+            regs[64] = 1
+            regs[132:136] = regs[116:120]
+        else:
+            regs[64] = 0
         # Status for this Reboot is still sent; later packets are dropped
         # until the boot window ends (real XL330 is silent while booting).
         global _silent_until

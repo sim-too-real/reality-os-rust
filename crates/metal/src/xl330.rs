@@ -844,8 +844,13 @@ impl Xl330Driver {
             self.hw_error_needs_refresh = false;
         }
         if self.last_hw_error != 0 {
-            // Startup Configuration can re-enable torque after reboot.
-            // EEPROM writes then access-NAK, and a stale Wizard goal moves.
+            // STATUS_ALERT is not a NAK. EEPROM is writable with torque
+            // off while the error is still latched. Write factory 0
+            // *before* INST_REBOOT: leftover bit 0 torque-ons onto
+            // Goal 0 (RAM reset) during the silent boot, and identify
+            // torque-off is too late. After reboot, torque-off again
+            // so later EEPROM writes cannot access-NAK.
+            let _ = self.ensure_startup_configuration_off()?;
             self.reboot_clear_ram_and_reidentify("setup_torque_off_after_reboot")?;
             self.last_hw_error = self
                 .read_reg(ADDR_HARDWARE_ERROR, 1)
@@ -881,39 +886,9 @@ impl Xl330Driver {
             )?;
             eeprom_changed = true;
         }
-        let startup = self
-            .read_reg(ADDR_STARTUP_CONFIGURATION, 1)
-            .ok()
-            .and_then(|b| b.first().copied());
-        self.startup_configuration = startup.unwrap_or(0xFF);
-        // Bit 0 torque-on at boot. A DTR-RESET then tracks Goal (RAM 0)
-        // during the next open settle before any certified command.
-        // Factory 0. Probe must not write this EEPROM.
-        // Do not treat a failed read as 0: that skipped the write and
-        // the next crash_if DTR-RESET yanked.
-        if startup != Some(FACTORY_STARTUP_CONFIGURATION) {
-            self.write_reg(
-                ADDR_STARTUP_CONFIGURATION,
-                &[FACTORY_STARTUP_CONFIGURATION],
-                "setup_startup_configuration_off",
-                None,
-                false,
-            )?;
+        if self.ensure_startup_configuration_off()? {
             eeprom_changed = true;
         }
-        let startup_got = self
-            .read_reg(ADDR_STARTUP_CONFIGURATION, 1)
-            .ok()
-            .and_then(|b| b.first().copied());
-        if startup_got != Some(FACTORY_STARTUP_CONFIGURATION) {
-            return Err(PlantError::refused(format!(
-                "dxl_startup_configuration_unverified:{}",
-                startup_got
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "unread".into())
-            )));
-        }
-        self.startup_configuration = FACTORY_STARTUP_CONFIGURATION;
         let proto = self
             .read_reg(ADDR_PROTOCOL_TYPE, 1)
             .ok()
@@ -1556,6 +1531,42 @@ impl Xl330Driver {
             XL330_POSITION_MODE_MIN.max(min),
             XL330_POSITION_MODE_MAX.min(max),
         )
+    }
+
+    /// Bit 0 torque-ons at the next boot and tracks Goal (RAM 0 after
+    /// reboot). A Hardware Error reboot used to run before this write.
+    /// Probe must not write this EEPROM. A failed read is not 0.
+    fn ensure_startup_configuration_off(&mut self) -> PlantResult<bool> {
+        let startup = self
+            .read_reg(ADDR_STARTUP_CONFIGURATION, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        self.startup_configuration = startup.unwrap_or(0xFF);
+        let mut changed = false;
+        if startup != Some(FACTORY_STARTUP_CONFIGURATION) {
+            self.write_reg(
+                ADDR_STARTUP_CONFIGURATION,
+                &[FACTORY_STARTUP_CONFIGURATION],
+                "setup_startup_configuration_off",
+                None,
+                false,
+            )?;
+            changed = true;
+        }
+        let startup_got = self
+            .read_reg(ADDR_STARTUP_CONFIGURATION, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if startup_got != Some(FACTORY_STARTUP_CONFIGURATION) {
+            return Err(PlantError::refused(format!(
+                "dxl_startup_configuration_unverified:{}",
+                startup_got
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unread".into())
+            )));
+        }
+        self.startup_configuration = FACTORY_STARTUP_CONFIGURATION;
+        Ok(changed)
     }
 
     /// Protocol 2.0 returns the Reboot status, then the servo is silent

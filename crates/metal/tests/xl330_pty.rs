@@ -1147,13 +1147,14 @@ fn xl330_pty_torque_off_after_hw_error_reboot_so_eeprom_can_write() {
     let root = metal_test_root("pty-hw-error");
     let cfg = MetalConfig::example(&tty);
     let mut driver = Xl330Driver::open(cfg, &root)
-        .expect("reboot then torque-off so PWM-mode EEPROM can become position");
+        .expect("clear Startup Configuration before Hardware Error reboot, then torque-off so PWM-mode EEPROM can become position");
     driver.read_sensor(0.0).expect("sensor");
     assert_eq!(
         driver.last_present_position(),
         2048,
-        "stale goal 0 must not yank after Startup Configuration torque-on"
+        "leftover Startup Configuration bit 0 must be cleared before INST_REBOOT; silent-boot torque-on onto Goal 0 used to yank present off 2048"
     );
+    assert_eq!(driver.applied_startup_configuration(), 0);
     driver
         .write_action(&[0.0], &ActionParams::empty())
         .expect("hold after hw-error reboot");
