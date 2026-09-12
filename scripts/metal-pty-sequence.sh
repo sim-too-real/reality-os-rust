@@ -210,4 +210,17 @@ run_campaign "$NEG_ROOT" "$TTY"
 require_nudge_action "$NEG_ROOT" "-0.2"
 require_nudge_wrap_park "$NEG_ROOT" 4080 4032 4095
 
+# Official e-Manual case 1: leftover Wizard Extended + hand-turned
+# wraps on the Position Mode write. Force-disable the reboot wrap so
+# this pass cannot hide behind INST_REBOOT. Same park as the reboot
+# pass; crash-replay must still pick +0.2 inside 856..952.
+MODE_WRAP_ROOT="${ROOT}-mode-wrap"
+TTY="$(start_responder "$MODE_WRAP_ROOT.responder.out" \
+  REALITYOS_METAL_PTY_EXTENDED=1 \
+  REALITYOS_METAL_PTY_PRESENT_MULTITURN=1 \
+  REALITYOS_METAL_PTY_NO_REBOOT_PRESENT_WRAP=1)"
+run_campaign "$MODE_WRAP_ROOT" "$TTY"
+require_nudge_action "$MODE_WRAP_ROOT" "0.2"
+require_nudge_wrap_park "$MODE_WRAP_ROOT" 904 856 952
+
 echo "metal-pty-sequence finished (not physical evidence)"

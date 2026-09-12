@@ -1372,6 +1372,83 @@ fn xl330_pty_refuses_when_multi_turn_present_survives_reboot() {
 }
 
 #[test]
+fn xl330_pty_mode_change_to_position_wraps_multiturn_without_reboot() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_EXTENDED", "1"),
+        ("REALITYOS_METAL_PTY_PRESENT_MULTITURN", "1"),
+        ("REALITYOS_METAL_PTY_NO_REBOOT_PRESENT_WRAP", "1"),
+    ]);
+    let root = metal_test_root("pty-mode-wrap-multiturn");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect(
+        "Wizard Extended + hand-turned 5000 must wrap on the Position Mode write; reboot is not required",
+    );
+    assert_eq!(
+        driver.startup_present(),
+        904,
+        "e-Manual mode-change wrap maps 5000 to absolute-within-one-rotation"
+    );
+    let (min, max) = driver.experiment_cage();
+    assert_eq!(
+        (min, max),
+        (856, 952),
+        "±48 cage around mode-wrapped 904; campaign valid_hold/nudge run here"
+    );
+    driver.read_sensor(0.0).expect("sensor after mode wrap");
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("inbound +0.2 after mode-change wrap must stay in 856..952");
+    driver
+        .read_sensor(0.0)
+        .expect("sensor after mode-wrap nudge");
+    assert_eq!(driver.last_present_position(), 936);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_mode_change_to_position_wraps_negative_without_reboot() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_EXTENDED", "1"),
+        ("REALITYOS_METAL_PTY_PRESENT_NEGATIVE", "1"),
+        ("REALITYOS_METAL_PTY_NO_REBOOT_PRESENT_WRAP", "1"),
+    ]);
+    let root = metal_test_root("pty-mode-wrap-negative");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect(
+        "Wizard Extended + hand-turned −16 must wrap on the Position Mode write; reboot is not required",
+    );
+    assert_eq!(
+        driver.startup_present(),
+        4080,
+        "e-Manual mode-change wrap maps −16 to absolute-within-one-rotation"
+    );
+    let (min, max) = driver.experiment_cage();
+    assert_eq!(
+        (min, max),
+        (4032, 4095),
+        "±48 cage around 4080 clamps to Position Mode max 4095"
+    );
+    driver
+        .read_sensor(0.0)
+        .expect("sensor after negative mode wrap");
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect_err("hardcoded +0.2 from 4080 is past 4095 and abort-latches ONLINE");
+    driver
+        .write_action(&[-0.2], &ActionParams::empty())
+        .expect("inbound −0.2 after mode-change wrap must stay in 4032..4095");
+    driver
+        .read_sensor(0.0)
+        .expect("sensor after negative mode-wrap nudge");
+    assert_eq!(driver.last_present_position(), 4048);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_refuses_torque_when_present_cannot_be_read() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_NO_PRESENT", "1")]);

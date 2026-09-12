@@ -187,6 +187,10 @@ def init_regs() -> bytearray:
         regs[52:56] = struct.pack("<i", 3000)
     if os.environ.get("REALITYOS_METAL_PTY_PWM") == "1":
         regs[11] = 16
+    if os.environ.get("REALITYOS_METAL_PTY_EXTENDED") == "1":
+        # Wizard leftover Extended Position (4). Official XL330 wraps
+        # Present when Operating Mode is written to Position (3).
+        regs[11] = 4
     if os.environ.get("REALITYOS_METAL_PTY_HW_ERROR") == "1":
         # Latched Hardware Error Status plus leftover Wizard bit 0.
         # Reboot clears the error; bit 0 torque-ons onto Goal 0 unless
@@ -312,6 +316,18 @@ if os.environ.get("REALITYOS_METAL_PTY_UNREAD_WATCHDOG") == "1":
     _fail_reads[98] = 1
 if os.environ.get("REALITYOS_METAL_PTY_UNREAD_MOVING_THRESHOLD") == "1":
     _fail_reads[24] = 1
+
+
+def wrap_present_to_one_rotation(regs: bytearray) -> None:
+    """Official: Present becomes absolute-within-one-rotation.
+    After wrap, Present still includes a *valid* Homing Offset
+    (−1024..1024). Invalid leftovers are ignored by the servo."""
+    present = struct.unpack_from("<i", regs, 132)[0]
+    offset = struct.unpack_from("<i", regs, 20)[0]
+    if offset < -1024 or offset > 1024:
+        offset = 0
+    actual = present - offset
+    regs[132:136] = struct.pack("<i", (actual % 4096) + offset)
 
 
 def maybe_startup_yank(regs: bytearray) -> None:
@@ -497,7 +513,17 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         if addr in (108, 112) and os.environ.get("REALITYOS_METAL_PTY_DROP_PROFILE") == "1":
             return b"", 0
         if addr == 11 and os.environ.get("REALITYOS_METAL_PTY_DROP_OPERATING_MODE") == "1":
+            # ACK-no-store must not wrap Present. A dropped mode write
+            # that still wrapped would hide leftover PWM/Extended.
             return b"", 0
+        if addr == 11 and len(data) >= 1:
+            # e-Manual: changing Operating Mode to Position Control
+            # resets Present to absolute-within-one-rotation. Wizard
+            # Extended + a hand-turned encoder wraps here; reboot is
+            # not required. Wrap before store so a later read sees
+            # the parked value.
+            if data[0] == 3 and regs[11] != 3:
+                wrap_present_to_one_rotation(regs)
         if addr == 10 and os.environ.get("REALITYOS_METAL_PTY_DROP_DRIVE_MODE") == "1":
             return b"", 0
         if addr == 44 and os.environ.get("REALITYOS_METAL_PTY_DROP_VELOCITY_LIMIT") == "1":
