@@ -2194,13 +2194,52 @@ add_case "$(crash_replay after_ack metal-crash-afterack)"
 wait_for_authority_bus_drop() {
   local save="${1:-$ROOT/bus_drop_sensor.json}"
   local check_vin="${2:-0}"
-  local respfile ipc_ok vin_now start now
+  local respfile ipc_ok vin_now start now py py_st
   # USB-UART death persists; 500 ms is enough. VIN evidence is a
   # Present Input Voltage sample (or persist_vin < 2.0 V). A hard
   # switch can sag through the Wizard window in tens of ms, then the
-  # servo goes silent and later polls are only UART tokens. Poll VIN
-  # as fast as sensor IPC allows so the existing dxl_vin_* tokens can
-  # still be measured. Do not accept UART death as VIN. Keep 60 s.
+  # servo goes silent and later polls are only UART tokens. Do not
+  # accept UART death as VIN. Keep 60 s.
+  if [[ "$check_vin" == "1" ]]; then
+    # as_autonomy wraps each propose in sudo+timeout(20). That spawn
+    # is 100s of ms, so "as fast as sensor IPC allows" was still too
+    # slow for the brownout window. One autonomy process talks
+    # ipc.sock directly (same dxl_vin_* tokens). bus/ is 0700, so
+    # persist_vin < 2.0 V stays a root-side file watch.
+    start="$(date +%s)"
+    sudo -u "$AUTONOMY_USER" -- env \
+      REALITYOS_METAL_DEVICE="${REALITYOS_METAL_DEVICE:-}" \
+      timeout --signal=TERM --kill-after=2 62 \
+      bash "$SCRIPT_DIR/metal-sensor-drop.sh" poll-vin "$ROOT/ipc.sock" "$save" 60 &
+    py=$!
+    while kill -0 "$py" 2>/dev/null; do
+      now="$(date +%s)"
+      if (( now - start >= 60 )); then
+        break
+      fi
+      vin_now="$(cat "$ROOT/bus/vin" 2>/dev/null || echo 999)"
+      if [[ "$vin_now" =~ ^[0-9]+$ ]] && [[ "$vin_now" -lt 20 ]]; then
+        kill "$py" 2>/dev/null || true
+        wait "$py" 2>/dev/null || true
+        if ! metal_sensor_indicates_vin_drop "$save"; then
+          printf '%s\n' "{\"ok\":false,\"stage\":\"sensor\",\"status\":\"error\",\"violations\":[\"dxl_vin_unreadable\"],\"bus_vin_0.1v\":$vin_now}" >"$save"
+        fi
+        return 0
+      fi
+      sleep 0.01
+    done
+    py_st=0
+    wait "$py" || py_st=$?
+    if [[ "$py_st" -eq 0 ]] && metal_sensor_indicates_vin_drop "$save"; then
+      return 0
+    fi
+    vin_now="$(cat "$ROOT/bus/vin" 2>/dev/null || echo 999)"
+    if [[ "$vin_now" =~ ^[0-9]+$ ]] && [[ "$vin_now" -lt 20 ]]; then
+      printf '%s\n' "{\"ok\":false,\"stage\":\"sensor\",\"status\":\"error\",\"violations\":[\"dxl_vin_unreadable\"],\"bus_vin_0.1v\":$vin_now}" >"$save"
+      return 0
+    fi
+    return 1
+  fi
   respfile="$(mktemp)"
   start="$(date +%s)"
   while now="$(date +%s)"; (( now - start < 60 )); do
@@ -2210,37 +2249,21 @@ wait_for_authority_bus_drop() {
     else
       ipc_ok=0
     fi
-    if [[ "$check_vin" == "1" ]]; then
-      # Independent VIN cutoff must not treat a USB-UART wiggle or
-      # serve death as power-loss evidence. Those are the unplug case.
-      if metal_sensor_indicates_vin_drop "$respfile"; then
-        cp "$respfile" "$save" || true
-        rm -f "$respfile" "$respfile.err"
-        return 0
-      fi
-      vin_now="$(cat "$ROOT/bus/vin" 2>/dev/null || echo 999)"
-      if [[ "$vin_now" =~ ^[0-9]+$ ]] && [[ "$vin_now" -lt 20 ]]; then
-        printf '%s\n' "{\"ok\":false,\"stage\":\"sensor\",\"status\":\"error\",\"violations\":[\"dxl_vin_unreadable\"],\"bus_vin_0.1v\":$vin_now}" >"$save"
-        rm -f "$respfile" "$respfile.err"
-        return 0
-      fi
-    else
-      if metal_sensor_indicates_drop "$respfile"; then
-        cp "$respfile" "$save" || true
-        rm -f "$respfile" "$respfile.err"
-        return 0
-      fi
-      # Empty IPC counts only when serve actually died with the UART.
-      # A transient sudo/IPC miss while smoke is still bound is not a drop.
-      if [[ "$ipc_ok" != "1" ]] && [[ ! -s "$respfile" ]]; then
-        if [[ ! -S "$ROOT/ipc.sock" ]] || ! resolve_metal_smoke_pid "$ROOT" >/dev/null 2>&1; then
-          printf '%s\n' '{"ok":false,"stage":"ipc","status":"error","violations":[]}' >"$save"
-          rm -f "$respfile" "$respfile.err"
-          return 0
-        fi
-      fi
-      sleep 0.5
+    if metal_sensor_indicates_drop "$respfile"; then
+      cp "$respfile" "$save" || true
+      rm -f "$respfile" "$respfile.err"
+      return 0
     fi
+    # Empty IPC counts only when serve actually died with the UART.
+    # A transient sudo/IPC miss while smoke is still bound is not a drop.
+    if [[ "$ipc_ok" != "1" ]] && [[ ! -s "$respfile" ]]; then
+      if [[ ! -S "$ROOT/ipc.sock" ]] || ! resolve_metal_smoke_pid "$ROOT" >/dev/null 2>&1; then
+        printf '%s\n' '{"ok":false,"stage":"ipc","status":"error","violations":[]}' >"$save"
+        rm -f "$respfile" "$respfile.err"
+        return 0
+      fi
+    fi
+    sleep 0.5
   done
   rm -f "$respfile" "$respfile.err"
   return 1
