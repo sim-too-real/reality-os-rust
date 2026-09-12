@@ -115,6 +115,40 @@ print("pty-nudge-action-ok action=%s" % (want,))
 PY
 }
 
+require_nudge_wrap_park() {
+  local root="$1"
+  local want_present="$2"
+  local want_min="$3"
+  local want_max="$4"
+  python3 - "$root/os_metal_cases.json" "$want_present" "$want_min" "$want_max" <<'PY'
+import json, re, sys
+cases = json.load(open(sys.argv[1]))
+want_present, want_min, want_max = map(int, sys.argv[2:5])
+nudge = next((c for c in cases if c.get("name") == "valid_nudge"), None)
+if not nudge:
+    sys.exit("error: missing valid_nudge case in %s" % (sys.argv[1],))
+if nudge.get("experiment_min") != want_min or nudge.get("experiment_max") != want_max:
+    sys.exit(
+        "error: wrap campaign must recenter cage to %s..%s, got %s..%s"
+        % (want_min, want_max, nudge.get("experiment_min"), nudge.get("experiment_max"))
+    )
+motion = nudge.get("observed_motion") or ""
+m = re.search(r"present (-?\d+)->", motion)
+if not m:
+    sys.exit("error: valid_nudge missing present-before in %r" % (motion,))
+before = int(m.group(1))
+if abs(before - want_present) > 4:
+    sys.exit(
+        "error: wrap park must be %s±4 before valid_nudge, got %s (%s)"
+        % (want_present, before, motion)
+    )
+print(
+    "pty-wrap-park-ok present_before=%s cage=%s..%s"
+    % (before, want_min, want_max)
+)
+PY
+}
+
 # valid_nudge records the serve cage and pre-write present. A mid-range
 # +16 torque wrap must recenter to 2016..2112 and park at 2064; keeping
 # 2000..2096 makes the campaign picker fail slack after hold.
@@ -159,5 +193,21 @@ AT_MAX_ROOT="${ROOT}-at-max"
 TTY="$(start_responder "$AT_MAX_ROOT.responder.out" REALITYOS_METAL_PTY_AT_MAX=1)"
 run_campaign "$AT_MAX_ROOT" "$TTY"
 require_nudge_action "$AT_MAX_ROOT" "-0.2"
+
+# Hand-turned first contact (docs: Present 5000 or −16). Driver open tests
+# already wrap; the campaign script's hold / inbound picker / crash-replay
+# used to run only at mid-range 2048 / AT_MAX. Do not combine with
+# TORQUE_JUMP or AT_MAX: those leftover windows refuse a wrap park.
+WRAP_ROOT="${ROOT}-multiturn"
+TTY="$(start_responder "$WRAP_ROOT.responder.out" REALITYOS_METAL_PTY_PRESENT_MULTITURN=1)"
+run_campaign "$WRAP_ROOT" "$TTY"
+require_nudge_action "$WRAP_ROOT" "0.2"
+require_nudge_wrap_park "$WRAP_ROOT" 904 856 952
+
+NEG_ROOT="${ROOT}-negative"
+TTY="$(start_responder "$NEG_ROOT.responder.out" REALITYOS_METAL_PTY_PRESENT_NEGATIVE=1)"
+run_campaign "$NEG_ROOT" "$TTY"
+require_nudge_action "$NEG_ROOT" "-0.2"
+require_nudge_wrap_park "$NEG_ROOT" 4080 4032 4095
 
 echo "metal-pty-sequence finished (not physical evidence)"

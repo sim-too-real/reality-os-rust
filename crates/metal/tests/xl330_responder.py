@@ -244,6 +244,10 @@ def init_regs() -> bytearray:
         # Torque-off Present is a 4-byte continuous encoder. A hand-turned
         # horn sits outside 0–4095 until reboot / torque-on / mode change.
         regs[132:136] = struct.pack("<i", 5000)
+    if os.environ.get("REALITYOS_METAL_PTY_PRESENT_NEGATIVE") == "1":
+        # Same continuous encoder, other direction. Docs first-contact
+        # is "5000 or −16". Reboot remainder is 4080 (near Position max).
+        regs[132:136] = struct.pack("<i", -16)
     if os.environ.get("REALITYOS_METAL_PTY_HIGH_MOVING_THRESHOLD") == "1":
         regs[24:28] = struct.pack("<I", 1023)
     else:

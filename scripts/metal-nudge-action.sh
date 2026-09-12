@@ -143,11 +143,20 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   [[ "$(metal_nudge_action_from_values 4090 4042 4095 32 0.2)" == "-0.2" ]]
   # Horn near 0: +32 still fits the ±48 cage.
   [[ "$(metal_nudge_action_from_values 10 0 58 32 0.2)" == "0.2" ]]
+  # Hand-turned first contact after reboot wrap (docs: 5000 or −16).
+  [[ "$(metal_nudge_action_from_values 904 856 952 32 0.2)" == "0.2" ]]
+  [[ "$(metal_nudge_action_from_values 4080 4032 4095 32 0.2)" == "-0.2" ]]
   mkdir -p "$tmp/bus"
   printf '%s\n' '4090' >"$tmp/bus/present"
   printf '%s\n' '{"experiment_min":4042,"experiment_max":4095}' >"$tmp/bus/position_cage.json"
   printf '%s\n' '{"max_position_delta_ticks":32,"tau_max":0.2}' >"$tmp/metal.json"
   [[ "$(metal_nudge_action_from_bus "$tmp")" == "-0.2" ]]
+  printf '%s\n' '4080' >"$tmp/bus/present"
+  printf '%s\n' '{"experiment_min":4032,"experiment_max":4095}' >"$tmp/bus/position_cage.json"
+  [[ "$(metal_nudge_action_from_bus "$tmp")" == "-0.2" ]]
+  printf '%s\n' '904' >"$tmp/bus/present"
+  printf '%s\n' '{"experiment_min":856,"experiment_max":952}' >"$tmp/bus/position_cage.json"
+  [[ "$(metal_nudge_action_from_bus "$tmp")" == "0.2" ]]
   printf '%s\n' '2048' >"$tmp/bus/present"
   printf '%s\n' '{"experiment_min":2000,"experiment_max":2096}' >"$tmp/bus/position_cage.json"
   [[ "$(metal_nudge_action_from_bus "$tmp")" == "0.2" ]]

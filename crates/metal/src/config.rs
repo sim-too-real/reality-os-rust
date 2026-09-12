@@ -860,6 +860,16 @@ mod tests {
             pick_inbound_nudge_action(10, 0, 58, delta, tau).unwrap(),
             tau
         );
+        assert_eq!(
+            pick_inbound_nudge_action(904, 856, 952, delta, tau).unwrap(),
+            tau,
+            "hand-turned +5000 wrap parks at 904; +32 stays inbound"
+        );
+        assert_eq!(
+            pick_inbound_nudge_action(4080, 4032, 4095, delta, tau).unwrap(),
+            -tau,
+            "hand-turned −16 wrap parks at 4080; +32 is past Position Mode max"
+        );
         let err = pick_inbound_nudge_action(2048, 2048, 2048, delta, tau).unwrap_err();
         assert!(err.contains("metal_nudge_no_inbound_step"), "{err}");
     }
@@ -883,6 +893,10 @@ mod tests {
             .expect("AT_MAX 48-tick inbound window still hosts -32 after slack");
         cage_allows_inbound_nudge_after_hold_still(0, 0, 48, delta, tau)
             .expect("horn at 0 with ±48 hosts +32 after slack");
+        cage_allows_inbound_nudge_after_hold_still(904, 856, 952, delta, tau)
+            .expect("+5000 wrap cage hosts +32 after hold+propose hunt");
+        cage_allows_inbound_nudge_after_hold_still(4080, 4032, 4095, delta, tau)
+            .expect("−16 wrap cage hosts −32 after hold+propose hunt");
         cage_allows_inbound_nudge_after_hold_still(2048, 2008, 2048, delta, tau)
             .expect("40-tick leftover at max is the setup minimum");
         let tight = cage_allows_inbound_nudge_after_hold_still(2048, 2040, 2060, delta, tau)
@@ -953,6 +967,8 @@ mod tests {
             (2048, 2000, 2048, "-0.2"),
             (4090, 4042, 4095, "-0.2"),
             (10, 0, 58, "0.2"),
+            (904, 856, 952, "0.2"),
+            (4080, 4032, 4095, "-0.2"),
         ];
         for (present, min, max, want) in cases {
             assert_eq!(

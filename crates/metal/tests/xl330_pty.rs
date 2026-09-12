@@ -1195,10 +1195,52 @@ fn xl330_pty_reboots_when_torque_off_present_is_multi_turn() {
         "Robotis reboot maps 5000 to absolute-within-one-rotation (5000 rem 4096)"
     );
     let (min, max) = driver.experiment_cage();
-    assert!(
-        (0..=4095).contains(&min) && (0..=4095).contains(&max),
-        "cage after wrap must stay in Position Mode 0..=4095, got {min}..{max}"
+    assert_eq!(
+        (min, max),
+        (856, 952),
+        "±48 cage around wrapped 904; campaign valid_hold/nudge run here"
     );
+    driver.read_sensor(0.0).expect("sensor after wrap");
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("inbound +0.2 after +5000 wrap must stay in 856..952");
+    driver.read_sensor(0.0).expect("sensor after wrap nudge");
+    assert_eq!(driver.last_present_position(), 936);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_reboots_when_torque_off_present_is_negative_multi_turn() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_PRESENT_NEGATIVE", "1")]);
+    let root = metal_test_root("pty-present-negative");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect(
+        "torque-off Present −16 must reboot-wrap into 0..=4095, not refuse first contact",
+    );
+    assert_eq!(
+        driver.startup_present(),
+        4080,
+        "Robotis reboot maps −16 to absolute-within-one-rotation (−16 rem 4096)"
+    );
+    let (min, max) = driver.experiment_cage();
+    assert_eq!(
+        (min, max),
+        (4032, 4095),
+        "±48 cage around 4080 clamps to Position Mode max 4095"
+    );
+    driver.read_sensor(0.0).expect("sensor after negative wrap");
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect_err("hardcoded +0.2 from 4080 is past 4095 and abort-latches ONLINE");
+    driver
+        .write_action(&[-0.2], &ActionParams::empty())
+        .expect("inbound −0.2 after −16 wrap must stay in 4032..4095");
+    driver
+        .read_sensor(0.0)
+        .expect("sensor after negative-wrap nudge");
+    assert_eq!(driver.last_present_position(), 4048);
     driver.close();
     let _ = std::fs::remove_dir_all(&root);
 }
