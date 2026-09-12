@@ -59,15 +59,15 @@ ensure_metal_os_users() {
   fi
   if ! getent group "$IPC_GROUP" >/dev/null 2>&1; then
     groupadd --system "$IPC_GROUP"
-    echo "metal-campaign: created system group $IPC_GROUP"
+    echo "metal-campaign: created system group $IPC_GROUP" >&2
   fi
   if ! id -u "$AUTHORITY_USER" >/dev/null 2>&1; then
     useradd --system --no-create-home --shell /bin/bash -G "$IPC_GROUP" "$AUTHORITY_USER"
-    echo "metal-campaign: created system user $AUTHORITY_USER"
+    echo "metal-campaign: created system user $AUTHORITY_USER" >&2
   fi
   if ! id -u "$AUTONOMY_USER" >/dev/null 2>&1; then
     useradd --system --no-create-home --shell /bin/bash -G "$IPC_GROUP" "$AUTONOMY_USER"
-    echo "metal-campaign: created system user $AUTONOMY_USER"
+    echo "metal-campaign: created system user $AUTONOMY_USER" >&2
   fi
   usermod -aG "$IPC_GROUP" "$AUTHORITY_USER"
   usermod -aG "$IPC_GROUP" "$AUTONOMY_USER"
@@ -218,7 +218,7 @@ if [[ "$DEVICE_REAL" == /dev/pts/* ]]; then
     echo "error: refusing PTY $DEVICE_REAL; not a physical actuator. Will not write metal_proof.json." >&2
     exit 2
   fi
-  echo "metal-campaign: PTY sequence only; not metal evidence; will not install docs/metal_proof.json"
+  echo "metal-campaign: PTY sequence only; not metal evidence; will not install docs/metal_proof.json" >&2
   PTY_SEQUENCE_ACTIVE=1
   CUTOFF_TESTED=0
   export REALITYOS_METAL_CUTOFF_TESTED=0
@@ -309,7 +309,7 @@ set_usb_serial_latency() {
   if echo 1 >"$timer" 2>/dev/null; then
     got="$(tr -d '[:space:]' <"$timer" 2>/dev/null || true)"
     if [[ "$got" == "1" ]]; then
-      echo "metal-campaign: set $timer=1 (USB-UART default 16 ms can miss the 40 ms live deadline)"
+      echo "metal-campaign: set $timer=1 (USB-UART default 16 ms can miss the 40 ms live deadline)" >&2
       return 0
     fi
   fi
@@ -379,7 +379,7 @@ disable_usb_autosuspend() {
     echo "error: USB-UART power/control is '${got:-unreadable}' after write (want on); autosuspend can miss the 40 ms live deadline" >&2
     return 1
   fi
-  echo "metal-campaign: set $uart/power/control=on (USB autosuspend can miss the 40 ms live deadline)"
+  echo "metal-campaign: set $uart/power/control=on (USB autosuspend can miss the 40 ms live deadline)" >&2
 }
 
 # Walk sysfs from the tty to the UART USB device (first
@@ -734,13 +734,13 @@ release_foreign_tty_holders() {
   local holders=""
   holders="$(fuser -v "$real" 2>&1 || true)"
   if echo "$holders" | grep -qE 'brltty'; then
-    echo "metal-campaign: $real is held by brltty; stopping brltty.service brltty-udev.service"
+    echo "metal-campaign: $real is held by brltty; stopping brltty.service brltty-udev.service" >&2
     systemctl stop brltty.service brltty-udev.service 2>/dev/null || true
     killall -q brltty 2>/dev/null || true
     STOPPED_BRLTTY=1
   fi
   if echo "$holders" | grep -qE 'ModemManager|modem-manager'; then
-    echo "metal-campaign: $real is held by ModemManager; stopping ModemManager (deb and snap)"
+    echo "metal-campaign: $real is held by ModemManager; stopping ModemManager (deb and snap)" >&2
     systemctl stop ModemManager.service 2>/dev/null || true
     systemctl stop snap.modem-manager.modemmanager.service 2>/dev/null || true
     killall -q ModemManager 2>/dev/null || true
@@ -825,7 +825,7 @@ write_metal_udev_ignore_rule() {
     if [[ "$leftover" != "$rules" ]]; then
       rm -f "$leftover"
       METAL_UDEV_NEEDS_RELOAD=1
-      echo "metal-campaign: removed leftover $leftover (wrong adapter ignore rule)"
+      echo "metal-campaign: removed leftover $leftover (wrong adapter ignore rule)" >&2
     fi
   done
   if [[ ! -f "$rules" ]] || ! metal_udev_ignore_rule_text "$name" | cmp -s - "$rules"; then
@@ -834,7 +834,7 @@ write_metal_udev_ignore_rule() {
       return 1
     }
     METAL_UDEV_NEEDS_RELOAD=1
-    echo "metal-campaign: wrote $rules (ID_MM_DEVICE_IGNORE + ID_BRLTTY=0 + 0600 ${AUTHORITY_USER})"
+    echo "metal-campaign: wrote $rules (ID_MM_DEVICE_IGNORE + ID_BRLTTY=0 + 0600 ${AUTHORITY_USER})" >&2
   fi
   UDEV_RULE="$rules"
 }
@@ -1358,11 +1358,11 @@ rm -rf "$ROOT"
 install -d -m 0755 "$ROOT"
 FSTYPE="$(metal_fstype "$ROOT")"
 if [[ "$FSTYPE" == "tmpfs" ]]; then
-  echo "metal-campaign: $ROOT is on tmpfs"
+  echo "metal-campaign: $ROOT is on tmpfs" >&2
 elif [[ "${REALITYOS_METAL_ALLOW_SLOW_DISK:-0}" == "1" ]]; then
   echo "warning: $ROOT fstype=${FSTYPE:-unknown} is not tmpfs; REALITYOS_METAL_ALLOW_SLOW_DISK=1; a journal fsync >100 ms latches the software watchdog" >&2
 elif mount -t tmpfs -o size=32M,mode=0755 realityos-metal "$ROOT"; then
-  echo "metal-campaign: mounted tmpfs on $ROOT (watchdog journal+seal fsync must stay under 100 ms)"
+  echo "metal-campaign: mounted tmpfs on $ROOT (watchdog journal+seal fsync must stay under 100 ms)" >&2
 else
   echo "error: $ROOT is not tmpfs (fstype=${FSTYPE:-unknown}) and tmpfs mount failed." >&2
   echo "error: each watchdog emit fsyncs journal+seal; a disk fsync >100 ms cannot be caught up." >&2
@@ -1373,7 +1373,7 @@ fi
 BUILT_BIN="$BIN_DIR"
 STAGE="${REALITYOS_METAL_STAGE:-/tmp/realityos-metal-bin}"
 if try_stage_metal_bins "$STAGE"; then
-  echo "metal-campaign: staged metal binaries at $BIN_DIR"
+  echo "metal-campaign: staged metal binaries at $BIN_DIR" >&2
 elif [[ -z "${REALITYOS_METAL_STAGE:-}" ]] && try_stage_metal_bins /dev/shm/realityos-metal-bin; then
   STAGE=/dev/shm/realityos-metal-bin
   echo "metal-campaign: default /tmp stage is not executable; using $STAGE" >&2
@@ -2070,13 +2070,18 @@ add_case "$PROBE_REC"
 crash_replay() {
   local point="$1"
   local cid="$2"
+  local rec before_crash died before after after_restart
+  # add_case "$(crash_replay …)" captures stdout. USB prepare can print
+  # latency_timer / power/control / udev lines after crash_if rematch
+  # (CH340 drop, FTDI ttyUSB1). Those are not JSON. Keep the work on
+  # stderr; only the case record is printed.
+  {
   stop_auth
   if ! start_auth_until_live 0 "$point" "$ROOT/crash-${point}-live.json"; then
     echo "error: crash serve did not become live for $point (DTR-RESET / identify)" >&2
     cat "$ROOT/crash-${point}-live.json" >&2 || true
     exit 1
   fi
-  local before_crash
   before_crash="$(serial_tx)"
   as_autonomy "$PROP" --root "$ROOT" --id "$cid" --verb hold propose >/tmp/metal-"$cid".json || true
   # crash_if is process::exit on the smoke child. after_prepare / after_write /
@@ -2085,7 +2090,7 @@ crash_replay() {
   # write_all+flush and before the Status Packet. If act() fails first, those
   # later points never fire — fail closed instead of `wait $AUTH_PID` hanging
   # on a live serve (PTY campaign hang).
-  local died=0
+  died=0
   for _ in $(seq 1 50); do
     if ! resolve_metal_smoke_pid "$ROOT" >/dev/null; then
       died=1
@@ -2108,7 +2113,6 @@ crash_replay() {
     cat "$ROOT/crash-${point}-restart.json" >&2 || true
     exit 1
   fi
-  local before after after_restart
   after_restart="$(serial_tx)"
   # before_prepare never reaches durable prepare. Restart must not
   # auto-retransmit (serial_tx stays). Replaying that ID is a *new*
@@ -2181,6 +2185,7 @@ r = json.load(open(sys.argv[1]))
 if not r.get("ok"):
     sys.exit("error: reset hold after %s failed (journal would abort-latch the next crash point): %s" % (sys.argv[2], r))
 PY
+  } >&2
   printf '%s\n' "$rec"
 }
 
