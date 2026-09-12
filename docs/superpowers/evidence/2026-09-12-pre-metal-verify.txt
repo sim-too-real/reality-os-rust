@@ -1,0 +1,62 @@
+PRE_METAL_FREEZE_SHA=5c4c6e54489468584e7197c03c19f9f0f750e2c2
+
+host=windows
+baseline=4f3b0daebbacd4441cb5f7e1f33f2085c10cc2c5
+implementation_commits=
+  abead88 fix(semantics): declare explicit_safe on command sets; add InvalidCommand
+  d924010 fix(semantics): refuse unknown hold; never invent zero actuator commands
+  b31fd6b fix(verify): observed hold map and named_to_ctrl refuse invention
+  e5592bc test(verify): lowering failure cannot produce a policy write
+  5c4c6e5 chore: clippy -D warnings nits required by the pre-metal freeze bar
+
+MANIPULATION_V1_FREEZE_SHA=b6396a784c9d09e69cafbb073a9ef3e933113990
+historical_WX250s_first_score=docs/superpowers/evidence/manipulation_holdout_first_score.json unmodified
+
+implicit-zero hold/named-to-ctrl invention paths are gone:
+  lower_named_targets / lower_actuator_commands / hold_value / fill_holds: no unwrap_or(0.0), no unwrap_or(0)
+  KeepCurrent requires finite observed current (MissingJointState otherwise)
+  ExplicitSafe requires declared finite explicit_safe value (InvalidCommand otherwise)
+  named_to_ctrl: if current.len() != nu -> InvalidCommand; vec![None; nu] not vec![0.0; nu]
+  out-of-scope zeros left untouched: hostile-replay ActionProposal, plant dynamics, governor Abort, runtime_assurance Zero, XL330 0-tick hold
+
+frozen authority/kernel paths were unchanged:
+  git diff 4f3b0da..HEAD -- crates/kernel crates/governor crates/session crates/metal
+    crates/plant/src/execute.rs crates/plant/src/ledger.rs crates/plant/src/write_guard.rs
+    crates/plant/src/consume.rs docs/superpowers/evidence/manipulation_holdout_first_score.json
+  is empty
+
+commands (this Windows host):
+  cargo fmt --all -- --check
+    EXIT=1
+    reason=pre-existing rustfmt drift vs rustfmt 1.95.0 on this host, including crates/metal/**
+    action=NOT applied (frozen metal / XL330 driver not rewritten)
+  cargo clippy --workspace --all-targets -- -D warnings
+    EXIT=101
+    reason=realityos-vport/hil/metal use std::os::unix (Windows named hole)
+  cargo clippy --workspace --all-targets --exclude realityos-vport --exclude realityos-hil --exclude realityos-metal -- -D warnings
+    EXIT=0
+  cargo test -p realityos-metal --all-targets -- --test-threads=1
+    EXIT=101
+    named_hole=Windows cannot compile realityos-metal (nix::sys::termios, serialport::TTYPort)
+  cargo test --workspace --all-targets --exclude realityos-metal --exclude realityos-vport --exclude realityos-hil -- --test-threads=1
+    EXIT=0
+  cargo test -p realityos-semantics --lib  (twice)
+    EXIT=0 EXIT=0
+  cargo test -p realityos-verify --lib named_to_ctrl / observed_hold_values / semantic_lowering_failure (twice)
+    EXIT=0 EXIT=0
+  cargo test -p realityos-verify --lib (single-threaded, prior to clippy-nit commit)
+    EXIT=0  (77 passed)
+
+MuJoCo job (Python 3.12 + pinned requirements):
+  skip_reason=no Python 3.12
+  host_python=3.10.11 with importable mujoco 3.7.0 (numpy 1.26.4, pin is numpy==2.2.6)
+  do_not_claim=REALITYOS_REQUIRE_MUJOCO=1 cargo test -p realityos-verify --all-targets and cargo run -p realityos-verify -- milestone were not run as the 3.12 gate
+  existing ensure_mujoco_or_skip tests were not weakened
+
+Unix metal scripts:
+  named_hole
+  scripts/metal-pty-sequence.sh scripts/metal-online-journal.sh scripts/metal-os-boundary.sh
+  reason=Windows host; sudo /dev/ttyUSB* not available
+  not_success=did not fake exit 0; did not write docs/metal_proof.json
+
+STOP software development. Next operation is the real XL330 measured metal campaign (not this host).
