@@ -2232,6 +2232,31 @@ start_auth_after_usb_replug() {
 # and serial_tx_delta=0. If unplug killed serve, propose-id cannot return
 # those tokens; record measured serial_tx and the drop evidence file.
 # Do not invent a disconnect violation.
+# Propose after a drop can return only UART tokens (servo already silent)
+# while the wait evidence still has the VIN refuse that armed the flag.
+# Union those evidence tokens into the case so from_measured sees them.
+union_drop_evidence_into_case() {
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+rec = json.loads(sys.argv[1])
+try:
+    body = json.load(open(sys.argv[2], encoding="utf-8"))
+except Exception:
+    body = {}
+extra = []
+if isinstance(body, dict):
+    extra = [str(v) for v in (body.get("violations") or [])]
+seen = {str(v) for v in (rec.get("violations") or [])}
+merged = list(rec.get("violations") or [])
+for v in extra:
+    if v not in seen:
+        merged.append(v)
+        seen.add(v)
+rec["violations"] = merged
+print(json.dumps(rec))
+PY
+}
+
 measure_after_confirmed_bus_drop() {
   local name="$1"
   local proposal="$2"
@@ -2243,7 +2268,7 @@ measure_after_confirmed_bus_drop() {
   if rec="$(MEASURE_REQUIRE="${METAL_BUS_DROP_TOKEN_SPEC}" MEASURE_FORBID=software_watchdog_miss \
       measure "$name" "$proposal" AUTHORIZATION_BLOCKED false \
       env METAL_CMD_ID="$cid" "$PROP" --root "$ROOT" propose-id)"; then
-    printf '%s\n' "$rec"
+    union_drop_evidence_into_case "$rec" "$evidence"
     return 0
   fi
   w_after="$(writes)"
@@ -2389,6 +2414,19 @@ if [[ "${REALITYOS_METAL_CUTOFF_LIVE:-0}" == "1" ]]; then
   export REALITYOS_METAL_CUTOFF_LIVE_OBSERVED=1
   CUTOFF_TESTED=1
   add_case "$(measure_after_confirmed_bus_drop vin_cutoff_live 'propose after VIN open' "$ROOT/vin_cutoff_sensor.json" metal-cutoff)"
+  python3 - "$CASES_FILE" <<'PY'
+import json, sys
+cases = json.load(open(sys.argv[1], encoding="utf-8"))
+vin = [c for c in cases if c.get("name") == "vin_cutoff_live"]
+if not vin:
+    raise SystemExit("error: vin_cutoff_live case missing after live VIN wait")
+blob = " ".join(str(v) for v in (vin[-1].get("violations") or [])).lower()
+if "dxl_vin_unreadable" not in blob and "dxl_vin_outside_wizard_limits" not in blob:
+    raise SystemExit(
+        "error: vin_cutoff_live case has no VIN token (propose-only UART death is not cutoff): %s"
+        % (vin[-1],)
+    )
+PY
 fi
 
 COMMIT="$(git -C "$REPO" -c safe.directory="$REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
