@@ -2169,25 +2169,34 @@ wait_for_authority_bus_drop() {
     else
       ipc_ok=0
     fi
-    if metal_sensor_indicates_drop "$respfile"; then
-      cp "$respfile" "$save" || true
-      rm -f "$respfile" "$respfile.err"
-      return 0
-    fi
-    # Empty IPC counts only when serve actually died with the UART.
-    # A transient sudo/IPC miss while smoke is still bound is not a drop.
-    if [[ "$ipc_ok" != "1" ]] && [[ ! -s "$respfile" ]]; then
-      if [[ ! -S "$ROOT/ipc.sock" ]] || ! resolve_metal_smoke_pid "$ROOT" >/dev/null 2>&1; then
-        printf '%s\n' '{"ok":false,"stage":"ipc","status":"error","violations":[]}' >"$save"
+    if [[ "$check_vin" == "1" ]]; then
+      # Independent VIN cutoff must not treat a USB-UART wiggle or
+      # serve death as power-loss evidence. Those are the unplug case.
+      if metal_sensor_indicates_vin_drop "$respfile"; then
+        cp "$respfile" "$save" || true
         rm -f "$respfile" "$respfile.err"
         return 0
       fi
-    fi
-    if [[ "$check_vin" == "1" ]]; then
       vin_now="$(cat "$ROOT/bus/vin" 2>/dev/null || echo 999)"
       if [[ "$vin_now" =~ ^[0-9]+$ ]] && [[ "$vin_now" -lt 20 ]]; then
+        printf '%s\n' "{\"ok\":false,\"stage\":\"sensor\",\"status\":\"error\",\"violations\":[\"dxl_vin_unreadable\"],\"bus_vin_0.1v\":$vin_now}" >"$save"
         rm -f "$respfile" "$respfile.err"
         return 0
+      fi
+    else
+      if metal_sensor_indicates_drop "$respfile"; then
+        cp "$respfile" "$save" || true
+        rm -f "$respfile" "$respfile.err"
+        return 0
+      fi
+      # Empty IPC counts only when serve actually died with the UART.
+      # A transient sudo/IPC miss while smoke is still bound is not a drop.
+      if [[ "$ipc_ok" != "1" ]] && [[ ! -s "$respfile" ]]; then
+        if [[ ! -S "$ROOT/ipc.sock" ]] || ! resolve_metal_smoke_pid "$ROOT" >/dev/null 2>&1; then
+          printf '%s\n' '{"ok":false,"stage":"ipc","status":"error","violations":[]}' >"$save"
+          rm -f "$respfile" "$respfile.err"
+          return 0
+        fi
       fi
     fi
     rm -f "$respfile" "$respfile.err"
@@ -2370,6 +2379,10 @@ if [[ "${REALITYOS_METAL_CUTOFF_LIVE:-0}" == "1" ]]; then
   echo "Open the independent VIN switch now (USB data may stay enumerated)." >&2
   if ! wait_for_authority_bus_drop "$ROOT/vin_cutoff_sensor.json" 1; then
     echo "error: VIN did not drop within 60s; cutoff live test failed" >&2
+    exit 1
+  fi
+  if ! metal_sensor_indicates_vin_drop "$ROOT/vin_cutoff_sensor.json"; then
+    echo "error: VIN wait returned without dxl_vin_unreadable / dxl_vin_outside_wizard_limits; USB-UART death is not independent cutoff evidence" >&2
     exit 1
   fi
   export REALITYOS_METAL_CUTOFF_TESTED=1

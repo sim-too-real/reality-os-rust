@@ -9,8 +9,10 @@
 # read. Parse the JSON.
 
 # Keep in sync with metal_sensor_indicates_drop tokens and campaign
-# MEASURE_REQUIRE after a live VIN / USB-UART drop.
+# MEASURE_REQUIRE after a live USB-UART drop. VIN cutoff uses the
+# narrower metal_sensor_indicates_vin_drop set — UART death is not VIN.
 METAL_BUS_DROP_TOKEN_SPEC='dxl_io|driver not connected|online_hardware_disconnected|metal_live_io_deadline|metal_serial_closed|hardware_disconnected|dxl_vin_outside_wizard_limits|dxl_vin_unreadable'
+METAL_VIN_DROP_TOKEN_SPEC='dxl_vin_outside_wizard_limits|dxl_vin_unreadable'
 
 # `realityos-metal-propose sensor` exits 0 for any successful IPC round
 # trip, including ok=false (VIN refuse, DTR-RESET, bus_lost). A live
@@ -73,6 +75,38 @@ sys.exit(0 if any(tok in blob for tok in tokens) else 1)
 PY
 }
 
+# Independent VIN cutoff: USB data may stay enumerated. A USB-UART
+# wiggle, truncated IPC, or serve death is the unplug case — not VIN.
+metal_sensor_indicates_vin_drop() {
+  local path="${1:-}"
+  [[ -n "$path" ]] || return 1
+  python3 - "$path" <<'PY'
+import json, sys
+
+path = sys.argv[1]
+tokens = (
+    "dxl_vin_outside_wizard_limits",
+    "dxl_vin_unreadable",
+)
+try:
+    raw = open(path, encoding="utf-8").read().strip()
+except OSError:
+    sys.exit(1)
+if not raw:
+    sys.exit(1)
+try:
+    body = json.loads(raw)
+except json.JSONDecodeError:
+    sys.exit(1)
+if not isinstance(body, dict):
+    sys.exit(1)
+if body.get("ok") is True:
+    sys.exit(1)
+blob = json.dumps(body).lower()
+sys.exit(0 if any(tok in blob for tok in tokens) else 1)
+PY
+}
+
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   set -euo pipefail
   tmp="$(mktemp -d)"
@@ -113,5 +147,25 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   fi
   printf '%s\n' 'not-json{' >"$tmp/dead.json"
   metal_sensor_indicates_drop "$tmp/dead.json"
+  metal_sensor_indicates_vin_drop "$tmp/brown.json"
+  metal_sensor_indicates_vin_drop "$tmp/novin.json"
+  printf '%s\n' '{"ok":false,"violations":["metal_serial_closed","dxl_vin_unreadable"]}' >"$tmp/mixed.json"
+  metal_sensor_indicates_vin_drop "$tmp/mixed.json"
+  if metal_sensor_indicates_vin_drop "$tmp/closed.json"; then
+    echo "error: UART serial_closed must not count as a VIN drop" >&2
+    exit 1
+  fi
+  if metal_sensor_indicates_vin_drop "$tmp/vin.json"; then
+    echo "error: UART disconnect tokens must not count as a VIN drop" >&2
+    exit 1
+  fi
+  if metal_sensor_indicates_vin_drop "$tmp/dead.json"; then
+    echo "error: truncated IPC must not count as a VIN drop" >&2
+    exit 1
+  fi
+  if metal_sensor_indicates_vin_drop "$tmp/live.json"; then
+    echo "error: healthy sensor must not count as a VIN drop" >&2
+    exit 1
+  fi
   echo "metal-sensor-drop-ok"
 fi
