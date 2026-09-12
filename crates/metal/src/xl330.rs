@@ -2344,6 +2344,10 @@ impl Xl330Driver {
         self.cfg.campaign_hooks && self.bus.join("force_disconnect").exists()
     }
 
+    fn campaign_io_loss(&self) -> bool {
+        self.cfg.campaign_hooks && self.bus.join("force_io_loss").exists()
+    }
+
     fn campaign_fail_sensor(&self) -> bool {
         self.cfg.campaign_hooks && self.bus.join("fail_sensor").exists()
     }
@@ -2744,6 +2748,12 @@ impl HardwareDriverPort for Xl330Driver {
         // `_authority_now_s` is a receive hint for the governor. Capture time is
         // the device realtime tick, not the authority clock.
         if !self.bus_up() {
+            return Err(PlantError::Disconnected);
+        }
+        // Live USB unplug is dxl_io on a dead xfer. This hook keeps the
+        // PTY up so a process --restart can measure journal ESTOP
+        // continuity without a new pts identity.
+        if self.campaign_io_loss() {
             return Err(PlantError::Disconnected);
         }
         if self.campaign_fail_sensor() {

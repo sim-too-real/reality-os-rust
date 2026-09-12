@@ -1748,6 +1748,29 @@ start_auth_until_live() {
     first="$(metal_serve_first_online_flag "$first" "$ROOT")"
     echo "metal-campaign: serve attempt $attempt (DTR-RESET window first=$first crash=${crash:-none})" >&2
     if start_auth "$first" "$crash"; then
+      # Bus-loss first sensor and live USB unplug journal ESTOP.
+      # Continuity re-engages it on --restart. This process is new;
+      # recover is the operator ack so the first hold / post-replug
+      # reset hold is not estop_engaged. Same-process recover still
+      # refuses (bus_lost / hardware_session_dead).
+      if [[ "$first" == "0" ]]; then
+        as_autonomy "$PROP" --root "$ROOT" recover \
+          >"$sensor_path.recover" 2>/dev/null || true
+        if ! python3 - "$sensor_path.recover" <<'PY'
+import json, sys
+try:
+    body = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+raise SystemExit(0 if isinstance(body, dict) and body.get("ok") is True else 1)
+PY
+        then
+          echo "metal-campaign: --restart recover did not clear journal ESTOP; retry" >&2
+          stop_auth || true
+          sleep 0.8
+          continue
+        fi
+      fi
       if as_autonomy "$PROP" --root "$ROOT" sensor >"$sensor_path" 2>/dev/null \
         && metal_sensor_is_live "$sensor_path"; then
         return 0

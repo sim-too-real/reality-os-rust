@@ -87,7 +87,8 @@ pub struct MetalConfig {
     pub tau_max: f64,
     #[serde(default = "default_freshness")]
     pub freshness_threshold_s: f64,
-    /// Campaign-only overlays (force_disconnect / hot_swap). Off in production.
+    /// Campaign-only overlays (force_disconnect / force_io_loss / hot_swap).
+    /// Off in production.
     #[serde(default)]
     pub campaign_hooks: bool,
 }

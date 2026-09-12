@@ -2394,6 +2394,67 @@ fn xl330_pty_bus_timeout_requires_online_restart() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Live USB unplug and a DTR-RESET first sensor journal ESTOP via
+/// `note_acquire_err`. Continuity re-engages it on `--restart`. Sensor
+/// can still be `ok=true` (acquire does not check the latch), so the
+/// campaign first hold / post-replug reset hold died as `estop_engaged`
+/// until `--restart` recover-acks the new instance.
+#[test]
+fn xl330_pty_restart_after_bus_loss_estop_needs_recover() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder();
+    let root = metal_test_root("pty-estop-restart");
+    bind_pty_cfg(&root, &tty);
+
+    {
+        let mut auth = MetalAuthority::start(&root, true).expect("first-online");
+        let hold = auth.handle(MetalRequest::propose("pty-estop-hold", "hold"));
+        assert!(hold.ok, "baseline hold: {hold:?}");
+        std::fs::write(root.join("bus/force_io_loss"), b"1").unwrap();
+        let lost = auth.handle(MetalRequest::propose("pty-estop-lost", "hold"));
+        assert!(!lost.ok, "forced I/O loss must refuse: {lost:?}");
+        assert!(
+            lost.violations.iter().any(|v| v.contains("driver not connected")
+                || v.contains("online_hardware_disconnected")),
+            "I/O loss must journal ESTOP, not a vacuous miss: {lost:?}"
+        );
+        let rec = auth.handle(recover_req("pty-estop-same"));
+        assert!(!rec.ok, "same instance must not recover: {rec:?}");
+        assert!(
+            rec.violations
+                .iter()
+                .any(|v| v.contains("hardware_session_requires_online_restart")),
+            "{rec:?}"
+        );
+    }
+    std::fs::remove_file(root.join("bus/force_io_loss")).unwrap();
+
+    {
+        let mut auth =
+            MetalAuthority::start(&root, false).expect("restart after bus-loss ESTOP");
+        let blocked = auth.handle(MetalRequest::propose("pty-estop-hold2", "hold"));
+        assert!(
+            !blocked.ok
+                && blocked
+                    .violations
+                    .iter()
+                    .any(|v| v.contains("estop_engaged") || v.contains("abort_latched")),
+            "continuity must re-apply journal ESTOP until recover: {blocked:?}"
+        );
+        let rec = auth.handle(recover_req("pty-estop-restart"));
+        assert!(
+            rec.ok,
+            "new instance recover is the operator ack: {rec:?}"
+        );
+        let hold = auth.handle(MetalRequest::propose("pty-estop-hold3", "hold"));
+        assert!(
+            hold.ok,
+            "post-replug / DTR-RESET restart hold after recover: {hold:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn xl330_pty_vanished_udev_path_is_not_disconnect() {
     let _serial = pty_serial();
