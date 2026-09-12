@@ -1,11 +1,12 @@
 use crate::capability::{CapName, CapStatus, CapabilityGraph};
-use crate::command::{HoldSemantics, IkTrace, JointTarget, JointTargetSet};
-use crate::embodiment::{EmbodimentModel, JointKind};
+use crate::command::{ActuatorCommandSet, HoldSemantics, IkTrace, JointTarget, JointTargetSet};
+use crate::embodiment::{Actuator, EmbodimentModel, JointKind};
 use crate::kinematics::{resolve_chain_joints, solve_ik};
 use crate::observation::ObservationFrame;
 use crate::skill::{SkillContract, SkillName, SkillRefuse};
 use crate::transform::{Se3, TransformError, TransformGraph};
 use crate::world::WorldState;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledCtrl {
@@ -170,66 +171,80 @@ fn current_chain_q(
     Ok(q)
 }
 
-pub fn lower_named_targets(
-    model: &EmbodimentModel,
-    targets: &JointTargetSet,
-    current_by_joint: &std::collections::HashMap<String, f64>,
-) -> Result<Vec<(String, f64)>, SkillRefuse> {
-    let mut out = Vec::new();
-    for act in &model.actuators {
-        if let Some(t) = targets.targets.iter().find(|t| {
-            t.joint_name == act.target_joint
-                || t.actuator_name.as_deref() == Some(act.name.as_str())
-        }) {
-            out.push((act.name.clone(), t.value));
-        } else {
-            match targets.hold_outside {
-                HoldSemantics::KeepCurrent | HoldSemantics::ExplicitSafe => {
-                    if act.targets_joint() {
-                        let hold = current_by_joint
-                            .get(&act.target_joint)
-                            .copied()
-                            .ok_or(SkillRefuse::MissingJointState)?;
-                        out.push((act.name.clone(), hold));
-                    } else {
-                        let hold = current_by_joint
-                            .get(&act.name)
-                            .or_else(|| current_by_joint.get(&act.target_joint))
-                            .copied()
-                            .unwrap_or(0.0);
-                        out.push((act.name.clone(), hold));
-                    }
-                }
-            }
-        }
+fn finite_or_invalid(v: f64) -> Result<f64, SkillRefuse> {
+    if v.is_finite() {
+        Ok(v)
+    } else {
+        Err(SkillRefuse::InvalidCommand)
     }
-    Ok(out)
 }
 
-pub fn lower_actuator_commands(
-    model: &EmbodimentModel,
-    commands: &crate::command::ActuatorCommandSet,
-    current_by_name: &std::collections::HashMap<String, f64>,
-) -> Result<Vec<(String, f64)>, SkillRefuse> {
-    let mut out = Vec::new();
-    for act in &model.actuators {
-        if let Some(c) = commands
-            .commands
-            .iter()
-            .find(|c| c.actuator_name == act.name)
-        {
-            out.push((act.name.clone(), c.value));
-        } else {
-            let hold = current_by_name
-                .get(&act.name)
-                .or_else(|| current_by_name.get(&act.target_joint))
-                .copied();
-            match commands.hold_outside {
-                HoldSemantics::KeepCurrent | HoldSemantics::ExplicitSafe => {
-                    out.push((act.name.clone(), hold.unwrap_or(0.0)));
-                }
-            }
+fn observed_for(act: &Actuator, current: &HashMap<String, f64>) -> Option<f64> {
+    current
+        .get(&act.name)
+        .or_else(|| current.get(&act.target_joint))
+        .copied()
+        .filter(|v| v.is_finite())
+}
+
+fn hold_value(
+    hold: HoldSemantics,
+    explicit_safe: &BTreeMap<String, f64>,
+    act: &Actuator,
+    current: &HashMap<String, f64>,
+) -> Result<f64, SkillRefuse> {
+    match hold {
+        HoldSemantics::KeepCurrent => {
+            observed_for(act, current).ok_or(SkillRefuse::MissingJointState)
         }
+        HoldSemantics::ExplicitSafe => explicit_safe
+            .get(&act.name)
+            .copied()
+            .ok_or(SkillRefuse::InvalidCommand)
+            .and_then(finite_or_invalid),
+    }
+}
+
+fn bind_joint_target<'a>(
+    model: &'a EmbodimentModel,
+    t: &JointTarget,
+) -> Result<&'a Actuator, SkillRefuse> {
+    finite_or_invalid(t.value)?;
+    let hits: Vec<&Actuator> = model
+        .actuators
+        .iter()
+        .filter(|act| {
+            t.joint_name == act.target_joint
+                || t.actuator_name.as_deref() == Some(act.name.as_str())
+        })
+        .collect();
+    match hits.as_slice() {
+        [act] => {
+            if act.control_mode != t.control_mode {
+                return Err(SkillRefuse::InvalidCommand);
+            }
+            Ok(*act)
+        }
+        [] => Err(SkillRefuse::MissingActuator),
+        _ => Err(SkillRefuse::InvalidCommand),
+    }
+}
+
+fn fill_holds(
+    model: &EmbodimentModel,
+    requested: HashMap<&str, f64>,
+    hold: HoldSemantics,
+    explicit_safe: &BTreeMap<String, f64>,
+    current: &HashMap<String, f64>,
+) -> Result<Vec<(String, f64)>, SkillRefuse> {
+    let mut out = Vec::with_capacity(model.actuators.len());
+    for act in &model.actuators {
+        let v = if let Some(v) = requested.get(act.name.as_str()) {
+            *v
+        } else {
+            hold_value(hold, explicit_safe, act, current)?
+        };
+        out.push((act.name.clone(), v));
     }
     if out.is_empty() {
         return Err(SkillRefuse::MissingActuator);
@@ -237,8 +252,60 @@ pub fn lower_actuator_commands(
     Ok(out)
 }
 
+pub fn lower_actuator_commands(
+    model: &EmbodimentModel,
+    commands: &ActuatorCommandSet,
+    current_by_name: &HashMap<String, f64>,
+) -> Result<Vec<(String, f64)>, SkillRefuse> {
+    let mut requested = HashMap::new();
+    let mut seen = HashSet::new();
+    for c in &commands.commands {
+        let v = finite_or_invalid(c.value)?;
+        let act = model
+            .actuators
+            .iter()
+            .find(|a| a.name == c.actuator_name)
+            .ok_or(SkillRefuse::MissingActuator)?;
+        if !seen.insert(c.actuator_name.as_str()) {
+            return Err(SkillRefuse::InvalidCommand);
+        }
+        if act.control_mode != c.control_mode {
+            return Err(SkillRefuse::InvalidCommand);
+        }
+        requested.insert(act.name.as_str(), v);
+    }
+    fill_holds(
+        model,
+        requested,
+        commands.hold_outside,
+        &commands.explicit_safe,
+        current_by_name,
+    )
+}
+
+pub fn lower_named_targets(
+    model: &EmbodimentModel,
+    targets: &JointTargetSet,
+    current_by_joint: &HashMap<String, f64>,
+) -> Result<Vec<(String, f64)>, SkillRefuse> {
+    let mut requested = HashMap::new();
+    for t in &targets.targets {
+        let act = bind_joint_target(model, t)?;
+        if requested.insert(act.name.as_str(), t.value).is_some() {
+            return Err(SkillRefuse::InvalidCommand);
+        }
+    }
+    fill_holds(
+        model,
+        requested,
+        targets.hold_outside,
+        &targets.explicit_safe,
+        current_by_joint,
+    )
+}
+
 #[cfg(test)]
-use crate::embodiment::{unknown_se3, Actuator, Body, EndEffector, FrameKind, Joint, ModelFrame};
+use crate::embodiment::{unknown_se3, Body, EndEffector, FrameKind, Joint, ModelFrame};
 #[cfg(test)]
 use crate::observation::JointStateSample;
 #[cfg(test)]
@@ -390,7 +457,26 @@ pub(crate) fn identity_base_graph(epoch: &str) -> TransformGraph {
 mod tests {
     use super::*;
     use crate::capability::derive_capabilities;
+    use crate::command::{ActuatorCommand, ActuatorCommandSet};
     use crate::provenance::Provenance;
+
+    fn cmd(name: &str, value: f64, mode: &str) -> ActuatorCommand {
+        ActuatorCommand {
+            actuator_name: name.into(),
+            value,
+            control_mode: mode.into(),
+            skill_id: "t".into(),
+        }
+    }
+
+    fn current_complete() -> std::collections::HashMap<String, f64> {
+        let mut m = std::collections::HashMap::new();
+        m.insert("j0".into(), 0.11);
+        m.insert("j1".into(), 0.22);
+        m.insert("a0".into(), 0.11);
+        m.insert("a1".into(), 0.22);
+        m
+    }
 
     #[test]
     fn adapter_selected_by_caps_not_name() {
@@ -568,7 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn tendon_actuator_is_held_without_requiring_joint_state() {
+    fn reach_compiles_without_commanding_tendon_actuator() {
         let mut m = synth_planar_two_link();
         m.actuators.push(Actuator {
             name: "split".into(),
@@ -603,11 +689,242 @@ mod tests {
             )
             .expect("arm REACH must compile without the tendon actuator");
         assert!(!out.targets.contains_joint("split"));
-        let mut current = std::collections::HashMap::new();
-        current.insert("j0".into(), 0.0);
-        current.insert("j1".into(), 0.0);
-        let lowered = lower_named_targets(&m, &out.targets, &current).expect("hold tendon");
-        assert!(lowered.iter().any(|(n, _)| n == "split"));
+        assert_eq!(out.targets.targets.len(), 2);
+    }
+
+    #[test]
+    fn keep_current_holds_exact_measured_on_omitted_actuator() {
+        let model = synth_planar_two_link();
+        let set = ActuatorCommandSet {
+            commands: vec![cmd("a0", 0.4, "position")],
+            hold_outside: HoldSemantics::KeepCurrent,
+            explicit_safe: Default::default(),
+        };
+        let out = lower_actuator_commands(&model, &set, &current_complete()).unwrap();
+        assert_eq!(out, vec![("a0".into(), 0.4), ("a1".into(), 0.22)]);
+    }
+
+    #[test]
+    fn keep_current_missing_state_refuses_and_emits_no_vector() {
+        let model = synth_planar_two_link();
+        let set = ActuatorCommandSet {
+            commands: vec![cmd("a0", 0.4, "position")],
+            hold_outside: HoldSemantics::KeepCurrent,
+            explicit_safe: Default::default(),
+        };
+        let mut current = current_complete();
+        current.remove("a1");
+        current.remove("j1");
+        let err = lower_actuator_commands(&model, &set, &current).unwrap_err();
+        assert_eq!(err, SkillRefuse::MissingJointState);
+        assert!(!err.writes_allowed());
+    }
+
+    #[test]
+    fn explicit_safe_uses_declared_value_including_zero() {
+        let model = synth_planar_two_link();
+        let set = ActuatorCommandSet {
+            commands: vec![cmd("a0", 0.4, "position")],
+            hold_outside: HoldSemantics::ExplicitSafe,
+            explicit_safe: std::collections::BTreeMap::from([("a1".into(), 0.0)]),
+        };
+        let out = lower_actuator_commands(&model, &set, &Default::default()).unwrap();
+        assert_eq!(out, vec![("a0".into(), 0.4), ("a1".into(), 0.0)]);
+    }
+
+    #[test]
+    fn explicit_safe_without_declaration_refuses() {
+        let model = synth_planar_two_link();
+        let set = ActuatorCommandSet {
+            commands: vec![cmd("a0", 0.4, "position")],
+            hold_outside: HoldSemantics::ExplicitSafe,
+            explicit_safe: Default::default(),
+        };
+        let err = lower_actuator_commands(&model, &set, &current_complete()).unwrap_err();
+        assert_eq!(err, SkillRefuse::InvalidCommand);
+    }
+
+    #[test]
+    fn unknown_actuator_refuses() {
+        let model = synth_planar_two_link();
+        let set = ActuatorCommandSet {
+            commands: vec![cmd("nope", 0.1, "position")],
+            hold_outside: HoldSemantics::KeepCurrent,
+            explicit_safe: Default::default(),
+        };
+        let err = lower_actuator_commands(&model, &set, &current_complete()).unwrap_err();
+        assert_eq!(err, SkillRefuse::MissingActuator);
+    }
+
+    #[test]
+    fn duplicate_actuator_refuses() {
+        let model = synth_planar_two_link();
+        let set = ActuatorCommandSet {
+            commands: vec![cmd("a0", 0.1, "position"), cmd("a0", 0.2, "position")],
+            hold_outside: HoldSemantics::KeepCurrent,
+            explicit_safe: Default::default(),
+        };
+        let err = lower_actuator_commands(&model, &set, &current_complete()).unwrap_err();
+        assert_eq!(err, SkillRefuse::InvalidCommand);
+    }
+
+    #[test]
+    fn nan_refuses() {
+        let model = synth_planar_two_link();
+        let set = ActuatorCommandSet {
+            commands: vec![cmd("a0", f64::NAN, "position")],
+            hold_outside: HoldSemantics::KeepCurrent,
+            explicit_safe: Default::default(),
+        };
+        assert_eq!(
+            lower_actuator_commands(&model, &set, &current_complete()).unwrap_err(),
+            SkillRefuse::InvalidCommand
+        );
+    }
+
+    #[test]
+    fn inf_refuses() {
+        let model = synth_planar_two_link();
+        for v in [f64::INFINITY, f64::NEG_INFINITY] {
+            let set = ActuatorCommandSet {
+                commands: vec![cmd("a0", v, "position")],
+                hold_outside: HoldSemantics::KeepCurrent,
+                explicit_safe: Default::default(),
+            };
+            assert_eq!(
+                lower_actuator_commands(&model, &set, &current_complete()).unwrap_err(),
+                SkillRefuse::InvalidCommand
+            );
+        }
+    }
+
+    #[test]
+    fn incompatible_control_mode_refuses() {
+        let model = synth_planar_two_link();
+        let set = ActuatorCommandSet {
+            commands: vec![cmd("a0", 0.1, "velocity")],
+            hold_outside: HoldSemantics::KeepCurrent,
+            explicit_safe: Default::default(),
+        };
+        assert_eq!(
+            lower_actuator_commands(&model, &set, &current_complete()).unwrap_err(),
+            SkillRefuse::InvalidCommand
+        );
+    }
+
+    #[test]
+    fn tendon_omitted_without_current_refuses() {
+        let mut m = synth_planar_two_link();
+        m.actuators.push(Actuator {
+            name: "split".into(),
+            target_joint: "split".into(),
+            control_mode: "position".into(),
+            transmission_kind: "tendon".into(),
+            ctrlrange: Provenanced::unknown("test", 0.0),
+            forcerange: Provenanced::unknown("test", 0.0),
+            gear: Provenanced::unknown("test", 0.0),
+        });
+        let targets = JointTargetSet {
+            targets: vec![JointTarget {
+                joint_name: "j0".into(),
+                actuator_name: Some("a0".into()),
+                value: 0.3,
+                control_mode: "position".into(),
+                skill_id: "skill.reach".into(),
+            }],
+            hold_outside: HoldSemantics::KeepCurrent,
+            explicit_safe: Default::default(),
+        };
+        let mut current = current_complete();
+        current.remove("split");
+        let err = lower_named_targets(&m, &targets, &current).unwrap_err();
+        assert_eq!(err, SkillRefuse::MissingJointState);
+    }
+
+    #[test]
+    fn tendon_omitted_with_named_current_holds_exact() {
+        let mut m = synth_planar_two_link();
+        m.actuators.push(Actuator {
+            name: "split".into(),
+            target_joint: "split".into(),
+            control_mode: "position".into(),
+            transmission_kind: "tendon".into(),
+            ctrlrange: Provenanced::unknown("test", 0.0),
+            forcerange: Provenanced::unknown("test", 0.0),
+            gear: Provenanced::unknown("test", 0.0),
+        });
+        let targets = JointTargetSet {
+            targets: vec![JointTarget {
+                joint_name: "j0".into(),
+                actuator_name: Some("a0".into()),
+                value: 0.3,
+                control_mode: "position".into(),
+                skill_id: "skill.reach".into(),
+            }],
+            hold_outside: HoldSemantics::KeepCurrent,
+            explicit_safe: Default::default(),
+        };
+        let mut current = current_complete();
+        current.insert("split".into(), 0.77);
+        let out = lower_named_targets(&m, &targets, &current).unwrap();
+        let split = out.iter().find(|(n, _)| n == "split").unwrap();
+        assert_eq!(split.1, 0.77);
+        let a1 = out.iter().find(|(n, _)| n == "a1").unwrap();
+        assert_eq!(a1.1, 0.22);
+    }
+
+    #[test]
+    fn ambiguous_joint_target_refuses() {
+        let mut m = synth_planar_two_link();
+        m.actuators.push(Actuator {
+            name: "a0_alias".into(),
+            target_joint: "j0".into(),
+            control_mode: "position".into(),
+            transmission_kind: "joint".into(),
+            ctrlrange: Provenanced::unknown("test", 0.0),
+            forcerange: Provenanced::unknown("test", 0.0),
+            gear: Provenanced::unknown("test", 0.0),
+        });
+        let targets = JointTargetSet {
+            targets: vec![JointTarget {
+                joint_name: "j0".into(),
+                actuator_name: None,
+                value: 0.3,
+                control_mode: "position".into(),
+                skill_id: "skill.reach".into(),
+            }],
+            hold_outside: HoldSemantics::KeepCurrent,
+            explicit_safe: Default::default(),
+        };
+        assert_eq!(
+            lower_named_targets(&m, &targets, &current_complete()).unwrap_err(),
+            SkillRefuse::InvalidCommand
+        );
+    }
+
+    #[test]
+    fn named_and_actuator_lowerers_agree_on_keep_current() {
+        let model = synth_planar_two_link();
+        let current = current_complete();
+        let cmds = ActuatorCommandSet {
+            commands: vec![cmd("a0", 0.4, "position")],
+            hold_outside: HoldSemantics::KeepCurrent,
+            explicit_safe: Default::default(),
+        };
+        let targets = JointTargetSet {
+            targets: vec![JointTarget {
+                joint_name: "j0".into(),
+                actuator_name: Some("a0".into()),
+                value: 0.4,
+                control_mode: "position".into(),
+                skill_id: "t".into(),
+            }],
+            hold_outside: HoldSemantics::KeepCurrent,
+            explicit_safe: Default::default(),
+        };
+        let a = lower_actuator_commands(&model, &cmds, &current).unwrap();
+        let b = lower_named_targets(&model, &targets, &current).unwrap();
+        assert_eq!(a, b);
     }
 
     #[test]
