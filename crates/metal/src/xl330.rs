@@ -1442,6 +1442,13 @@ impl Xl330Driver {
         // Do not yank present onto the Wizard window. Clamping then
         // torque-on would move before any certified command and break
         // the zero-motion baseline.
+        // crash_if / USB unplug skip Drop, so EEPROM still holds the
+        // session cage. An unloaded horn can sag outside that leftover
+        // window after DTR-RESET. Restore recorded Wizard limits
+        // (fail-safe while serve is down) before this refuse. Missing
+        // position_cage.json is a no-op so a true Wizard fixture still
+        // refuses. establish_startup_cage repeats this (idempotent).
+        self.restore_recorded_wizard_window_before_new_cage()?;
         if present < self.min_position || present > self.max_position {
             return Err(PlantError::refused(format!(
                 "dxl_present_outside_wizard_limits:present={present}:min={}:max={}:homing_offset={}",

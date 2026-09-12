@@ -59,15 +59,15 @@ ensure_metal_os_users() {
   fi
   if ! getent group "$IPC_GROUP" >/dev/null 2>&1; then
     groupadd --system "$IPC_GROUP"
-    echo "metal-campaign: created system group $IPC_GROUP"
+    echo "metal-campaign: created system group $IPC_GROUP" >&2
   fi
   if ! id -u "$AUTHORITY_USER" >/dev/null 2>&1; then
     useradd --system --no-create-home --shell /bin/bash -G "$IPC_GROUP" "$AUTHORITY_USER"
-    echo "metal-campaign: created system user $AUTHORITY_USER"
+    echo "metal-campaign: created system user $AUTHORITY_USER" >&2
   fi
   if ! id -u "$AUTONOMY_USER" >/dev/null 2>&1; then
     useradd --system --no-create-home --shell /bin/bash -G "$IPC_GROUP" "$AUTONOMY_USER"
-    echo "metal-campaign: created system user $AUTONOMY_USER"
+    echo "metal-campaign: created system user $AUTONOMY_USER" >&2
   fi
   usermod -aG "$IPC_GROUP" "$AUTHORITY_USER"
   usermod -aG "$IPC_GROUP" "$AUTONOMY_USER"
@@ -218,7 +218,7 @@ if [[ "$DEVICE_REAL" == /dev/pts/* ]]; then
     echo "error: refusing PTY $DEVICE_REAL; not a physical actuator. Will not write metal_proof.json." >&2
     exit 2
   fi
-  echo "metal-campaign: PTY sequence only; not metal evidence; will not install docs/metal_proof.json"
+  echo "metal-campaign: PTY sequence only; not metal evidence; will not install docs/metal_proof.json" >&2
   PTY_SEQUENCE_ACTIVE=1
   CUTOFF_TESTED=0
   export REALITYOS_METAL_CUTOFF_TESTED=0
@@ -309,7 +309,7 @@ set_usb_serial_latency() {
   if echo 1 >"$timer" 2>/dev/null; then
     got="$(tr -d '[:space:]' <"$timer" 2>/dev/null || true)"
     if [[ "$got" == "1" ]]; then
-      echo "metal-campaign: set $timer=1 (USB-UART default 16 ms can miss the 40 ms live deadline)"
+      echo "metal-campaign: set $timer=1 (USB-UART default 16 ms can miss the 40 ms live deadline)" >&2
       return 0
     fi
   fi
@@ -379,7 +379,7 @@ disable_usb_autosuspend() {
     echo "error: USB-UART power/control is '${got:-unreadable}' after write (want on); autosuspend can miss the 40 ms live deadline" >&2
     return 1
   fi
-  echo "metal-campaign: set $uart/power/control=on (USB autosuspend can miss the 40 ms live deadline)"
+  echo "metal-campaign: set $uart/power/control=on (USB autosuspend can miss the 40 ms live deadline)" >&2
 }
 
 # Walk sysfs from the tty to the UART USB device (first
@@ -734,13 +734,13 @@ release_foreign_tty_holders() {
   local holders=""
   holders="$(fuser -v "$real" 2>&1 || true)"
   if echo "$holders" | grep -qE 'brltty'; then
-    echo "metal-campaign: $real is held by brltty; stopping brltty.service brltty-udev.service"
+    echo "metal-campaign: $real is held by brltty; stopping brltty.service brltty-udev.service" >&2
     systemctl stop brltty.service brltty-udev.service 2>/dev/null || true
     killall -q brltty 2>/dev/null || true
     STOPPED_BRLTTY=1
   fi
   if echo "$holders" | grep -qE 'ModemManager|modem-manager'; then
-    echo "metal-campaign: $real is held by ModemManager; stopping ModemManager (deb and snap)"
+    echo "metal-campaign: $real is held by ModemManager; stopping ModemManager (deb and snap)" >&2
     systemctl stop ModemManager.service 2>/dev/null || true
     systemctl stop snap.modem-manager.modemmanager.service 2>/dev/null || true
     killall -q ModemManager 2>/dev/null || true
@@ -825,7 +825,7 @@ write_metal_udev_ignore_rule() {
     if [[ "$leftover" != "$rules" ]]; then
       rm -f "$leftover"
       METAL_UDEV_NEEDS_RELOAD=1
-      echo "metal-campaign: removed leftover $leftover (wrong adapter ignore rule)"
+      echo "metal-campaign: removed leftover $leftover (wrong adapter ignore rule)" >&2
     fi
   done
   if [[ ! -f "$rules" ]] || ! metal_udev_ignore_rule_text "$name" | cmp -s - "$rules"; then
@@ -834,7 +834,7 @@ write_metal_udev_ignore_rule() {
       return 1
     }
     METAL_UDEV_NEEDS_RELOAD=1
-    echo "metal-campaign: wrote $rules (ID_MM_DEVICE_IGNORE + ID_BRLTTY=0 + 0600 ${AUTHORITY_USER})"
+    echo "metal-campaign: wrote $rules (ID_MM_DEVICE_IGNORE + ID_BRLTTY=0 + 0600 ${AUTHORITY_USER})" >&2
   fi
   UDEV_RULE="$rules"
 }
@@ -1358,11 +1358,11 @@ rm -rf "$ROOT"
 install -d -m 0755 "$ROOT"
 FSTYPE="$(metal_fstype "$ROOT")"
 if [[ "$FSTYPE" == "tmpfs" ]]; then
-  echo "metal-campaign: $ROOT is on tmpfs"
+  echo "metal-campaign: $ROOT is on tmpfs" >&2
 elif [[ "${REALITYOS_METAL_ALLOW_SLOW_DISK:-0}" == "1" ]]; then
   echo "warning: $ROOT fstype=${FSTYPE:-unknown} is not tmpfs; REALITYOS_METAL_ALLOW_SLOW_DISK=1; a journal fsync >100 ms latches the software watchdog" >&2
 elif mount -t tmpfs -o size=32M,mode=0755 realityos-metal "$ROOT"; then
-  echo "metal-campaign: mounted tmpfs on $ROOT (watchdog journal+seal fsync must stay under 100 ms)"
+  echo "metal-campaign: mounted tmpfs on $ROOT (watchdog journal+seal fsync must stay under 100 ms)" >&2
 else
   echo "error: $ROOT is not tmpfs (fstype=${FSTYPE:-unknown}) and tmpfs mount failed." >&2
   echo "error: each watchdog emit fsyncs journal+seal; a disk fsync >100 ms cannot be caught up." >&2
@@ -1373,7 +1373,7 @@ fi
 BUILT_BIN="$BIN_DIR"
 STAGE="${REALITYOS_METAL_STAGE:-/tmp/realityos-metal-bin}"
 if try_stage_metal_bins "$STAGE"; then
-  echo "metal-campaign: staged metal binaries at $BIN_DIR"
+  echo "metal-campaign: staged metal binaries at $BIN_DIR" >&2
 elif [[ -z "${REALITYOS_METAL_STAGE:-}" ]] && try_stage_metal_bins /dev/shm/realityos-metal-bin; then
   STAGE=/dev/shm/realityos-metal-bin
   echo "metal-campaign: default /tmp stage is not executable; using $STAGE" >&2
@@ -2070,13 +2070,18 @@ add_case "$PROBE_REC"
 crash_replay() {
   local point="$1"
   local cid="$2"
+  local rec before_crash died before after after_restart
+  # add_case "$(crash_replay …)" captures stdout. USB prepare can print
+  # latency_timer / power/control / udev lines after crash_if rematch
+  # (CH340 drop, FTDI ttyUSB1). Those are not JSON. Keep the work on
+  # stderr; only the case record is printed.
+  {
   stop_auth
   if ! start_auth_until_live 0 "$point" "$ROOT/crash-${point}-live.json"; then
     echo "error: crash serve did not become live for $point (DTR-RESET / identify)" >&2
     cat "$ROOT/crash-${point}-live.json" >&2 || true
     exit 1
   fi
-  local before_crash
   before_crash="$(serial_tx)"
   as_autonomy "$PROP" --root "$ROOT" --id "$cid" --verb hold propose >/tmp/metal-"$cid".json || true
   # crash_if is process::exit on the smoke child. after_prepare / after_write /
@@ -2085,7 +2090,7 @@ crash_replay() {
   # write_all+flush and before the Status Packet. If act() fails first, those
   # later points never fire — fail closed instead of `wait $AUTH_PID` hanging
   # on a live serve (PTY campaign hang).
-  local died=0
+  died=0
   for _ in $(seq 1 50); do
     if ! resolve_metal_smoke_pid "$ROOT" >/dev/null; then
       died=1
@@ -2108,7 +2113,6 @@ crash_replay() {
     cat "$ROOT/crash-${point}-restart.json" >&2 || true
     exit 1
   fi
-  local before after after_restart
   after_restart="$(serial_tx)"
   # before_prepare never reaches durable prepare. Restart must not
   # auto-retransmit (serial_tx stays). Replaying that ID is a *new*
@@ -2181,6 +2185,7 @@ r = json.load(open(sys.argv[1]))
 if not r.get("ok"):
     sys.exit("error: reset hold after %s failed (journal would abort-latch the next crash point): %s" % (sys.argv[2], r))
 PY
+  } >&2
   printf '%s\n' "$rec"
 }
 
@@ -2194,13 +2199,56 @@ add_case "$(crash_replay after_ack metal-crash-afterack)"
 wait_for_authority_bus_drop() {
   local save="${1:-$ROOT/bus_drop_sensor.json}"
   local check_vin="${2:-0}"
-  local respfile ipc_ok vin_now start now
+  local respfile ipc_ok vin_now start now py py_st
   # USB-UART death persists; 500 ms is enough. VIN evidence is a
   # Present Input Voltage sample (or persist_vin < 2.0 V). A hard
   # switch can sag through the Wizard window in tens of ms, then the
-  # servo goes silent and later polls are only UART tokens. Poll VIN
-  # as fast as sensor IPC allows so the existing dxl_vin_* tokens can
-  # still be measured. Do not accept UART death as VIN. Keep 60 s.
+  # servo goes silent and later polls are only UART tokens. Do not
+  # accept UART death as VIN. Keep 60 s.
+  if [[ "$check_vin" == "1" ]]; then
+    # as_autonomy wraps each propose in sudo+timeout(20). That spawn
+    # is 100s of ms, so "as fast as sensor IPC allows" was still too
+    # slow for the brownout window. One autonomy process talks
+    # ipc.sock directly (same dxl_vin_* tokens). Root opens the
+    # poller and the save file: ROOT is 0751 (autonomy cannot create
+    # vin_cutoff_sensor.json) and a 0700 clone would hide the repo
+    # script. bus/ is 0700, so persist_vin < 2.0 V stays a root watch.
+    start="$(date +%s)"
+    : >"$save"
+    sudo -u "$AUTONOMY_USER" -- env \
+      REALITYOS_METAL_DEVICE="${REALITYOS_METAL_DEVICE:-}" \
+      timeout --signal=TERM --kill-after=2 62 \
+      python3 - "$ROOT/ipc.sock" 60 \
+      <"$SCRIPT_DIR/metal-vin-sensor-poll.py" >"$save" &
+    py=$!
+    while kill -0 "$py" 2>/dev/null; do
+      now="$(date +%s)"
+      if (( now - start >= 60 )); then
+        break
+      fi
+      vin_now="$(cat "$ROOT/bus/vin" 2>/dev/null || echo 999)"
+      if [[ "$vin_now" =~ ^[0-9]+$ ]] && [[ "$vin_now" -lt 20 ]]; then
+        kill "$py" 2>/dev/null || true
+        wait "$py" 2>/dev/null || true
+        if ! metal_sensor_indicates_vin_drop "$save"; then
+          printf '%s\n' "{\"ok\":false,\"stage\":\"sensor\",\"status\":\"error\",\"violations\":[\"dxl_vin_unreadable\"],\"bus_vin_0.1v\":$vin_now}" >"$save"
+        fi
+        return 0
+      fi
+      sleep 0.01
+    done
+    py_st=0
+    wait "$py" || py_st=$?
+    if [[ "$py_st" -eq 0 ]] && metal_sensor_indicates_vin_drop "$save"; then
+      return 0
+    fi
+    vin_now="$(cat "$ROOT/bus/vin" 2>/dev/null || echo 999)"
+    if [[ "$vin_now" =~ ^[0-9]+$ ]] && [[ "$vin_now" -lt 20 ]]; then
+      printf '%s\n' "{\"ok\":false,\"stage\":\"sensor\",\"status\":\"error\",\"violations\":[\"dxl_vin_unreadable\"],\"bus_vin_0.1v\":$vin_now}" >"$save"
+      return 0
+    fi
+    return 1
+  fi
   respfile="$(mktemp)"
   start="$(date +%s)"
   while now="$(date +%s)"; (( now - start < 60 )); do
@@ -2210,37 +2258,21 @@ wait_for_authority_bus_drop() {
     else
       ipc_ok=0
     fi
-    if [[ "$check_vin" == "1" ]]; then
-      # Independent VIN cutoff must not treat a USB-UART wiggle or
-      # serve death as power-loss evidence. Those are the unplug case.
-      if metal_sensor_indicates_vin_drop "$respfile"; then
-        cp "$respfile" "$save" || true
-        rm -f "$respfile" "$respfile.err"
-        return 0
-      fi
-      vin_now="$(cat "$ROOT/bus/vin" 2>/dev/null || echo 999)"
-      if [[ "$vin_now" =~ ^[0-9]+$ ]] && [[ "$vin_now" -lt 20 ]]; then
-        printf '%s\n' "{\"ok\":false,\"stage\":\"sensor\",\"status\":\"error\",\"violations\":[\"dxl_vin_unreadable\"],\"bus_vin_0.1v\":$vin_now}" >"$save"
-        rm -f "$respfile" "$respfile.err"
-        return 0
-      fi
-    else
-      if metal_sensor_indicates_drop "$respfile"; then
-        cp "$respfile" "$save" || true
-        rm -f "$respfile" "$respfile.err"
-        return 0
-      fi
-      # Empty IPC counts only when serve actually died with the UART.
-      # A transient sudo/IPC miss while smoke is still bound is not a drop.
-      if [[ "$ipc_ok" != "1" ]] && [[ ! -s "$respfile" ]]; then
-        if [[ ! -S "$ROOT/ipc.sock" ]] || ! resolve_metal_smoke_pid "$ROOT" >/dev/null 2>&1; then
-          printf '%s\n' '{"ok":false,"stage":"ipc","status":"error","violations":[]}' >"$save"
-          rm -f "$respfile" "$respfile.err"
-          return 0
-        fi
-      fi
-      sleep 0.5
+    if metal_sensor_indicates_drop "$respfile"; then
+      cp "$respfile" "$save" || true
+      rm -f "$respfile" "$respfile.err"
+      return 0
     fi
+    # Empty IPC counts only when serve actually died with the UART.
+    # A transient sudo/IPC miss while smoke is still bound is not a drop.
+    if [[ "$ipc_ok" != "1" ]] && [[ ! -s "$respfile" ]]; then
+      if [[ ! -S "$ROOT/ipc.sock" ]] || ! resolve_metal_smoke_pid "$ROOT" >/dev/null 2>&1; then
+        printf '%s\n' '{"ok":false,"stage":"ipc","status":"error","violations":[]}' >"$save"
+        rm -f "$respfile" "$respfile.err"
+        return 0
+      fi
+    fi
+    sleep 0.5
   done
   rm -f "$respfile" "$respfile.err"
   return 1

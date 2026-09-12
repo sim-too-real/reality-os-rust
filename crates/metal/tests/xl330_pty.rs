@@ -2722,3 +2722,32 @@ fn xl330_pty_crash_restart_restores_wizard_window_before_new_cage() {
     second.close();
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn xl330_pty_crash_restart_restores_wizard_before_present_outside_leftover_cage() {
+    let _serial = pty_serial();
+    let root = metal_test_root("pty-cage-restore-sag");
+    let sag = root.join("sag_present");
+    let sag_s = sag.to_str().expect("utf8 sag path").to_string();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_SAG_FILE", &sag_s)]);
+    let cfg = MetalConfig::example(&tty);
+    let mut first = Xl330Driver::open(cfg.clone(), &root).expect("first open");
+    assert_eq!(first.last_present_position(), 2048);
+    assert_eq!(first.experiment_cage(), (2000, 2096));
+    first.abandon_without_eeprom_restore_for_test();
+    drop(first);
+    // Unloaded horn sagged past leftover EEPROM after crash_if / DTR-RESET
+    // (torque-off, Startup Configuration 0). position_cage.json still has
+    // Wizard 0–4095. Restore must run before the leftover-cage refuse.
+    std::fs::write(&sag, "1920").unwrap();
+    let mut second = Xl330Driver::open(cfg, &root)
+        .expect("recorded Wizard window must be restored before leftover-cage refuse");
+    assert_eq!(second.last_present_position(), 1920);
+    assert_eq!(second.startup_present(), 1920);
+    assert_eq!(second.experiment_cage(), (1872, 1968));
+    second
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("post-sag restart must host a certified step around sagged present");
+    second.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
