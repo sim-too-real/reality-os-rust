@@ -4,9 +4,10 @@
 # `realityos-metal-propose sensor` returns exit 0 for any successful IPC
 # round trip, including ok=false. A VIN brownout does not kill serve; it
 # refuses acquire and latches bus_lost. Comparing the CLI exit code
-# therefore never observes a real cutoff. `bus/vin` also freezes at the
-# last healthy sample because persist_vin runs only after a good motion
-# read. Parse the JSON.
+# therefore never observes a real cutoff. persist_vin runs after a
+# successful motion-block read, including a 0 / brown VIN sample, then
+# live acquire refuses. The file freezes only when that read itself
+# fails (silent servo). Parse the JSON.
 
 # Keep in sync with metal_sensor_indicates_drop tokens and campaign
 # MEASURE_REQUIRE after a live USB-UART drop. VIN cutoff uses the
