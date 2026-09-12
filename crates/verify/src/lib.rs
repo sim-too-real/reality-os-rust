@@ -659,4 +659,64 @@ mod integration_tests {
         assert!(bad.is_err());
         crate::mujoco_exec::checkin_worker(_i);
     }
+
+    #[test]
+    fn semantic_lowering_failure_does_not_allow_policy_write() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = crate::bundle::RobotBundle::load(crate::corpus::robot_dir("planar_arm")).unwrap();
+        let (inst, man) = crate::runner::load_and_normalize(&b, &[], 0).unwrap();
+        let model = crate::semantics_map::embodiment_from_manifest(&b, &man);
+        let cmds = realityos_semantics::command::ActuatorCommandSet {
+            commands: vec![realityos_semantics::command::ActuatorCommand {
+                actuator_name: man.actuators[0].name.clone(),
+                value: 0.05,
+                control_mode: "position".into(),
+                skill_id: "t".into(),
+            }],
+            hold_outside: realityos_semantics::command::HoldSemantics::KeepCurrent,
+            explicit_safe: Default::default(),
+        };
+        let current = std::collections::HashMap::new();
+        let shared = std::sync::Arc::new(crate::driver::SharedMujoco {
+            inst: std::sync::Mutex::new(inst),
+            probe: crate::driver::SimActuationProbe::default(),
+            robot_id: man.robot_id.clone(),
+            model_hash: man.model_hash.clone(),
+        });
+        let port = crate::driver::SharedSimPort::new(shared.clone());
+        let max_a = man.tau_max().into_iter().fold(1.0, f64::max);
+        let plant = realityos_plant::HardwareBackedPlant::new(
+            port,
+            &man.robot_id,
+            man.nu.max(1) as usize,
+            max_a,
+        );
+        let auth = crate::authority::SimAuthority::open(plant, &man, 10.0).unwrap();
+        let before = shared.probe.snapshot().policy_ctrl_writes;
+        match realityos_semantics::adapter::lower_actuator_commands(&model, &cmds, &current) {
+            Err(e) => {
+                assert_eq!(
+                    e,
+                    realityos_semantics::skill::SkillRefuse::MissingJointState
+                );
+                assert!(!e.writes_allowed());
+            }
+            Ok(_) => panic!("lowering invented a command vector from empty current"),
+        }
+        assert!(
+            crate::manipulation::named_to_ctrl(&man, &[], &[]).is_err(),
+            "named_to_ctrl must refuse current-vector mismatch, not invent zeros"
+        );
+        let after = shared.probe.snapshot().policy_ctrl_writes;
+        assert_eq!(after, before);
+        assert_eq!(after, 0);
+        drop(auth);
+        let inst = match std::sync::Arc::try_unwrap(shared) {
+            Ok(owned) => owned.inst.into_inner().expect("mujoco mutex"),
+            Err(_) => panic!("shared mujoco still referenced"),
+        };
+        crate::mujoco_exec::checkin_worker(inst);
+    }
 }
