@@ -32,6 +32,11 @@ pub fn checkin_worker(inst: MujocoInstance) {
     if !inst.alive() {
         return;
     }
+    // Bound native MjModel lifetime on large Menagerie compiles.
+    if inst.compile_count >= 8 {
+        drop(inst);
+        return;
+    }
     if let Ok(mut pool) = WORKER_POOL.lock() {
         if pool.len() < 8 {
             pool.push(inst);
@@ -120,6 +125,7 @@ pub struct MujocoInstance {
     pub mujoco_version: String,
     pub last_rpc: String,
     pub last_exit: Option<i32>,
+    pub compile_count: u32,
 }
 
 impl Drop for MujocoInstance {
@@ -180,6 +186,7 @@ impl MujocoInstance {
             mujoco_version: String::new(),
             last_rpc: "spawn".into(),
             last_exit: None,
+            compile_count: 0,
         };
         let hello = inst.rpc(&json!({"cmd":"hello"}))?;
         if hello["ok"] != true {
@@ -319,6 +326,7 @@ impl MujocoInstance {
             ));
         }
         self.inspect = resp["inspect"].clone();
+        self.compile_count = self.compile_count.saturating_add(1);
         Ok(resp)
     }
 
@@ -351,6 +359,37 @@ impl MujocoInstance {
         self.rpc(&json!({"cmd":"step","n": n}))
     }
 
+    pub fn configure_body(
+        &mut self,
+        body: &str,
+        pos: Option<[f64; 3]>,
+        mass: Option<f64>,
+        friction: Option<f64>,
+        size: Option<Vec<f64>>,
+        hide: bool,
+    ) -> Result<Value, ExecError> {
+        let mut msg = json!({"cmd": "configure_body", "body": body, "hide": hide});
+        if let Some(p) = pos {
+            msg["pos"] = json!(p);
+        }
+        if let Some(m) = mass {
+            msg["mass"] = json!(m);
+        }
+        if let Some(f) = friction {
+            msg["friction"] = json!(f);
+        }
+        if let Some(s) = size {
+            msg["size"] = json!(s);
+        }
+        let r = self.rpc(&msg)?;
+        if r["ok"] != true {
+            return Err(ExecError::Msg(
+                r["error"].as_str().unwrap_or("configure_body").into(),
+            ));
+        }
+        Ok(r)
+    }
+
     pub fn set_body_pos(&mut self, body: &str, pos: [f64; 3]) -> Result<Value, ExecError> {
         let r = self.rpc(&json!({"cmd":"set_body_pos","body": body, "pos": pos}))?;
         if r["ok"] != true {
@@ -366,7 +405,23 @@ impl MujocoInstance {
         qpos: Option<&[f64]>,
         qvel: Option<&[f64]>,
     ) -> Result<Value, ExecError> {
+        self.reset_ex(qpos, qvel, None)
+    }
+
+    pub fn reset_keyframe(&mut self, keyframe: i32) -> Result<Value, ExecError> {
+        self.reset_ex(None, None, Some(keyframe))
+    }
+
+    fn reset_ex(
+        &mut self,
+        qpos: Option<&[f64]>,
+        qvel: Option<&[f64]>,
+        keyframe: Option<i32>,
+    ) -> Result<Value, ExecError> {
         let mut msg = json!({"cmd":"reset"});
+        if let Some(k) = keyframe {
+            msg["keyframe"] = json!(k);
+        }
         if let Some(q) = qpos {
             msg["qpos"] = json!(q);
         }

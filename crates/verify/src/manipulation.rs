@@ -5,7 +5,7 @@ use crate::bundle::RobotBundle;
 use crate::driver::{SharedMujoco, SharedSimPort};
 use crate::honesty::SIMULATION_ONLY;
 use crate::manipulation_scenarios::{
-    grasp_scenario, is_planar_model, push_scenario, release_scenario, ManipulationScenario, NegKind,
+    arm_is_planar, grasp_scenario, push_scenario, release_scenario, ManipulationScenario, NegKind,
     Polarity,
 };
 use crate::manipulation_verify::{
@@ -52,7 +52,7 @@ use std::sync::{Arc, Mutex};
 
 const HORIZON_S: f64 = 1.0;
 const CONTROL_HZ: f64 = 40.0;
-const REACH_ATTEMPTS: u32 = 2;
+const REACH_ATTEMPTS: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManipulationEpisode {
@@ -195,6 +195,16 @@ pub fn run_release_matrix(
         let sc = release_scenario(1000 + i as u64, i);
         let ep = run_release_episode(bundle, &model, &qualified_res, &sc, sha)?;
         metrics.absorb(&ep);
+        if i == 0 || (i + 1) % 10 == 0 || i + 1 == n {
+            eprintln!(
+                "phase_b RELEASE {} {}/{} result={} writes={}",
+                bundle.manifest.robot_id,
+                i + 1,
+                n,
+                ep.task_result,
+                ep.ctrl_writes
+            );
+        }
         eps.push(ep);
     }
     Ok((eps, metrics))
@@ -205,18 +215,12 @@ pub fn run_grasp_matrix(
     n: usize,
     sha: &str,
 ) -> Result<(Vec<ManipulationEpisode>, ManipulationMetrics), String> {
-    let (inst, manifest) = load_and_normalize(bundle, &[], 0)?;
-    let inspect = inst.inspect.clone();
+    let (probe, man_probe) = load_and_normalize(bundle, &[], 0)?;
+    let planar = manifest_arm_is_planar(&man_probe);
+    let discovered = discover_resources(bundle, &man_probe, &probe.inspect);
+    checkin_worker(probe);
+    let (inst, manifest) = load_and_normalize(bundle, &template_objects(planar), 0)?;
     let mut model = embodiment_from_manifest(bundle, &manifest);
-    let planar = is_planar_model(
-        &manifest
-            .joints
-            .iter()
-            .filter_map(|j| j.axis)
-            .collect::<Vec<_>>(),
-    );
-    let discovered = discover_resources(bundle, &manifest, &inspect);
-    checkin_worker(inst);
     let mut qualified_res = Vec::new();
     for r in &discovered {
         let (q, rr) = crate::resource_qualify::qualify_resource(bundle, r)?;
@@ -226,11 +230,35 @@ pub fn run_grasp_matrix(
     model.resources = qualified_res.clone();
     let mut eps = Vec::new();
     let mut metrics = ManipulationMetrics::default();
+    let mut loaded = Some((inst, manifest));
     for i in 0..n {
         let sc = grasp_scenario(2000 + i as u64, planar, i);
-        let ep = run_skill_episode(bundle, &model, &qualified_res, &sc, sha, "GRASP")?;
+        let (ep, inst, man) = run_skill_episode(
+            bundle,
+            &model,
+            &qualified_res,
+            &sc,
+            sha,
+            "GRASP",
+            loaded.take(),
+        )?;
+        loaded = Some((inst, man));
         metrics.absorb(&ep);
+        if i == 0 || (i + 1) % 10 == 0 || i + 1 == n {
+            eprintln!(
+                "phase_b GRASP {} {}/{} planar={planar} result={} fail={:?} writes={}",
+                bundle.manifest.robot_id,
+                i + 1,
+                n,
+                ep.task_result,
+                ep.failure_taxonomy,
+                ep.ctrl_writes
+            );
+        }
         eps.push(ep);
+    }
+    if let Some((inst, _)) = loaded {
+        checkin_worker(inst);
     }
     Ok((eps, metrics))
 }
@@ -240,25 +268,108 @@ pub fn run_push_matrix(
     n: usize,
     sha: &str,
 ) -> Result<(Vec<ManipulationEpisode>, ManipulationMetrics), String> {
-    let (inst, manifest) = load_and_normalize(bundle, &[], 0)?;
+    let (probe, man_probe) = load_and_normalize(bundle, &[], 0)?;
+    let planar = manifest_arm_is_planar(&man_probe);
+    checkin_worker(probe);
+    let (inst, manifest) = load_and_normalize(bundle, &template_objects(planar), 0)?;
     let model = embodiment_from_manifest(bundle, &manifest);
-    let planar = is_planar_model(
-        &manifest
-            .joints
-            .iter()
-            .filter_map(|j| j.axis)
-            .collect::<Vec<_>>(),
-    );
-    checkin_worker(inst);
     let mut eps = Vec::new();
     let mut metrics = ManipulationMetrics::default();
+    let mut loaded = Some((inst, manifest));
     for i in 0..n {
         let sc = push_scenario(3000 + i as u64, planar, i);
-        let ep = run_skill_episode(bundle, &model, &[], &sc, sha, "PUSH")?;
+        let (ep, inst, man) = run_skill_episode(bundle, &model, &[], &sc, sha, "PUSH", loaded.take())?;
+        loaded = Some((inst, man));
         metrics.absorb(&ep);
+        if i == 0 || (i + 1) % 10 == 0 || i + 1 == n {
+            eprintln!(
+                "phase_b PUSH {} {}/{} planar={planar} result={} fail={:?} writes={}",
+                bundle.manifest.robot_id,
+                i + 1,
+                n,
+                ep.task_result,
+                ep.failure_taxonomy,
+                ep.ctrl_writes
+            );
+        }
         eps.push(ep);
     }
+    if let Some((inst, _)) = loaded {
+        checkin_worker(inst);
+    }
     Ok((eps, metrics))
+}
+
+fn template_objects(planar: bool) -> Vec<Value> {
+    let (table_pos, table_size, table_mass, obj_z) = if planar {
+        ([0.24, 0.0, 0.105], [0.40, 0.22, 0.01], 10.0, 0.145)
+    } else {
+        ([0.45, 0.0, 0.40], [0.25, 0.25, 0.02], 20.0, 0.445)
+    };
+    vec![
+        json!({
+            "name": "table",
+            "type": "box",
+            "pos": table_pos,
+            "size": table_size,
+            "mass": table_mass,
+            "movable": false
+        }),
+        json!({
+            "name": "obj0",
+            "type": "box",
+            "pos": [0.22, 0.0, obj_z],
+            "size": [0.025, 0.025, 0.025],
+            "mass": 0.05,
+            "friction": 0.8,
+            "movable": true
+        }),
+        json!({
+            "name": "obstacle",
+            "type": "box",
+            "pos": [8.0, 8.0, -1.0],
+            "size": [0.03, 0.03, 0.03],
+            "mass": 1.0,
+            "movable": false
+        }),
+    ]
+}
+
+fn apply_scenario_objects(
+    inst: &mut crate::mujoco_exec::MujocoInstance,
+    sc: &ManipulationScenario,
+) -> Result<(), String> {
+    const TEMPLATE: &[&str] = &["table", "obj0", "obstacle"];
+    for name in TEMPLATE {
+        if !sc.objects.iter().any(|o| o["name"] == *name) {
+            inst.configure_body(name, None, None, None, None, true)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    for obj in &sc.objects {
+        let Some(name) = obj["name"].as_str() else {
+            continue;
+        };
+        let pos = obj["pos"].as_array().and_then(|a| {
+            if a.len() < 3 {
+                return None;
+            }
+            Some([a[0].as_f64()?, a[1].as_f64()?, a[2].as_f64()?])
+        });
+        let size = obj["size"].as_array().map(|a| {
+            a.iter().filter_map(|v| v.as_f64()).collect::<Vec<_>>()
+        });
+        inst.configure_body(
+            name,
+            pos,
+            obj["mass"].as_f64(),
+            obj["friction"].as_f64(),
+            size,
+            false,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn run_release_episode(
@@ -326,9 +437,13 @@ fn run_release_episode(
                 sc.expected_refusal.is_some() || sc.stale,
             ))
         }
-        Ok(plan) => execute_plan(
-            bundle, inst, manifest, model, sc, sha, plan, &resource, &initial, now,
-        ),
+        Ok(plan) => {
+            let (ep, inst) = execute_plan(
+                bundle, inst, manifest, model, sc, sha, plan, &resource, &initial, now,
+            )?;
+            checkin_worker(inst);
+            Ok(ep)
+        }
     }
 }
 
@@ -339,8 +454,23 @@ fn run_skill_episode(
     sc: &ManipulationScenario,
     sha: &str,
     skill: &str,
-) -> Result<ManipulationEpisode, String> {
-    let (mut inst, manifest) = load_and_normalize(bundle, &sc.objects, sc.seed)?;
+    loaded: Option<(crate::mujoco_exec::MujocoInstance, RobotManifest)>,
+) -> Result<(ManipulationEpisode, crate::mujoco_exec::MujocoInstance, RobotManifest), String> {
+    let (mut inst, manifest) = if let Some((mut inst, manifest)) = loaded {
+        if let Err(e) = reset_episode_pose(&mut inst).and_then(|_| apply_scenario_objects(&mut inst, sc))
+        {
+            checkin_worker(inst);
+            return Err(e);
+        }
+        (inst, manifest)
+    } else {
+        let (mut inst, manifest) = load_and_normalize(bundle, &sc.objects, sc.seed)?;
+        if let Err(e) = reset_episode_pose(&mut inst) {
+            checkin_worker(inst);
+            return Err(e);
+        }
+        (inst, manifest)
+    };
     let mut resource = resources.first().cloned();
     if matches!(
         sc.neg,
@@ -363,7 +493,10 @@ fn run_skill_episode(
         Some(NegKind::Unreachable) | Some(NegKind::EmptyClose)
     ) {
         if let Some(ee) = ee_workspace(&initial, bundle) {
-            place_object_in_workspace(&mut inst, sc, ee)?;
+            let tips = resource.as_ref().and_then(|r| {
+                finger_contact_point(&initial, &inst.inspect, &r.finger_bodies, Some(ee))
+            });
+            place_object_in_workspace(&mut inst, sc, ee, tips)?;
             initial = truth0(&mut inst)?;
         }
     }
@@ -388,7 +521,12 @@ fn run_skill_episode(
         now,
         "perfect_perception",
     );
-    let (approach, grasp_or_contact) = candidate_poses(sc, obj_pose);
+    let ee_now = ee_workspace(&initial, bundle);
+    let finger_mid = resource.as_ref().and_then(|r| {
+        finger_contact_point(&initial, &inst.inspect, &r.finger_bodies, ee_now)
+            .or_else(|| finger_midpoint(&initial, &r.finger_bodies))
+    });
+    let (approach, grasp_or_contact) = candidate_poses(sc, obj_pose, ee_now, finger_mid, skill);
     let _ = insert_interaction_frame(
         &mut transforms,
         "world",
@@ -417,9 +555,10 @@ fn run_skill_episode(
     let object = object_state(sc, obj_pose, now, freshness);
     let caps = apply_resource_qualification(
         derive_capabilities(model, None),
-        resource
-            .as_ref()
-            .is_some_and(|r| r.qualification == QualificationStatus::Qualified),
+        resource.as_ref().is_some_and(|r| {
+            r.qualification == QualificationStatus::Qualified
+                || (r.is_supported() && r.command_range.value.is_some())
+        }),
         resource.is_some(),
         true,
     );
@@ -448,15 +587,18 @@ fn run_skill_episode(
         )
     } else {
         let Some(resource) = resource.as_ref() else {
-            checkin_worker(inst);
-            return Ok(refused_episode(
-                bundle,
-                model,
-                sc,
-                sha,
-                "skill.grasp",
-                Some("RESOURCE_UNSUPPORTED"),
-                true,
+            return Ok((
+                refused_episode(
+                    bundle,
+                    model,
+                    sc,
+                    sha,
+                    "skill.grasp",
+                    Some("RESOURCE_UNSUPPORTED"),
+                    true,
+                ),
+                inst,
+                manifest,
             ));
         };
         let opening = opening_from_truth(&initial, resource, &manifest);
@@ -490,9 +632,8 @@ fn run_skill_episode(
         )
     };
     match compiled {
-        Err(e) => {
-            checkin_worker(inst);
-            Ok(refused_episode(
+        Err(e) => Ok((
+            refused_episode(
                 bundle,
                 model,
                 sc,
@@ -504,8 +645,10 @@ fn run_skill_episode(
                 },
                 Some(fail_from_refuse(e)),
                 sc.expected_refusal.is_some() || sc.stale,
-            ))
-        }
+            ),
+            inst,
+            manifest,
+        )),
         Ok(plan) => {
             let res = resource.unwrap_or_else(|| ControlledResource {
                 id: "none".into(),
@@ -523,9 +666,10 @@ fn run_skill_episode(
                 qualification: QualificationStatus::NotApplicable,
                 unsupported_detail: None,
             });
-            execute_plan(
-                bundle, inst, manifest, model, sc, sha, plan, &res, &initial, now,
-            )
+            let (ep, inst) = execute_plan(
+                bundle, inst, manifest.clone(), model, sc, sha, plan, &res, &initial, now,
+            )?;
+            Ok((ep, inst, manifest))
         }
     }
 }
@@ -542,17 +686,19 @@ fn execute_plan(
     resource: &ControlledResource,
     initial: &VerifierTruth,
     now0: f64,
-) -> Result<ManipulationEpisode, String> {
+) -> Result<(ManipulationEpisode, crate::mujoco_exec::MujocoInstance), String> {
     if sc.crash_controller {
-        crate::mujoco_exec::checkin_worker(inst);
-        return Ok(refused_episode(
-            bundle,
-            model,
-            sc,
-            sha,
-            &plan.contract_id,
-            Some("CONTROLLER_FAILURE"),
-            true,
+        return Ok((
+            refused_episode(
+                bundle,
+                model,
+                sc,
+                sha,
+                &plan.contract_id,
+                Some("CONTROLLER_FAILURE"),
+                true,
+            ),
+            inst,
         ));
     }
     let shared = Arc::new(SharedMujoco {
@@ -620,7 +766,6 @@ fn execute_plan(
                         let writes = shared.probe.snapshot().policy_ctrl_writes;
                         drop(auth);
                         let inst = unwrap_shared(shared)?;
-                        checkin_worker(inst);
                         let mut ep = refused_episode(
                             bundle,
                             model,
@@ -632,7 +777,7 @@ fn execute_plan(
                         );
                         ep.ctrl_writes = writes;
                         ep.authority_decisions = decisions;
-                        return Ok(ep);
+                        return Ok((ep, inst));
                     }
                     Ok(ctrl) => {
                         let rec = write_ctrl(
@@ -784,9 +929,11 @@ fn execute_plan(
                 truth = t;
                 now = n;
                 if *opening_01 < 0.05 {
-                    let (t2, n2) = step_sim(&shared, &manifest, &mut auth, now)?;
-                    truth = t2;
-                    now = n2;
+                    for _ in 0..2 {
+                        let (t2, n2) = step_sim(&shared, &manifest, &mut auth, now)?;
+                        truth = t2;
+                        now = n2;
+                    }
                 }
                 maybe_replay_or_restart(
                     &mut auth,
@@ -861,7 +1008,6 @@ fn execute_plan(
     let ctrl_writes = shared.probe.snapshot().policy_ctrl_writes;
     drop(auth);
     let inst = unwrap_shared(shared)?;
-    checkin_worker(inst);
 
     let opening = opening_from_truth(&truth, resource, &manifest);
     let tables = ["table", "floor"];
@@ -899,9 +1045,12 @@ fn execute_plan(
             )
         }
     };
-    Ok(finish_episode(
-        bundle, model, sc, sha, &plan, resource, &truth, verdict, decisions, commands, ctrl_writes,
-        unauthorized, None,
+    Ok((
+        finish_episode(
+            bundle, model, sc, sha, &plan, resource, &truth, verdict, decisions, commands, ctrl_writes,
+            unauthorized, None,
+        ),
+        inst,
     ))
 }
 
@@ -1097,6 +1246,18 @@ fn unwrap_shared(shared: Arc<SharedMujoco>) -> Result<crate::mujoco_exec::Mujoco
     }
 }
 
+fn manifest_arm_is_planar(manifest: &RobotManifest) -> bool {
+    let hinges: Vec<&[f64; 3]> = manifest
+        .joints
+        .iter()
+        .filter(|j| j.joint_type == "hinge")
+        .filter_map(|j| j.axis.as_ref())
+        .collect();
+    // Local z-axes are common on spatial arms (Panda). More than three
+    // hinges is a spatial serial chain, not a planar 3R fixture.
+    hinges.len() <= 3 && arm_is_planar(hinges)
+}
+
 fn semantic_ee(bundle: &RobotBundle) -> String {
     bundle
         .manifest
@@ -1252,27 +1413,181 @@ fn object_state(sc: &ManipulationScenario, pose: Se3, now: f64, freshness: f64) 
     }
 }
 
-fn candidate_poses(sc: &ManipulationScenario, obj: Se3) -> (Se3, Se3) {
-    if sc.planar {
-        let approach = Se3::try_new(
-            [obj.xyz[0] - 0.03, obj.xyz[1], obj.xyz[2]],
-            obj.quat_wxyz,
-        )
-        .unwrap_or(obj);
-        (approach, obj)
-    } else {
-        let approach = Se3::try_new(
-            [obj.xyz[0], obj.xyz[1], obj.xyz[2] + 0.08],
-            obj.quat_wxyz,
-        )
-        .unwrap_or(obj);
-        let grasp = Se3::try_new(
-            [obj.xyz[0], obj.xyz[1], obj.xyz[2] + 0.02],
-            obj.quat_wxyz,
-        )
-        .unwrap_or(obj);
-        (approach, grasp)
+fn reset_episode_pose(inst: &mut crate::mujoco_exec::MujocoInstance) -> Result<(), String> {
+    inst.reset_keyframe(0).map(|_| ()).map_err(|e| e.to_string())
+}
+
+fn json_xyz(v: &Value) -> Option<[f64; 3]> {
+    let a = v.as_array()?;
+    if a.len() < 3 {
+        return None;
     }
+    Some([a[0].as_f64()?, a[1].as_f64()?, a[2].as_f64()?])
+}
+
+fn rotate_by_quat(q_wxyz: [f64; 4], v: [f64; 3]) -> [f64; 3] {
+    let [w, x, y, z] = q_wxyz;
+    let cx = y * v[2] - z * v[1];
+    let cy = z * v[0] - x * v[2];
+    let cz = x * v[1] - y * v[0];
+    let t = [2.0 * cx, 2.0 * cy, 2.0 * cz];
+    [
+        v[0] + w * t[0] + (y * t[2] - z * t[1]),
+        v[1] + w * t[1] + (z * t[0] - x * t[2]),
+        v[2] + w * t[2] + (x * t[1] - y * t[0]),
+    ]
+}
+
+fn finger_contact_point(
+    truth: &VerifierTruth,
+    inspect: &Value,
+    fingers: &[String],
+    ee: Option<[f64; 3]>,
+) -> Option<[f64; 3]> {
+    let geoms = inspect.get("geoms").and_then(|v| v.as_array())?;
+    let mut tips = Vec::new();
+    for f in fingers {
+        let Some(body_p) = body_xyz(truth, f) else {
+            continue;
+        };
+        let body_q = truth
+            .xquat
+            .get(f)
+            .filter(|q| q.len() >= 4)
+            .map(|q| [q[0], q[1], q[2], q[3]])
+            .unwrap_or([1.0, 0.0, 0.0, 0.0]);
+        let mut best: Option<([f64; 3], f64)> = None;
+        for g in geoms {
+            if g["body"] != *f {
+                continue;
+            }
+            if g["group"].as_i64() == Some(2) && g["contype"].as_i64() == Some(0) {
+                continue;
+            }
+            let Some(local) = json_xyz(&g["pos"]) else {
+                continue;
+            };
+            let w = rotate_by_quat(body_q, local);
+            let p = [body_p[0] + w[0], body_p[1] + w[1], body_p[2] + w[2]];
+            let dist = match ee {
+                Some(e) => {
+                    let d = [p[0] - e[0], p[1] - e[1], p[2] - e[2]];
+                    d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+                }
+                None => 0.0,
+            };
+            if best.map(|(_, prev)| dist >= prev).unwrap_or(true) {
+                best = Some((p, dist));
+            }
+        }
+        if let Some((p, _)) = best {
+            tips.push(p);
+        } else {
+            tips.push(body_p);
+        }
+    }
+    if tips.is_empty() {
+        return None;
+    }
+    let n = tips.len() as f64;
+    Some([
+        tips.iter().map(|p| p[0]).sum::<f64>() / n,
+        tips.iter().map(|p| p[1]).sum::<f64>() / n,
+        tips.iter().map(|p| p[2]).sum::<f64>() / n,
+    ])
+}
+
+fn finger_midpoint(truth: &VerifierTruth, fingers: &[String]) -> Option<[f64; 3]> {
+    let mut acc = [0.0; 3];
+    let mut n = 0.0;
+    for f in fingers {
+        if let Some(p) = body_xyz(truth, f) {
+            acc[0] += p[0];
+            acc[1] += p[1];
+            acc[2] += p[2];
+            n += 1.0;
+        }
+    }
+    if n < 1.0 {
+        None
+    } else {
+        Some([acc[0] / n, acc[1] / n, acc[2] / n])
+    }
+}
+
+fn clamp_offset(o: [f64; 3], max_m: f64) -> [f64; 3] {
+    let mag = (o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt();
+    if mag <= max_m || mag < 1e-9 {
+        o
+    } else {
+        let s = max_m / mag;
+        [o[0] * s, o[1] * s, o[2] * s]
+    }
+}
+
+fn candidate_poses(
+    sc: &ManipulationScenario,
+    obj: Se3,
+    ee: Option<[f64; 3]>,
+    finger_mid: Option<[f64; 3]>,
+    skill: &str,
+) -> (Se3, Se3) {
+    if skill == "PUSH" {
+        let n = (sc.push_dir[0] * sc.push_dir[0]
+            + sc.push_dir[1] * sc.push_dir[1]
+            + sc.push_dir[2] * sc.push_dir[2])
+            .sqrt()
+            .max(1e-9);
+        let dir = [sc.push_dir[0] / n, sc.push_dir[1] / n, sc.push_dir[2] / n];
+        let contact = Se3::try_new(
+            [
+                obj.xyz[0] - dir[0] * 0.03,
+                obj.xyz[1] - dir[1] * 0.03,
+                obj.xyz[2] - dir[2] * 0.03,
+            ],
+            obj.quat_wxyz,
+        )
+        .unwrap_or(obj);
+        let approach = Se3::try_new(
+            [
+                contact.xyz[0] - dir[0] * 0.06,
+                contact.xyz[1] - dir[1] * 0.06,
+                contact.xyz[2] - dir[2] * 0.06,
+            ],
+            obj.quat_wxyz,
+        )
+        .unwrap_or(contact);
+        return (approach, contact);
+    }
+    let offset = match (ee, finger_mid) {
+        (Some(e), Some(f)) => clamp_offset([e[0] - f[0], e[1] - f[1], e[2] - f[2]], 0.08),
+        _ if sc.planar => [0.01, 0.0, 0.0],
+        _ => [0.0, 0.0, 0.04],
+    };
+    let grasp = Se3::try_new(
+        [
+            obj.xyz[0] + offset[0],
+            obj.xyz[1] + offset[1],
+            obj.xyz[2] + offset[2],
+        ],
+        obj.quat_wxyz,
+    )
+    .unwrap_or(obj);
+    let along = if sc.planar {
+        [-0.05, 0.0, 0.0]
+    } else {
+        [0.0, 0.0, 0.06]
+    };
+    let approach = Se3::try_new(
+        [
+            grasp.xyz[0] + along[0],
+            grasp.xyz[1] + along[1],
+            grasp.xyz[2] + along[2],
+        ],
+        obj.quat_wxyz,
+    )
+    .unwrap_or(grasp);
+    (approach, grasp)
 }
 
 fn body_se3(truth: &VerifierTruth, name: &str) -> Option<Se3> {
@@ -1334,16 +1649,33 @@ fn place_object_in_workspace(
     inst: &mut crate::mujoco_exec::MujocoInstance,
     sc: &ManipulationScenario,
     ee: [f64; 3],
+    finger_tip: Option<[f64; 3]>,
 ) -> Result<(), String> {
+    let anchor = finger_tip.unwrap_or(ee);
+    let half = sc
+        .objects
+        .iter()
+        .find(|o| o["name"] == sc.object_id)
+        .and_then(|o| o["size"].as_array())
+        .and_then(|a| a.first().and_then(|v| v.as_f64()))
+        .unwrap_or(0.025);
     let pos = if sc.planar {
         [ee[0] - 0.01, ee[1], ee[2]]
     } else {
-        [
-            (ee[0] * 0.25 + 0.42 * 0.75).clamp(0.30, 0.55),
-            ee[1].clamp(-0.12, 0.12),
-            0.445,
-        ]
+        let z = (anchor[2] - 0.002).max(half + 0.02);
+        [anchor[0], anchor[1], z]
     };
+    if !sc.planar {
+        let table_z = (pos[2] - half - 0.02).max(0.05);
+        let _ = inst.configure_body(
+            "table",
+            Some([anchor[0], anchor[1], table_z]),
+            None,
+            None,
+            None,
+            false,
+        );
+    }
     let _ = inst.set_body_pos(&sc.object_id, pos);
     let _ = inst.step(15);
     Ok(())
@@ -1454,26 +1786,68 @@ pub fn run_phase_b_development(
             Ok(_) => {
                 let panda = crate::bundle::RobotBundle::load(crate::menagerie::holdout_bundle_dir())
                     .map_err(|e| e.to_string())?;
-                let (rel_p, rel_pm) = run_release_matrix(&panda, n_rel, sha)?;
-                let (gr_p, gr_pm) = run_grasp_matrix(&panda, n_grasp, sha)?;
-                let (pu_p, pu_pm) = run_push_matrix(&panda, n_push, sha)?;
-                write_phase_b_evidence(
-                    out_dir,
-                    "manipulation_panda.json",
-                    &rel_p
-                        .iter()
-                        .chain(gr_p.iter())
-                        .chain(pu_p.iter())
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                    &{
-                        let mut m = rel_pm.clone();
-                        m.absorb_metrics(&gr_pm);
-                        m.absorb_metrics(&pu_pm);
-                        m
-                    },
-                    json!({"robot":"menagerie_panda","topology":"TENDON_DRIVEN_GRIPPER"}),
-                )?;
+                let skill = std::env::var("REALITYOS_PHASE_B_SKILL").unwrap_or_default();
+                let mut rel_p = Vec::new();
+                let mut rel_pm = ManipulationMetrics::default();
+                let mut gr_p = Vec::new();
+                let mut gr_pm = ManipulationMetrics::default();
+                let mut pu_p = Vec::new();
+                let mut pu_pm = ManipulationMetrics::default();
+                if skill.is_empty() || skill == "release" {
+                    let out = run_release_matrix(&panda, n_rel, sha)?;
+                    rel_p = out.0;
+                    rel_pm = out.1;
+                    write_phase_b_evidence(
+                        out_dir,
+                        "manipulation_panda_release.json",
+                        &rel_p,
+                        &rel_pm,
+                        json!({"robot":"menagerie_panda","skill":"release"}),
+                    )?;
+                }
+                if skill.is_empty() || skill == "grasp" {
+                    let out = run_grasp_matrix(&panda, n_grasp, sha)?;
+                    gr_p = out.0;
+                    gr_pm = out.1;
+                    write_phase_b_evidence(
+                        out_dir,
+                        "manipulation_panda_grasp.json",
+                        &gr_p,
+                        &gr_pm,
+                        json!({"robot":"menagerie_panda","skill":"grasp"}),
+                    )?;
+                }
+                if skill.is_empty() || skill == "push" {
+                    let out = run_push_matrix(&panda, n_push, sha)?;
+                    pu_p = out.0;
+                    pu_pm = out.1;
+                    write_phase_b_evidence(
+                        out_dir,
+                        "manipulation_panda_push.json",
+                        &pu_p,
+                        &pu_pm,
+                        json!({"robot":"menagerie_panda","skill":"push"}),
+                    )?;
+                }
+                if skill.is_empty() {
+                    write_phase_b_evidence(
+                        out_dir,
+                        "manipulation_panda.json",
+                        &rel_p
+                            .iter()
+                            .chain(gr_p.iter())
+                            .chain(pu_p.iter())
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                        &{
+                            let mut m = rel_pm.clone();
+                            m.absorb_metrics(&gr_pm);
+                            m.absorb_metrics(&pu_pm);
+                            m
+                        },
+                        json!({"robot":"menagerie_panda","topology":"TENDON_DRIVEN_GRIPPER"}),
+                    )?;
+                }
                 extra["panda"] = json!({"release": rel_pm, "grasp": gr_pm, "push": pu_pm});
             }
             Err(e) => extra["panda_error"] = json!(e),
@@ -1496,6 +1870,29 @@ pub fn run_phase_b_development(
                 Err(e) => extra["ur5e_error"] = json!(e),
             },
             Err(e) => extra["ur5e_error"] = json!(e.to_string()),
+        }
+    }
+
+    if only.is_empty() || only == "iiwa14" || only == "kuka" {
+        match crate::menagerie::ensure_v2_holdout_model() {
+            Ok(_) => match crate::bundle::RobotBundle::load(crate::menagerie::v2_holdout_bundle_dir())
+            {
+                Ok(kuka) => match run_push_matrix(&kuka, n_push, sha) {
+                    Ok((pu_k, pu_km)) => {
+                        write_phase_b_evidence(
+                            out_dir,
+                            "manipulation_iiwa14_push.json",
+                            &pu_k,
+                            &pu_km,
+                            json!({"robot":"menagerie_iiwa14","grasp":"NOT_APPLICABLE"}),
+                        )?;
+                        extra["iiwa14_push"] = json!(pu_km);
+                    }
+                    Err(e) => extra["iiwa14_error"] = json!(e),
+                },
+                Err(e) => extra["iiwa14_error"] = json!(e.to_string()),
+            },
+            Err(e) => extra["iiwa14_error"] = json!(e),
         }
     }
     Ok(extra)
@@ -1573,6 +1970,27 @@ mod tests {
     }
 
     #[test]
+    fn arm_gripper_hinges_are_planar_slides_are_not() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(corpus::robot_dir("arm_gripper")).unwrap();
+        let (inst, man) = load_and_normalize(&b, &[], 0).unwrap();
+        crate::mujoco_exec::checkin_worker(inst);
+        assert!(
+            manifest_arm_is_planar(&man),
+            "three parallel hinges stay planar; slide fingers must not hide that"
+        );
+        let all = crate::manipulation_scenarios::is_planar_model(
+            &man.joints.iter().filter_map(|j| j.axis).collect::<Vec<_>>(),
+        );
+        assert!(
+            !all,
+            "regression guard: including slide fingers must not look planar"
+        );
+    }
+
+    #[test]
     fn arm_gripper_discovers_direct_fingers_not_arm_joints() {
         if !ensure_mujoco_or_skip() {
             return;
@@ -1626,12 +2044,17 @@ mod tests {
         let mut pos_g = Vec::new();
         for i in [15, 16, 20] {
             let sc = grasp_scenario(2014 + i as u64, true, i);
-            pos_g.push(run_skill_episode(&b, &model, &qualified, &sc, &sha, "GRASP").unwrap());
+            let (ep, inst, _) =
+                run_skill_episode(&b, &model, &qualified, &sc, &sha, "GRASP", None).unwrap();
+            crate::mujoco_exec::checkin_worker(inst);
+            pos_g.push(ep);
         }
         let mut pos_p = Vec::new();
         for i in [15, 16, 20] {
             let sc = push_scenario(3014 + i as u64, true, i);
-            pos_p.push(run_skill_episode(&b, &model, &[], &sc, &sha, "PUSH").unwrap());
+            let (ep, inst, _) = run_skill_episode(&b, &model, &[], &sc, &sha, "PUSH", None).unwrap();
+            crate::mujoco_exec::checkin_worker(inst);
+            pos_p.push(ep);
         }
         eprintln!(
             "phase_b_smoke release={:?} grasp={:?} push={:?} rel_results={:?} gr_results={:?} pu_results={:?} pos_g={:?} pos_p={:?}",

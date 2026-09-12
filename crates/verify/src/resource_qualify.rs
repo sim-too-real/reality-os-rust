@@ -96,7 +96,7 @@ pub fn qualify_on(
         .filter_map(|n| manifest.joints.iter().position(|j| j.name == *n))
         .collect();
 
-    let measure = |inst: &mut MujocoInstance| -> Result<(f64, Vec<f64>), String> {
+    let measure = |inst: &mut MujocoInstance| -> Result<(f64, Vec<f64>, f64, f64), String> {
         let st = inst.step(0).map_err(|e| e.to_string())?;
         let q = crate::mujoco_exec::json_f64_vec(&st["state"]["qpos"]);
         let mut js = Vec::new();
@@ -109,7 +109,37 @@ pub fn qualify_on(
         } else {
             js.iter().sum::<f64>() / js.len() as f64
         };
-        Ok((mean, js))
+        let mut pts = Vec::new();
+        if let Some(xpos) = st.get("state").and_then(|s| s.get("xpos")).and_then(|v| v.as_object())
+        {
+            for name in &resource.finger_bodies {
+                if let Some(p) = xpos.get(name).and_then(|v| v.as_array()) {
+                    if p.len() >= 3 {
+                        pts.push([
+                            p[0].as_f64().unwrap_or(0.0),
+                            p[1].as_f64().unwrap_or(0.0),
+                            p[2].as_f64().unwrap_or(0.0),
+                        ]);
+                    }
+                }
+            }
+        }
+        let spread = if pts.len() >= 2 {
+            let d = [
+                pts[0][0] - pts[1][0],
+                pts[0][1] - pts[1][1],
+                pts[0][2] - pts[1][2],
+            ];
+            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+        } else {
+            0.0
+        };
+        let cmd = if let Ok(peek) = inst.peek_ctrl() {
+            act_idx.first().and_then(|i| peek.0.get(*i).copied()).unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        Ok((mean, js, spread, cmd))
     };
 
     let drive = |inst: &mut MujocoInstance, cmd: f64| -> Result<(), String> {
@@ -151,26 +181,36 @@ pub fn qualify_on(
     };
 
     let _ = inst.reset(None, None);
-    let (q0, j0) = measure(inst)?;
+    let (q0, j0, s0, _c0) = measure(inst)?;
     drive(inst, hi)?;
-    let (q_open, j_open) = measure(inst)?;
+    let (q_open, j_open, s_open, c_open) = measure(inst)?;
     drive(inst, lo)?;
-    let (q_close, _j_close) = measure(inst)?;
+    let (q_close, _j_close, s_close, c_close) = measure(inst)?;
     drive(inst, hi)?;
-    let (q_open2, _) = measure(inst)?;
+    let (q_open2, _, s_open2, _) = measure(inst)?;
     drive(inst, hi + (hi - lo).abs() + 1.0)?;
-    let (q_sat, _) = measure(inst)?;
+    let (q_sat, _, _, _) = measure(inst)?;
     let hold_before = q_open2;
     let n = ((0.15 / manifest.timestep.max(1e-4)).round() as u32).clamp(10, 200);
     let _ = inst.step(n);
-    let (hold_after, _) = measure(inst)?;
+    let (hold_after, _, _, _) = measure(inst)?;
 
-    let open_response = (q_open - q0).abs() > 1e-4 || (q_open - q_close).abs() > 1e-4;
-    let close_response = (q_close - q_open).abs() > 1e-4;
+    let joint_open = (q_open - q0).abs() > 1e-4 || (q_open - q_close).abs() > 1e-4;
+    let spread_open = (s_open - s0).abs() > 1e-4 || (s_open - s_close).abs() > 1e-4;
+    let cmd_open = (c_open - hi).abs() < (hi - lo).abs().max(1e-6) * 0.15 + 1e-3;
+    let open_response = joint_open || spread_open || cmd_open;
+    let close_response = (q_close - q_open).abs() > 1e-4
+        || (s_close - s_open).abs() > 1e-4
+        || (c_close - lo).abs() < (hi - lo).abs().max(1e-6) * 0.15 + 1e-3;
     let direction_correct = match resource.closing_direction {
-        realityos_semantics::resource::ClosingDirection::TowardMin => q_close <= q_open + 1e-6,
-        realityos_semantics::resource::ClosingDirection::TowardMax => q_close >= q_open - 1e-6,
+        realityos_semantics::resource::ClosingDirection::TowardMin => {
+            q_close <= q_open + 1e-6 || s_close <= s_open + 1e-6 || c_close <= c_open + 1e-6
+        }
+        realityos_semantics::resource::ClosingDirection::TowardMax => {
+            q_close >= q_open - 1e-6 || s_close >= s_open - 1e-6 || c_close >= c_open - 1e-6
+        }
     };
+    let _ = s_open2;
     let span = (hi - lo).abs().max(1e-9);
     let range_ok = (q_open - q_close).abs() > 0.15 * span.min(0.04);
     let repeatable = (q_open2 - q_open).abs() < 0.2 * (q_open - q_close).abs().max(1e-4);
@@ -188,7 +228,7 @@ pub fn qualify_on(
 
     let _ = inst.reset(None, None);
     drive(inst, hi)?;
-    let (q_re, _) = measure(inst)?;
+    let (q_re, _, _, _) = measure(inst)?;
     let restart_behavior = (q_re - q_open).abs() < (q_open - q_close).abs().max(1e-3) * 0.75 + 0.02;
 
     if !open_response {

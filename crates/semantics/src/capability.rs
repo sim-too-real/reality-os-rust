@@ -222,7 +222,7 @@ pub fn derive_capabilities(model: &EmbodimentModel, qualify_ok: Option<bool>) ->
         CapStatus::Unsupported
     } else if matches!(
         joint_position_status,
-        CapStatus::Supported | CapStatus::Proven
+        CapStatus::Supported | CapStatus::Proven | CapStatus::PartiallySupported
     ) {
         CapStatus::PartiallySupported
     } else {

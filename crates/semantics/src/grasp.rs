@@ -110,6 +110,9 @@ pub fn compile_grasp(
     if !resource.is_supported() {
         return Err(SkillRefuse::ResourceUnsupported);
     }
+    if resource.force_bound.value.is_none() {
+        return Err(SkillRefuse::ForceBoundUnavailable);
+    }
     if matches!(
         resource.topology,
         crate::resource::ResourceTopology::UnsupportedResourceTopology
@@ -127,15 +130,18 @@ pub fn compile_grasp(
     }
     let cartesian_ok = cap_usable(caps, CapName::CartesianPositionControl);
     let joint_ok = cap_usable(caps, CapName::JointPositionControl);
-    let chain_ok = model
-        .ee_joint_chain(ee)
-        .is_some_and(|c| !c.is_empty());
+    let chain_ok = model.ee_joint_chain(ee).is_some_and(|c| !c.is_empty())
+        || model.end_effectors.iter().any(|e| !e.joint_chain.is_empty());
     if !(cartesian_ok || (joint_ok && chain_ok)) {
+        if model.position_actuators().next().is_none() {
+            return Err(SkillRefuse::MissingActuator);
+        }
         return Err(SkillRefuse::Unsupported);
     }
     if resource.qualification != crate::resource::QualificationStatus::Qualified
         && !cap_usable(caps, CapName::GripperOpenClose)
         && !cap_usable(caps, CapName::ParallelGripper)
+        && !(resource.is_supported() && resource.command_range.value.is_some())
     {
         return Err(SkillRefuse::ResourceUnsupported);
     }
@@ -183,12 +189,12 @@ pub fn compile_grasp(
     plan.steps.push(SkillStep::Reach {
         end_effector: ee.into(),
         target: pose_evidence("world", approach_world, now_s, expires),
-        success_radius: 0.08,
+        success_radius: 0.05,
     });
     plan.steps.push(SkillStep::Reach {
         end_effector: ee.into(),
         target: pose_evidence("world", grasp_world, now_s, expires),
-        success_radius: 0.06,
+        success_radius: 0.018,
     });
     plan.steps.push(SkillStep::ResourceCommand {
         resource_id: resource.id.clone(),
@@ -265,7 +271,7 @@ mod tests {
             opening_range: Provenanced::declared([0.0, 0.03], "t", 0.0),
             command_range: Provenanced::declared([0.0, 0.03], "t", 0.0),
             closing_direction: ClosingDirection::TowardMin,
-            force_bound: Provenanced::unknown("t", 0.0),
+            force_bound: Provenanced::declared([0.0, 20.0], "t", 0.0),
             qualification: QualificationStatus::Qualified,
             unsupported_detail: None,
         };
@@ -370,5 +376,29 @@ mod tests {
             .steps
             .iter()
             .any(|s| matches!(s, SkillStep::VerifyMotion(_))));
+    }
+
+    #[test]
+    fn unknown_force_bound_refuses() {
+        let (m, caps, mut r, object, cand, gripper, obs, g) = setup();
+        r.force_bound = Provenanced::unknown("FORCE_BOUND_UNAVAILABLE", 0.0);
+        let err = compile_grasp(
+            &m,
+            &caps,
+            &r,
+            &object,
+            &cand,
+            &gripper,
+            &obs,
+            &g,
+            "ee",
+            &m.model_hash,
+            1.0,
+            0.25,
+            0.4,
+        )
+        .unwrap_err();
+        assert_eq!(err, SkillRefuse::ForceBoundUnavailable);
+        assert!(!err.writes_allowed());
     }
 }

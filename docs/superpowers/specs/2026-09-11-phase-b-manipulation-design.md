@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-11  
 **Status:** implementation design for Phase B only  
-**Baseline `main`:** `7601edfe7a3f2a4de202cf078eecc4ed4ed0214c` (PR #14 merged)  
+**Baseline `main`:** `53dfb0eef73e14a9413cca202fd268e895520258` (PR #15 merged; contains PR #14)  
 **`GENERALITY_V2_FREEZE_SHA`:** `b580c6275acc797c7433faa490cc712107b0adb5`  
 **Scope:** RELEASE, GRASP, PUSH. Stop after hold-out first score. No vision, VLA, planner, PLACE, insertion, tactile, locomotion.
 

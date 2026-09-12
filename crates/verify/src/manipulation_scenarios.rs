@@ -58,6 +58,15 @@ pub fn is_planar_model(joint_axes: &[[f64; 3]]) -> bool {
         && joint_axes.iter().all(|a| a[0].abs() < 0.2 && a[1].abs() < 0.2 && a[2].abs() > 0.8)
 }
 
+/// Planarity of the *arm*, not the gripper. Slide finger joints have lateral
+/// axes and must not flip a planar arm into a 3-D table placement.
+pub fn arm_is_planar<'a, I>(hinge_axes: I) -> bool
+where
+    I: IntoIterator<Item = &'a [f64; 3]>,
+{
+    is_planar_model(&hinge_axes.into_iter().copied().collect::<Vec<_>>())
+}
+
 impl NegKind {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -399,6 +408,24 @@ fn object_json(
         "movable": movable,
         "rgba": [0.85, 0.25, 0.2, 1.0]
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slide_finger_axes_do_not_define_arm_planarity() {
+        let hinges = [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]];
+        assert!(arm_is_planar(hinges.iter()));
+        let with_slides = [
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+        ];
+        assert!(!is_planar_model(&with_slides));
+    }
 }
 
 pub fn required_negative_kinds() -> &'static [NegKind] {

@@ -70,6 +70,7 @@ impl ManipulationFailure {
             SkillRefuse::UnexpectedContact => Self::UnexpectedContact,
             SkillRefuse::ModelFeatureUnsupported => Self::ModelFeatureUnsupported,
             SkillRefuse::StaleEvidence => Self::TargetStale,
+            SkillRefuse::ForceBoundUnavailable => Self::ForceBoundUnavailable,
             _ => Self::ResourceUnsupported,
         }
     }

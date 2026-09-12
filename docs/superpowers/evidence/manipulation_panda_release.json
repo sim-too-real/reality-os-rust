@@ -1,0 +1,5705 @@
+{
+  "episodes": [
+    {
+      "authority_decisions": [],
+      "commands": [],
+      "contacts": [],
+      "ctrl_writes": 0,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "expected_refusal": true,
+      "failure_taxonomy": "STALE_GRIPPER_STATE",
+      "joint_state": [],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "world_seed": 1000
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9727909659974753,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280157265942,
+          "ft": 0.6990329719651922
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626084560032149e-7,
+        0.001266428990013272,
+        -6.747529674177259e-7,
+        -0.06962442802622398,
+        -0.000023416167798194953,
+        0.1921726619999964,
+        0.0004245912366637191,
+        0.03883516828661016,
+        0.038835460905861485
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1001
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.961163042650067,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02279881230056,
+          "ft": 0.6990273932120225
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6258519647805826e-7,
+        0.0012664289881555452,
+        -6.747230560437874e-7,
+        -0.06962442801978015,
+        -0.000023416116248335916,
+        0.1921726620157714,
+        0.0004245920263894866,
+        0.03837096366565768,
+        0.03837125628561172
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1002
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9772800200515382,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280264717392,
+          "ft": 0.6990351435782564
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626175103681289e-7,
+        0.0012664289907364417,
+        -6.747646111848291e-7,
+        -0.06962442802873231,
+        -0.000023416187865295705,
+        0.1921726619938559,
+        0.0004245909292507346,
+        0.03901437824296741,
+        0.0390146708619452
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1003
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9913731796195806,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280605259364,
+          "ft": 0.699042026012447
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6264620697533084e-7,
+        0.00126642899302843,
+        -6.748015145585071e-7,
+        -0.06962442803668155,
+        -0.00002341625146530652,
+        0.19217266197439536,
+        0.0004245899549755944,
+        0.03957699889327044,
+        0.03957729151138129
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1004
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9983168778546986,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280774831031,
+          "ft": 0.6990454531051064
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626604968853979e-7,
+        0.0012664289941697624,
+        -6.748198911522087e-7,
+        -0.06962442804063972,
+        -0.000023416283135894796,
+        0.19217266196470537,
+        0.00042458946983727256,
+        0.03985420202843114,
+        0.03985449464611032
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1005
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9765410827180498,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.0228024699594,
+          "ft": 0.6990347854262214
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626160170745836e-7,
+        0.001266428990617171,
+        -6.74762690833461e-7,
+        -0.06962442802831863,
+        -0.000023416184555723782,
+        0.19217266199486863,
+        0.0004245909799505921,
+        0.038984878725766114,
+        0.038985171344789
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1006
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.964372976295756,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02279957099958,
+          "ft": 0.699028926565956
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.62591589410853e-7,
+        0.0012664289886661444,
+        -6.747312772521683e-7,
+        -0.06962442802155128,
+        -0.000023416130416930585,
+        0.19217266201143557,
+        0.0004245918093286374,
+        0.038499109163934224,
+        0.038499401783695104
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1007
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9615539540076141,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02279890456538,
+          "ft": 0.6990275796780778
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.625859738808107e-7,
+        0.0012664289882176366,
+        -6.747240557711607e-7,
+        -0.06962442801999555,
+        -0.000023416117971285993,
+        0.1921726620152441,
+        0.00042459199999401174,
+        0.03838656944952241,
+        0.03838686206945296
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1008
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.989252555128158,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280553706515,
+          "ft": 0.6990409841202886
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626418626803674e-7,
+        0.0012664289926814516,
+        -6.747959278652969e-7,
+        -0.06962442803547818,
+        -0.000023416241837087923,
+        0.1921726619773413,
+        0.0004245901024653719,
+        0.03949234029527062,
+        0.03949263291351272
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1009
+    },
+    {
+      "authority_decisions": [],
+      "commands": [],
+      "contacts": [],
+      "ctrl_writes": 0,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "expected_refusal": true,
+      "failure_taxonomy": "STALE_GRIPPER_STATE",
+      "joint_state": [],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "world_seed": 1010
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9969158645444345,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280740522204,
+          "ft": 0.699044759709997
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626576056122448e-7,
+        0.0012664289939388366,
+        -6.748161730215856e-7,
+        -0.06962442803983887,
+        -0.00002341627672799428,
+        0.19217266196666585,
+        0.0004245895679942816,
+        0.039798271417846184,
+        0.039798564035612695
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1011
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9761051479391446,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280236547868,
+          "ft": 0.6990345742641063
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6261513663850756e-7,
+        0.0012664289905468535,
+        -6.747615586068794e-7,
+        -0.06962442802807475,
+        -0.00002341618260442189,
+        0.19217266199546573,
+        0.000424591009842963,
+        0.03896747553753058,
+        0.038967768156580075
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1012
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9667477612165966,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280013393172,
+          "ft": 0.6990300642601658
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6259633277235653e-7,
+        0.001266428989044996,
+        -6.747373771385287e-7,
+        -0.06962442802286542,
+        -0.000023416140929596532,
+        0.19217266200821845,
+        0.0004245916482775471,
+        0.03859391423798614,
+        0.03859420685760372
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1013
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9961216119455355,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.022807210931,
+          "ft": 0.6990443670403113
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626559683155536e-7,
+        0.0012664289938080669,
+        -6.748140674844516e-7,
+        -0.06962442803938536,
+        -0.00002341627309926958,
+        0.19217266196777605,
+        0.0004245896235797292,
+        0.03976656362999747,
+        0.039766856247813454
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1014
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.990740772263505,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280589873617,
+          "ft": 0.6990417150667909
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626449104569783e-7,
+        0.001266428992924877,
+        -6.747998472568382e-7,
+        -0.0696244280363224,
+        -0.000023416248591845528,
+        0.19217266197527455,
+        0.000424589998992589,
+        0.03955175221695094,
+        0.03955204483510097
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1015
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9738476104354151,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280182513616,
+          "ft": 0.6990334822264935
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6261058349014074e-7,
+        0.0012664289901831952,
+        -6.747557033315761e-7,
+        -0.0696244280268134,
+        -0.00002341617251332353,
+        0.19217266199855348,
+        0.00042459116443108657,
+        0.03887735116107048,
+        0.03887764378025753
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1016
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "replay:Refused:refuse"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9979823951138694,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280766635933,
+          "ft": 0.6990452874717612
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626598062438125e-7,
+        0.0012664289941146,
+        -6.748190029982531e-7,
+        -0.06962442804044838,
+        -0.00002341628160523255,
+        0.19217266196517369,
+        0.0004245894932840993,
+        0.039840848961913054,
+        0.03984114157961309
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1017
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.999632276143084,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280807087644,
+          "ft": 0.6990461050070588
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626632151706178e-7,
+        0.0012664289943868702,
+        -6.748233868231063e-7,
+        -0.06962442804139261,
+        -0.000023416289160403793,
+        0.1921726619628621,
+        0.00042458937755354546,
+        0.03990671475539305,
+        0.03990700737299011
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1018
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "replay:Refused:refuse"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9814394550711265,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.0228036471886,
+          "ft": 0.6990371646317001
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6262593710494436e-7,
+        0.0012664289914094825,
+        -6.747754478323901e-7,
+        -0.06962442803106669,
+        -0.000023416206541390423,
+        0.1921726619881411,
+        0.00042459064315093705,
+        0.03918042929946093,
+        0.03918072191818413
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1019
+    },
+    {
+      "authority_decisions": [],
+      "commands": [],
+      "contacts": [],
+      "ctrl_writes": 0,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "expected_refusal": true,
+      "failure_taxonomy": "STALE_GRIPPER_STATE",
+      "joint_state": [],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "world_seed": 1020
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.97399751311864,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280186097713,
+          "ft": 0.6990335546624341
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6261088549680513e-7,
+        0.001266428990207315,
+        -6.747560917072773e-7,
+        -0.06962442802689704,
+        -0.000023416173182657973,
+        0.19217266199834873,
+        0.0004245911541773454,
+        0.03888333550721444,
+        0.038883628126392365
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1021
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9683770081766131,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280052093433,
+          "ft": 0.6990308463963859
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.625995937547069e-7,
+        0.0012664289893054483,
+        -6.747415707091796e-7,
+        -0.06962442802376886,
+        -0.000023416148156879937,
+        0.19217266200600683,
+        0.0004245915375582969,
+        0.03865895628762103,
+        0.0386592489071401
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1022
+    },
+    {
+      "authority_decisions": [],
+      "commands": [],
+      "contacts": [],
+      "ctrl_writes": 0,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "expected_refusal": true,
+      "failure_taxonomy": "CONTROLLER_FAILURE",
+      "joint_state": [],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "world_seed": 1023
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.964463259037562,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02279959237649,
+          "ft": 0.6990289697664357
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.625917695270147e-7,
+        0.0012664289886805322,
+        -6.747315088786304e-7,
+        -0.06962442802160121,
+        -0.000023416130816120273,
+        0.1921726620113133,
+        0.00042459180321315786,
+        0.038502713390130595,
+        0.03850300600988604
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1024
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9814667012670124,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280365375204,
+          "ft": 0.6990371778992817
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6262599242189677e-7,
+        0.0012664289914139008,
+        -6.747755189690635e-7,
+        -0.06962442803108203,
+        -0.00002341620666398882,
+        0.19217266198810368,
+        0.00042459064127285857,
+        0.03918151700959246,
+        0.039181809628314
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1025
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9894950984772358,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280559597207,
+          "ft": 0.6990411031715759
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626423590815634e-7,
+        0.0012664289927210985,
+        -6.747965662292484e-7,
+        -0.06962442803561564,
+        -0.000023416242937257097,
+        0.1921726619770047,
+        0.0004245900856123961,
+        0.03950202299957312,
+        0.039502315617800224
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1026
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9733256484779758,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280170038378,
+          "ft": 0.6990332300994314
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626095322640261e-7,
+        0.0012664289900992326,
+        -6.747543514717817e-7,
+        -0.06962442802652216,
+        -0.000023416170183501335,
+        0.19217266199926655,
+        0.00042459120012238,
+        0.03885651363528304,
+        0.03885680625450184
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1027
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9885694466028732,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280537123372,
+          "ft": 0.6990406489729644
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626404652505872e-7,
+        0.0012664289925698403,
+        -6.747941307931446e-7,
+        -0.06962442803509108,
+        -0.000023416238739977946,
+        0.19217266197828897,
+        0.0004245901499086398,
+        0.03946506955013579,
+        0.0394653621684201
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1028
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9834691549373284,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280413670908,
+          "ft": 0.6990381539632282
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626300621348166e-7,
+        0.0012664289917389464,
+        -6.747807525542145e-7,
+        -0.06962442803220936,
+        -0.000023416215683653897,
+        0.19217266198534377,
+        0.00042459050310166794,
+        0.03926145804628859,
+        0.03926175066488718
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1029
+    },
+    {
+      "authority_decisions": [],
+      "commands": [],
+      "contacts": [],
+      "ctrl_writes": 0,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "expected_refusal": true,
+      "failure_taxonomy": "STALE_GRIPPER_STATE",
+      "joint_state": [],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "world_seed": 1030
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9845279498195266,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280439246502,
+          "ft": 0.6990386708549716
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626322173431089e-7,
+        0.001266428991911082,
+        -6.747835241172924e-7,
+        -0.06962442803280638,
+        -0.00002341622046022102,
+        0.19217266198388216,
+        0.00042459042993037193,
+        0.03930372676979829,
+        0.03930401938833177
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1031
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9717112974275401,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280131496067,
+          "ft": 0.6990324511530539
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626062845445361e-7,
+        0.0012664289898398394,
+        -6.747501749568965e-7,
+        -0.06962442802562249,
+        -0.000023416162985612275,
+        0.19217266200146907,
+        0.0004245913103895616,
+        0.03879206625331591,
+        0.03879235887263284
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1032
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9778881159023495,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.0228027931058,
+          "ft": 0.6990354385158698
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626187400958506e-7,
+        0.001266428990834659,
+        -6.74766192594862e-7,
+        -0.069624428029073,
+        -0.000023416190590729302,
+        0.19217266199302185,
+        0.00042459088749948045,
+        0.03903865436652767,
+        0.03903894698546829
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1033
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "replay:Refused:refuse"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9931834518471108,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280649354144,
+          "ft": 0.6990429171802046
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626499228455797e-7,
+        0.001266428993325215,
+        -6.748062931076738e-7,
+        -0.0696244280377108,
+        -0.000023416259700753504,
+        0.19217266197187563,
+        0.00042458982882181983,
+        0.03964926775058148,
+        0.03964956036858008
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1034
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.99409091152414,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.0228067148848,
+          "ft": 0.6990433645170814
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626517881012477e-7,
+        0.0012664289934741929,
+        -6.74808691796342e-7,
+        -0.06962442803822746,
+        -0.000023416263834701415,
+        0.19217266197061073,
+        0.0004245897654966756,
+        0.039685494939463634,
+        0.039685787557405885
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1035
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9968695918457435,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280739389585,
+          "ft": 0.6990447368217839
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626575101884567e-7,
+        0.0012664289939312145,
+        -6.74816050308135e-7,
+        -0.06962442803981242,
+        -0.000023416276516507463,
+        0.19217266196673055,
+        0.0004245895712338731,
+        0.03979642414039904,
+        0.03979671675816844
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1036
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9613178211320943,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02279884882526,
+          "ft": 0.6990274670318626
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.625855042471504e-7,
+        0.0012664289881801271,
+        -6.747234518298678e-7,
+        -0.06962442801986542,
+        -0.00002341611693044152,
+        0.1921726620155627,
+        0.0004245920159396693,
+        0.038377142661204365,
+        0.038377435281149105
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1037
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "replay:Refused:refuse"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9843233705026839,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280434302624,
+          "ft": 0.6990385709408672
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626318007351026e-7,
+        0.0012664289918778084,
+        -6.747829883660926e-7,
+        -0.06962442803269098,
+        -0.000023416219536896763,
+        0.1921726619841647,
+        0.0004245904440745672,
+        0.03929555964817274,
+        0.039295852266718806
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1038
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9712505892056457,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280120508924,
+          "ft": 0.6990322290936043
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626053586896582e-7,
+        0.0012664289897658914,
+        -6.747489843224554e-7,
+        -0.06962442802536598,
+        -0.00002341616093364912,
+        0.192172662002097,
+        0.0004245913418244658,
+        0.038773674071055544,
+        0.03877396669040044
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1039
+    },
+    {
+      "authority_decisions": [],
+      "commands": [],
+      "contacts": [],
+      "ctrl_writes": 0,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "expected_refusal": true,
+      "failure_taxonomy": "STALE_GRIPPER_STATE",
+      "joint_state": [],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "world_seed": 1040
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9975517490514446,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280756088346,
+          "ft": 0.6990450742996047
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626589173846977e-7,
+        0.001266428994043609,
+        -6.74817859939789e-7,
+        -0.0696244280402022,
+        -0.000023416279635262788,
+        0.19217266196577631,
+        0.00042458952346033114,
+        0.0398236569073901,
+        0.03982394952511699
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1041
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.985367128448951,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280459536784,
+          "ft": 0.6990390809310677
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626339271634999e-7,
+        0.0012664289920476446,
+        -6.747857229187243e-7,
+        -0.06962442803328,
+        -0.00002341622424967933,
+        0.19217266198272268,
+        0.0004245903718805764,
+        0.03933722807402521,
+        0.03933752069250704
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1042
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9700410060092902,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280091685836,
+          "ft": 0.6990316465728506
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626029299601629e-7,
+        0.0012664289895719112,
+        -6.747458610155501e-7,
+        -0.06962442802469314,
+        -0.00002341615555087959,
+        0.1921726620037441,
+        0.0004245914242856227,
+        0.03872538564565055,
+        0.038725678265068814
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1043
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.983429506128558,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280412713635,
+          "ft": 0.6990381346168955
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6262998147353737e-7,
+        0.0012664289917325047,
+        -6.747806488250858e-7,
+        -0.06962442803218703,
+        -0.000023416215504885063,
+        0.19217266198539845,
+        0.0004245905058402005,
+        0.03925987520473582,
+        0.039260167823336835
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1044
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9810392724219789,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280355079026,
+          "ft": 0.6990369698122147
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6262512480556916e-7,
+        0.0012664289913446038,
+        -6.74774403228496e-7,
+        -0.06962442803084166,
+        -0.000023416204741099248,
+        0.192172661988692,
+        0.00042459067072949855,
+        0.03916445339134635,
+        0.0391647460100941
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1045
+    },
+    {
+      "authority_decisions": [],
+      "commands": [],
+      "contacts": [],
+      "ctrl_writes": 0,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "expected_refusal": true,
+      "failure_taxonomy": "CONTROLLER_FAILURE",
+      "joint_state": [],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "world_seed": 1046
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9875253410332222,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280511799046,
+          "ft": 0.6990401371608789
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626383311974107e-7,
+        0.0012664289923993946,
+        -6.747913864352487e-7,
+        -0.06962442803449999,
+        -0.00002341623401029672,
+        0.19217266197973612,
+        0.0004245902223607631,
+        0.03942338724662196,
+        0.039423679864970744
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1047
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9648824135460528,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02279969164506,
+          "ft": 0.6990291703851736
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6259260597062956e-7,
+        0.0012664289887473377,
+        -6.747325845316474e-7,
+        -0.06962442802183291,
+        -0.00002341613266992212,
+        0.1921726620107461,
+        0.0004245917748133427,
+        0.03851944668410933,
+        0.03851973930383951
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1048
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9649408296660711,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02279970548032,
+          "ft": 0.6990291983530156
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.625927225717456e-7,
+        0.00126642898875665,
+        -6.747327344787699e-7,
+        -0.06962442802186523,
+        -0.000023416132928344023,
+        0.19217266201066696,
+        0.00042459177085437495,
+        0.038521778745651214,
+        0.03852207136537787
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1049
+    },
+    {
+      "authority_decisions": [],
+      "commands": [],
+      "contacts": [],
+      "ctrl_writes": 0,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "expected_refusal": true,
+      "failure_taxonomy": "STALE_GRIPPER_STATE",
+      "joint_state": [],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "world_seed": 1050
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "replay:Refused:refuse"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9783251686302256,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280289804692,
+          "ft": 0.6990356506043025
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6261962440238117e-7,
+        0.001266428990905289,
+        -6.747673297988086e-7,
+        -0.06962442802931794,
+        -0.00002341619255060927,
+        0.1921726619924221,
+        0.0004245908574758726,
+        0.039056102185009114,
+        0.039056394803923034
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1051
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9922460897941368,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280626511552,
+          "ft": 0.6990424555291976
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626479979152657e-7,
+        0.001266428993171473,
+        -6.748038176783745e-7,
+        -0.06962442803717764,
+        -0.00002341625543454924,
+        0.1921726619731809,
+        0.0004245898941731043,
+        0.03961184681276619,
+        0.03961213943082294
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1052
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9920202024444864,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.0228062101026,
+          "ft": 0.6990423443426366
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6264753431355417e-7,
+        0.0012664289931344445,
+        -6.74803221494051e-7,
+        -0.06962442803704921,
+        -0.000023416254407073232,
+        0.1921726619734953,
+        0.0004245899099123856,
+        0.039602829041630976,
+        0.03960312165970174
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1053
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9881139712489774,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.0228052607294,
+          "ft": 0.6990404256363254
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.62639534024668e-7,
+        0.0012664289924954632,
+        -6.747929332516768e-7,
+        -0.06962442803483315,
+        -0.000023416236676111022,
+        0.1921726619789204,
+        0.00042459018152418503,
+        0.039446886272030614,
+        0.03944717889034305
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1054
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9677123496693631,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280036297536,
+          "ft": 0.6990305271609679
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.625982627593627e-7,
+        0.0012664289891991445,
+        -6.74739859070642e-7,
+        -0.06962442802340013,
+        -0.00002341614520700792,
+        0.19217266200690952,
+        0.0004245915827491416,
+        0.038632422095641696,
+        0.038632714715200966
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1055
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9713306830892475,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280122418628,
+          "ft": 0.6990322676889531
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626055196175289e-7,
+        0.0012664289897787455,
+        -6.747491912731192e-7,
+        -0.06962442802541056,
+        -0.000023416161290312,
+        0.19217266200198785,
+        0.0004245913363605802,
+        0.03877687154232942,
+        0.03877716416166946
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1056
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "replay:Refused:refuse"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9894543848454008,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.0228055860854,
+          "ft": 0.6990410831877448
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.62642275746607e-7,
+        0.0012664289927144434,
+        -6.747964590618244e-7,
+        -0.0696244280355926,
+        -0.0000234162427525626,
+        0.1921726619770613,
+        0.0004245900884416439,
+        0.0395003976486425,
+        0.03950069026687211
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1057
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9660085501839935,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02279995855882,
+          "ft": 0.6990297098246089
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.625948550322232e-7,
+        0.0012664289889269692,
+        -6.747354767885353e-7,
+        -0.06962442802245603,
+        -0.00002341613765449544,
+        0.1921726620092207,
+        0.00042459169845105496,
+        0.0385644037942946,
+        0.03856469641395682
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1058
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9904696704317715,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280583281424,
+          "ft": 0.6990415818325103
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626443549158699e-7,
+        0.0012664289928805052,
+        -6.747991328399542e-7,
+        -0.06962442803616849,
+        -0.00002341624736060516,
+        0.19217266197565125,
+        0.0004245900178533233,
+        0.03954092941400653,
+        0.039541222032173334
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1059
+    },
+    {
+      "authority_decisions": [],
+      "commands": [],
+      "contacts": [],
+      "ctrl_writes": 0,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "expected_refusal": true,
+      "failure_taxonomy": "STALE_GRIPPER_STATE",
+      "joint_state": [],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "world_seed": 1060
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.976110245612935,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280236669826,
+          "ft": 0.6990345767320609
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.62615146931752e-7,
+        0.0012664289905476751,
+        -6.747615718438289e-7,
+        -0.0696244280280776,
+        -0.00002341618262723471,
+        0.1921726619954587,
+        0.0004245910094934881,
+        0.038967679044524826,
+        0.03896797166357401
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1061
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9670270343285593,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280020022128,
+          "ft": 0.6990301982329935
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6259689135517577e-7,
+        0.0012664289890896097,
+        -6.747380954670188e-7,
+        -0.06962442802302017,
+        -0.000023416142167578217,
+        0.1921726620078396,
+        0.00042459162931210377,
+        0.03860506325103064,
+        0.03860535587063135
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1062
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9747856893864372,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280204951646,
+          "ft": 0.6990339356973395
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626124741884469e-7,
+        0.0012664289903342042,
+        -6.74758134739049e-7,
+        -0.06962442802733719,
+        -0.000023416176703659755,
+        0.19217266199727137,
+        0.0004245911002381043,
+        0.0389148007185602,
+        0.03891509333769013
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1063
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9875916797344635,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280513407374,
+          "ft": 0.6990401696615155
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6263846672034633e-7,
+        0.0012664289924102185,
+        -6.747915607155161e-7,
+        -0.0696244280345375,
+        -0.00002341623431065484,
+        0.1921726619796441,
+        0.000424590217759688,
+        0.039426035589816576,
+        0.03942632820816126
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1064
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9786082964232584,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.0228029660569,
+          "ft": 0.6990357880510764
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6262019747729706e-7,
+        0.00126642899095106,
+        -6.747680667638638e-7,
+        -0.06962442802947669,
+        -0.000023416193820709588,
+        0.19217266199203353,
+        0.000424590838019097,
+        0.03906740508286287,
+        0.03906769770175947
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1065
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9781587073371213,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.0228028580726,
+          "ft": 0.6990355698165933
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626192875479093e-7,
+        0.0012664289908783832,
+        -6.747668966093442e-7,
+        -0.06962442802922464,
+        -0.000023416191804041905,
+        0.19217266199265076,
+        0.00042459086891262314,
+        0.03904945679363862,
+        0.039049749412562715
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1066
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9793589629960396,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280314646396,
+          "ft": 0.6990361526590121
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6262171769342605e-7,
+        0.00126642899107248,
+        -6.747700217372697e-7,
+        -0.06962442802989782,
+        -0.000023416197189949764,
+        0.19217266199100252,
+        0.00042459078640553566,
+        0.03909737284937383,
+        0.03909766546822452
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1067
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "replay:Refused:refuse"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9716073815428257,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280129017568,
+          "ft": 0.6990324010565223
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626060756732748e-7,
+        0.001266428989823157,
+        -6.747499063518253e-7,
+        -0.0696244280255646,
+        -0.00002341616252269293,
+        0.1921726620016108,
+        0.0004245913174812162,
+        0.038787917771043214,
+        0.03878821039036645
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1068
+    },
+    {
+      "authority_decisions": [],
+      "commands": [],
+      "contacts": [],
+      "ctrl_writes": 0,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "expected_refusal": true,
+      "failure_taxonomy": "CONTROLLER_FAILURE",
+      "joint_state": [],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "world_seed": 1069
+    },
+    {
+      "authority_decisions": [],
+      "commands": [],
+      "contacts": [],
+      "ctrl_writes": 0,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "expected_refusal": true,
+      "failure_taxonomy": "STALE_GRIPPER_STATE",
+      "joint_state": [],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "world_seed": 1070
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9885685794566514,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280537102396,
+          "ft": 0.6990406485473807
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626404634772686e-7,
+        0.0012664289925696964,
+        -6.747941285126889e-7,
+        -0.06962442803509057,
+        -0.00002341623873604774,
+        0.19217266197829017,
+        0.0004245901499688617,
+        0.03946503493232216,
+        0.03946532755060653
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1071
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9992413733636989,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280797497254,
+          "ft": 0.6990459111922389
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6266240699190564e-7,
+        0.0012664289943223228,
+        -6.748223475183052e-7,
+        -0.06962442804116879,
+        -0.00002341628736924516,
+        0.19217266196341004,
+        0.000424589404990552,
+        0.03989110931398131,
+        0.03989140193160278
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1072
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9850074144367325,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280450837438,
+          "ft": 0.6990389051096951
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626331940704013e-7,
+        0.0012664289919890933,
+        -6.74784780172813e-7,
+        -0.06962442803307695,
+        -0.0000234162226249322,
+        0.1921726619832199,
+        0.0004245903967696505,
+        0.03932286773626697,
+        0.03932316035477094
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1073
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9814262779948582,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280364401516,
+          "ft": 0.6990371582165471
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6262591035254433e-7,
+        0.0012664289914073449,
+        -6.747754134292341e-7,
+        -0.0696244280310593,
+        -0.000023416206482099364,
+        0.19217266198815935,
+        0.00042459064405920855,
+        0.0391799032502678,
+        0.03918019586899182
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1074
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9693638485137421,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280075565412,
+          "ft": 0.6990313207779437
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626015716130105e-7,
+        0.001266428989463419,
+        -6.747441142030486e-7,
+        -0.06962442802431681,
+        -0.00002341615254038806,
+        0.19217266200466543,
+        0.0004245914704048943,
+        0.03869835247479493,
+        0.03869864509425424
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1075
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "replay:Refused:refuse"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9748251117107307,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280205894552,
+          "ft": 0.6990339547620362
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6261255368397677e-7,
+        0.0012664289903405526,
+        -6.747582369690291e-7,
+        -0.06962442802735917,
+        -0.000023416176879844912,
+        0.19217266199721744,
+        0.0004245910975390896,
+        0.038916374518503605,
+        0.03891666713763114
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1076
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9881649497213273,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280527309183,
+          "ft": 0.6990404506272075
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6263963822953633e-7,
+        0.001266428992503787,
+        -6.747930672574037e-7,
+        -0.06962442803486202,
+        -0.000023416236907059207,
+        0.19217266197884977,
+        0.0004245901779863726,
+        0.0394489214112147,
+        0.03944921402952399
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1077
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.961376963942714,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02279886278497,
+          "ft": 0.6990274952437945
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6258562186269773e-7,
+        0.0012664289881895209,
+        -6.747236030815795e-7,
+        -0.06962442801989799,
+        -0.000023416117191111752,
+        0.1921726620154828,
+        0.00042459201194623215,
+        0.038379503733355025,
+        0.038379796353296206
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1078
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9940670538330539,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280670906032,
+          "ft": 0.6990433527521106
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6265173904070385e-7,
+        0.0012664289934702763,
+        -6.748086287052776e-7,
+        -0.06962442803821393,
+        -0.00002341626372596904,
+        0.192172661970644,
+        0.0004245897671622858,
+        0.03968454250366604,
+        0.039684835121609786
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1079
+    },
+    {
+      "authority_decisions": [],
+      "commands": [],
+      "contacts": [],
+      "ctrl_writes": 0,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "expected_refusal": true,
+      "failure_taxonomy": "STALE_GRIPPER_STATE",
+      "joint_state": [],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "world_seed": 1080
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9678513106036479,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280039598918,
+          "ft": 0.6990305938869376
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.625985409565726e-7,
+        0.001266428989221364,
+        -6.747402168277566e-7,
+        -0.06962442802347721,
+        -0.00002341614582357367,
+        0.1921726620067208,
+        0.000424591573303622,
+        0.03863796963030457,
+        0.03863826224985544
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1081
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9894199060099529,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280557771071,
+          "ft": 0.6990410662610312
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6264220517592973e-7,
+        0.0012664289927088075,
+        -6.74796368309109e-7,
+        -0.06962442803557306,
+        -0.000023416242596157543,
+        0.19217266197710908,
+        0.0004245900908375486,
+        0.03949902120039271,
+        0.039499313818624454
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1082
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.990685858393239,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280588538254,
+          "ft": 0.6990416880788607
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6264479791535834e-7,
+        0.00126642899291589,
+        -6.747997025301215e-7,
+        -0.06962442803629125,
+        -0.00002341624834242063,
+        0.19217266197535088,
+        0.0004245900028133861,
+        0.03954955997061676,
+        0.03954985258877019
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1083
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9632013026091074,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02279929377238,
+          "ft": 0.6990283662767204
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.625892534247273e-7,
+        0.001266428988479571,
+        -6.747282732116959e-7,
+        -0.06962442802090411,
+        -0.000023416125239707294,
+        0.19217266201301983,
+        0.0004245918886427024,
+        0.03845233414458299,
+        0.038452626764414466
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1084
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "replay:Refused:refuse"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9664046480550393,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280005251292,
+          "ft": 0.6990298997106118
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.625956467219863e-7,
+        0.001266428988990202,
+        -6.747364948887867e-7,
+        -0.06962442802267536,
+        -0.00002341613940910973,
+        0.19217266200868377,
+        0.0004245916715709049,
+        0.038580216631771705,
+        0.03858050925141001
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1085
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9882144182149809,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280528509472,
+          "ft": 0.6990404748821747
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6263973935303924e-7,
+        0.0012664289925118622,
+        -6.747931973006607e-7,
+        -0.06962442803489,
+        -0.000023416237131178325,
+        0.1921726619787812,
+        0.00042459017455318167,
+        0.03945089626972209,
+        0.039451188888028337
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1086
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9912337234105327,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280601865742,
+          "ft": 0.6990419574246471
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626459210005963e-7,
+        0.0012664289930055892,
+        -6.748011467996045e-7,
+        -0.06962442803660232,
+        -0.000023416250831503484,
+        0.1921726619745893,
+        0.0004245899646844905,
+        0.03957143158647561,
+        0.0395717242045951
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1087
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9918865778259713,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280617756492,
+          "ft": 0.6990422785849447
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626472601176953e-7,
+        0.0012664289931125449,
+        -6.748028688825867e-7,
+        -0.06962442803697326,
+        -0.00002341625379937563,
+        0.19217266197368124,
+        0.00042458991922135047,
+        0.03959749454091787,
+        0.03959778715899691
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1088
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9948621354896267,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280690315362,
+          "ft": 0.6990437450195893
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626533746676927e-7,
+        0.001266428993600912,
+        -6.74810732095189e-7,
+        -0.06962442803866696,
+        -0.000023416267350993192,
+        0.1921726619695348,
+        0.0004245897116331446,
+        0.039716283388774774,
+        0.039716576006669106
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1089
+    },
+    {
+      "authority_decisions": [],
+      "commands": [],
+      "contacts": [],
+      "ctrl_writes": 0,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "expected_refusal": true,
+      "failure_taxonomy": "STALE_GRIPPER_STATE",
+      "joint_state": [],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "world_seed": 1090
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9699676518764687,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280089938633,
+          "ft": 0.6990316112709902
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626027827693345e-7,
+        0.001266428989560154,
+        -6.747456717305433e-7,
+        -0.06962442802465237,
+        -0.000023416155224662016,
+        0.19217266200384395,
+        0.000424591429283114,
+        0.03872245723561514,
+        0.03872274985503786
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1091
+    },
+    {
+      "authority_decisions": [],
+      "commands": [],
+      "contacts": [],
+      "ctrl_writes": 0,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "expected_refusal": true,
+      "failure_taxonomy": "CONTROLLER_FAILURE",
+      "joint_state": [],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "world_seed": 1092
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9714542133486312,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.0228012536457,
+          "ft": 0.6990323272238973
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626057678454598e-7,
+        0.0012664289897985708,
+        -6.747495104902238e-7,
+        -0.0696244280254793,
+        -0.000023416161840457103,
+        0.19217266200181948,
+        0.00042459132793266967,
+        0.03878180306066856,
+        0.0387820956800011
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1093
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9889718833281018,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280546891744,
+          "ft": 0.6990408463892246
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626412883954281e-7,
+        0.001266428992635585,
+        -6.747951893441736e-7,
+        -0.06962442803531914,
+        -0.000023416240564305825,
+        0.19217266197773084,
+        0.0004245901219625553,
+        0.039481135444441574,
+        0.03948142806270102
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1094
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:",
+        "replay:Refused:refuse"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9621598877239306,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02279904764674,
+          "ft": 0.6990278688472076
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.625871795217628e-7,
+        0.0012664289883139298,
+        -6.747256062059652e-7,
+        -0.06962442802032957,
+        -0.000023416120643336308,
+        0.19217266201442643,
+        0.0004245919590584736,
+        0.03841075925734109,
+        0.03841105187723521
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1095
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9675612628245489,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280032708656,
+          "ft": 0.6990304546268146
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.62597960331645e-7,
+        0.001266428989174988,
+        -6.747394701534467e-7,
+        -0.06962442802331632,
+        -0.000023416144536740267,
+        0.19217266200711464,
+        0.00042459159301739223,
+        0.038626390475942095,
+        0.03862668309551051
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1096
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9612800592298683,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02279883991326,
+          "ft": 0.6990274490192285
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.6258542915495034e-7,
+        0.0012664289881741291,
+        -6.747233552625253e-7,
+        -0.06962442801984461,
+        -0.00002341611676401544,
+        0.19217266201561367,
+        0.0004245920184892949,
+        0.03837563514786897,
+        0.038375927767815975
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1097
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9640973617217895,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.0227995057596,
+          "ft": 0.6990287947087234
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.625910396579195e-7,
+        0.0012664289886222372,
+        -6.747305702788204e-7,
+        -0.06962442802139902,
+        -0.000023416129198518543,
+        0.19217266201180833,
+        0.00042459182799445744,
+        0.038488106205365046,
+        0.03848839882514254
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1098
+    },
+    {
+      "authority_decisions": [
+        "Allowed:allow:"
+      ],
+      "commands": [
+        {
+          "kind": "resource",
+          "opening": 0.9977595961701118,
+          "step": 0
+        }
+      ],
+      "contacts": [
+        {
+          "a": "link5",
+          "available": true,
+          "b": "hand",
+          "fn": 104.02280761178297,
+          "ft": 0.699045177174325
+        }
+      ],
+      "ctrl_writes": 1,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [
+        "gripper_opening_threshold",
+        "no_unexpected_trapped_contact"
+      ],
+      "expected_refusal": false,
+      "failure_taxonomy": null,
+      "joint_state": [
+        -2.626593463360019e-7,
+        0.0012664289940778671,
+        -6.74818411564215e-7,
+        -0.06962442804032098,
+        -0.00002341628058594334,
+        0.19217266196548544,
+        0.0004245895088976869,
+        0.039831954484700886,
+        0.03983224710241482
+      ],
+      "metal": false,
+      "model_hash": "758da46f58dad2e55b1b0bb4f28c360171bafe65acfad4d5a4dae9ae0ac4c31c",
+      "object_definitions": [],
+      "object_evidence": {
+        "id": "obj0",
+        "perception": "PERFECT_PERCEPTION",
+        "pose": null
+      },
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "replay_write_delta": null,
+      "resource_topology": "TendonDrivenGripper",
+      "robot_id": "menagerie_panda",
+      "semantic_resource": "parallel_gripper",
+      "simulation_only": true,
+      "skill_contract": "skill.release",
+      "software_sha": "local",
+      "support_relations": [],
+      "task_result": "success",
+      "unauthorized_writes": 0,
+      "world_seed": 1099
+    }
+  ],
+  "evidence_status": "SIMULATION_ONLY",
+  "extra": {
+    "robot": "menagerie_panda",
+    "skill": "release"
+  },
+  "metal": false,
+  "metrics": {
+    "authority_violations": 0,
+    "expected_refusals": 14,
+    "grasp_acquisition_success": 0,
+    "grasp_episodes": 0,
+    "grasp_slip": 0,
+    "grasp_verified_hold_success": 0,
+    "push_contact_establishment": 0,
+    "push_episodes": 0,
+    "push_task_success": 0,
+    "release_episodes": 100,
+    "release_success": 86,
+    "safe_completion": 100,
+    "unauthorized_writes": 0,
+    "unexpected_physical_violations": 0
+  },
+  "n_episodes": 100,
+  "perception": "PERFECT_PERCEPTION",
+  "simulation_only": true
+}

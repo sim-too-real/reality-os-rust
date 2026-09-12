@@ -102,8 +102,12 @@ pub fn compile_push(
     }
     let cartesian_ok = cap_usable(caps, CapName::CartesianPositionControl);
     let joint_ok = cap_usable(caps, CapName::JointPositionControl);
-    let chain_ok = model.ee_joint_chain(ee).is_some_and(|c| !c.is_empty());
+    let chain_ok = model.ee_joint_chain(ee).is_some_and(|c| !c.is_empty())
+        || model.end_effectors.iter().any(|e| !e.joint_chain.is_empty());
     if !(cartesian_ok || (joint_ok && chain_ok)) {
+        if model.position_actuators().next().is_none() {
+            return Err(SkillRefuse::MissingActuator);
+        }
         return Err(SkillRefuse::Unsupported);
     }
     if !cap_usable(caps, CapName::ContactManipulation)

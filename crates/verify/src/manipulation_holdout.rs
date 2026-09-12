@@ -38,19 +38,71 @@ pub struct ManipulationHoldoutFirstScore {
 pub fn write_holdout_bundle_yaml() -> Result<(), String> {
     let dir = manipulation_holdout_bundle_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let yaml = dir.join("robot.yaml");
-    if yaml.exists() {
-        return Ok(());
-    }
-    let model = if manipulation_holdout_model_dir().join("wx250s.xml").exists() {
-        "model/wx250s.xml"
-    } else if manipulation_holdout_model_dir().join("wx250s_gripper.xml").exists() {
-        "model/wx250s_gripper.xml"
+    let model_dir = manipulation_holdout_model_dir();
+    let (model, xml_path) = if model_dir.join("wx250s.xml").exists() {
+        ("model/wx250s.xml", model_dir.join("wx250s.xml"))
+    } else if model_dir.join("wx250s_gripper.xml").exists() {
+        (
+            "model/wx250s_gripper.xml",
+            model_dir.join("wx250s_gripper.xml"),
+        )
     } else {
-        "model/wx250s.xml"
+        return Err("holdout xml missing; fetch after MANIPULATION_V1_FREEZE_SHA".into());
+    };
+    let xml = std::fs::read_to_string(&xml_path).map_err(|e| e.to_string())?;
+    let names = names_from_official_mjcf(&xml);
+    let ee = names
+        .sites
+        .iter()
+        .find(|s| {
+            let n = s.to_ascii_lowercase();
+            n.contains("ee") || n.contains("tool") || n.contains("attach") || n.contains("tcp")
+        })
+        .cloned()
+        .or_else(|| names.sites.first().cloned());
+    let grip_body = names
+        .bodies
+        .iter()
+        .find(|b| {
+            let n = b.to_ascii_lowercase();
+            n.contains("gripper") || n.contains("finger") || n.contains("left")
+        })
+        .cloned();
+    let ee_body = grip_body
+        .clone()
+        .or_else(|| {
+            names
+                .bodies
+                .iter()
+                .rev()
+                .find(|b| !b.is_empty() && *b != "world")
+                .cloned()
+        })
+        .ok_or_else(|| "holdout xml has no body names".to_string())?;
+    let grip_joint = names
+        .joints
+        .iter()
+        .find(|j| {
+            let n = j.to_ascii_lowercase();
+            n.contains("finger") || n.contains("grip") || n.contains("left")
+        })
+        .cloned();
+    let ee_block = if let Some(site) = ee {
+        format!("  - name: tool0\n    site: {site}\n    body: {ee_body}\n")
+    } else {
+        format!("  - name: tool0\n    body: {ee_body}\n")
+    };
+    let grip_block = if let Some(body) = grip_body {
+        if let Some(joint) = grip_joint {
+            format!("  - name: parallel_gripper\n    body: {body}\n    joint: {joint}\n")
+        } else {
+            format!("  - name: parallel_gripper\n    body: {body}\n")
+        }
+    } else {
+        "  []\n".into()
     };
     std::fs::write(
-        yaml,
+        dir.join("robot.yaml"),
         format!(
             "robot_id: {MANIPULATION_HOLDOUT_ROBOT}\n\
              model_format: mjcf\n\
@@ -61,26 +113,69 @@ pub fn write_holdout_bundle_yaml() -> Result<(), String> {
              joint_aliases: {{}}\n\
              actuator_aliases: {{}}\n\
              end_effectors:\n\
-               - name: tool0\n\
-                 body: gripper_link\n\
+             {ee_block}\
              grippers:\n\
-               - name: parallel_gripper\n\
-                 body: gripper_link\n\
+             {grip_block}\
              feet: []\n\
              cameras: []\n\
              task_frames:\n\
                - name: tool0\n\
-                 body: gripper_link\n\
+                 body: {ee_body}\n\
              collision_groups: {{}}\n\
              default_controller_profile: pd_position\n\
              source:\n\
                license: BSD-3-Clause\n\
                attribution: Official Google DeepMind MuJoCo Menagerie (trossen_wx250s).\n\
                redistributable: true\n\
-               notes: Untouched official Menagerie import for Phase B hold-out. Not used during development.\n"
+               notes: YAML written from official Menagerie XML after freeze. Not used during development.\n"
         ),
     )
     .map_err(|e| e.to_string())
+}
+
+struct MjcfNames {
+    bodies: Vec<String>,
+    sites: Vec<String>,
+    joints: Vec<String>,
+}
+
+fn names_from_official_mjcf(xml: &str) -> MjcfNames {
+    fn attrs(tag: &str, key: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let needle = format!("{key}=\"");
+        let mut rest = tag;
+        while let Some(i) = rest.find(&needle) {
+            let s = &rest[i + needle.len()..];
+            if let Some(end) = s.find('"') {
+                let name = s[..end].to_string();
+                if !name.is_empty() {
+                    out.push(name);
+                }
+                rest = &s[end + 1..];
+            } else {
+                break;
+            }
+        }
+        out
+    }
+    let mut bodies = Vec::new();
+    let mut sites = Vec::new();
+    let mut joints = Vec::new();
+    for raw in xml.split('<').skip(1) {
+        let tag = raw.split('>').next().unwrap_or("");
+        let kind = tag.split_whitespace().next().unwrap_or("");
+        match kind {
+            "body" => bodies.extend(attrs(tag, "name")),
+            "site" => sites.extend(attrs(tag, "name")),
+            "joint" => joints.extend(attrs(tag, "name")),
+            _ => {}
+        }
+    }
+    MjcfNames {
+        bodies,
+        sites,
+        joints,
+    }
 }
 
 pub fn run_manipulation_holdout_first_score(

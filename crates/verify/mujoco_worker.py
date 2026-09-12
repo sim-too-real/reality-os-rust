@@ -7,6 +7,7 @@ It does not certify real-world safety. SIM != METAL.
 
 from __future__ import annotations
 
+import gc
 import json
 import math
 import os
@@ -14,6 +15,10 @@ import sys
 import time
 import traceback
 from typing import Any
+
+_ASSET_CACHE: dict[tuple[str, ...], dict[str, bytes]] = {}
+_BASE_MODEL: dict[str, Any] = {}
+_BASE_INSPECT: dict[str, Any] = {}
 
 os.environ.setdefault("MUJOCO_GL", "disable")
 
@@ -208,12 +213,13 @@ class Instance:
                     "group": int(m.geom_group[i]),
                     "contype": int(m.geom_contype[i]),
                     "conaffinity": int(m.geom_conaffinity[i]),
+                    "pos": [float(x) for x in m.geom_pos[i]],
                 }
             )
         tendons = []
         wrap_joint = int(getattr(mujoco.mjtWrap, "mjWRAP_JOINT", 1))
         for i in range(int(getattr(m, "ntendon", 0))):
-            joints = []
+            wrap_joints = []
             adr = int(m.tendon_adr[i]) if hasattr(m, "tendon_adr") else 0
             num = int(m.tendon_num[i]) if hasattr(m, "tendon_num") else 0
             for k in range(num):
@@ -221,8 +227,8 @@ class Instance:
                 obj = int(m.wrap_objid[adr + k])
                 prm = float(m.wrap_prm[adr + k])
                 if wrap == wrap_joint and 0 <= obj < m.njnt:
-                    joints.append({"name": m.joint(obj).name or f"joint_{obj}", "coef": prm})
-            tendons.append({"name": m.tendon(i).name or f"tendon_{i}", "joints": joints})
+                    wrap_joints.append({"name": m.joint(obj).name or f"joint_{obj}", "coef": prm})
+            tendons.append({"name": m.tendon(i).name or f"tendon_{i}", "joints": wrap_joints})
         equalities = []
         for i in range(int(getattr(m, "neq", 0))):
             eq_type = int(m.eq_type[i])
@@ -422,6 +428,9 @@ def _scan_urdf_losses(text: str) -> list[str]:
 
 
 def _collect_assets(roots: list[str]) -> dict[str, bytes]:
+    key = tuple(sorted(os.path.abspath(r) for r in roots if r))
+    if key in _ASSET_CACHE:
+        return _ASSET_CACHE[key]
     assets: dict[str, bytes] = {}
     for root in roots:
         if not root:
@@ -442,6 +451,7 @@ def _collect_assets(roots: list[str]) -> dict[str, bytes]:
                     continue
                 assets[rel] = data
                 assets[fn] = data
+    _ASSET_CACHE[key] = assets
     return assets
 
 
@@ -512,9 +522,18 @@ def _load_spec(path: str, assets: dict[str, bytes]) -> Any:
     return spec
 
 
-def _load(msg: dict[str, Any]) -> dict[str, Any]:
+def _drop_runtime(keep_if_cached: bool = True) -> None:
+    prev = INST.model
     INST.model = None
     INST.data = None
+    cached = keep_if_cached and any(prev is m for m in _BASE_MODEL.values())
+    if prev is not None and not cached:
+        del prev
+        gc.collect()
+
+
+def _load(msg: dict[str, Any]) -> dict[str, Any]:
+    _drop_runtime(True)
     INST.ctrl_write_count = 0
     INST.safe_write_count = 0
     INST.last_ctrl = []
@@ -552,6 +571,24 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
     roots.extend(str(r) for r in (msg.get("asset_roots") or []))
     assets = _collect_assets(roots)
     INST.asset_names = sorted({k for k in assets if "/" in k or "." in k})
+    seed = int(msg.get("seed", 0))
+    if not extras and path in _BASE_MODEL:
+        INST.model = _BASE_MODEL[path]
+        INST.data = mujoco.MjData(INST.model)
+        INST.data.qpos[:] = INST.model.qpos0
+        INST.data.qvel[:] = 0
+        mujoco.mj_forward(INST.model, INST.data)
+        INST.last_ctrl = [float(x) for x in INST.data.ctrl]
+        inspect = dict(_BASE_INSPECT[path])
+        inspect["load_seed"] = seed
+        inspect["model_cache"] = "hit"
+        return {
+            "ok": True,
+            "inspect": inspect,
+            "state": INST.state(),
+            "metal": False,
+            "evidence_status": EVIDENCE_STATUS,
+        }
     try:
         spec = _load_spec(path, assets)
         _add_scenario_objects(spec, extras)
@@ -568,7 +605,6 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": f"compile_failed:{err}", "metal": False, "evidence_status": EVIDENCE_STATUS}
 
     INST.data = mujoco.MjData(INST.model)
-    seed = int(msg.get("seed", 0))
     INST.data.qpos[:] = INST.model.qpos0
     INST.data.qvel[:] = 0
     mujoco.mj_forward(INST.model, INST.data)
@@ -580,6 +616,12 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
     INST.warnings = warning_bits
     inspect = INST.inspect()
     inspect["load_seed"] = seed
+    inspect["model_cache"] = "miss"
+    if not extras:
+        _BASE_MODEL[path] = INST.model
+        _BASE_INSPECT[path] = dict(inspect)
+    else:
+        gc.collect()
     return {"ok": True, "inspect": inspect, "state": INST.state(), "metal": False, "evidence_status": EVIDENCE_STATUS}
 
 
@@ -678,6 +720,16 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
         return _local_linear()
     if cmd == "reset":
         mujoco.mj_resetData(INST.model, INST.data)
+        if msg.get("keyframe") is not None and INST.model.nkey > 0:
+            k = int(msg["keyframe"])
+            k = max(0, min(k, INST.model.nkey - 1))
+            kq = INST.model.key_qpos[k]
+            nq = min(int(kq.shape[0]), int(INST.model.nq))
+            INST.data.qpos[:nq] = kq[:nq]
+            if hasattr(INST.model, "key_ctrl"):
+                kc = INST.model.key_ctrl[k]
+                nu = min(int(kc.shape[0]), int(INST.model.nu))
+                INST.data.ctrl[:nu] = kc[:nu]
         if "qpos" in msg:
             q = msg["qpos"]
             if len(q) != INST.model.nq:
@@ -759,6 +811,57 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
             mujoco.mj_forward(INST.model, INST.data)
             return {"ok": True, "state": INST.state()}
         return {"ok": False, "error": "body_not_freejoint"}
+    if cmd == "configure_body":
+        body = str(msg.get("body") or "")
+        found = None
+        for i in range(INST.model.nbody):
+            if INST.model.body(i).name == body:
+                found = i
+                break
+        if found is None:
+            return {"ok": False, "error": f"unknown_body:{body}"}
+        consts_changed = False
+        if msg.get("mass") is not None:
+            INST.model.body_mass[found] = float(msg["mass"])
+            consts_changed = True
+        geoms = [
+            g
+            for g in range(INST.model.ngeom)
+            if int(INST.model.geom_bodyid[g]) == found
+        ]
+        if msg.get("friction") is not None and geoms:
+            fr = float(msg["friction"])
+            for g in geoms:
+                INST.model.geom_friction[g][0] = fr
+                INST.model.geom_friction[g][1] = fr
+                INST.model.geom_friction[g][2] = 0.01
+        if msg.get("size") is not None and geoms:
+            size = list(msg["size"])
+            for g in geoms:
+                for k in range(min(3, len(size))):
+                    INST.model.geom_size[g][k] = float(size[k])
+            consts_changed = True
+        if consts_changed and hasattr(mujoco, "mj_setConst"):
+            qpos_save = INST.data.qpos.copy()
+            qvel_save = INST.data.qvel.copy()
+            ctrl_save = INST.data.ctrl.copy()
+            mujoco.mj_setConst(INST.model, INST.data)
+            INST.data.qpos[:] = qpos_save
+            INST.data.qvel[:] = qvel_save
+            INST.data.ctrl[:] = ctrl_save
+        if msg.get("hide"):
+            pos = [8.0, 8.0, -1.0]
+        else:
+            pos = msg.get("pos")
+        if pos is not None:
+            jnt = int(INST.model.body_jntadr[found])
+            if jnt >= 0 and int(INST.model.jnt_type[jnt]) == 0:
+                adr = int(INST.model.jnt_qposadr[jnt])
+                INST.data.qpos[adr : adr + 3] = pos
+            else:
+                INST.model.body_pos[found][:] = pos
+        mujoco.mj_forward(INST.model, INST.data)
+        return {"ok": True, "state": INST.state()}
     if cmd == "passive_rollout":
         n = int(msg.get("n", 50))
         INST.data.ctrl[:] = 0

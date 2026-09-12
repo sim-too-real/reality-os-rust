@@ -64,6 +64,7 @@ pub enum SkillRefuse {
     StaleObject,
     Blocked,
     UnexpectedContact,
+    ForceBoundUnavailable,
 }
 
 impl SkillRefuse {
@@ -184,6 +185,7 @@ mod tests {
             SkillRefuse::StaleObject,
             SkillRefuse::Blocked,
             SkillRefuse::UnexpectedContact,
+            SkillRefuse::ForceBoundUnavailable,
         ] {
             assert!(!r.writes_allowed());
         }

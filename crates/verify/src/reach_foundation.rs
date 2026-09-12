@@ -591,6 +591,7 @@ fn refuse_string(err: SkillRefuse) -> String {
         SkillRefuse::StaleGripperState | SkillRefuse::StaleObject => "REFUSE".into(),
         SkillRefuse::Blocked => "BLOCKED".into(),
         SkillRefuse::UnexpectedContact => "UNEXPECTED_CONTACT".into(),
+        SkillRefuse::ForceBoundUnavailable => "FORCE_BOUND_UNAVAILABLE".into(),
     }
 }
 
