@@ -138,10 +138,10 @@ pub fn compile_grasp(
         }
         return Err(SkillRefuse::Unsupported);
     }
-    if resource.qualification != crate::resource::QualificationStatus::Qualified
-        && !cap_usable(caps, CapName::GripperOpenClose)
-        && !cap_usable(caps, CapName::ParallelGripper)
-        && !(resource.is_supported() && resource.command_range.value.is_some())
+    if !(resource.qualification == crate::resource::QualificationStatus::Qualified
+        || cap_usable(caps, CapName::GripperOpenClose)
+        || cap_usable(caps, CapName::ParallelGripper)
+        || (resource.is_supported() && resource.command_range.value.is_some()))
     {
         return Err(SkillRefuse::ResourceUnsupported);
     }
@@ -152,10 +152,10 @@ pub fn compile_grasp(
     let approach_id = InteractionFrameKind::Approach.frame_id(&candidate.object_id);
     let grasp_id = InteractionFrameKind::Grasp.frame_id(&candidate.object_id);
     let approach_world = world_pose_of(transforms, &approach_id, now_s, freshness_s)
-        .or_else(|_| Ok::<Se3, SkillRefuse>(candidate.approach))
+        .or(Ok::<Se3, SkillRefuse>(candidate.approach))
         .map_err(|_| SkillRefuse::Unsupported)?;
     let grasp_world = world_pose_of(transforms, &grasp_id, now_s, freshness_s)
-        .or_else(|_| Ok::<Se3, SkillRefuse>(candidate.grasp))
+        .or(Ok::<Se3, SkillRefuse>(candidate.grasp))
         .map_err(|_| SkillRefuse::Unsupported)?;
 
     let expires = now_s + freshness_s;

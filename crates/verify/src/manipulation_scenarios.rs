@@ -332,7 +332,7 @@ pub fn push_scenario(seed: u64, planar: bool, idx: usize) -> ManipulationScenari
         s.objects.push(json!({
             "name":"obstacle",
             "type":"box",
-            "pos": if planar { json!([x + 0.08, y, z]) } else { json!([x + 0.08, y, z]) },
+            "pos": json!([x + 0.08, y, z]),
             "size":[0.03,0.03,0.03],
             "mass":2.0,
             "movable":false
@@ -410,24 +410,6 @@ fn object_json(
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn slide_finger_axes_do_not_define_arm_planarity() {
-        let hinges = [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]];
-        assert!(arm_is_planar(hinges.iter()));
-        let with_slides = [
-            [0.0, 0.0, 1.0],
-            [0.0, 0.0, 1.0],
-            [0.0, 1.0, 0.0],
-            [0.0, -1.0, 0.0],
-        ];
-        assert!(!is_planar_model(&with_slides));
-    }
-}
-
 pub fn required_negative_kinds() -> &'static [NegKind] {
     &[
         NegKind::Unreachable,
@@ -445,4 +427,22 @@ pub fn required_negative_kinds() -> &'static [NegKind] {
         NegKind::RestartReplay,
         NegKind::ControllerFailure,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slide_finger_axes_do_not_define_arm_planarity() {
+        let hinges = [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]];
+        assert!(arm_is_planar(hinges.iter()));
+        let with_slides = [
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+        ];
+        assert!(!is_planar_model(&with_slides));
+    }
 }

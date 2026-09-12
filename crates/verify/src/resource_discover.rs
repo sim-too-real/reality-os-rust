@@ -65,10 +65,11 @@ fn discover_one(
             }
         }
         for a in &manifest.actuators {
-            if a.transmission_kind == "joint" && affected.contains(&a.transmission_target) {
-                if !actuator_inputs.contains(&a.name) {
-                    actuator_inputs.push(a.name.clone());
-                }
+            if a.transmission_kind == "joint"
+                && affected.contains(&a.transmission_target)
+                && !actuator_inputs.contains(&a.name)
+            {
+                actuator_inputs.push(a.name.clone());
             }
             if a.transmission_kind == "tendon" {
                 if let Some(t) = tendons.iter().find(|t| t.tendon == a.transmission_target) {

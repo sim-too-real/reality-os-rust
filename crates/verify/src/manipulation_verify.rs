@@ -256,7 +256,7 @@ pub fn verify_push(
             let d = sub(a, b);
             let n = mag(direction).max(1e-9);
             let along = (d[0] * direction[0] + d[1] * direction[1] + d[2] * direction[2]) / n;
-            along >= min_dist.min(0.03).max(0.012)
+            along >= min_dist.clamp(0.012, 0.03)
         }
         _ => false,
     };

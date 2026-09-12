@@ -1024,7 +1024,7 @@ fn execute_plan(
                         ];
                         let world = WorldState::empty(&model.calibration_epoch, now)
                             .with_target_in_frame(
-                                &semantic_ee(bundle),
+                                semantic_ee(bundle),
                                 "world",
                                 t,
                                 now + 0.5,
