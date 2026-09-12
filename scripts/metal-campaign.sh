@@ -2194,22 +2194,17 @@ add_case "$(crash_replay after_ack metal-crash-afterack)"
 wait_for_authority_bus_drop() {
   local save="${1:-$ROOT/bus_drop_sensor.json}"
   local check_vin="${2:-0}"
-  local respfile ipc_ok vin_now
+  local respfile ipc_ok vin_now start now
   # USB-UART death persists; 500 ms is enough. VIN evidence is a
   # Present Input Voltage sample (or persist_vin < 2.0 V). A hard
   # switch can sag through the Wizard window in tens of ms, then the
   # servo goes silent and later polls are only UART tokens. Poll VIN
-  # faster so the existing dxl_vin_* tokens can still be measured.
-  # Do not accept UART death as VIN. Keep the 60 s operator window.
-  local tries=120
-  local pause=0.5
-  if [[ "$check_vin" == "1" ]]; then
-    tries=1200
-    pause=0.05
-  fi
-  local i
-  for i in $(seq 1 "$tries"); do
-    respfile="$(mktemp)"
+  # as fast as sensor IPC allows so the existing dxl_vin_* tokens can
+  # still be measured. Do not accept UART death as VIN. Keep 60 s.
+  respfile="$(mktemp)"
+  start="$(date +%s)"
+  while now="$(date +%s)"; (( now - start < 60 )); do
+    : >"$respfile.err"
     if as_autonomy "$PROP" --root "$ROOT" sensor >"$respfile" 2>"$respfile.err"; then
       ipc_ok=1
     else
@@ -2244,10 +2239,10 @@ wait_for_authority_bus_drop() {
           return 0
         fi
       fi
+      sleep 0.5
     fi
-    rm -f "$respfile" "$respfile.err"
-    sleep "$pause"
   done
+  rm -f "$respfile" "$respfile.err"
   return 1
 }
 
