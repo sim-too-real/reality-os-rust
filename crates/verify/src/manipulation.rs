@@ -30,18 +30,14 @@ use realityos_semantics::failure::ManipulationFailure;
 use realityos_semantics::grasp::{compile_grasp, GraspCandidate};
 use realityos_semantics::gripper_state::{derive_gripper_state, GripperStateEvidence};
 use realityos_semantics::interaction::{insert_interaction_frame, InteractionFrameKind};
-use realityos_semantics::object::{
-    GeometryClass, GraspOccupancy, ObjectGeometry, ObjectState,
-};
+use realityos_semantics::object::{GeometryClass, GraspOccupancy, ObjectGeometry, ObjectState};
 use realityos_semantics::observation::{JointStateSample, ObservationFrame};
 use realityos_semantics::plan::{SkillPlan, SkillStep};
 use realityos_semantics::provenance::{Provenance, Provenanced};
 use realityos_semantics::push::{compile_push, PushCandidate};
 use realityos_semantics::reach::compile_reach;
 use realityos_semantics::release::compile_release;
-use realityos_semantics::resource::{
-    ControlledResource, QualificationStatus, ResourceTopology,
-};
+use realityos_semantics::resource::{ControlledResource, QualificationStatus, ResourceTopology};
 use realityos_semantics::skill::SkillRefuse;
 use realityos_semantics::transform::{Se3, TransformEdge, TransformGraph};
 use realityos_semantics::world::WorldState;
@@ -278,7 +274,8 @@ pub fn run_push_matrix(
     let mut loaded = Some((inst, manifest));
     for i in 0..n {
         let sc = push_scenario(3000 + i as u64, planar, i);
-        let (ep, inst, man) = run_skill_episode(bundle, &model, &[], &sc, sha, "PUSH", loaded.take())?;
+        let (ep, inst, man) =
+            run_skill_episode(bundle, &model, &[], &sc, sha, "PUSH", loaded.take())?;
         loaded = Some((inst, man));
         metrics.absorb(&ep);
         if i == 0 || (i + 1) % 10 == 0 || i + 1 == n {
@@ -356,9 +353,9 @@ fn apply_scenario_objects(
             }
             Some([a[0].as_f64()?, a[1].as_f64()?, a[2].as_f64()?])
         });
-        let size = obj["size"].as_array().map(|a| {
-            a.iter().filter_map(|v| v.as_f64()).collect::<Vec<_>>()
-        });
+        let size = obj["size"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_f64()).collect::<Vec<_>>());
         inst.configure_body(
             name,
             pos,
@@ -381,8 +378,10 @@ fn run_release_episode(
 ) -> Result<ManipulationEpisode, String> {
     let (mut inst, manifest) = load_and_normalize(bundle, &[], sc.seed)?;
     let mut resource = resources.first().cloned();
-    if matches!(sc.neg, Some(NegKind::GripperUnavailable) | Some(NegKind::UnsupportedCoupling))
-    {
+    if matches!(
+        sc.neg,
+        Some(NegKind::GripperUnavailable) | Some(NegKind::UnsupportedCoupling)
+    ) {
         if let Some(r) = resource.as_mut() {
             r.topology = ResourceTopology::UnsupportedResourceTopology;
             r.unsupported_detail = Some("injected_negative".into());
@@ -411,7 +410,13 @@ fn run_release_episode(
         derive_gripper_state(&resource, opening, Some(0.0), Some(false), Some(false), now)
     };
     let caps = apply_resource_qualification(derive_capabilities(model, None), true, false, true);
-    let obs = obs_frame(model, &initial.qpos, &model.calibration_epoch, now, freshness);
+    let obs = obs_frame(
+        model,
+        &initial.qpos,
+        &model.calibration_epoch,
+        now,
+        freshness,
+    );
     let compiled = compile_release(
         model,
         &caps,
@@ -455,9 +460,17 @@ fn run_skill_episode(
     sha: &str,
     skill: &str,
     loaded: Option<(crate::mujoco_exec::MujocoInstance, RobotManifest)>,
-) -> Result<(ManipulationEpisode, crate::mujoco_exec::MujocoInstance, RobotManifest), String> {
+) -> Result<
+    (
+        ManipulationEpisode,
+        crate::mujoco_exec::MujocoInstance,
+        RobotManifest,
+    ),
+    String,
+> {
     let (mut inst, manifest) = if let Some((mut inst, manifest)) = loaded {
-        if let Err(e) = reset_episode_pose(&mut inst).and_then(|_| apply_scenario_objects(&mut inst, sc))
+        if let Err(e) =
+            reset_episode_pose(&mut inst).and_then(|_| apply_scenario_objects(&mut inst, sc))
         {
             checkin_worker(inst);
             return Err(e);
@@ -602,7 +615,8 @@ fn run_skill_episode(
             ));
         };
         let opening = opening_from_truth(&initial, resource, &manifest);
-        let grip = derive_gripper_state(resource, opening, Some(0.0), Some(false), Some(false), now);
+        let grip =
+            derive_gripper_state(resource, opening, Some(0.0), Some(false), Some(false), now);
         compile_grasp(
             model,
             &caps,
@@ -667,7 +681,16 @@ fn run_skill_episode(
                 unsupported_detail: None,
             });
             let (ep, inst) = execute_plan(
-                bundle, inst, manifest.clone(), model, sc, sha, plan, &res, &initial, now,
+                bundle,
+                inst,
+                manifest.clone(),
+                model,
+                sc,
+                sha,
+                plan,
+                &res,
+                &initial,
+                now,
             )?;
             Ok((ep, inst, manifest))
         }
@@ -709,7 +732,8 @@ fn execute_plan(
     });
     let port = SharedSimPort::new(shared.clone());
     let max_a = manifest.tau_max().into_iter().fold(1.0, f64::max);
-    let plant = HardwareBackedPlant::new(port, &manifest.robot_id, manifest.nu.max(1) as usize, max_a);
+    let plant =
+        HardwareBackedPlant::new(port, &manifest.robot_id, manifest.nu.max(1) as usize, max_a);
     let journal = std::env::temp_dir().join(format!(
         "realityos-manip-{}-{}-{}.jsonl",
         manifest.robot_id,
@@ -780,7 +804,7 @@ fn execute_plan(
                         return Ok((ep, inst));
                     }
                     Ok(ctrl) => {
-                        let rec = write_ctrl(
+                        let rec = match write_ctrl(
                             &mut auth,
                             &manifest,
                             model,
@@ -791,7 +815,23 @@ fn execute_plan(
                             now,
                             "reach",
                             xyz,
-                        )?;
+                        ) {
+                            Ok(rec) => rec,
+                            Err(e) => {
+                                return refuse_in_flight(
+                                    bundle,
+                                    model,
+                                    sc,
+                                    sha,
+                                    &plan.contract_id,
+                                    e,
+                                    shared,
+                                    auth,
+                                    decisions,
+                                    sc.polarity != Polarity::Positive,
+                                );
+                            }
+                        };
                         decisions.push(format!(
                             "{:?}:{}:{}",
                             rec.outcome, rec.status, rec.physical_reason
@@ -813,10 +853,8 @@ fn execute_plan(
                         now = n;
                         for attempt in 1..REACH_ATTEMPTS {
                             let ee = privileged_ee(bundle);
-                            if let Some(p) = truth
-                                .named_pos
-                                .get(&ee)
-                                .or_else(|| truth.xpos.get(&ee))
+                            if let Some(p) =
+                                truth.named_pos.get(&ee).or_else(|| truth.xpos.get(&ee))
                             {
                                 if p.len() >= 3 {
                                     let d = ((p[0] - xyz[0]).powi(2)
@@ -828,19 +866,9 @@ fn execute_plan(
                                     }
                                 }
                             }
-                            let obs = obs_frame(
-                                model,
-                                &truth.qpos,
-                                &model.calibration_epoch,
-                                now,
-                                0.5,
-                            );
-                            let g = graph_from_truth(
-                                model,
-                                &truth,
-                                &model.calibration_epoch,
-                                now,
-                            );
+                            let obs =
+                                obs_frame(model, &truth.qpos, &model.calibration_epoch, now, 0.5);
+                            let g = graph_from_truth(model, &truth, &model.calibration_epoch, now);
                             if let Ok(ctrl) = compile_reach(
                                 model,
                                 &caps,
@@ -852,7 +880,7 @@ fn execute_plan(
                                 0.5,
                                 &ChainIkPositionPdAdapter,
                             ) {
-                                let rec = write_ctrl(
+                                let rec = match write_ctrl(
                                     &mut auth,
                                     &manifest,
                                     model,
@@ -863,11 +891,25 @@ fn execute_plan(
                                     now,
                                     "reach",
                                     xyz,
-                                )?;
-                                decisions.push(format!(
-                                    "reach-retry:{:?}:{}",
-                                    rec.outcome, rec.status
-                                ));
+                                ) {
+                                    Ok(rec) => rec,
+                                    Err(e) => {
+                                        return refuse_in_flight(
+                                            bundle,
+                                            model,
+                                            sc,
+                                            sha,
+                                            &plan.contract_id,
+                                            e,
+                                            shared,
+                                            auth,
+                                            decisions,
+                                            sc.polarity != Polarity::Positive,
+                                        );
+                                    }
+                                };
+                                decisions
+                                    .push(format!("reach-retry:{:?}:{}", rec.outcome, rec.status));
                                 let (t, n) = step_sim(&shared, &manifest, &mut auth, now)?;
                                 truth = t;
                                 now = n;
@@ -882,17 +924,41 @@ fn execute_plan(
                 expires_at_s,
                 ..
             } => {
-                let mut current = current_map(model, &truth);
-                for a in &model.actuators {
-                    if let Some(i) = manifest.actuators.iter().position(|x| x.name == a.name) {
-                        if let Some(v) = truth.ctrl.get(i) {
-                            current.insert(a.name.clone(), *v);
-                        }
+                let current = observed_hold_values(model, &manifest, &truth.qpos, &truth.ctrl);
+                let lowered = match lower_actuator_commands(model, cmds, &current) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return refuse_in_flight(
+                            bundle,
+                            model,
+                            sc,
+                            sha,
+                            &plan.contract_id,
+                            e,
+                            shared,
+                            auth,
+                            decisions,
+                            sc.polarity != Polarity::Positive,
+                        );
                     }
-                }
-                let lowered = lower_actuator_commands(model, cmds, &current)
-                    .map_err(|e| format!("{e:?}"))?;
-                let action = named_to_ctrl(&manifest, &lowered, &truth.ctrl);
+                };
+                let action = match named_to_ctrl(&manifest, &lowered, &truth.ctrl) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        return refuse_in_flight(
+                            bundle,
+                            model,
+                            sc,
+                            sha,
+                            &plan.contract_id,
+                            e,
+                            shared,
+                            auth,
+                            decisions,
+                            sc.polarity != Polarity::Positive,
+                        );
+                    }
+                };
                 let obs = pol_obs(&manifest, &episode_id, si, &truth, now);
                 let proposal = ActionProposal {
                     robot_id: obs.robot_id.clone(),
@@ -981,7 +1047,7 @@ fn execute_plan(
                             0.5,
                             &ChainIkPositionPdAdapter,
                         ) {
-                            let rec = write_ctrl(
+                            let rec = match write_ctrl(
                                 &mut auth,
                                 &manifest,
                                 model,
@@ -992,7 +1058,23 @@ fn execute_plan(
                                 now,
                                 "reach",
                                 t,
-                            )?;
+                            ) {
+                                Ok(rec) => rec,
+                                Err(e) => {
+                                    return refuse_in_flight(
+                                        bundle,
+                                        model,
+                                        sc,
+                                        sha,
+                                        &plan.contract_id,
+                                        e,
+                                        shared,
+                                        auth,
+                                        decisions,
+                                        sc.polarity != Polarity::Positive,
+                                    );
+                                }
+                            };
                             decisions.push(format!("verify:{:?}:{}", rec.outcome, rec.status));
                             let (t2, n2) = step_sim(&shared, &manifest, &mut auth, now)?;
                             truth = t2;
@@ -1047,8 +1129,19 @@ fn execute_plan(
     };
     Ok((
         finish_episode(
-            bundle, model, sc, sha, &plan, resource, &truth, verdict, decisions, commands, ctrl_writes,
-            unauthorized, None,
+            bundle,
+            model,
+            sc,
+            sha,
+            &plan,
+            resource,
+            &truth,
+            verdict,
+            decisions,
+            commands,
+            ctrl_writes,
+            unauthorized,
+            None,
         ),
         inst,
     ))
@@ -1121,6 +1214,36 @@ fn finish_episode(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn refuse_in_flight(
+    bundle: &RobotBundle,
+    model: &EmbodimentModel,
+    sc: &ManipulationScenario,
+    sha: &str,
+    contract: &str,
+    e: SkillRefuse,
+    shared: Arc<SharedMujoco>,
+    auth: SimAuthority<SharedSimPort>,
+    decisions: Vec<String>,
+    expected: bool,
+) -> Result<(ManipulationEpisode, crate::mujoco_exec::MujocoInstance), String> {
+    let writes = shared.probe.snapshot().policy_ctrl_writes;
+    drop(auth);
+    let inst = unwrap_shared(shared)?;
+    let mut ep = refused_episode(
+        bundle,
+        model,
+        sc,
+        sha,
+        contract,
+        Some(fail_from_refuse(e)),
+        expected,
+    );
+    ep.ctrl_writes = writes;
+    ep.authority_decisions = decisions;
+    Ok((ep, inst))
+}
+
 fn refused_episode(
     bundle: &RobotBundle,
     model: &EmbodimentModel,
@@ -1171,11 +1294,11 @@ fn write_ctrl(
     now: f64,
     verb: &str,
     target: [f64; 3],
-) -> Result<crate::authority::AuthorityRecord, String> {
+) -> Result<crate::authority::AuthorityRecord, SkillRefuse> {
     let obs = pol_obs(manifest, episode_id, si, truth, now);
-    let current = current_map(model, truth);
-    let lowered = lower_named_targets(model, &ctrl.targets, &current).map_err(|e| format!("{e:?}"))?;
-    let action = named_to_ctrl(manifest, &lowered, &truth.ctrl);
+    let current = observed_hold_values(model, manifest, &truth.qpos, &truth.ctrl);
+    let lowered = lower_named_targets(model, &ctrl.targets, &current)?;
+    let action = named_to_ctrl(manifest, &lowered, &truth.ctrl)?;
     let proposal = ActionProposal {
         robot_id: obs.robot_id.clone(),
         model_hash: obs.model_hash.clone(),
@@ -1290,8 +1413,10 @@ fn graph_from_truth(
         let Some(quat) = truth.xquat.get(name).filter(|q| q.len() >= 4) else {
             continue;
         };
-        let Ok(pose) = Se3::try_new([pos[0], pos[1], pos[2]], [quat[0], quat[1], quat[2], quat[3]])
-        else {
+        let Ok(pose) = Se3::try_new(
+            [pos[0], pos[1], pos[2]],
+            [quat[0], quat[1], quat[2], quat[3]],
+        ) else {
             continue;
         };
         let _ = g.insert(TransformEdge::from_se3(
@@ -1353,13 +1478,23 @@ fn obs_frame(
     }
 }
 
-fn current_map(model: &EmbodimentModel, truth: &VerifierTruth) -> HashMap<String, f64> {
+pub(crate) fn observed_hold_values(
+    model: &EmbodimentModel,
+    manifest: &RobotManifest,
+    qpos: &[f64],
+    ctrl: &[f64],
+) -> HashMap<String, f64> {
     let mut out = HashMap::new();
     for joint in &model.joints {
         if let Some(adr) = joint.qpos_adr {
-            if let Some(q) = truth.qpos.get(adr as usize) {
-                out.insert(joint.name.clone(), *q);
+            if let Some(q) = qpos.get(adr as usize).copied().filter(|v| v.is_finite()) {
+                out.insert(joint.name.clone(), q);
             }
+        }
+    }
+    for (i, a) in manifest.actuators.iter().enumerate() {
+        if let Some(v) = ctrl.get(i).copied().filter(|v| v.is_finite()) {
+            out.insert(a.name.clone(), v);
         }
     }
     out
@@ -1414,7 +1549,9 @@ fn object_state(sc: &ManipulationScenario, pose: Se3, now: f64, freshness: f64) 
 }
 
 fn reset_episode_pose(inst: &mut crate::mujoco_exec::MujocoInstance) -> Result<(), String> {
-    inst.reset_keyframe(0).map(|_| ()).map_err(|e| e.to_string())
+    inst.reset_keyframe(0)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 fn json_xyz(v: &Value) -> Option<[f64; 3]> {
@@ -1605,31 +1742,37 @@ fn fail_from_refuse(e: SkillRefuse) -> &'static str {
     ManipulationFailure::from_refuse(e).as_str()
 }
 
-fn named_to_ctrl(
+pub(crate) fn named_to_ctrl(
     manifest: &RobotManifest,
     named: &[(String, f64)],
     current: &[f64],
-) -> Vec<f64> {
-    let mut action = if current.len() == manifest.nu.max(0) as usize {
-        current.to_vec()
-    } else {
-        vec![0.0; manifest.nu.max(0) as usize]
-    };
-    for (name, v) in named {
-        if let Some(i) = manifest.actuators.iter().position(|a| a.name == *name) {
-            if i < action.len() {
-                let [lo, hi] = manifest.actuators[i].ctrlrange;
-                action[i] = v.clamp(lo.min(hi), lo.max(hi));
-            }
-        }
+) -> Result<Vec<f64>, SkillRefuse> {
+    let nu = manifest.nu.max(0) as usize;
+    if current.len() != nu {
+        return Err(SkillRefuse::InvalidCommand);
     }
-    for (i, a) in manifest.actuators.iter().enumerate() {
-        if i < action.len() {
-            let [lo, hi] = a.ctrlrange;
-            action[i] = action[i].clamp(lo.min(hi), lo.max(hi));
+    let mut action = vec![None; nu];
+    let mut seen = std::collections::HashSet::new();
+    for (name, v) in named {
+        if !v.is_finite() {
+            return Err(SkillRefuse::InvalidCommand);
         }
+        let Some(i) = manifest.actuators.iter().position(|a| a.name == *name) else {
+            return Err(SkillRefuse::MissingActuator);
+        };
+        if !seen.insert(i) {
+            return Err(SkillRefuse::InvalidCommand);
+        }
+        if i >= action.len() {
+            return Err(SkillRefuse::InvalidCommand);
+        }
+        let [lo, hi] = manifest.actuators[i].ctrlrange;
+        action[i] = Some(v.clamp(lo.min(hi), lo.max(hi)));
     }
     action
+        .into_iter()
+        .collect::<Option<Vec<f64>>>()
+        .ok_or(SkillRefuse::MissingActuator)
 }
 
 fn ee_workspace(truth: &VerifierTruth, bundle: &RobotBundle) -> Option<[f64; 3]> {
@@ -1734,10 +1877,7 @@ fn maybe_replay_or_restart(
         Some(command_id),
         Some("drive"),
     );
-    decisions.push(format!(
-        "replay:{:?}:{}",
-        rec.outcome, rec.status
-    ));
+    decisions.push(format!("replay:{:?}:{}", rec.outcome, rec.status));
     let after_w = shared.probe.snapshot().policy_ctrl_writes;
     if after_w > before_w {
         *unauthorized += after_w - before_w;
@@ -1780,12 +1920,15 @@ pub fn run_phase_b_development(
     }
 
     if (only.is_empty() || only == "panda")
-        && crate::menagerie::holdout_bundle_dir().join("robot.yaml").exists()
+        && crate::menagerie::holdout_bundle_dir()
+            .join("robot.yaml")
+            .exists()
     {
         match crate::menagerie::ensure_holdout_model() {
             Ok(_) => {
-                let panda = crate::bundle::RobotBundle::load(crate::menagerie::holdout_bundle_dir())
-                    .map_err(|e| e.to_string())?;
+                let panda =
+                    crate::bundle::RobotBundle::load(crate::menagerie::holdout_bundle_dir())
+                        .map_err(|e| e.to_string())?;
                 let skill = std::env::var("REALITYOS_PHASE_B_SKILL").unwrap_or_default();
                 let mut rel_p = Vec::new();
                 let mut rel_pm = ManipulationMetrics::default();
@@ -1875,23 +2018,24 @@ pub fn run_phase_b_development(
 
     if only.is_empty() || only == "iiwa14" || only == "kuka" {
         match crate::menagerie::ensure_v2_holdout_model() {
-            Ok(_) => match crate::bundle::RobotBundle::load(crate::menagerie::v2_holdout_bundle_dir())
-            {
-                Ok(kuka) => match run_push_matrix(&kuka, n_push, sha) {
-                    Ok((pu_k, pu_km)) => {
-                        write_phase_b_evidence(
-                            out_dir,
-                            "manipulation_iiwa14_push.json",
-                            &pu_k,
-                            &pu_km,
-                            json!({"robot":"menagerie_iiwa14","grasp":"NOT_APPLICABLE"}),
-                        )?;
-                        extra["iiwa14_push"] = json!(pu_km);
-                    }
-                    Err(e) => extra["iiwa14_error"] = json!(e),
-                },
-                Err(e) => extra["iiwa14_error"] = json!(e.to_string()),
-            },
+            Ok(_) => {
+                match crate::bundle::RobotBundle::load(crate::menagerie::v2_holdout_bundle_dir()) {
+                    Ok(kuka) => match run_push_matrix(&kuka, n_push, sha) {
+                        Ok((pu_k, pu_km)) => {
+                            write_phase_b_evidence(
+                                out_dir,
+                                "manipulation_iiwa14_push.json",
+                                &pu_k,
+                                &pu_km,
+                                json!({"robot":"menagerie_iiwa14","grasp":"NOT_APPLICABLE"}),
+                            )?;
+                            extra["iiwa14_push"] = json!(pu_km);
+                        }
+                        Err(e) => extra["iiwa14_error"] = json!(e),
+                    },
+                    Err(e) => extra["iiwa14_error"] = json!(e.to_string()),
+                }
+            }
             Err(e) => extra["iiwa14_error"] = json!(e),
         }
     }
@@ -1952,6 +2096,82 @@ mod tests {
     use crate::resource_discover::discover_resources;
     use crate::runner::load_and_normalize;
     use std::path::Path;
+
+    #[test]
+    fn named_to_ctrl_refuses_zero_fill_on_dim_mismatch() {
+        let man = RobotManifest {
+            robot_id: "t".into(),
+            nq: 1,
+            nv: 1,
+            nu: 1,
+            nbody: 1,
+            njoint: 1,
+            nactuator: 1,
+            nsensor: 0,
+            ncamera: 0,
+            timestep: 0.002,
+            joints: vec![],
+            actuators: vec![crate::normalize::ActuatorRecord {
+                name: "act1".into(),
+                transmission_target: "j0".into(),
+                control_dimensions: 1,
+                ctrlrange: [-1.0, 1.0],
+                ctrllimited: true,
+                force_range: None,
+                actuator_type: "position".into(),
+                transmission_kind: "joint".into(),
+            }],
+            sensors: vec![],
+            cameras: vec![],
+            bodies: vec![],
+            sites: vec![],
+            site_records: vec![],
+            derived: crate::normalize::DerivedInterface::default(),
+            model_hash: "h".into(),
+            source_hash: "s".into(),
+            mujoco_version: "3".into(),
+            source_format: "mjcf".into(),
+            lost_features: vec![],
+            support_bodies: vec![],
+            collision_groups: Default::default(),
+            metal: false,
+            evidence_status: crate::honesty::SIMULATION_ONLY.into(),
+        };
+        let err = named_to_ctrl(&man, &[("act1".into(), 0.1)], &[]).unwrap_err();
+        assert_eq!(err, SkillRefuse::InvalidCommand);
+    }
+
+    #[test]
+    fn observed_hold_values_omits_non_finite() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(corpus::robot_dir("planar_arm")).unwrap();
+        let (i, man) = load_and_normalize(&b, &[], 0).unwrap();
+        let model = crate::semantics_map::embodiment_from_manifest(&b, &man);
+        let nq = man.nq.max(0) as usize;
+        let nu = man.nu.max(0) as usize;
+        let mut qpos = vec![0.1; nq];
+        let mut ctrl = vec![0.2; nu];
+        if !qpos.is_empty() {
+            qpos[0] = f64::NAN;
+        }
+        if !ctrl.is_empty() {
+            ctrl[0] = f64::NAN;
+            if nu > 1 {
+                ctrl[1] = 0.5;
+            }
+        }
+        let out = observed_hold_values(&model, &man, &qpos, &ctrl);
+        for v in out.values() {
+            assert!(v.is_finite(), "non-finite leaked into hold map: {out:?}");
+        }
+        if nu > 1 {
+            let name = &man.actuators[1].name;
+            assert_eq!(out.get(name).copied(), Some(0.5));
+        }
+        crate::mujoco_exec::checkin_worker(i);
+    }
 
     #[test]
     fn grasp_generator_covers_required_negatives() {
@@ -2023,7 +2243,9 @@ mod tests {
         assert_eq!(rel_m.unauthorized_writes, 0);
         let g_n = if n > 2 { 300 } else { 3 };
         let (gr, gr_m) = run_grasp_matrix(&b, g_n, &sha).expect("grasp");
-        assert!(gr.iter().all(|e| e.unauthorized_writes == 0 || e.expected_refusal));
+        assert!(gr
+            .iter()
+            .all(|e| e.unauthorized_writes == 0 || e.expected_refusal));
         assert_eq!(gr_m.unauthorized_writes, 0);
         let p_n = if n > 2 { 300 } else { 3 };
         let (pu, pu_m) = run_push_matrix(&b, p_n, &sha).expect("push");
@@ -2052,7 +2274,8 @@ mod tests {
         let mut pos_p = Vec::new();
         for i in [15, 16, 20] {
             let sc = push_scenario(3014 + i as u64, true, i);
-            let (ep, inst, _) = run_skill_episode(&b, &model, &[], &sc, &sha, "PUSH", None).unwrap();
+            let (ep, inst, _) =
+                run_skill_episode(&b, &model, &[], &sc, &sha, "PUSH", None).unwrap();
             crate::mujoco_exec::checkin_worker(inst);
             pos_p.push(ep);
         }

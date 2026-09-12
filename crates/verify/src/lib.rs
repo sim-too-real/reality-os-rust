@@ -642,4 +642,21 @@ mod integration_tests {
         );
         assert!(obs.rgb.is_none());
     }
+
+    #[test]
+    fn named_to_ctrl_does_not_invent_zero_vector() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = crate::bundle::RobotBundle::load(crate::corpus::robot_dir("planar_arm")).unwrap();
+        let (_i, man) = crate::runner::load_and_normalize(&b, &[], 0).unwrap();
+        let named: Vec<(String, f64)> = man
+            .actuators
+            .iter()
+            .map(|a| (a.name.clone(), 0.1))
+            .collect();
+        let bad = crate::manipulation::named_to_ctrl(&man, &named, &[]);
+        assert!(bad.is_err());
+        crate::mujoco_exec::checkin_worker(_i);
+    }
 }

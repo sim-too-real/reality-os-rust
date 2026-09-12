@@ -160,6 +160,34 @@ pub fn run_foundation_reach_on(
         Ok(ctrl) => ctrl,
     };
 
+    let episode_id = format!("foundation-reach-{}", manifest.robot_id);
+    let observation_id = "obs-0".to_string();
+    let policy_obs = build_policy_observation(
+        manifest,
+        &episode_id,
+        &observation_id,
+        &initial,
+        target,
+        now_s,
+    );
+    let current_by_name =
+        crate::manipulation::observed_hold_values(&model, manifest, &initial.qpos, &initial.ctrl);
+    let proposal = match action_proposal_from_ctrl(
+        &policy_obs,
+        &ctrl,
+        &model,
+        manifest,
+        &current_by_name,
+        &initial.ctrl,
+        now_s,
+        HORIZON_S + 0.5,
+    ) {
+        Ok(p) => p,
+        Err(refuse) => {
+            return Ok((error_report(base, refuse_string(refuse)), inst));
+        }
+    };
+
     let shared = Arc::new(SharedMujoco {
         inst: Mutex::new(inst),
         probe: SimActuationProbe::default(),
@@ -185,26 +213,6 @@ pub fn run_foundation_reach_on(
     let mut auth = SimAuthority::open_with_journal(plant, manifest, now_s, Some(journal))?;
     auth.freshness_s = freshness_s;
     auth.command_lifetime_s = HORIZON_S + 0.5;
-
-    let episode_id = format!("foundation-reach-{}", manifest.robot_id);
-    let observation_id = "obs-0".to_string();
-    let policy_obs = build_policy_observation(
-        manifest,
-        &episode_id,
-        &observation_id,
-        &initial,
-        target,
-        now_s,
-    );
-    let current_by_joint = current_joint_map(&model, &initial.qpos);
-    let proposal = action_proposal_from_ctrl(
-        &policy_obs,
-        &ctrl,
-        &model,
-        &current_by_joint,
-        now_s,
-        auth.command_lifetime_s,
-    )?;
     let task = TaskSpec::Reach {
         end_effector: privileged_ee(bundle),
         target,
@@ -418,18 +426,6 @@ fn graph_from_truth(
     g
 }
 
-fn current_joint_map(model: &EmbodimentModel, qpos: &[f64]) -> HashMap<String, f64> {
-    let mut out = HashMap::new();
-    for joint in &model.joints {
-        if let Some(adr) = joint.qpos_adr {
-            if let Some(q) = qpos.get(adr as usize) {
-                out.insert(joint.name.clone(), *q);
-            }
-        }
-    }
-    out
-}
-
 fn qpos_digest(qpos: &[f64]) -> String {
     let mut h = Sha256::new();
     h.update(b"realityos.foundation.qpos/1\0");
@@ -519,13 +515,14 @@ fn action_proposal_from_ctrl(
     obs: &PolicyObservation,
     ctrl: &CompiledCtrl,
     model: &EmbodimentModel,
-    current_by_joint: &HashMap<String, f64>,
+    manifest: &RobotManifest,
+    current_by_name: &HashMap<String, f64>,
+    current_ctrl: &[f64],
     now_s: f64,
     horizon_s: f64,
-) -> Result<ActionProposal, String> {
-    let lowered = lower_named_targets(model, &ctrl.targets, current_by_joint)
-        .map_err(|e| format!("lower targets: {e:?}"))?;
-    let action = lowered.into_iter().map(|(_, v)| v).collect();
+) -> Result<ActionProposal, SkillRefuse> {
+    let lowered = lower_named_targets(model, &ctrl.targets, current_by_name)?;
+    let action = crate::manipulation::named_to_ctrl(manifest, &lowered, current_ctrl)?;
     Ok(ActionProposal {
         robot_id: obs.robot_id.clone(),
         model_hash: obs.model_hash.clone(),
