@@ -51,8 +51,9 @@ use crate::protocol::{
 };
 
 /// After INST_REBOOT the servo is silent while it boots. One 400 ms
-/// sleep missed a 500–800 ms XL330. Poll a short ping until this
-/// deadline; setup identify's 16×150 ms recv must not be the wait.
+/// sleep missed a 500–800 ms XL330. Poll a short identify until this
+/// deadline; setup identify's 16×150 ms recv must not be the wait,
+/// and the first PING must not be the only attempt.
 const REBOOT_IDENTIFY_DEADLINE_MS: u64 = 1_500;
 const REBOOT_IDENTIFY_POLL_MS: u64 = 50;
 
@@ -1572,9 +1573,10 @@ impl Xl330Driver {
     /// Protocol 2.0 returns the Reboot status, then the servo is silent
     /// while it boots. A single 400 ms wait plus one identify missed a
     /// 500–800 ms XL330 (hand-turned multiturn first contact, or a
-    /// Hardware Error reboot). Poll a short ping until it answers; do
-    /// not close+open, and do not use setup `recv_status` (16×150 ms)
-    /// as the boot wait — one identify then outlasts this deadline.
+    /// Hardware Error reboot). Poll a short identify until it answers;
+    /// do not close+open. The first PING can succeed while READs are
+    /// still dead — one `ping_and_identify` then aborted with time
+    /// left. Setup `recv_status` (16×150 ms) must not be the wait.
     fn reboot_clear_ram_and_reidentify(&mut self, torque_off_why: &'static str) -> PlantResult<()> {
         let _ = self.xfer(&encode_reboot(self.cfg.servo_id), true);
         // Reboot status is INST_STATUS with empty params — the same
@@ -1582,7 +1584,7 @@ impl Xl330Driver {
         // must not look like a post-reboot identify.
         self.drain_rx();
         let deadline = Instant::now() + Duration::from_millis(REBOOT_IDENTIFY_DEADLINE_MS);
-        let ping = loop {
+        let identified = loop {
             if Instant::now() >= deadline {
                 break Err(io::Error::new(io::ErrorKind::TimedOut, "timeout"));
             }
@@ -1590,15 +1592,13 @@ impl Xl330Driver {
             if Instant::now() >= deadline {
                 break Err(io::Error::new(io::ErrorKind::TimedOut, "timeout"));
             }
-            match self.ping_after_reboot() {
+            match self.identify_after_reboot() {
                 Ok(()) => break Ok(()),
                 Err(e) if Instant::now() >= deadline => break Err(e),
                 Err(_) => {}
             }
         };
-        ping.map_err(|e| PlantError::refused(format!("dxl_reboot_identify:{e}")))?;
-        self.ping_and_identify()
-            .map_err(|e| PlantError::refused(format!("dxl_reboot_identify:{e}")))?;
+        identified.map_err(|e| PlantError::refused(format!("dxl_reboot_identify:{e}")))?;
         self.write_torque_off_verified(torque_off_why)
     }
 
@@ -1671,6 +1671,18 @@ impl Xl330Driver {
             }
         }
         let _ = port.set_timeout(saved);
+        result
+    }
+
+    /// Short ping, then identify with the 40 ms live budget so a
+    /// PING-up / READ-dead boot cannot spend 16×150 ms and miss the
+    /// 1.5 s deadline. Caller retries until that deadline.
+    fn identify_after_reboot(&mut self) -> io::Result<()> {
+        self.ping_after_reboot()?;
+        let saved = self.live_io;
+        self.live_io = true;
+        let result = self.ping_and_identify();
+        self.live_io = saved;
         result
     }
 

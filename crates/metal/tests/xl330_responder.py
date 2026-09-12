@@ -275,7 +275,10 @@ _corrupt_next_crc = False
 _silent_next_status = False
 # After INST_REBOOT the real XL330 is silent while it boots. A single
 # 400 ms host wait missed identify. Armed from REALITYOS_METAL_PTY_SLOW_REBOOT_MS.
+# After that, PING can land before READ (SRL / model). Armed from
+# REALITYOS_METAL_PTY_REBOOT_PING_ONLY_MS.
 _silent_until = 0.0
+_ping_only_until = 0.0
 _travel_reads = 0
 _travel_from: int | None = None
 _travel_to: int | None = None
@@ -586,7 +589,7 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             regs[64] = 0
         # Status for this Reboot is still sent; later packets are dropped
         # until the boot window ends (real XL330 is silent while booting).
-        global _silent_until
+        global _silent_until, _ping_only_until
         try:
             silent_s = max(
                 0.0,
@@ -594,8 +597,19 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             )
         except ValueError:
             silent_s = 0.0
+        try:
+            ping_only_s = max(
+                0.0,
+                float(os.environ.get("REALITYOS_METAL_PTY_REBOOT_PING_ONLY_MS", "0"))
+                / 1000.0,
+            )
+        except ValueError:
+            ping_only_s = 0.0
+        now = time.monotonic()
         if silent_s > 0:
-            _silent_until = time.monotonic() + silent_s
+            _silent_until = now + silent_s
+        if ping_only_s > 0:
+            _ping_only_until = now + silent_s + ping_only_s
         return b"", 0
     return b"", 0
 
@@ -621,8 +635,10 @@ def main() -> None:
             continue
         req_id, inst, params, _consumed = parsed
         del buf[:]
-        global _silent_until
+        global _silent_until, _ping_only_until
         if time.monotonic() < _silent_until:
+            continue
+        if time.monotonic() < _ping_only_until and inst != INST_PING:
             continue
         own = regs[7]
         secondary = regs[12]

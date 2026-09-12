@@ -1227,6 +1227,24 @@ fn xl330_pty_identifies_after_reboot_longer_than_400ms() {
 }
 
 #[test]
+fn xl330_pty_identifies_when_reboot_answers_ping_before_read() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_PRESENT_MULTITURN", "1"),
+        ("REALITYOS_METAL_PTY_SLOW_REBOOT_MS", "400"),
+        ("REALITYOS_METAL_PTY_REBOOT_PING_ONLY_MS", "400"),
+    ]);
+    let root = metal_test_root("pty-reboot-ping-only");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect(
+        "a reboot that answers PING at 400 ms but not READ until 800 ms must keep polling identify; one ping_and_identify after the first ping aborted first contact",
+    );
+    assert_eq!(driver.startup_present(), 904);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_refuses_when_reboot_identify_stays_silent() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[
