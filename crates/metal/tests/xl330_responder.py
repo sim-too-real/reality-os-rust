@@ -271,6 +271,9 @@ def status_wanted(srl: int, inst: int) -> bool:
 _motion_block_reads = 0
 _corrupt_next_crc = False
 _silent_next_status = False
+# After INST_REBOOT the real XL330 is silent while it boots. A single
+# 400 ms host wait missed identify. Armed from REALITYOS_METAL_PTY_SLOW_REBOOT_MS.
+_silent_until = 0.0
 _travel_reads = 0
 _travel_from: int | None = None
 _travel_to: int | None = None
@@ -572,6 +575,18 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             regs[132:136] = struct.pack("<i", present % 4096)
         if os.environ.get("REALITYOS_METAL_PTY_HW_ERROR") == "1":
             regs[64] = 1  # Startup Configuration torque-on after reboot
+        # Status for this Reboot is still sent; later packets are dropped
+        # until the boot window ends (real XL330 is silent while booting).
+        global _silent_until
+        try:
+            silent_s = max(
+                0.0,
+                float(os.environ.get("REALITYOS_METAL_PTY_SLOW_REBOOT_MS", "0")) / 1000.0,
+            )
+        except ValueError:
+            silent_s = 0.0
+        if silent_s > 0:
+            _silent_until = time.monotonic() + silent_s
         return b"", 0
     return b"", 0
 
@@ -597,6 +612,9 @@ def main() -> None:
             continue
         req_id, inst, params, _consumed = parsed
         del buf[:]
+        global _silent_until
+        if time.monotonic() < _silent_until:
+            continue
         own = regs[7]
         secondary = regs[12]
         if req_id not in (254, own) and not (
@@ -643,8 +661,6 @@ def main() -> None:
                 os.write(master, echo)
             except OSError:
                 continue
-
-
 if __name__ == "__main__":
     try:
         main()

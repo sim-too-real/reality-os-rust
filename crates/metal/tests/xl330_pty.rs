@@ -1203,6 +1203,48 @@ fn xl330_pty_reboots_when_torque_off_present_is_multi_turn() {
 }
 
 #[test]
+fn xl330_pty_identifies_after_reboot_longer_than_400ms() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_PRESENT_MULTITURN", "1"),
+        ("REALITYOS_METAL_PTY_SLOW_REBOOT_MS", "600"),
+    ]);
+    let root = metal_test_root("pty-slow-reboot");
+    let cfg = MetalConfig::example(&tty);
+    let started = std::time::Instant::now();
+    let mut driver = Xl330Driver::open(cfg, &root).expect(
+        "hand-turned multiturn reboot that stays silent 600 ms must still identify; a single 400 ms wait missed first contact",
+    );
+    assert!(
+        started.elapsed() >= Duration::from_millis(600),
+        "must actually wait out the silent boot, not only wrap Present: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(driver.startup_present(), 904);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_reboot_identify_stays_silent() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_PRESENT_MULTITURN", "1"),
+        ("REALITYOS_METAL_PTY_SLOW_REBOOT_MS", "2000"),
+    ]);
+    let root = metal_test_root("pty-reboot-silent");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!(
+            "a reboot that stays silent past the 1.5 s poll must not torque-on (setup identify's 16×150 ms recv used to sit through a 2 s boot and then accept the first reply)"
+        ),
+        Err(e) => e,
+    };
+    assert!(err.to_string().contains("dxl_reboot_identify"), "got {err}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_upgrades_wizard_9600_so_live_io_fits_deadline() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_BAUD_9600", "1")]);

@@ -50,6 +50,12 @@ use crate::protocol::{
     STATUS_RETURN_ALL, XL330_POSITION_MODE_MAX, XL330_POSITION_MODE_MIN, XL330_PWM_LIMIT_MAX,
 };
 
+/// After INST_REBOOT the servo is silent while it boots. One 400 ms
+/// sleep missed a 500–800 ms XL330. Poll a short ping until this
+/// deadline; setup identify's 16×150 ms recv must not be the wait.
+const REBOOT_IDENTIFY_DEADLINE_MS: u64 = 1_500;
+const REBOOT_IDENTIFY_POLL_MS: u64 = 50;
+
 pub struct Xl330Driver {
     port: Option<Box<dyn SerialPort>>,
     #[allow(dead_code)]
@@ -1552,12 +1558,109 @@ impl Xl330Driver {
         )
     }
 
+    /// Protocol 2.0 returns the Reboot status, then the servo is silent
+    /// while it boots. A single 400 ms wait plus one identify missed a
+    /// 500–800 ms XL330 (hand-turned multiturn first contact, or a
+    /// Hardware Error reboot). Poll a short ping until it answers; do
+    /// not close+open, and do not use setup `recv_status` (16×150 ms)
+    /// as the boot wait — one identify then outlasts this deadline.
     fn reboot_clear_ram_and_reidentify(&mut self, torque_off_why: &'static str) -> PlantResult<()> {
         let _ = self.xfer(&encode_reboot(self.cfg.servo_id), true);
-        std::thread::sleep(Duration::from_millis(400));
+        // Reboot status is INST_STATUS with empty params — the same
+        // shape as PING. PTY `ClearBuffer` is a no-op; leftover RX
+        // must not look like a post-reboot identify.
+        self.drain_rx();
+        let deadline = Instant::now() + Duration::from_millis(REBOOT_IDENTIFY_DEADLINE_MS);
+        let ping = loop {
+            if Instant::now() >= deadline {
+                break Err(io::Error::new(io::ErrorKind::TimedOut, "timeout"));
+            }
+            std::thread::sleep(Duration::from_millis(REBOOT_IDENTIFY_POLL_MS));
+            if Instant::now() >= deadline {
+                break Err(io::Error::new(io::ErrorKind::TimedOut, "timeout"));
+            }
+            match self.ping_after_reboot() {
+                Ok(()) => break Ok(()),
+                Err(e) if Instant::now() >= deadline => break Err(e),
+                Err(_) => {}
+            }
+        };
+        ping.map_err(|e| PlantError::refused(format!("dxl_reboot_identify:{e}")))?;
         self.ping_and_identify()
             .map_err(|e| PlantError::refused(format!("dxl_reboot_identify:{e}")))?;
         self.write_torque_off_verified(torque_off_why)
+    }
+
+    /// Read-until-quiet. `serialport` `ClearBuffer` on a PTY often
+    /// leaves the Reboot status sitting for the next `xfer`.
+    fn drain_rx(&mut self) {
+        let Some(port) = self.port.as_mut() else {
+            return;
+        };
+        let saved = port.timeout();
+        let _ = port.clear(serialport::ClearBuffer::Input);
+        let _ = port.set_timeout(Duration::from_millis(5));
+        let mut tmp = [0u8; 64];
+        let end = Instant::now() + Duration::from_millis(20);
+        while Instant::now() < end {
+            match port.read(&mut tmp) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        let _ = port.set_timeout(saved);
+        let _ = port.clear(serialport::ClearBuffer::Input);
+    }
+
+    /// One PING with a poll-sized budget. Setup identify's 16×150 ms
+    /// recv would sit through a 1.5 s deadline and then accept the
+    /// first reply after a longer silent boot.
+    fn ping_after_reboot(&mut self) -> io::Result<()> {
+        self.drain_rx();
+        let frame = encode_ping(self.cfg.servo_id);
+        let port = self
+            .port
+            .as_mut()
+            .ok_or_else(|| io::Error::other("metal_serial_closed"))?;
+        let saved = port.timeout();
+        port.clear(serialport::ClearBuffer::Input)
+            .map_err(io::Error::other)?;
+        port.write_all(&frame).map_err(io::Error::other)?;
+        port.flush().map_err(io::Error::other)?;
+        half_duplex_turnaround(&self.cfg.device);
+        port.set_timeout(Duration::from_millis(REBOOT_IDENTIFY_POLL_MS))
+            .map_err(io::Error::other)?;
+        let mut acc = Vec::new();
+        let mut tmp = [0u8; 64];
+        let end = Instant::now() + Duration::from_millis(REBOOT_IDENTIFY_POLL_MS);
+        let mut result = Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "dxl_reboot_ping_timeout",
+        ));
+        while Instant::now() < end {
+            match port.read(&mut tmp) {
+                Ok(0) => {}
+                Ok(n) => {
+                    acc.extend_from_slice(&tmp[..n]);
+                    if let Ok(st) = decode_status_scan(&acc) {
+                        result = if instruction_ok(st.error) {
+                            Ok(())
+                        } else {
+                            Err(io::Error::other(format!("dxl_status_error:{}", st.error)))
+                        };
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::TimedOut => break,
+                Err(e) => {
+                    let _ = port.set_timeout(saved);
+                    return Err(e);
+                }
+            }
+        }
+        let _ = port.set_timeout(saved);
+        result
     }
 
     /// Leftover Wizard 9 600 cannot host live I/O. Write factory baud
