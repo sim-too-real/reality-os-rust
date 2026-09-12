@@ -2204,13 +2204,17 @@ wait_for_authority_bus_drop() {
     # as_autonomy wraps each propose in sudo+timeout(20). That spawn
     # is 100s of ms, so "as fast as sensor IPC allows" was still too
     # slow for the brownout window. One autonomy process talks
-    # ipc.sock directly (same dxl_vin_* tokens). bus/ is 0700, so
-    # persist_vin < 2.0 V stays a root-side file watch.
+    # ipc.sock directly (same dxl_vin_* tokens). Root opens the
+    # poller and the save file: ROOT is 0751 (autonomy cannot create
+    # vin_cutoff_sensor.json) and a 0700 clone would hide the repo
+    # script. bus/ is 0700, so persist_vin < 2.0 V stays a root watch.
     start="$(date +%s)"
+    : >"$save"
     sudo -u "$AUTONOMY_USER" -- env \
       REALITYOS_METAL_DEVICE="${REALITYOS_METAL_DEVICE:-}" \
       timeout --signal=TERM --kill-after=2 62 \
-      bash "$SCRIPT_DIR/metal-sensor-drop.sh" poll-vin "$ROOT/ipc.sock" "$save" 60 &
+      python3 - "$ROOT/ipc.sock" 60 \
+      <"$SCRIPT_DIR/metal-vin-sensor-poll.py" >"$save" &
     py=$!
     while kill -0 "$py" 2>/dev/null; do
       now="$(date +%s)"

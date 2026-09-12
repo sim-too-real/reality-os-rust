@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Detect a live bus/VIN drop from an authority sensor JSON body.
-# `poll-vin SOCK SAVE [SECONDS]` is the live VIN wait: one process, one
-# connect per sample, same dxl_vin_* tokens. Not a PTY proof gate.
+# `poll-vin SOCK SAVE [SECONDS]` wraps metal-vin-sensor-poll.py (stdout
+# JSON, same dxl_vin_* tokens). Not a PTY proof gate.
 #
 # `realityos-metal-propose sensor` returns exit 0 for any successful IPC
 # round trip, including ok=false. A VIN brownout does not kill serve; it
@@ -79,111 +79,19 @@ PY
 }
 
 # One autonomy process, one connect per sample. Same tokens as
-# metal_sensor_indicates_vin_drop. Do not accept UART death, truncated
-# IPC, or a missing socket as VIN. Campaign VIN wait must not respawn
-# sudo+propose each sample: that gap is 100s of ms; a hard switch can
-# sag through the Wizard window in tens of ms, then later polls are
-# only UART tokens. bus/vin < 2.0 V stays a root-side fallback because
-# bus/ is 0700 authority.
+# metal_sensor_indicates_vin_drop. The poller prints JSON to stdout
+# and does not write the metal root: ROOT is 0751 and a 0700 clone
+# would make autonomy miss both the save file and this script.
+# bus/vin < 2.0 V stays a root-side fallback because bus/ is 0700.
+_METAL_SENSOR_DROP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+METAL_VIN_SENSOR_POLL_PY="${_METAL_SENSOR_DROP_DIR}/metal-vin-sensor-poll.py"
+
 metal_poll_vin_sensor_ipc() {
   local sock="${1:-}"
   local save="${2:-}"
   local seconds="${3:-60}"
-  [[ -n "$sock" && -n "$save" ]] || return 1
-  python3 - "$sock" "$save" "$seconds" <<'PY'
-import json, os, socket, sys, time
-
-sock_path, save_path, seconds_s = sys.argv[1:4]
-try:
-    seconds = float(seconds_s)
-except ValueError:
-    sys.exit(1)
-if seconds <= 0:
-    sys.exit(1)
-tokens = (
-    "dxl_vin_outside_wizard_limits",
-    "dxl_vin_unreadable",
-)
-req = (
-    json.dumps(
-        {
-            "op": "sensor",
-            "verb": "hold",
-            "command_id": "metal-vin-wait",
-            "proposer": "autonomy",
-        }
-    )
-    + "\n"
-).encode()
-deadline = time.monotonic() + seconds
-
-
-def recv_line(sock, rec_deadline):
-    buf = b""
-    while time.monotonic() < rec_deadline:
-        remain = rec_deadline - time.monotonic()
-        if remain <= 0:
-            return None
-        sock.settimeout(min(0.05, remain))
-        try:
-            chunk = sock.recv(4096)
-        except socket.timeout:
-            continue
-        except OSError:
-            return None
-        if not chunk:
-            return None
-        buf += chunk
-        nl = buf.find(b"\n")
-        if nl >= 0:
-            return buf[:nl].decode("utf-8", "replace")
-    return None
-
-
-def one_sensor():
-    remain = deadline - time.monotonic()
-    if remain <= 0:
-        return None
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
-        sock.settimeout(min(0.05, remain))
-        sock.connect(sock_path)
-        sock.settimeout(min(2.0, max(0.01, deadline - time.monotonic())))
-        sock.sendall(req)
-        return recv_line(sock, min(deadline, time.monotonic() + 2.0))
-    except OSError:
-        return None
-    finally:
-        sock.close()
-
-
-def vin_body(raw):
-    if not raw or not raw.strip():
-        return None
-    try:
-        body = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(body, dict) or body.get("ok") is True:
-        return None
-    blob = json.dumps(body).lower()
-    if any(tok in blob for tok in tokens):
-        return body
-    return None
-
-
-while time.monotonic() < deadline:
-    body = vin_body(one_sensor())
-    if body is None:
-        continue
-    tmp = save_path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(body, f, separators=(",", ":"))
-        f.write("\n")
-    os.replace(tmp, save_path)
-    sys.exit(0)
-sys.exit(1)
-PY
+  [[ -n "$sock" && -n "$save" && -f "$METAL_VIN_SENSOR_POLL_PY" ]] || return 1
+  python3 "$METAL_VIN_SENSOR_POLL_PY" "$sock" "$seconds" >"$save"
 }
 
 # Independent VIN cutoff: USB data may stay enumerated. A USB-UART
@@ -372,6 +280,14 @@ PY
     exit 1
   fi
   metal_sensor_indicates_vin_drop "$tmp/poll-vin-hit.json"
+  # Campaign runs `python3 - SOCK SECONDS < poll.py >save` so autonomy
+  # never opens the repo script or writes ROOT.
+  if ! python3 - "$tmp/poll-vin-ok.sock" 1 <"$METAL_VIN_SENSOR_POLL_PY" >"$tmp/poll-vin-stdin.json"; then
+    echo "error: python3 - < metal-vin-sensor-poll.py must catch VIN (campaign VIN wait)" >&2
+    kill "$srv_pid" 2>/dev/null || true
+    exit 1
+  fi
+  metal_sensor_indicates_vin_drop "$tmp/poll-vin-stdin.json"
   if metal_poll_vin_sensor_ipc "$tmp/poll-vin-uart.sock" "$tmp/poll-vin-uart.json" 0.4; then
     echo "error: poll-vin must not treat UART death as VIN" >&2
     kill "$srv_pid" 2>/dev/null || true
