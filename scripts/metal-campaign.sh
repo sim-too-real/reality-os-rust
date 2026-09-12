@@ -2195,7 +2195,20 @@ wait_for_authority_bus_drop() {
   local save="${1:-$ROOT/bus_drop_sensor.json}"
   local check_vin="${2:-0}"
   local respfile ipc_ok vin_now
-  for _ in $(seq 1 120); do
+  # USB-UART death persists; 500 ms is enough. VIN evidence is a
+  # Present Input Voltage sample (or persist_vin < 2.0 V). A hard
+  # switch can sag through the Wizard window in tens of ms, then the
+  # servo goes silent and later polls are only UART tokens. Poll VIN
+  # faster so the existing dxl_vin_* tokens can still be measured.
+  # Do not accept UART death as VIN. Keep the 60 s operator window.
+  local tries=120
+  local pause=0.5
+  if [[ "$check_vin" == "1" ]]; then
+    tries=1200
+    pause=0.05
+  fi
+  local i
+  for i in $(seq 1 "$tries"); do
     respfile="$(mktemp)"
     if as_autonomy "$PROP" --root "$ROOT" sensor >"$respfile" 2>"$respfile.err"; then
       ipc_ok=1
@@ -2233,7 +2246,7 @@ wait_for_authority_bus_drop() {
       fi
     fi
     rm -f "$respfile" "$respfile.err"
-    sleep 0.5
+    sleep "$pause"
   done
   return 1
 }
