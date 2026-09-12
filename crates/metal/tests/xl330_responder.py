@@ -330,6 +330,34 @@ def wrap_present_to_one_rotation(regs: bytearray) -> None:
     regs[132:136] = struct.pack("<i", (actual % 4096) + offset)
 
 
+def apply_sag_file(regs: bytearray) -> None:
+    """One-shot Present overwrite after crash_if / DTR-RESET.
+
+    The host writes an integer tick count to REALITYOS_METAL_PTY_SAG_FILE
+    between driver opens. Applied on the next handle, then unlinked so
+    later Goal writes can move Present. Missing / empty / unreadable
+    files are ignored.
+    """
+    path = os.environ.get("REALITYOS_METAL_PTY_SAG_FILE")
+    if not path:
+        return
+    try:
+        raw = open(path, encoding="utf-8").read().strip()
+    except OSError:
+        return
+    if not raw:
+        return
+    try:
+        present = int(raw)
+    except ValueError:
+        return
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    regs[132:136] = struct.pack("<i", present)
+
+
 def maybe_startup_yank(regs: bytearray) -> None:
     """Startup Configuration tracks Goal after DTR-RESET without a host write.
     After 80 ms (inside the 100 ms PTY open settle) copy goal→present while
@@ -369,6 +397,7 @@ def advance_delayed_travel(regs: bytearray) -> None:
 
 def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
     global _motion_block_reads
+    apply_sag_file(regs)
     maybe_startup_yank(regs)
     if inst == INST_PING:
         return b"", 0
