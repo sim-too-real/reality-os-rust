@@ -125,6 +125,7 @@ impl ControlAdapter for ChainIkPositionPdAdapter {
             targets: JointTargetSet {
                 targets,
                 hold_outside: HoldSemantics::KeepCurrent,
+                explicit_safe: std::collections::BTreeMap::new(),
             },
             ik: Some(trace),
             control_mode: "position".into(),

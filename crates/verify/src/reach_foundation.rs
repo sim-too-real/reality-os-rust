@@ -583,6 +583,7 @@ fn refuse_string(err: SkillRefuse) -> String {
         SkillRefuse::StaleEvidence
         | SkillRefuse::WrongModelHash
         | SkillRefuse::EpochMismatch
+        | SkillRefuse::InvalidCommand
         | SkillRefuse::Refuse => "REFUSE".into(),
         SkillRefuse::MissingJointState => "PROBE".into(),
         SkillRefuse::KinematicsUnsupported => "KINEMATICS_UNSUPPORTED_FOR_ADAPTER".into(),

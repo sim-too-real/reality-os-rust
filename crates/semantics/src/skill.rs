@@ -65,6 +65,7 @@ pub enum SkillRefuse {
     Blocked,
     UnexpectedContact,
     ForceBoundUnavailable,
+    InvalidCommand,
 }
 
 impl SkillRefuse {
@@ -186,6 +187,7 @@ mod tests {
             SkillRefuse::Blocked,
             SkillRefuse::UnexpectedContact,
             SkillRefuse::ForceBoundUnavailable,
+            SkillRefuse::InvalidCommand,
         ] {
             assert!(!r.writes_allowed());
         }

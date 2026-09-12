@@ -152,6 +152,7 @@ pub fn lower_resource_opening(
     Ok(ActuatorCommandSet {
         commands,
         hold_outside,
+        explicit_safe: std::collections::BTreeMap::new(),
     })
 }
 
