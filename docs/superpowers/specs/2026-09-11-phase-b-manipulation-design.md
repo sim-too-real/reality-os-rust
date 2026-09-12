@@ -4,6 +4,7 @@
 **Status:** implementation design for Phase B only  
 **Baseline `main`:** `53dfb0eef73e14a9413cca202fd268e895520258` (PR #15 merged; contains PR #14)  
 **`GENERALITY_V2_FREEZE_SHA`:** `b580c6275acc797c7433faa490cc712107b0adb5`  
+**`MANIPULATION_V1_FREEZE_SHA`:** `b6396a784c9d09e69cafbb073a9ef3e933113990`  
 **Scope:** RELEASE, GRASP, PUSH. Stop after hold-out first score. No vision, VLA, planner, PLACE, insertion, tactile, locomotion.
 
 ## 0. Frozen

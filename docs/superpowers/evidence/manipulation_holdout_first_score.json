@@ -1,0 +1,110 @@
+{
+  "source_repository": "https://github.com/google-deepmind/mujoco_menagerie",
+  "source_commit": "8161bba264d7fa7c99ca301e91e7fb44737676ad",
+  "manipulation_v1_freeze_sha": "b6396a784c9d09e69cafbb073a9ef3e933113990",
+  "robot_id": "menagerie_wx250s",
+  "model_hash": "b3137989399133b38f38ccfae56685dffd03bfc18a1236c9b1d99b6f9239cbc2",
+  "provenance": {
+    "files": {
+      "CHANGELOG.md": "689979d198766073da0af7162cf48af3646179e7377a846437bbdaaed16982a8",
+      "LICENSE": "21868447315ac2b10e592d08958c1035b19a32cf39e9165b23033f68390098cb",
+      "README.md": "b188115194352c7bbb27b2c5552247dabee4249130470e5feaaecbad611b9714",
+      "assets/interbotix_black.png": "4cd224156bbaab1ddf1b92b90d46c54835a8b41f61bc258b2f216c2618e062cf",
+      "assets/wx250s_10_gripper_finger.stl": "6a459bd4ef07eb5c4687e258bd9564004e741437e2e668af7ed31964567d8f90",
+      "assets/wx250s_11_ar_tag.stl": "a18a1601074d29ed1d546ead70cd18fbb063f1db7b5b96b9f0365be714f3136a",
+      "assets/wx250s_1_base.stl": "69facd590abff70fa03431497ead2c7f1aabe616d55af594288e9bf36b1fd067",
+      "assets/wx250s_2_shoulder.stl": "337b4cb7e9b637ee3dca6a737becf831fe5f95b790b34f9a97e5cf11475fc222",
+      "assets/wx250s_3_upper_arm.stl": "b4550b3a79e83d0ca9e1a65e490ff4e25b667e8a7d8e94bab441851c96eb11fa",
+      "assets/wx250s_4_upper_forearm.stl": "1a64efc97dc129bc277afee75c129de27721e8fedcad45a4ec8b251f44542f23",
+      "assets/wx250s_5_lower_forearm.stl": "1445950b7f5ce2cf374b98711df296acd6c2b4df24c3937b413bcb6beb037603",
+      "assets/wx250s_6_wrist.stl": "8602fe1313765caceec64faff5ec919ec09c57c614b87f1c1c625dcef1e3df5a",
+      "assets/wx250s_7_gripper.stl": "6dbc189d3787ca62e09a8cf3f928ceca70c5c184a95c97ac6587805aa6a1ec6d",
+      "assets/wx250s_8_gripper_prop.stl": "30fcd807817b7c9df6275d2c8100cfe0e7786e2c65b574d22efe177520f1a316",
+      "assets/wx250s_9_gripper_bar.stl": "b54601da3f60eea180226b695bb95a9b29b187f22f5b74d9a523ac9785d9a518",
+      "scene.xml": "14142c26537a8bf563368baebcbd5b941fd7a1de38f86a6ff810b35e27df2743",
+      "wx250s.png": "1df5f35503c42cc93a5d970fec39f4b39a129e745504c2e818b7d96790af5017",
+      "wx250s.xml": "2475c1f4a4c085d370d3e7e43d56377d07bd44de3bace9371f1b5f08de00c27b"
+    },
+    "import_timestamp": "2026-09-12T08:11:17Z",
+    "model_path": "trossen_wx250s",
+    "source_commit": "8161bba264d7fa7c99ca301e91e7fb44737676ad",
+    "source_repository": "https://github.com/google-deepmind/mujoco_menagerie",
+    "tarball_sha256": "c0d6b373d0fffc6698443f7d79715f251308b888ab7d990aca4bf10fb2cdab65"
+  },
+  "resource_discovery": [
+    {
+      "actuators": [
+        "gripper"
+      ],
+      "id": "parallel_gripper",
+      "joints": [
+        "left_finger",
+        "right_finger"
+      ],
+      "topology": "COUPLED_JOINT_GRIPPER",
+      "unsupported": null
+    }
+  ],
+  "resource_qualification": {},
+  "release": {
+    "metrics": {
+      "authority_violations": 0,
+      "expected_refusals": 2,
+      "grasp_acquisition_success": 0,
+      "grasp_episodes": 0,
+      "grasp_slip": 0,
+      "grasp_verified_hold_success": 0,
+      "push_contact_establishment": 0,
+      "push_episodes": 0,
+      "push_task_success": 0,
+      "release_episodes": 20,
+      "release_success": 0,
+      "safe_completion": 20,
+      "unauthorized_writes": 0,
+      "unexpected_physical_violations": 0
+    },
+    "n": 20
+  },
+  "grasp": {
+    "metrics": {
+      "authority_violations": 0,
+      "expected_refusals": 16,
+      "grasp_acquisition_success": 2,
+      "grasp_episodes": 20,
+      "grasp_slip": 0,
+      "grasp_verified_hold_success": 2,
+      "push_contact_establishment": 0,
+      "push_episodes": 0,
+      "push_task_success": 0,
+      "release_episodes": 0,
+      "release_success": 0,
+      "safe_completion": 20,
+      "unauthorized_writes": 0,
+      "unexpected_physical_violations": 0
+    },
+    "n": 20
+  },
+  "push": {
+    "metrics": {
+      "authority_violations": 0,
+      "expected_refusals": 14,
+      "grasp_acquisition_success": 0,
+      "grasp_episodes": 0,
+      "grasp_slip": 0,
+      "grasp_verified_hold_success": 0,
+      "push_contact_establishment": 14,
+      "push_episodes": 20,
+      "push_task_success": 0,
+      "release_episodes": 0,
+      "release_success": 0,
+      "safe_completion": 20,
+      "unauthorized_writes": 0,
+      "unexpected_physical_violations": 0
+    },
+    "n": 20
+  },
+  "conclusion": "MANIPULATION GENERALIZATION LIMIT FOUND",
+  "metal": false,
+  "evidence_status": "SIMULATION_ONLY",
+  "simulation_only": true
+}

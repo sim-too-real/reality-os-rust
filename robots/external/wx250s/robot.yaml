@@ -1,0 +1,27 @@
+robot_id: menagerie_wx250s
+model_format: mjcf
+model_file: model/wx250s.xml
+asset_roots:
+  - model
+expected_base_type: fixed
+joint_aliases: {}
+actuator_aliases: {}
+end_effectors:
+  - name: tool0
+    body: wx250s/gripper_link
+grippers:
+  - name: parallel_gripper
+    body: wx250s/gripper_link
+    joint: left_finger
+feet: []
+cameras: []
+task_frames:
+  - name: tool0
+    body: wx250s/gripper_link
+collision_groups: {}
+default_controller_profile: pd_position
+source:
+  license: BSD-3-Clause
+  attribution: Official Google DeepMind MuJoCo Menagerie (trossen_wx250s).
+  redistributable: true
+  notes: YAML written from official Menagerie XML after freeze. Not used during development.
