@@ -13,6 +13,14 @@ DEVICE="${REALITYOS_METAL_DEVICE:-}"
 CUTOFF_TESTED="${REALITYOS_METAL_CUTOFF_TESTED:-0}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=metal-unix-mode.sh
+source "$SCRIPT_DIR/metal-unix-mode.sh"
+# shellcheck source=metal-sensor-drop.sh
+source "$SCRIPT_DIR/metal-sensor-drop.sh"
+# shellcheck source=metal-online-journal.sh
+source "$SCRIPT_DIR/metal-online-journal.sh"
+# shellcheck source=metal-nudge-action.sh
+source "$SCRIPT_DIR/metal-nudge-action.sh"
 # Authority UID cannot write the repo `docs/` tree. Resolve against the
 # script's repo, not `$PWD`: `sudo ... /path/scripts/metal-campaign.sh`
 # from $HOME used to install ~/docs/metal_proof.json after a live run.
@@ -90,7 +98,7 @@ usb_tty_owner_mode_ok() {
   want_uid="$(id -u "$AUTHORITY_USER")"
   got_uid="$(stat -c '%u' "$real" 2>/dev/null || true)"
   mode="$(stat -c '%a' "$real" 2>/dev/null || true)"
-  [[ "$got_uid" == "$want_uid" && "$mode" == "0600" ]]
+  [[ "$got_uid" == "$want_uid" ]] && unix_mode_eq "$mode" 0600
 }
 
 # Live /dev/ttyUSB* (or ACM/CH341) after resolving by-id / by-path.
@@ -214,6 +222,10 @@ if [[ "$DEVICE_REAL" == /dev/pts/* ]]; then
   PTY_SEQUENCE_ACTIVE=1
   CUTOFF_TESTED=0
   export REALITYOS_METAL_CUTOFF_TESTED=0
+  export REALITYOS_METAL_CUTOFF_LIVE=0
+  export REALITYOS_METAL_CUTOFF_LIVE_OBSERVED=0
+  export REALITYOS_METAL_UNPLUG_LIVE=0
+  export REALITYOS_METAL_UNPLUG_LIVE_OBSERVED=0
   export REALITYOS_METAL_ALLOW_PTY=1
 fi
 # probe identifies (SRL poke only; no EEPROM, no torque). serve enables
@@ -224,6 +236,20 @@ if [[ "$PTY_SEQUENCE_ACTIVE" != "1" && "$CUTOFF_TESTED" != "1" ]]; then
   echo "error: open the VIN disconnect, confirm lost holding torque (USB/data may stay enumerated), then REALITYOS_METAL_CUTOFF_TESTED=1." >&2
   echo "error: that cutoff is not STO/SS1/PL/SIL unless the hardware's own documentation says it is." >&2
   exit 2
+fi
+# measured_success needs both live measurements. Do not torque a real
+# XL330 for ten minutes and then fail because the operator omitted a flag.
+if [[ "$PTY_SEQUENCE_ACTIVE" != "1" ]]; then
+  if [[ "${REALITYOS_METAL_UNPLUG_LIVE:-0}" != "1" ]]; then
+    echo "error: refuse to run the live XL330 campaign without REALITYOS_METAL_UNPLUG_LIVE=1." >&2
+    echo "error: force_disconnect is a campaign hook; measured_success requires a physical USB-UART unplug." >&2
+    exit 2
+  fi
+  if [[ "${REALITYOS_METAL_CUTOFF_LIVE:-0}" != "1" ]]; then
+    echo "error: refuse to run the live XL330 campaign without REALITYOS_METAL_CUTOFF_LIVE=1." >&2
+    echo "error: REALITYOS_METAL_CUTOFF_TESTED is operator attestation only and cannot mint measured_success." >&2
+    exit 2
+  fi
 fi
 if [[ -z "$ROOT" || "$ROOT" == "/" || "$ROOT" == "/tmp" || "$ROOT" == "/var" ]]; then
   echo "error: refusing to wipe unexpected REALITYOS_METAL_ROOT=$ROOT" >&2
@@ -1525,10 +1551,11 @@ run_init_and_probe() {
 run_init_and_probe
 as_authority "$SMOKE" --root "$ROOT" bind-measured
 # Probe wrote the working baud/id. REALITYOS_METAL_BAUD is a probe
-# hint (2/3/4 Mbps only). A factory XL330 is 57 600; 1 Mbps is already
-# in the automatic scan after that. Serve must not reopen at the hint
-# (campaign used to pass the env through and apply_process_env
-# clobbered metal.json).
+# scan extra (2/3/4 Mbps only). init/probe must not persist the env
+# hint into metal.json before discover. A factory XL330 is 57 600;
+# 1 Mbps is already in the automatic scan after that. Serve must not
+# reopen at a leftover hint (campaign used to pass the env through
+# and apply_process_env clobbered metal.json).
 if [[ -f "$ROOT/metal.json" ]]; then
   eval "$(python3 - "$ROOT/metal.json" <<'PY'
 import json, sys
@@ -1581,8 +1608,8 @@ settle_after_write() {
     fi
     sleep 0.05
   done
-  echo "warning: XL330 present did not reach goal within 1.5s; sampling anyway" >&2
-  as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1 || true
+  echo "error: XL330 present did not reach the written goal within 1.5s (still traveling or PWM-stalled)" >&2
+  return 1
 }
 
 # $! after `sudo -u ... serve &` is the sudo wrapper. /proc/<sudo>/fd is not
@@ -1618,6 +1645,11 @@ start_auth() {
   # prepare_usb_serial_host → stabilize waits up to 4 s for a CH340
   # re-enum and refuses a recycled ttyUSB0 whose USB identity drifted.
   for attempt in 1 2 3 4 5; do
+    # start_online with first_online=true refuses an existing journal/seal.
+    # A DTR-RESET / watchdog-miss bind that created driver.jsonl must
+    # resume with --restart. Deleting the journal to retry --first-online
+    # would look like first boot and hide the crash-replay invariant.
+    first="$(metal_serve_first_online_flag "$first" "$ROOT")"
     rm -f "$ROOT/ipc.sock" "$ROOT/serve.err"
     # After crash_if / process::exit the USB-serial node can still look
     # held for a beat. Do not exit 2 here — that skipped the open retry
@@ -1699,6 +1731,58 @@ stop_auth() {
   rm -f "$ROOT/stop_serve" "$ROOT/ipc.sock"
 }
 
+# After crash_if / USB replug / first serve open, the tty can exist while
+# the servo is still in DTR-RESET. start_auth retries prepare until
+# ipc.sock binds (MetalAuthority::start succeeded), but propose/sensor
+# exits 0 for ok=false. A DTR-RESET refuse used to look like a landed
+# session on every restart except USB replug. Retry until the JSON body
+# is ok=true. Sensor IPC does not fire crash_if.
+start_auth_until_live() {
+  local first="${1:-0}"
+  local crash="${2:-}"
+  local sensor_path="${3:-$ROOT/live_sensor.json}"
+  local attempt
+  for attempt in 1 2 3 4 5 6; do
+    # Same journal flip as start_auth so the log matches the flag serve
+    # actually gets after a not-yet-live first bind.
+    first="$(metal_serve_first_online_flag "$first" "$ROOT")"
+    echo "metal-campaign: serve attempt $attempt (DTR-RESET window first=$first crash=${crash:-none})" >&2
+    if start_auth "$first" "$crash"; then
+      # Bus-loss first sensor and live USB unplug journal ESTOP.
+      # Continuity re-engages it on --restart. This process is new;
+      # recover is the operator ack so the first hold / post-replug
+      # reset hold is not estop_engaged. Same-process recover still
+      # refuses (bus_lost / hardware_session_dead).
+      if [[ "$first" == "0" ]]; then
+        as_autonomy "$PROP" --root "$ROOT" recover \
+          >"$sensor_path.recover" 2>/dev/null || true
+        if ! python3 - "$sensor_path.recover" <<'PY'
+import json, sys
+try:
+    body = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+raise SystemExit(0 if isinstance(body, dict) and body.get("ok") is True else 1)
+PY
+        then
+          echo "metal-campaign: --restart recover did not clear journal ESTOP; retry" >&2
+          stop_auth || true
+          sleep 0.8
+          continue
+        fi
+      fi
+      if as_autonomy "$PROP" --root "$ROOT" sensor >"$sensor_path" 2>/dev/null \
+        && metal_sensor_is_live "$sensor_path"; then
+        return 0
+      fi
+      echo "metal-campaign: serve bound but sensor is not live (ok!=true); retry" >&2
+      stop_auth || true
+    fi
+    sleep 0.8
+  done
+  return 1
+}
+
 AUTH_PID=""
 SMOKE_PID=""
 cleanup() {
@@ -1706,7 +1790,13 @@ cleanup() {
   cleanup_usb_serial_host || true
 }
 trap cleanup EXIT
-start_auth 1
+if ! start_auth_until_live 1 "" "$ROOT/first_live_sensor.json"; then
+  echo "error: first serve did not become live (DTR-RESET / identify)" >&2
+  cat "$ROOT/first_live_sensor.json" >&2 || true
+  cat "$ROOT/authority.err" >&2 || true
+  cat "$ROOT/serve.err" >&2 || true
+  exit 1
+fi
 if [[ -s "$ROOT/serve.err" ]]; then
   echo "error: serve.err after first bind; identity/hold would be unmeasured:" >&2
   cat "$ROOT/serve.err" >&2
@@ -1731,15 +1821,21 @@ assert int(p["direct_device_open_attempts"]) > 0, p
 assert int(p["direct_device_open_successes"]) == 0, p
 assert p["read_signing_key"] is False
 assert p["write_signing_key"] is False
+assert p["chmod_signing_key"] is False
 assert p["modify_journal"] is False
+assert p["open_actuator_lock"] is False
 assert p["take_actuator_lock"] is False
+assert int(p.get("direct_device_write_successes") or 0) == 0, p
 assert p["proc_fd_device"] is False
 print("uid-probes-ok")
 PY
 
 # Sample once so valid_hold has a before-present (zero-motion baseline).
-if ! as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null; then
+# Propose/sensor exits 0 for ok=false; require a live JSON body.
+if ! as_autonomy "$PROP" --root "$ROOT" sensor >"$ROOT/pre_hold_sensor.json" \
+  || ! metal_sensor_is_live "$ROOT/pre_hold_sensor.json"; then
   echo "error: pre-hold sensor sample failed; session is not live" >&2
+  cat "$ROOT/pre_hold_sensor.json" >&2 || true
   cat "$ROOT/serve.err" >&2 || true
   exit 1
 fi
@@ -1764,10 +1860,17 @@ measure() {
   fi
   # bus/present is the pre-write sample. After an authorized goal write,
   # wait until present is inside the hold-still band of the new goal (not
-  # merely Moving=0 — a real XL330 is still parked then). action=0.2 uses
-  # the full 32-tick cap; plastic-gear backlash can hide an 8-tick step.
+  # merely Moving=0 — a real XL330 is still parked then). The inbound
+  # nudge uses the full 32-tick cap (±tau_max); plastic-gear backlash
+  # can hide an 8-tick step. Sign is chosen so the goal stays inside
+  # the experiment cage (hardcoded +0.2 abort-latched a Wizard-max
+  # leftover or a horn near 4095).
   if [[ "$expected" == "true" ]] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("ok") else 1)' "$respfile"; then
-    settle_after_write
+    if ! settle_after_write; then
+      echo "error: authorized $name did not settle; refuse to sample a traveling or stuck horn as a proof case" >&2
+      rm -f "$respfile"
+      exit 1
+    fi
   fi
   after="$(writes)"
   eg_after="$(egress_attempts)"
@@ -1837,12 +1940,16 @@ rec = {
     "serial_tx_before": txb,
     "serial_tx_after": txa,
     "serial_tx_delta": tx_delta,
+    "physical_writes_before": txb,
+    "physical_writes_after": txa,
+    "physical_writes_delta": tx_delta,
     "device_ack_delta": ack_delta,
     "unauthorized_device_ack_delta": 0 if expected else ack_delta,
     "observed_present_after": pa_i,
     "commanded_goal": gp_i,
     "experiment_min": cage.get("experiment_min"),
     "experiment_max": cage.get("experiment_max"),
+    "violations": r.get("violations") or [],
 }
 print(json.dumps(rec))
 PY
@@ -1862,10 +1969,18 @@ open(path, "w").write(json.dumps(a))
 }
 
 add_case "$(measure valid_hold 'verb=hold' NONE true "$PROP" --root "$ROOT" --id metal-hold --verb hold propose)"
-add_case "$(measure valid_nudge 'verb=drive action=0.2' NONE true "$PROP" --root "$ROOT" --id metal-nudge --verb drive --action 0.2 propose)"
+# Pick the sign before propose. An outbound +32 is experiment_cage_violation;
+# that plant.act Err abort-latches ONLINE, so a retry of -0.2 cannot run.
+NUDGE_ACTION="$(metal_nudge_action_from_bus "$ROOT")" || {
+  echo "error: no inbound 32-tick nudge fits the experiment cage (present/cage unreadable or leftover window tighter than the step)" >&2
+  exit 1
+}
+echo "metal-campaign: valid_nudge action=$NUDGE_ACTION (inbound 32-tick step)" >&2
+add_case "$(measure valid_nudge "verb=drive action=$NUDGE_ACTION" NONE true "$PROP" --root "$ROOT" --id metal-nudge --verb drive --action "$NUDGE_ACTION" propose)"
 add_case "$(measure unsupported_action 'verb=dance' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" unsupported)"
 add_case "$(measure oversized_action 'action=1e6' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" oversized)"
-add_case "$(measure nan_action 'action=NaN' AUTHORIZATION_BLOCKED false "$PROP" --root "$ROOT" --id metal-nan --verb drive --action nan propose)"
+add_case "$(MEASURE_REQUIRE=bad_request measure nan_action 'action=[NaN]' PROTOCOL_BLOCKED false "$PROP" --root "$ROOT" '{"op":"propose","verb":"drive","command_id":"metal-nan","action":[NaN],"proposer":"autonomy"}' raw)"
+add_case "$(MEASURE_REQUIRE=bad_request measure inf_action 'action=[Infinity]' PROTOCOL_BLOCKED false "$PROP" --root "$ROOT" '{"op":"propose","verb":"drive","command_id":"metal-inf","action":[Infinity],"proposer":"autonomy"}' raw)"
 add_case "$(measure replay 'same command_id metal-hold' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-hold "$PROP" --root "$ROOT" replay)"
 add_case "$(measure malformed_json 'raw {not-json' PROTOCOL_BLOCKED false "$PROP" --root "$ROOT" raw)"
 add_case "$(measure hil_fault_refused 'hil_fault' PROTOCOL_BLOCKED false "$PROP" --root "$ROOT" hil_fault)"
@@ -1904,7 +2019,11 @@ add_case "$(MEASURE_REQUIRE='hardware_session_requires_online_restart|dispatch_s
 as_authority rm -f "$ROOT/bus/hot_swap.json"
 
 stop_auth
-start_auth 0
+if ! start_auth_until_live 0 "" "$ROOT/disconnect_restart_sensor.json"; then
+  echo "error: serve restart before force_disconnect did not become live (DTR-RESET / identify)" >&2
+  cat "$ROOT/disconnect_restart_sensor.json" >&2 || true
+  exit 1
+fi
 require_live_session
 as_authority bash -c "echo 1 > '$ROOT/bus/force_disconnect'"
 add_case "$(MEASURE_REQUIRE=online_hardware_disconnected MEASURE_FORBID=software_watchdog_miss measure device_disconnect 'force_disconnect then propose' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-disc "$PROP" --root "$ROOT" propose-id)"
@@ -1913,10 +2032,12 @@ as_authority rm -f "$ROOT/bus/force_disconnect"
 add_case "$(MEASURE_REQUIRE='hardware_session_requires_online_restart|dispatch_safe_state_latched' MEASURE_FORBID=software_watchdog_miss measure reconnect_after_disconnect 'cleared hook cannot revive instance' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-disc-re "$PROP" --root "$ROOT" propose-id)"
 
 BEFORE="$(writes)"
-PROBE_REC="$(python3 - "$ROOT/os_probe.json" "$BEFORE" <<'PY'
+TX_NOW="$(serial_tx)"
+PROBE_REC="$(python3 - "$ROOT/os_probe.json" "$BEFORE" "$TX_NOW" <<'PY'
 import json, sys
 p = json.load(open(sys.argv[1]))
 before = int(sys.argv[2])
+tx = int(sys.argv[3])
 print(json.dumps({
     "name": "autonomy_uid_direct_device",
     "expected_authorization": False,
@@ -1931,9 +2052,12 @@ print(json.dumps({
     "proposal": "open/write device, lock, key, journal, proc fd",
     "unauthorized_write": False,
     "egress_attempt_delta": 0,
-    "serial_tx_before": before,
-    "serial_tx_after": before,
+    "serial_tx_before": tx,
+    "serial_tx_after": tx,
     "serial_tx_delta": 0,
+    "physical_writes_before": tx,
+    "physical_writes_after": tx,
+    "physical_writes_delta": 0,
     "device_ack_delta": 0,
     "unauthorized_device_ack_delta": 0,
     "observed_present_after": None,
@@ -1947,10 +2071,13 @@ crash_replay() {
   local point="$1"
   local cid="$2"
   stop_auth
-  if ! start_auth 0 "$point"; then
-    echo "error: crash serve did not bind for $point" >&2
+  if ! start_auth_until_live 0 "$point" "$ROOT/crash-${point}-live.json"; then
+    echo "error: crash serve did not become live for $point (DTR-RESET / identify)" >&2
+    cat "$ROOT/crash-${point}-live.json" >&2 || true
     exit 1
   fi
+  local before_crash
+  before_crash="$(serial_tx)"
   as_autonomy "$PROP" --root "$ROOT" --id "$cid" --verb hold propose >/tmp/metal-"$cid".json || true
   # crash_if is process::exit on the smoke child. after_prepare / after_write /
   # after_ack live in execute_certified_command; during_write is in the XL330
@@ -1976,14 +2103,29 @@ crash_replay() {
   fi
   wait "$AUTH_PID" 2>/dev/null || true
   "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
-  if ! start_auth 0; then
-    echo "error: restart after $point crash failed" >&2
+  if ! start_auth_until_live 0 "" "$ROOT/crash-${point}-restart.json"; then
+    echo "error: restart after $point crash did not become live (DTR-RESET / identify)" >&2
+    cat "$ROOT/crash-${point}-restart.json" >&2 || true
     exit 1
   fi
-  local before after
-  before="$(serial_tx)"
-  as_autonomy env METAL_CMD_ID="$cid" "$PROP" --root "$ROOT" replay >/tmp/metal-"$cid"-replay.json || true
-  after="$(serial_tx)"
+  local before after after_restart
+  after_restart="$(serial_tx)"
+  # before_prepare never reaches durable prepare. Restart must not
+  # auto-retransmit (serial_tx stays). Replaying that ID is a *new*
+  # command from the journal, not a duplicate of a hardware write —
+  # do not treat that as the ambiguous-execution retry invariant.
+  if [[ "$point" == "before_prepare" ]]; then
+    before="$before_crash"
+    after="$after_restart"
+    if [[ "$after" -gt "$before" ]]; then
+      echo "error: crash/restart $point wrote or auto-retried (serial_tx $before→$after)" >&2
+      exit 1
+    fi
+  else
+    before="$(serial_tx)"
+    as_autonomy env METAL_CMD_ID="$cid" "$PROP" --root "$ROOT" replay >/tmp/metal-"$cid"-replay.json || true
+    after="$(serial_tx)"
+  fi
   rec="$(python3 - <<PY
 import json, sys
 before=int("$before"); after=int("$after")
@@ -2000,12 +2142,19 @@ print(json.dumps({
     "observed_motion": None,
     "blocking_layer": "CRASH_RECOVERY_BLOCKED",
     "journal_result": "not_retried",
-    "proposal": "same command_id after $point crash/restart",
+    "proposal": (
+        "crash at before_prepare; restart must not auto-retransmit (ID never prepared)"
+        if "$point" == "before_prepare"
+        else "same command_id after $point crash/restart"
+    ),
     "unauthorized_write": after>before,
     "egress_attempt_delta": 0,
     "serial_tx_before": before,
     "serial_tx_after": after,
     "serial_tx_delta": max(0, after-before),
+    "physical_writes_before": before,
+    "physical_writes_after": after,
+    "physical_writes_delta": max(0, after-before),
     "device_ack_delta": 0,
     "unauthorized_device_ack_delta": 0,
     "observed_present_after": None,
@@ -2020,8 +2169,9 @@ PY
   # A successful driver_write resets the counter. Do that here, quietly
   # (stdout is the case JSON for add_case).
   stop_auth
-  if ! start_auth 0; then
-    echo "error: restart after $point replay failed; next crash point would be unmeasured" >&2
+  if ! start_auth_until_live 0 "" "$ROOT/reset-${cid}-live.json"; then
+    echo "error: restart after $point replay did not become live; next crash point would be unmeasured" >&2
+    cat "$ROOT/reset-${cid}-live.json" >&2 || true
     exit 1
   fi
   as_autonomy "$PROP" --root "$ROOT" --id "${cid}-reset" --verb hold propose >"$ROOT/reset-${cid}.json" || true
@@ -2034,18 +2184,224 @@ PY
   printf '%s\n' "$rec"
 }
 
+add_case "$(crash_replay before_prepare metal-crash-beforeprep)"
 add_case "$(crash_replay after_prepare_before_write metal-crash-prep)"
 add_case "$(crash_replay during_write metal-crash-during)"
 add_case "$(crash_replay after_serial_tx_before_status metal-crash-posttx)"
 add_case "$(crash_replay after_write_before_ack metal-crash-ack)"
 add_case "$(crash_replay after_ack metal-crash-afterack)"
 
+wait_for_authority_bus_drop() {
+  local save="${1:-$ROOT/bus_drop_sensor.json}"
+  local check_vin="${2:-0}"
+  local respfile ipc_ok vin_now
+  for _ in $(seq 1 120); do
+    respfile="$(mktemp)"
+    if as_autonomy "$PROP" --root "$ROOT" sensor >"$respfile" 2>"$respfile.err"; then
+      ipc_ok=1
+    else
+      ipc_ok=0
+    fi
+    if [[ "$check_vin" == "1" ]]; then
+      # Independent VIN cutoff must not treat a USB-UART wiggle or
+      # serve death as power-loss evidence. Those are the unplug case.
+      if metal_sensor_indicates_vin_drop "$respfile"; then
+        cp "$respfile" "$save" || true
+        rm -f "$respfile" "$respfile.err"
+        return 0
+      fi
+      vin_now="$(cat "$ROOT/bus/vin" 2>/dev/null || echo 999)"
+      if [[ "$vin_now" =~ ^[0-9]+$ ]] && [[ "$vin_now" -lt 20 ]]; then
+        printf '%s\n' "{\"ok\":false,\"stage\":\"sensor\",\"status\":\"error\",\"violations\":[\"dxl_vin_unreadable\"],\"bus_vin_0.1v\":$vin_now}" >"$save"
+        rm -f "$respfile" "$respfile.err"
+        return 0
+      fi
+    else
+      if metal_sensor_indicates_drop "$respfile"; then
+        cp "$respfile" "$save" || true
+        rm -f "$respfile" "$respfile.err"
+        return 0
+      fi
+      # Empty IPC counts only when serve actually died with the UART.
+      # A transient sudo/IPC miss while smoke is still bound is not a drop.
+      if [[ "$ipc_ok" != "1" ]] && [[ ! -s "$respfile" ]]; then
+        if [[ ! -S "$ROOT/ipc.sock" ]] || ! resolve_metal_smoke_pid "$ROOT" >/dev/null 2>&1; then
+          printf '%s\n' '{"ok":false,"stage":"ipc","status":"error","violations":[]}' >"$save"
+          rm -f "$respfile" "$respfile.err"
+          return 0
+        fi
+      fi
+    fi
+    rm -f "$respfile" "$respfile.err"
+    sleep 0.5
+  done
+  return 1
+}
+
+wait_for_usb_replug() {
+  echo "Replug the USB-UART now (same recorded adapter identity)." >&2
+  local p
+  for _ in $(seq 1 120); do
+    if p="$(resolve_recorded_usb_tty "$DEVICE")"; then
+      DEVICE="$p"
+      export REALITYOS_METAL_DEVICE="$DEVICE"
+      sync_metal_device_config || true
+      echo "$DEVICE"
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "error: USB-UART did not reappear with the recorded identity within 60s" >&2
+  return 1
+}
+
+# After replug the char device can exist while the servo is still in
+# DTR-RESET. Same live-sensor retry as first start / crash-replay.
+start_auth_after_usb_replug() {
+  start_auth_until_live 0 "" "$ROOT/replug_sensor.json"
+}
+
+# After a confirmed VIN/UART drop, propose must refuse with a drop token
+# and serial_tx_delta=0. If unplug killed serve, propose-id cannot return
+# those tokens; record measured serial_tx and the drop evidence file.
+# Do not invent a disconnect violation.
+# Propose after a drop can return only UART tokens (servo already silent)
+# while the wait evidence still has the VIN refuse that armed the flag.
+# Union those evidence tokens into the case so from_measured sees them.
+union_drop_evidence_into_case() {
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+rec = json.loads(sys.argv[1])
+try:
+    body = json.load(open(sys.argv[2], encoding="utf-8"))
+except Exception:
+    body = {}
+extra = []
+if isinstance(body, dict):
+    extra = [str(v) for v in (body.get("violations") or [])]
+seen = {str(v) for v in (rec.get("violations") or [])}
+merged = list(rec.get("violations") or [])
+for v in extra:
+    if v not in seen:
+        merged.append(v)
+        seen.add(v)
+rec["violations"] = merged
+print(json.dumps(rec))
+PY
+}
+
+measure_after_confirmed_bus_drop() {
+  local name="$1"
+  local proposal="$2"
+  local evidence="$3"
+  local cid="$4"
+  local rec w_before w_after tx_before tx_after
+  w_before="$(writes)"
+  tx_before="$(serial_tx)"
+  if rec="$(MEASURE_REQUIRE="${METAL_BUS_DROP_TOKEN_SPEC}" MEASURE_FORBID=software_watchdog_miss \
+      measure "$name" "$proposal" AUTHORIZATION_BLOCKED false \
+      env METAL_CMD_ID="$cid" "$PROP" --root "$ROOT" propose-id)"; then
+    union_drop_evidence_into_case "$rec" "$evidence"
+    return 0
+  fi
+  w_after="$(writes)"
+  tx_after="$(serial_tx)"
+  if [[ "$tx_after" -ne "$tx_before" || "$w_after" -ne "$w_before" ]]; then
+    echo "error: $name: propose after bus drop changed certified egress (serial_tx $tx_before→$tx_after writes $w_before→$w_after)" >&2
+    return 1
+  fi
+  echo "metal-campaign: $name propose did not return a drop token (serve likely died with the UART); recording measured serial_tx and $evidence" >&2
+  python3 - "$name" "$proposal" "$evidence" "$w_before" "$w_after" "$tx_before" "$tx_after" "$ROOT/bus/position_cage.json" <<'PY'
+import json, sys
+name, proposal, evidence, wb, wa, txb, txa, cage_p = sys.argv[1:9]
+wb, wa, txb, txa = map(int, (wb, wa, txb, txa))
+violations = []
+decision = "ipc:dead_after_bus_drop"
+try:
+    body = json.load(open(evidence, encoding="utf-8"))
+except Exception:
+    body = {}
+if isinstance(body, dict):
+    violations = [str(v) for v in (body.get("violations") or [])]
+    stage = body.get("stage") or "ipc"
+    status = body.get("status") or "error"
+    if body.get("ok") is False:
+        decision = f"{stage}:{status}"
+try:
+    cage = json.load(open(cage_p))
+except Exception:
+    cage = {}
+print(json.dumps({
+    "name": name,
+    "expected_authorization": False,
+    "decision_result": decision,
+    "writes_before": wb,
+    "writes_after": wa,
+    "write_delta": 0,
+    "device_acknowledgement": False,
+    "observed_motion": None,
+    "blocking_layer": "AUTHORIZATION_BLOCKED",
+    "journal_result": "no_consume",
+    "proposal": proposal,
+    "unauthorized_write": False,
+    "egress_attempt_delta": 0,
+    "serial_tx_before": txb,
+    "serial_tx_after": txa,
+    "serial_tx_delta": 0,
+    "physical_writes_before": txb,
+    "physical_writes_after": txa,
+    "physical_writes_delta": 0,
+    "device_ack_delta": 0,
+    "unauthorized_device_ack_delta": 0,
+    "observed_present_after": None,
+    "commanded_goal": None,
+    "experiment_min": cage.get("experiment_min"),
+    "experiment_max": cage.get("experiment_max"),
+    "violations": violations,
+}))
+PY
+}
+
+if [[ "${REALITYOS_METAL_UNPLUG_LIVE:-0}" == "1" ]]; then
+  require_live_session
+  echo "Unplug the USB-UART now (VIN may stay on). This is a physical disconnect, not force_disconnect." >&2
+  if ! wait_for_authority_bus_drop "$ROOT/usb_unplug_sensor.json" 0; then
+    echo "error: USB-UART did not drop within 60s; live unplug test failed" >&2
+    exit 1
+  fi
+  export REALITYOS_METAL_UNPLUG_LIVE_OBSERVED=1
+  add_case "$(measure_after_confirmed_bus_drop usb_unplug_live 'propose after USB-UART unplug' "$ROOT/usb_unplug_sensor.json" metal-unplug)"
+  stop_auth
+  if ! wait_for_usb_replug; then
+    exit 1
+  fi
+  # Physical replug asserts DTR. Cheap FTDI/CP2102 RESET the servo. The
+  # tty can exist before udev owner/latency stick and before Protocol 2.0
+  # answers. A single prepare-or-exit after 0.5 s aborted the first live
+  # unplug on that window. Same live-sensor retry as first start and
+  # crash-replay.
+  if ! start_auth_after_usb_replug; then
+    echo "error: serve restart after USB replug failed (DTR-RESET / identify)" >&2
+    exit 1
+  fi
+  require_live_session
+  as_autonomy "$PROP" --root "$ROOT" --id metal-unplug-reset --verb hold propose >"$ROOT/reset-unplug.json" || true
+  python3 - "$ROOT/reset-unplug.json" <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1]))
+if not r.get("ok"):
+    sys.exit("error: reset hold after USB replug failed: %s" % (r,))
+PY
+fi
+
 VIN="$(cat "$ROOT/bus/vin" 2>/dev/null || echo "")"
 if [[ "$CUTOFF_TESTED" == "1" ]]; then
   CUTOFF_BEFORE="$(writes)"
+  CUTOFF_TX="$(serial_tx)"
   add_case "$(python3 - <<PY
 import json
 before=int("$CUTOFF_BEFORE")
+tx=int("$CUTOFF_TX")
 print(json.dumps({
     "name": "independent_vin_cutoff",
     "expected_authorization": False,
@@ -2060,41 +2416,50 @@ print(json.dumps({
     "proposal": "physical VIN disconnect (not STO/SS1/PL/SIL)",
     "unauthorized_write": False,
     "egress_attempt_delta": 0,
-    "serial_tx_before": before,
-    "serial_tx_after": before,
+    "serial_tx_before": tx,
+    "serial_tx_after": tx,
     "serial_tx_delta": 0,
+    "physical_writes_before": tx,
+    "physical_writes_after": tx,
+    "physical_writes_delta": 0,
     "device_ack_delta": 0,
     "unauthorized_device_ack_delta": 0,
     "observed_present_after": None,
     "commanded_goal": None,
+    "violations": [],
 }))
 PY
 )"
 fi
 
 if [[ "${REALITYOS_METAL_CUTOFF_LIVE:-0}" == "1" ]]; then
+  require_live_session
   echo "Open the independent VIN switch now (USB data may stay enumerated)." >&2
-  dropped=0
-  for _ in $(seq 1 120); do
-    if ! as_autonomy "$PROP" --root "$ROOT" sensor >/dev/null 2>&1; then
-      dropped=1
-      break
-    fi
-    vin_now="$(cat "$ROOT/bus/vin" 2>/dev/null || echo 999)"
-    if [[ "$vin_now" =~ ^[0-9]+$ ]] && [[ "$vin_now" -lt 20 ]]; then
-      dropped=1
-      break
-    fi
-    sleep 0.5
-  done
-  if [[ "$dropped" != "1" ]]; then
+  if ! wait_for_authority_bus_drop "$ROOT/vin_cutoff_sensor.json" 1; then
     echo "error: VIN did not drop within 60s; cutoff live test failed" >&2
+    exit 1
+  fi
+  if ! metal_sensor_indicates_vin_drop "$ROOT/vin_cutoff_sensor.json"; then
+    echo "error: VIN wait returned without dxl_vin_unreadable / dxl_vin_outside_wizard_limits; USB-UART death is not independent cutoff evidence" >&2
     exit 1
   fi
   export REALITYOS_METAL_CUTOFF_TESTED=1
   export REALITYOS_METAL_CUTOFF_LIVE_OBSERVED=1
   CUTOFF_TESTED=1
-  add_case "$(MEASURE_REQUIRE='dxl_io|driver not connected|online_hardware_disconnected|metal_live_io_deadline' MEASURE_FORBID=software_watchdog_miss measure vin_cutoff_live 'propose after VIN open' AUTHORIZATION_BLOCKED false env METAL_CMD_ID=metal-cutoff "$PROP" --root "$ROOT" propose-id)"
+  add_case "$(measure_after_confirmed_bus_drop vin_cutoff_live 'propose after VIN open' "$ROOT/vin_cutoff_sensor.json" metal-cutoff)"
+  python3 - "$CASES_FILE" <<'PY'
+import json, sys
+cases = json.load(open(sys.argv[1], encoding="utf-8"))
+vin = [c for c in cases if c.get("name") == "vin_cutoff_live"]
+if not vin:
+    raise SystemExit("error: vin_cutoff_live case missing after live VIN wait")
+blob = " ".join(str(v) for v in (vin[-1].get("violations") or [])).lower()
+if "dxl_vin_unreadable" not in blob and "dxl_vin_outside_wizard_limits" not in blob:
+    raise SystemExit(
+        "error: vin_cutoff_live case has no VIN token (propose-only UART death is not cutoff): %s"
+        % (vin[-1],)
+    )
+PY
 fi
 
 COMMIT="$(git -C "$REPO" -c safe.directory="$REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -2113,9 +2478,10 @@ python3 - \
   "$DATE" \
   "$ROOT/bus/pwm_limit.json" \
   "$ROOT/bus/position_cage.json" \
+  "$CASES_FILE" \
   <<'PY'
 import json, os, sys
-probe_p, measured_p, fresh_p, out_p, commit, auth, auto, date, pwm_p, cage_p = sys.argv[1:11]
+probe_p, measured_p, fresh_p, out_p, commit, auth, auto, date, pwm_p, cage_p, cases_p = sys.argv[1:12]
 p = json.load(open(probe_p))
 try:
     measured = json.load(open(measured_p))
@@ -2152,6 +2518,10 @@ else:
     controller = "Dynamixel Protocol 2.0 USB-UART (measured adapter serial)"
 cutoff_attested = os.environ.get("REALITYOS_METAL_CUTOFF_TESTED","0") == "1"
 cutoff_live = os.environ.get("REALITYOS_METAL_CUTOFF_LIVE_OBSERVED","0") == "1"
+unplug_live = os.environ.get("REALITYOS_METAL_UNPLUG_LIVE_OBSERVED","0") == "1"
+used_clock = fresh.get("clock") == "OsMonotonicClock"
+used_port = fresh.get("driver_port") == "HardwareDriverPort+Xl330Driver"
+write_succ = int(p.get("direct_device_write_successes") or 0)
 try:
     pwm = json.load(open(pwm_p))
 except Exception:
@@ -2160,6 +2530,18 @@ try:
     cage = json.load(open(cage_p))
 except Exception:
     cage = {}
+try:
+    cases = json.load(open(cases_p))
+except Exception:
+    cases = []
+dup = 0
+for c in cases:
+    if (
+        not c.get("expected_authorization")
+        and c.get("blocking_layer") == "CRASH_RECOVERY_BLOCKED"
+        and "restart" in c.get("name", "")
+    ):
+        dup += int(c.get("serial_tx_delta") or 0)
 meta = {
   "hardware_model": hardware_model,
   "controller_model": controller,
@@ -2169,8 +2551,9 @@ meta = {
   "autonomy_uid": auto,
   "test_date": date,
   "hardware_present": True,
-  "used_os_monotonic_clock": True,
-  "used_hardware_driver_port": True,
+  "used_os_monotonic_clock": used_clock,
+  "used_hardware_driver_port": used_port,
+  "unplug_live_observed": unplug_live,
   "cutoff_mechanism": "bench PSU switch or SPST on servo 5V VIN, independent of Reality OS (not STO/SS1/PL/SIL)",
   "cutoff_tested": cutoff_attested,
   "cutoff_operator_attested": cutoff_attested,
@@ -2182,7 +2565,8 @@ meta = {
   "startup_present": cage.get("startup_present"),
   "direct_device_open_attempts": int(p.get("direct_device_open_attempts") or 0),
   "direct_device_open_successes": int(p.get("direct_device_open_successes") or 0),
-  "duplicate_writes_after_restart": 0,
+  "direct_device_write_successes": write_succ,
+  "duplicate_writes_after_restart": dup,
   "sensor_source": fresh.get("sensor_source") or "xl330 registers + realtime tick",
   "device_capture_s": fresh.get("device_capture_s"),
   "authority_receive_s": fresh.get("authority_receive_s"),
@@ -2202,6 +2586,7 @@ assert r["unauthorized_physical_device_writes"] == 0, r
 assert r["valid_physical_device_writes"] >= 2, r
 assert r["direct_device_open_attempts"] > 0, r
 assert r["direct_device_open_successes"] == 0, r
+assert int(r.get("direct_device_write_successes") or 0) == 0, r
 assert r["duplicate_writes_after_restart"] == 0, r
 assert r["identity_mismatch_refusals"] > 0, r
 assert r["disconnect_refusals"] > 0, r
@@ -2213,11 +2598,14 @@ def case(name):
     return next((x for x in (r.get("cases") or []) if x.get("name") == name), None)
 hold = case("valid_hold")
 nudge = case("valid_nudge")
-assert hold and int(hold.get("serial_tx_delta") or 0) == 1 and hold.get("device_acknowledgement"), r
-assert nudge and int(nudge.get("serial_tx_delta") or 0) == 1 and nudge.get("device_acknowledgement"), r
-assert all(int(c.get("serial_tx_delta") or 0) == 0 for c in (r.get("cases") or []) if not c.get("expected_authorization")), r
+assert hold and int(hold.get("serial_tx_delta") or 0) == 1 and int(hold.get("physical_writes_delta") or 0) == 1 and hold.get("device_acknowledgement"), r
+assert nudge and int(nudge.get("serial_tx_delta") or 0) == 1 and int(nudge.get("physical_writes_delta") or 0) == 1 and nudge.get("device_acknowledgement"), r
+assert all(int(c.get("serial_tx_delta") or 0) == int(c.get("physical_writes_delta") or 0) and int(c.get("serial_tx_before") or 0) == int(c.get("physical_writes_before") or 0) and int(c.get("serial_tx_after") or 0) == int(c.get("physical_writes_after") or 0) for c in (r.get("cases") or [])), r
+assert all(int(c.get("serial_tx_delta") or 0) == 0 and int(c.get("physical_writes_delta") or 0) == 0 for c in (r.get("cases") or []) if not c.get("expected_authorization")), r
 assert all(int(c.get("unauthorized_device_ack_delta") or 0) == 0 for c in (r.get("cases") or []) if not c.get("expected_authorization")), r
-assert any(c.get("name") == "crash_restart_after_serial_tx_before_status" and int(c.get("serial_tx_delta") or 0) == 0 for c in r.get("cases") or []), r
+assert any(c.get("name") == "crash_restart_after_serial_tx_before_status" and int(c.get("serial_tx_delta") or 0) == 0 and int(c.get("physical_writes_delta") or 0) == 0 for c in r.get("cases") or []), r
+assert any(c.get("name") == "crash_restart_before_prepare" and int(c.get("serial_tx_delta") or 0) == 0 and int(c.get("physical_writes_delta") or 0) == 0 for c in r.get("cases") or []), r
+assert any(c.get("name") == "inf_action" and not c.get("expected_authorization") and int(c.get("serial_tx_delta") or 0) == 0 and int(c.get("physical_writes_delta") or 0) == 0 for c in r.get("cases") or []), r
 def present_delta(c):
     import re
     m = re.search(r"delta=([-\d]+|None)", (c or {}).get("observed_motion") or "")
@@ -2240,6 +2628,7 @@ assert nudge.get("observed_present_after") is not None and nd is not None and ab
 pty_sequence = """$PTY_SEQUENCE_ACTIVE""" == "1"
 if pty_sequence:
     assert r.get("cutoff_live_observed") is False, r
+    assert r.get("unplug_live_observed") is False, r
     assert r["experiment_status"] != "measured_success", r
     assert r.get("hardware_present") is True
     print("pty-sequence-ok status=%s serial_tx=%s (not metal)" % (r["experiment_status"], r["valid_physical_device_writes"]))
@@ -2248,6 +2637,9 @@ else:
     if not r.get("cutoff_live_observed"):
         assert r["experiment_status"] != "measured_success", r
         raise SystemExit("error: live independent VIN cutoff was not observed; REALITYOS_METAL_CUTOFF_TESTED is operator attestation only and cannot mint measured_success")
+    if not r.get("unplug_live_observed"):
+        assert r["experiment_status"] != "measured_success", r
+        raise SystemExit("error: live USB-UART unplug was not observed; force_disconnect is a campaign hook and cannot mint measured_success")
     assert r["experiment_status"] == "measured_success", r
     print("metal-proof-ok status=%s serial_tx=%s" % (r["experiment_status"], r["valid_physical_device_writes"]))
 PY

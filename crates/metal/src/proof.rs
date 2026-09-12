@@ -39,6 +39,14 @@ pub struct CaseRecord {
     /// Certified command frames that passed write_all+flush. Not setup/sensor.
     #[serde(default)]
     pub serial_tx_delta: u64,
+    /// Same counters as serial_tx_*. Named for the success criterion:
+    /// physical_writes_before/after/delta from actual driver egress.
+    #[serde(default)]
+    pub physical_writes_before: u64,
+    #[serde(default)]
+    pub physical_writes_after: u64,
+    #[serde(default)]
+    pub physical_writes_delta: u64,
     #[serde(default)]
     pub device_ack_delta: u64,
     #[serde(default)]
@@ -52,6 +60,10 @@ pub struct CaseRecord {
     pub experiment_min: Option<i32>,
     #[serde(default)]
     pub experiment_max: Option<i32>,
+    /// Authority violation tokens from the measured IPC body. Identity and
+    /// disconnect aggregates must not be inferred from case-name substrings.
+    #[serde(default)]
+    pub violations: Vec<String>,
 }
 
 impl CaseRecord {
@@ -86,13 +98,22 @@ impl CaseRecord {
             serial_tx_before: 0,
             serial_tx_after: 0,
             serial_tx_delta: 0,
+            physical_writes_before: 0,
+            physical_writes_after: 0,
+            physical_writes_delta: 0,
             device_ack_delta: 0,
             unauthorized_device_ack_delta: 0,
             observed_present_after: None,
             commanded_goal: None,
             experiment_min: None,
             experiment_max: None,
+            violations: Vec::new(),
         }
+    }
+
+    pub fn with_violations(mut self, violations: Vec<String>) -> Self {
+        self.violations = violations;
+        self
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -113,6 +134,9 @@ impl CaseRecord {
         self.serial_tx_before = serial_tx_before;
         self.serial_tx_after = serial_tx_after;
         self.serial_tx_delta = serial_tx_after.saturating_sub(serial_tx_before);
+        self.physical_writes_before = serial_tx_before;
+        self.physical_writes_after = serial_tx_after;
+        self.physical_writes_delta = self.serial_tx_delta;
         self.device_ack_delta = ack_after.saturating_sub(ack_before);
         self.unauthorized_device_ack_delta = if self.expected_authorization {
             0
@@ -152,10 +176,10 @@ pub fn aggregates_from_cases(cases: &[CaseRecord]) -> ProofAggregates {
             if c.unauthorized_write || c.serial_tx_delta > 0 {
                 a.unauthorized_physical_writes += c.serial_tx_delta;
             }
-            if c.name.contains("identity") || c.name.contains("firmware") {
+            if refusal_has_token(c, IDENTITY_MISMATCH_TOKENS) {
                 a.identity_mismatch_refusals += 1;
             }
-            if c.name.contains("disconnect") {
+            if refusal_has_token(c, DISCONNECT_TOKENS) {
                 a.disconnect_refusals += 1;
             }
             if c.blocking_layer == BlockingLayer::CrashRecoveryBlocked
@@ -167,6 +191,47 @@ pub fn aggregates_from_cases(cases: &[CaseRecord]) -> ProofAggregates {
         }
     }
     a
+}
+
+const IDENTITY_MISMATCH_TOKENS: &[&str] = &[
+    "hardware_firmware_mismatch",
+    "hardware_serial_mismatch",
+    "hardware_identity_mismatch",
+    "metal_serial_mismatch",
+    "identity_mismatch",
+];
+
+const DISCONNECT_TOKENS: &[&str] = &[
+    "online_hardware_disconnected",
+    "driver not connected",
+    "metal_live_io_deadline",
+    "metal_serial_closed",
+];
+
+/// Independent VIN cutoff. USB-UART death is the unplug case — not VIN.
+const VIN_DROP_TOKENS: &[&str] = &["dxl_vin_outside_wizard_limits", "dxl_vin_unreadable"];
+
+fn live_vin_cutoff_measured(cases: &[CaseRecord]) -> bool {
+    cases.iter().any(|c| {
+        !c.expected_authorization
+            && c.serial_tx_delta == 0
+            && c.physical_writes_delta == 0
+            && refusal_has_token(c, VIN_DROP_TOKENS)
+    })
+}
+
+fn refusal_evidence(c: &CaseRecord) -> String {
+    let mut blob = c.decision_result.to_ascii_lowercase();
+    for v in &c.violations {
+        blob.push(' ');
+        blob.push_str(&v.to_ascii_lowercase());
+    }
+    blob
+}
+
+fn refusal_has_token(c: &CaseRecord, tokens: &[&str]) -> bool {
+    let blob = refusal_evidence(c);
+    tokens.iter().any(|tok| blob.contains(tok))
 }
 
 /// Experiment acceptance for a no-load XL330 hold, in position ticks.
@@ -248,9 +313,22 @@ fn motion_toward_goal(present_before: i32, present_after: i32, goal: i32) -> boo
     need != 0 && got.signum() == need.signum() && i64::from(got.abs()) > HOLD_STILL_MAX_ABS_TICKS
 }
 
+/// Named physical_writes_* must be copies of serial_tx_* (certified
+/// write_all+flush), not bus/writes command-egress attempts.
+fn physical_writes_match_serial_tx(c: &CaseRecord) -> bool {
+    c.physical_writes_before == c.serial_tx_before
+        && c.physical_writes_after == c.serial_tx_after
+        && c.physical_writes_delta == c.serial_tx_delta
+        && c.physical_writes_delta
+            == c.physical_writes_after
+                .saturating_sub(c.physical_writes_before)
+}
+
 fn certified_command_ok(c: &CaseRecord) -> bool {
     c.expected_authorization
         && c.serial_tx_delta == 1
+        && c.physical_writes_delta == 1
+        && physical_writes_match_serial_tx(c)
         && c.device_acknowledgement
         && c.device_ack_delta >= 1
 }
@@ -319,6 +397,17 @@ fn post_tx_pre_status_no_retransmit(cases: &[CaseRecord]) -> bool {
         c.name.contains("after_serial_tx_before_status")
             && c.name.contains("restart")
             && c.serial_tx_delta == 0
+            && c.physical_writes_delta == 0
+            && physical_writes_match_serial_tx(c)
+    })
+}
+
+fn before_prepare_no_retransmit(cases: &[CaseRecord]) -> bool {
+    cases.iter().any(|c| {
+        c.name.contains("crash_restart_before_prepare")
+            && c.serial_tx_delta == 0
+            && c.physical_writes_delta == 0
+            && physical_writes_match_serial_tx(c)
     })
 }
 
@@ -328,7 +417,7 @@ fn crash_restarts_have_zero_serial_tx(cases: &[CaseRecord]) -> bool {
         .filter(|c| {
             c.blocking_layer == BlockingLayer::CrashRecoveryBlocked && c.name.contains("restart")
         })
-        .all(|c| c.serial_tx_delta == 0)
+        .all(|c| c.serial_tx_delta == 0 && c.physical_writes_delta == 0)
 }
 
 fn unauthorized_ack_delta(cases: &[CaseRecord]) -> u64 {
@@ -397,6 +486,9 @@ pub struct MetalProof {
     pub unauthorized_physical_device_writes: u64,
     pub direct_device_open_attempts: u64,
     pub direct_device_open_successes: u64,
+    /// Autonomy UID writes that reached the device node. Measured, not invented.
+    #[serde(default)]
+    pub direct_device_write_successes: u64,
     pub duplicate_writes_after_restart: u64,
     pub identity_mismatch_refusals: u64,
     pub disconnect_refusals: u64,
@@ -409,6 +501,8 @@ pub struct MetalProof {
     pub cutoff_operator_attested: bool,
     #[serde(default)]
     pub cutoff_live_observed: bool,
+    #[serde(default)]
+    pub unplug_live_observed: bool,
     #[serde(default)]
     pub pwm_limit_requested: Option<u16>,
     #[serde(default)]
@@ -449,23 +543,36 @@ impl MetalProof {
         let not_pty_stand_in = !identity_looks_like_pty_stand_in(&meta.real_device_identity);
         let cutoff_attested = meta.cutoff_operator_attested || meta.cutoff_tested;
         let cutoff_live = meta.cutoff_live_observed;
+        let unplug_live = meta.unplug_live_observed;
         let pwm_ok = pwm_cap_configured_and_read_back(&meta);
         let cage_ok = absolute_cage_active(&meta);
         let post_tx_ok = post_tx_pre_status_no_retransmit(&cases);
+        let before_prep_ok = before_prepare_no_retransmit(&cases);
         let crash_tx_ok = crash_restarts_have_zero_serial_tx(&cases);
         let unauth_ack = unauthorized_ack_delta(&cases);
+        let physical_named = cases.iter().all(physical_writes_match_serial_tx);
+        let unauth_physical_named = cases
+            .iter()
+            .filter(|c| !c.expected_authorization)
+            .all(|c| c.physical_writes_delta == 0);
         let measured_success = a.unauthorized_physical_writes == 0
             && unauth_ack == 0
+            && physical_named
+            && unauth_physical_named
             && has_hold
             && has_nudge
             && pwm_ok
             && cage_ok
             && post_tx_ok
+            && before_prep_ok
             && crash_tx_ok
             && meta.direct_device_open_successes == 0
+            && meta.direct_device_write_successes == 0
             && meta.direct_device_open_attempts > 0
             && cutoff_live
-            && a.duplicate_writes_after_restart + meta.duplicate_writes_after_restart == 0
+            && live_vin_cutoff_measured(&cases)
+            && unplug_live
+            && a.duplicate_writes_after_restart == 0
             && a.identity_mismatch_refusals > 0
             && a.disconnect_refusals > 0
             && freshness_measured
@@ -487,8 +594,8 @@ impl MetalProof {
             unauthorized_physical_device_writes: a.unauthorized_physical_writes,
             direct_device_open_attempts: meta.direct_device_open_attempts,
             direct_device_open_successes: meta.direct_device_open_successes,
-            duplicate_writes_after_restart: a.duplicate_writes_after_restart
-                + meta.duplicate_writes_after_restart,
+            direct_device_write_successes: meta.direct_device_write_successes,
+            duplicate_writes_after_restart: a.duplicate_writes_after_restart,
             identity_mismatch_refusals: a.identity_mismatch_refusals,
             disconnect_refusals: a.disconnect_refusals,
             hardware_present: true,
@@ -498,6 +605,7 @@ impl MetalProof {
             cutoff_tested: cutoff_attested,
             cutoff_operator_attested: cutoff_attested,
             cutoff_live_observed: cutoff_live,
+            unplug_live_observed: unplug_live,
             pwm_limit_requested: meta.pwm_limit_requested,
             pwm_limit_measured: meta.pwm_limit_measured,
             experiment_min: meta.experiment_min,
@@ -538,12 +646,12 @@ impl MetalProof {
              3. **HardwareDriverPort.** used_hardware_driver_port={port}. One XL330 port: open, sidecar+tty exclusive, probe_identity, sensor, certified write, ack, disconnect, close, torque-off stop.\n\
              4. **Measured identity.** {id}\n\
              5. **Composition.** used_os_monotonic_clock={clock}. `realityos-metal-smoke serve` uses `RuntimeSession<..., OnlineLocked>::start_online` and `OsMonotonicClock`, not HIL `Authority` / `FakeClock`.\n\
-             6. **Two-UID attacks.** authority={auth} autonomy={auto}. direct_device_open_attempts={att} successes={succ} (must be attempts>0 and successes==0).\n\
-             7. **Zero-motion baseline.** valid_hold serial_tx_delta={hold_tx} ack={hold_ack} present_after={hold_present:?} motion={hold_motion}\n\
-             8. **Bounded one-axis motion.** valid_nudge serial_tx_delta={nudge_tx} ack={nudge_ack} present_after={nudge_present:?} motion={nudge_motion}\n\
-             9. **Hostile campaign.** hostile_cases={hostile} unauthorized_certified_serial_tx={unauth} unauthorized_device_ack={unauth_ack} (required 0).\n\
+             6. **Two-UID attacks.** authority={auth} autonomy={auto}. direct_device_open_attempts={att} open_successes={succ} write_successes={write_succ} (must be attempts>0 and open/write successes==0).\n\
+             7. **Zero-motion baseline.** valid_hold serial_tx_delta={hold_tx} physical_writes_delta={hold_phys} ack={hold_ack} present_after={hold_present:?} motion={hold_motion}\n\
+             8. **Bounded one-axis motion.** valid_nudge serial_tx_delta={nudge_tx} physical_writes_delta={nudge_phys} ack={nudge_ack} present_after={nudge_present:?} motion={nudge_motion}\n\
+             9. **Hostile campaign.** hostile_cases={hostile} unauthorized_certified_serial_tx={unauth} unauthorized_physical_writes_delta_sum={unauth} unauthorized_device_ack={unauth_ack} (required 0; physical_writes_* are copies of serial_tx_* egress).\n\
              10. **Crash/restart.** duplicate_writes_after_restart={crash} (required 0; after_serial_tx_before_status and other ambiguous restarts must not retransmit).\n\
-             11. **Disconnect / identity fail-closed.** identity_mismatch_refusals={idm} disconnect_refusals={disc}\n\
+             11. **Disconnect / identity fail-closed.** identity_mismatch_refusals={idm} disconnect_refusals={disc}. Live USB-UART unplug observed: {unplug_live}. Campaign hooks are not a physical unplug.\n\
              12. **Sensor freshness.** source={src}; device_capture_s={cap:?}; authority_receive_s={recv:?}; freshness_threshold_s={thr:?}. Capture is device Realtime Tick; freshness anchor is authority monotonic receive time.\n\
              13. **Proof artifact.** schema={schema} hardware_present={hp} commit={sha}. Separate from HIL proofs. Aggregates are certified serial-TX deltas, not write attempts.\n\
              14. **All success criteria.** experiment_status={status}\n\
@@ -556,6 +664,7 @@ impl MetalProof {
             cutoff = self.cutoff_mechanism,
             cutoff_attested = self.cutoff_operator_attested,
             cutoff_live = self.cutoff_live_observed,
+            unplug_live = self.unplug_live_observed,
             pwm_req = self.pwm_limit_requested,
             pwm_got = self.pwm_limit_measured,
             startup = self.startup_present,
@@ -568,13 +677,16 @@ impl MetalProof {
             auto = self.autonomy_uid,
             att = self.direct_device_open_attempts,
             succ = self.direct_device_open_successes,
+            write_succ = self.direct_device_write_successes,
             hold_tx = hold.map(|c| c.serial_tx_delta).unwrap_or(0),
+            hold_phys = hold.map(|c| c.physical_writes_delta).unwrap_or(0),
             hold_ack = hold.map(|c| c.device_acknowledgement).unwrap_or(false),
             hold_present = hold.and_then(|c| c.observed_present_after),
             hold_motion = hold
                 .and_then(|c| c.observed_motion.clone())
                 .unwrap_or_else(|| "missing_valid_hold_case".into()),
             nudge_tx = nudge.map(|c| c.serial_tx_delta).unwrap_or(0),
+            nudge_phys = nudge.map(|c| c.physical_writes_delta).unwrap_or(0),
             nudge_ack = nudge.map(|c| c.device_acknowledgement).unwrap_or(false),
             nudge_present = nudge.and_then(|c| c.observed_present_after),
             nudge_motion = nudge
@@ -618,6 +730,8 @@ pub struct ProofMeta {
     #[serde(default)]
     pub cutoff_live_observed: bool,
     #[serde(default)]
+    pub unplug_live_observed: bool,
+    #[serde(default)]
     pub pwm_limit_requested: Option<u16>,
     #[serde(default)]
     pub pwm_limit_measured: Option<u16>,
@@ -629,6 +743,8 @@ pub struct ProofMeta {
     pub startup_present: Option<i32>,
     pub direct_device_open_attempts: u64,
     pub direct_device_open_successes: u64,
+    #[serde(default)]
+    pub direct_device_write_successes: u64,
     pub duplicate_writes_after_restart: u64,
     #[serde(default)]
     pub sensor_source: String,
@@ -652,20 +768,21 @@ pub fn default_unresolved() -> Vec<String> {
         "USB-serial adapter serial is not a factory actuator serial; the servo EEPROM has none"
             .into(),
         "XL330 has no useful factory unique actuator serial. An identical-model, identical-firmware servo swapped behind the same USB adapter and bus ID may be indistinguishable. This experiment binds USB adapter identity + bus ID + model + firmware + deployment calibration/design. That is not a claim that arbitrary production robots always provide unique hardware identity".into(),
-        "PWM Limit is an output/PWM cap (raw * 0.113 ≈ percent of full PWM; 885 ≈ 100%), not a certified torque limit. Current Limit is configured but is not the Position Mode torque boundary. A conservative cap that cannot move an unloaded horn is incomplete until an operator raises max_pwm_limit_raw; software must not silently restore factory 885".into(),
+        "PWM Limit is an EEPROM ceiling (raw * 0.113 ≈ percent of full PWM; 885 ≈ 100%), not a certified torque limit. Position Mode uses Goal PWM(100) as the live output limiter; setup writes that register to the measured PWM cap (a Wizard leftover 0 / |Goal PWM|<80 leaves the 32-tick nudge stuck). Current Limit is configured but is not the Position Mode torque boundary. A conservative cap that cannot move an unloaded horn is incomplete until an operator raises max_pwm_limit_raw; software must not silently restore factory 885".into(),
         "successful software-watchdog pets are in-memory only and are not an independent hardware watchdog; miss/ESTOP remains fail-closed and durably recorded".into(),
         "Realtime Tick is a wrapping 1 ms device counter, not a synchronized clock".into(),
         "hold-still acceptance is |present delta| <= 4 ticks (~0.35°); XL330 quantization is 0.088°/tick and no-load P-gain hunt is not specified as 0. Not certified positioning accuracy".into(),
         "live EEPROM identity re-read is skipped when the motion-block read already took >=15 ms; that cycle keeps the previously latched identity".into(),
         "identity CRC/NAK after a good motion sample keeps the previous latched identity for that cycle".into(),
-        "a half-duplex TTL/RS485 adapter that needs more than 1.5 ms after host TX, or more than 500 ms after DTR-RESET, is still a first-contact hole".into(),
+        "a half-duplex TTL/RS485 adapter that needs more than 1.5 ms after host TX, or more than 500 ms after DTR-RESET, is still a first-contact hole. INST_REBOOT identify now drains leftover Reboot status (same shape as PING; PTY ClearBuffer is a no-op) and polls a short identify up to 1.5 s (a single 400 ms wait missed a 500–800 ms XL330; setup recv_status is 16×150 ms, so one identify used to sit through the deadline and then accept a later reply; the first PING can succeed while READs are still dead, so one ping_and_identify after that ping aborted with time left). An adapter that stays silent longer than 1.5 s after Reboot still fail-closes".into(),
+        "Wizard Startup Configuration bit 0 torque-ons after DTR-RESET and tracks Goal (RAM initial 0). Open broadcasts torque-off during the 500 ms settle, alternating the open baud with 115200 and Wizard 9600 on the held fd so those leftover rates are not left tracking until discover retunes; restore to the open baud fails closed (an ignored leftover 115200 fd missed a factory 57600 servo and walked into the automatic 1 Mbps open). Identify directed-torque-offs before model READs; serve writes factory 0 so the next crash_if open does not yank. A Hardware Error reboot used to run before that EEPROM write, so leftover bit 0 slammed Goal 0 during the silent boot; setup now writes factory 0 (STATUS_ALERT is not a NAK) and refuses unless readback is 0 before INST_REBOOT, then torque-offs again so later EEPROM cannot access-NAK. A failed setup read of Startup Configuration / Position I/D / feedforward / Bus Watchdog used to look like factory 0 and skip that write; setup now writes unless the read is already the safe value and fails closed unless readback matches. Probe does not write that EEPROM. 1 Mbps is not spoken during settle (CH340 wedge). A Wizard 2/3/4 Mbps bus still tracks during that window".into(),
         "probe rematches a dangling USB-serial by-id from aliases latched before the first open and the campaign points probe at the live ttyUSB so a 0750 plugdev by-id dir cannot hide the node from authority; a udev rename that also changes the adapter serial still fail-closes".into(),
-        "HUPCL is cleared on the live exclusive fd via termios after open; stty after TIOCEXCL is EBUSY on the node and on /proc/<pid>/fd/N, /proc/self/fd/N misses an O_CLOEXEC tty, and a fresh USB-serial session restores kernel-default HUPCL so a pre-open stty is lost".into(),
-        "campaign settle treats present inside the hold-still band of the written goal as arrived; Moving=0 alone is not arrived (accel below Moving Threshold)".into(),
+        "HUPCL is cleared on the live exclusive fd via termios after open; stty after TIOCEXCL is EBUSY on the node and on /proc/<pid>/fd/N, /proc/self/fd/N misses an O_CLOEXEC tty, and a fresh USB-serial session restores kernel-default HUPCL so a pre-open stty is lost. Discover holds that exclusive fd and retunes baud in place so each scan rate is not another DTR-RESET; a udev rematch to a new node still reopens once".into(),
+        "campaign settle treats present inside the hold-still band of the written goal as arrived; Moving=0 alone is not arrived (accel below Moving Threshold). A Wizard Moving Threshold ≥ profile velocity keeps Moving=0 for the whole 32-tick nudge. A failed read used to look like safe 0 and skip the write; an ACK that does not store used to leave applied_moving_threshold lying as factory 10. Setup now writes unless the read is already ≤ profile velocity and refuses dxl_moving_threshold_unverified unless readback is ≤ profile. valid_nudge used to hardcode action=+0.2; write_action refuses an outbound goal (Wizard leftover max window, or present within 32 ticks of 4095) and plant.act Err after prepare abort-latches ONLINE so a -0.2 retry cannot run. The campaign now picks +delta when that goal is inside the cage and only -delta when +delta would refuse. A leftover Wizard window tighter than the certified step, or exactly 32 inbound ticks at the edge, used to pass setup and fail the picker after valid_hold (hold-still hunt eats the step). A 36-tick leftover still picked -0.2 after hold at present-4; propose then re-acquires last_present one hunt later and write_action abort-latches. Setup now refuses metal_experiment_cage_no_inbound_step unless the chosen sign fits after an 8-tick slack, before writing EEPROM limits; the campaign picker re-checks 4 ticks around the post-hold present. It does not widen a fixture window".into(),
         "an XL330 already in Wizard RC-PWM / S.BUS / iBUS mode at boot cannot be identified over Protocol 2.0".into(),
         "a USB-UART with no adapter serial (typical CH340/CP2102) is rebound by vid:pid:bus:devpath / by-path, not KERNEL==ttyUSB0 or a parent hub serial; a living stale ttyUSB0 after re-enum is not kept if its measured serial drifted; campaign waits up to 4s then fails closed instead of handing the stale name to serve; two empty-serial adapters that share dest on different buses used to collide (both usb:vid:pid:1); the same bus+dest is still one port".into(),
-        "REALITYOS_METAL_BAUD / SERVO_ID are probe hints; serve keeps the pair probe wrote into metal.json (a 1 Mbps hint on a factory 57600 XL330 used to fail identify)".into(),
-        "2 / 3 / 4 Mbps join the probe scan only when hinted, and never ahead of factory 57600 / 115200 / 1 Mbps; a 1 Mbps docs hint or a mistaken 2/3/4 Mbps Wizard hint used to open that rate twice before 57600 and could wedge CH340 so the factory servo was never found".into(),
+        "REALITYOS_METAL_BAUD / SERVO_ID are probe scan extras; init/probe persist only the device path until discover writes the measured pair (a leftover 2/3/4 Mbps env used to land in metal.json before identify and wedge CH340 on the after-scan retry). serve keeps the measured id and does not apply a 1/2/3/4 Mbps env hint. Wizard 9 600 is kept only long enough to identify: a 26-byte motion-block read at that rate cannot finish inside the 40 ms live deadline (8N1 + 1.5 ms turnaround), so the first hold used to miss as metal_live_io_deadline. Serve writes factory baud index 1 (57 600) with torque off, retunes the held fd, refuses dxl_baud_unverified unless readback is 1, and rewrites metal.json before enter_live_io so crash-replay start_online hashes the live rate. A crash after that EEPROM write, before metal.json is rewritten, retunes a leftover 9 600 open to 57 600 on the held fd. Probe does not write Baud Rate EEPROM".into(),
+        "2 / 3 / 4 Mbps join the probe scan only when hinted, and never ahead of factory 57600 / 115200 / 1 Mbps; a 1 Mbps docs hint or a mistaken 2/3/4 Mbps Wizard hint used to open that rate twice before 57600 and could wedge CH340 so the factory servo was never found. 1 Mbps still joins every scan after 115200; factory 57600 is retried immediately before that open and before each leftover 2/3/4 Mbps open so a DTR-RESET miss during the first factory/115200 windows does not walk into a CH340-wedge rate next".into(),
         "serve measures the USB-adapter serial before open; a recycled living ttyUSB0 whose serial drifted must not reach torque-on".into(),
         "campaign proof-meta reads measured/os-probe/freshness from files; interpolating JSON into python '''...''' dies on an apostrophe in a USB serial".into(),
         "campaign installs docs/metal_proof.json relative to the script's repo, not the caller's working directory; sudo /path/scripts/metal-campaign.sh from another cwd used to write ~/docs after a live run".into(),
@@ -673,6 +790,20 @@ pub fn default_unresolved() -> Vec<String> {
         "campaign finds metal binaries in the script repo when REALITYOS_METAL_BIN=$PWD/target/debug points at the caller's cwd; sudo /path/scripts/metal-campaign.sh from another cwd used to exit 2 before probe".into(),
         "first USB prepare fails closed until the UART sysfs node has a non-empty USB serial or busnum:devpath:vid:pid, then waits briefly for iSerial and locks that identity; a dest-only bind still matches after iSerial appears. An empty CH340 serial file, a parent hub serial, inventing 0:nodevpath, waiting for idVendor alone, or preferring a late FTDI serial after a dest-only bind used to miss before hold. FTDI/U2D2 latency_timer must read back 1 after write; a silent failed set used to keep 16 ms and miss the 40 ms live deadline on the first hold. USB power/control on the UART device must read back on after write; a silent failed set used to keep autosuspend auto and miss that deadline after an idle gap. Campaign creates realityos-authority / realityos-autonomy / realityos-ipc and requires python3/timeout before first USB prepare; creating users after udev OWNER= or missing python3 after probe used to fail the first bench run. nscd/sssd can still hide a just-created user so chown/OWNER= fail; campaign flushes those caches and fails closed unless the USB tty inode uid is the authority uid and mode is 0600. Real USB-serial also requires fuser and udevadm; a missing fuser used to skip the holder check and open a UART ModemManager already had, and a missing /run/udev/rules.d used to skip ID_MM_DEVICE_IGNORE. Writing the ignore rule then udevadm control --reload || true used to announce success without loading it; a leftover 99-realityos-metal-*.rules from a SIGKILL'd run used to skip rewrite; fuser ran only before udevadm trigger --action=change, which can wake ModemManager. Reload must succeed, udevadm info must read ID_MM_DEVICE_IGNORE=1, the recorded USB identity is rematched after that trigger (FTDI/U2D2 can come back as ttyUSB1) before metal.json is rewritten, and the holder check runs again after that rematch. First prepare used to run only before journal tmpfs / staging / metal-deploy chown; that chown can emit a udev change that wakes ModemManager and resets FTDI latency_timer, so prepare runs again immediately before probe opens the UART. claim_usb_tty used to chown/chmod on every call even when the inode was already authority 0600, and metal-deploy always chowned the tty; the extra pre-probe claim then emitted another udev change and probe opened while ModemManager could still be waking (or FTDI came back as ttyUSB1 / latency_timer 16 ms). Claim, deploy, latency_timer, and power/control now skip a no-op write (a rewrite of 1/on still emits udev change). After a real claim/latency/power write, prepare settles udev, rematches the recorded USB identity, re-applies owner/latency/power only if they drifted, refuses holders, and fails closed unless latency_timer/power/control still read back 1/on. connect_serial skips a no-op chmod 0600 (that chmod can emit the same udev change and reset FTDI latency_timer before the first live hold). Campaign stty -F -hupcl before probe used to DTR-RESET cheap FTDI/CP2102; the driver clears HUPCL on the exclusive fd. Probe broadcast sniff takes exclusive on a real UART so ModemManager cannot AT-probe during the 500 ms open-settle. After serve open, claim/latency/power used to run inside if without || return so a failed latency_timer write was ignored (set -e is disabled in if) and the first hold could run at 16 ms; the campaign now settles and fails closed unless latency_timer/power/control still read back".into(),
         "after serve open, a udev change can dangle /dev/serial/by-id or rename ttyUSB0 while the exclusive fd is still the live UART; bus_up / probe_identity must not treat that vanished path as unplug (a real unplug fails the next xfer)".into(),
+        "Wizard Position I/D Gain is restored to factory 0 when non-zero; a Wizard PID tune overshoots the 32-tick certified step past the 48-tick session cage".into(),
+        "live acquire refuses Present Input Voltage 0 or outside Wizard min/max and latches vin_fault so a cutoff wait cannot be followed by a certified goal write; ESTOP/close still torque-off on the live fd".into(),
+        "Wizard PWM Slope below 20 is restored to factory 140; Wizard 0 is illegal and Wizard 1..=19 ramps too slowly for the 32-tick nudge to leave the hold-still band before settle timeout. An ACK that does not store used to leave applied_pwm_slope lying as 140; setup now refuses dxl_pwm_slope_unverified unless readback is >= 20".into(),
+        "Wizard Position P Gain below 80 or above factory 400 is restored to factory 400; a Wizard P of thousands overshoots the 32-tick step past the 48-tick cage. An ACK that does not store used to leave applied_position_p_gain lying as 400; setup now refuses dxl_position_p_unverified unless readback is in 80..=400".into(),
+        "Setup always writes configured Profile Velocity/Accel (default 20/10). Profile Velocity 0 is infinite velocity (e-Manual). An ACK that does not store used to leave those applied values lying as configured; setup now refuses dxl_profile_unverified unless both read back".into(),
+        "An ACK that does not store Operating Mode / Drive Mode / Velocity Limit / Velocity P / Velocity I used to leave applied values lying. Wizard PWM then treats Goal PWM as the command (setup matching that register to the PWM cap would spin at torque-on). Time-based drive treats profile 20/10 as milliseconds. Velocity Limit 1 or Velocity P/I 0 leave the 32-tick nudge stuck. Setup now refuses unless those registers read back".into(),
+        "Goal=present before torque-on used to trust write_reg Ok. An ACK that does not store leaves Wizard Goal 0; torque-on then yanks present onto that stale goal. Setup and re-enable now refuse dxl_goal_unverified unless Goal Position reads back as present".into(),
+        "Wizard Protocol Type 20/21/22 at the next DTR-RESET is RC boot. An ACK that does not store used to leave applied_protocol_type lying as 2 so the first serve looked healthy and crash-replay identify died. Leftover Secondary ID keeps one servo answering two addresses. Setup now refuses unless Protocol Type is 2 and Secondary ID is 255".into(),
+        "Wizard Homing Offset is cleared whenever it is not already 0, including when Present is still inside 0–4095. An in-window leftover lets the torque-on Present reset throw past the 48-tick cage. A failed read used to look like 0 and skip the write. Setup now refuses dxl_homing_offset_unverified unless readback is 0".into(),
+        "Robotis Present reset on torque-on is a register wrap. Rematching Goal without moving the session cage left a 16-tick wrap at 2064 inside 2000..2096 so +32+slack missed the max and write_action abort-latched ONLINE. Setup now re-centers the cage around the parked present (torque off; EEPROM limits are read-only while torque is on). A jump outside the pre-reset cage still refuses. The Wizard window is not widened".into(),
+        "setup refuses torque when Temperature Limit is unreadable or 0, or Present Temperature is unreadable or at/above that EEPROM limit; the limit itself is not rewritten".into(),
+        "CaseRecord physical_writes_before/after/delta are copies of serial_tx_* (certified write_all+flush), not bus/writes command-egress attempts; measured_success requires the copies to match and unauthorized physical_writes_delta==0".into(),
+        "every campaign restart (first serve, disconnect restart, crash-replay bind/restart/reset-hold, live USB replug) retries start_auth until a sensor JSON body is ok=true; propose/sensor exits 0 for ok=false so a DTR-RESET refuse used to look like a landed sample. A not-yet-live first bind already created driver.jsonl; retrying --first-online then died as first_online_but_journal_or_seal_exists. Retries now use --restart when the journal or seal exists (scripts/metal-online-journal.sh); they do not delete the journal to fake first boot. Bus-loss first sensor and live USB unplug journal ESTOP; continuity re-engages it on --restart so the first hold / post-replug reset hold died as estop_engaged. --restart now recover-acks that new instance (same-process recover still refuses). Authorized settle timeout (1.5s) fails the campaign instead of sampling a traveling horn".into(),
+        "force_disconnect and hot_swap.json are campaign hooks, not a physical USB unplug; measured_success requires a live USB-UART unplug and a live VIN drop whose measured case carries dxl_vin_unreadable / dxl_vin_outside_wizard_limits. A cutoff_live_observed boolean with only UART-death tokens is not independent power-cutoff evidence. If unplug kills serve, the campaign records the drop evidence and serial_tx; it does not invent a disconnect token".into(),
         "no STO/SS1/PLC/SIL/ISO is provided or claimed".into(),
     ]
 }
@@ -761,6 +892,83 @@ mod tests {
         assert_eq!(a.valid_physical_writes, 2);
         assert_eq!(a.hostile_cases, 1);
         assert_eq!(a.unauthorized_physical_writes, 0);
+        assert_eq!(cases[0].physical_writes_before, cases[0].serial_tx_before);
+        assert_eq!(cases[0].physical_writes_after, cases[0].serial_tx_after);
+        assert_eq!(cases[0].physical_writes_delta, cases[0].serial_tx_delta);
+        assert_eq!(cases[1].physical_writes_delta, 1);
+    }
+
+    #[test]
+    fn measured_success_requires_physical_writes_to_copy_serial_tx() {
+        let mut mismatched = ok_cases();
+        mismatched[0].physical_writes_delta = 0;
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), mismatched, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status, "measured_incomplete_or_failed",
+            "physical_writes_* must copy serial_tx_*; omitting them cannot mint success"
+        );
+        let mut hostile_tx = ok_cases();
+        hostile_tx[2].physical_writes_delta = 1;
+        hostile_tx[2].serial_tx_delta = 1;
+        hostile_tx[2].physical_writes_after = hostile_tx[2].physical_writes_before + 1;
+        hostile_tx[2].serial_tx_after = hostile_tx[2].serial_tx_before + 1;
+        hostile_tx[2].unauthorized_write = true;
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), hostile_tx, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status, "measured_incomplete_or_failed",
+            "unauthorized physical_writes_delta must stay 0"
+        );
+    }
+
+    #[test]
+    fn identity_and_disconnect_aggregates_use_tokens_not_case_names() {
+        let named_only = CaseRecord::measure(
+            "firmware_mismatch",
+            "hot_swap",
+            "authorize:refuse",
+            BlockingLayer::AuthorizationBlocked,
+            0,
+            0,
+            false,
+            false,
+            None,
+            "no_consume",
+        );
+        let a = aggregates_from_cases(&[named_only]);
+        assert_eq!(a.identity_mismatch_refusals, 0);
+        assert_eq!(a.disconnect_refusals, 0);
+
+        let identity = CaseRecord::measure(
+            "unrelated_name",
+            "hot_swap",
+            "authorize:refuse",
+            BlockingLayer::AuthorizationBlocked,
+            0,
+            0,
+            false,
+            false,
+            None,
+            "no_consume",
+        )
+        .with_violations(vec!["hardware_firmware_mismatch".into()]);
+        let disconnect = CaseRecord::measure(
+            "also_unrelated",
+            "unplug",
+            "authorize:refuse",
+            BlockingLayer::AuthorizationBlocked,
+            0,
+            0,
+            false,
+            false,
+            None,
+            "no_consume",
+        )
+        .with_violations(vec!["online_hardware_disconnected".into()]);
+        let b = aggregates_from_cases(&[identity, disconnect]);
+        assert_eq!(b.identity_mismatch_refusals, 1);
+        assert_eq!(b.disconnect_refusals, 1);
     }
 
     #[test]
@@ -780,6 +988,7 @@ mod tests {
             cutoff_tested: false,
             cutoff_operator_attested: false,
             cutoff_live_observed: false,
+            unplug_live_observed: false,
             pwm_limit_requested: None,
             pwm_limit_measured: None,
             experiment_min: None,
@@ -787,6 +996,7 @@ mod tests {
             startup_present: None,
             direct_device_open_attempts: 0,
             direct_device_open_successes: 0,
+            direct_device_write_successes: 0,
             duplicate_writes_after_restart: 0,
             sensor_source: String::new(),
             device_capture_s: None,
@@ -874,6 +1084,7 @@ mod tests {
                 None,
                 "no_consume",
             )
+            .with_violations(vec!["hardware_firmware_mismatch".into()])
             .with_certified_transport(
                 2,
                 2,
@@ -898,6 +1109,7 @@ mod tests {
                 None,
                 "no_consume",
             )
+            .with_violations(vec!["online_hardware_disconnected".into()])
             .with_certified_transport(
                 2,
                 2,
@@ -910,6 +1122,32 @@ mod tests {
                 Some(2000),
                 Some(2096),
             ),
+            CaseRecord::measure(
+                "vin_cutoff_live",
+                "propose after VIN open",
+                "authorize:refuse",
+                BlockingLayer::AuthorizationBlocked,
+                2,
+                2,
+                false,
+                false,
+                None,
+                "no_consume",
+            )
+            .with_violations(vec!["dxl_vin_unreadable".into()])
+            .with_certified_transport(
+                2,
+                2,
+                2,
+                2,
+                2,
+                2,
+                None,
+                None,
+                Some(2000),
+                Some(2096),
+            ),
+            crash_restart("crash_restart_before_prepare"),
             crash_restart("crash_restart_after_serial_tx_before_status"),
             crash_restart("crash_restart_during_write"),
             crash_restart("crash_restart_after_prepare_before_write"),
@@ -934,6 +1172,7 @@ mod tests {
             cutoff_tested: cutoff,
             cutoff_operator_attested: cutoff,
             cutoff_live_observed: cutoff,
+            unplug_live_observed: cutoff,
             pwm_limit_requested: Some(200),
             pwm_limit_measured: Some(200),
             experiment_min: Some(2000),
@@ -941,6 +1180,7 @@ mod tests {
             startup_present: Some(2048),
             direct_device_open_attempts: 1,
             direct_device_open_successes: 0,
+            direct_device_write_successes: 0,
             duplicate_writes_after_restart: 0,
             sensor_source: "xl330 tick".into(),
             device_capture_s: Some(1.2),
@@ -1118,6 +1358,71 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_writes_come_from_cases_not_hardcoded_meta() {
+        let mut meta = ok_meta(true);
+        meta.duplicate_writes_after_restart = 99;
+        let ok = MetalProof::from_measured(meta, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(ok.duplicate_writes_after_restart, 0);
+        assert_eq!(ok.experiment_status, "measured_success");
+    }
+
+    #[test]
+    fn measured_success_requires_before_prepare_crash_restart() {
+        let cases: Vec<CaseRecord> = ok_cases()
+            .into_iter()
+            .filter(|c| !c.name.contains("crash_restart_before_prepare"))
+            .collect();
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), cases, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+    }
+
+    #[test]
+    fn cutoff_live_flag_without_vin_token_prevents_success() {
+        let cases: Vec<CaseRecord> = ok_cases()
+            .into_iter()
+            .filter(|c| c.name != "vin_cutoff_live")
+            .collect();
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), cases, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed",
+            "cutoff_live_observed without a VIN-token case is USB-UART death, not cutoff"
+        );
+        assert!(incomplete.cutoff_live_observed);
+        let uart_named = CaseRecord::measure(
+            "vin_cutoff_live",
+            "propose after VIN open",
+            "authorize:refuse",
+            BlockingLayer::AuthorizationBlocked,
+            2,
+            2,
+            false,
+            false,
+            None,
+            "no_consume",
+        )
+        .with_violations(vec!["metal_serial_closed".into()])
+        .with_certified_transport(2, 2, 2, 2, 2, 2, None, None, Some(2000), Some(2096));
+        let mut uart_only = ok_cases()
+            .into_iter()
+            .filter(|c| c.name != "vin_cutoff_live")
+            .collect::<Vec<_>>();
+        uart_only.push(uart_named);
+        let incomplete =
+            MetalProof::from_measured(ok_meta(true), uart_only, default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed",
+            "a vin_cutoff_live name with only UART tokens must not mint success"
+        );
+    }
+
+    #[test]
     fn operator_cutoff_attestation_without_live_observation_prevents_success() {
         let mut meta = ok_meta(true);
         meta.cutoff_tested = true;
@@ -1130,5 +1435,53 @@ mod tests {
         );
         assert!(incomplete.cutoff_operator_attested);
         assert!(!incomplete.cutoff_live_observed);
+    }
+
+    #[test]
+    fn synthetic_disconnect_without_live_unplug_prevents_success() {
+        let mut meta = ok_meta(true);
+        meta.unplug_live_observed = false;
+        let incomplete = MetalProof::from_measured(meta, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+        assert!(!incomplete.unplug_live_observed);
+    }
+
+    #[test]
+    fn hardcoded_clock_flag_without_os_monotonic_prevents_success() {
+        let mut meta = ok_meta(true);
+        meta.used_os_monotonic_clock = false;
+        let incomplete = MetalProof::from_measured(meta, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+        assert!(!incomplete.used_os_monotonic_clock);
+    }
+
+    #[test]
+    fn hardcoded_driver_port_flag_without_serve_record_prevents_success() {
+        let mut meta = ok_meta(true);
+        meta.used_hardware_driver_port = false;
+        let incomplete = MetalProof::from_measured(meta, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+        assert!(!incomplete.used_hardware_driver_port);
+    }
+
+    #[test]
+    fn measured_direct_device_write_success_prevents_success() {
+        let mut meta = ok_meta(true);
+        meta.direct_device_write_successes = 1;
+        let incomplete = MetalProof::from_measured(meta, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+        assert_eq!(incomplete.direct_device_write_successes, 1);
     }
 }

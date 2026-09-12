@@ -67,6 +67,13 @@ impl MetalAuthority {
         }
         let key = load_or_create_key(&root)?;
         let driver = Xl330Driver::open(cfg.clone(), &root)?;
+        // Serve may have rewritten leftover Wizard 9 600 to factory 57 600
+        // so live I/O fits the 40 ms deadline. start_online hashes baud;
+        // crash-replay must open at the same rate the journal recorded.
+        if driver.applied_baud() != cfg.baud {
+            cfg.baud = driver.applied_baud();
+            cfg.save(&cfg_path)?;
+        }
         let measured = driver.measured();
         if measured.serial != cfg.expected_serial {
             anyhow::bail!(
@@ -105,6 +112,22 @@ impl MetalAuthority {
                 args, plant,
             )
             .map_err(|e| anyhow::anyhow!(e.0))?;
+        if !cfg.freshness_threshold_s.is_finite() || cfg.freshness_threshold_s <= 0.0 {
+            anyhow::bail!(
+                "metal_freshness_threshold_invalid:{}",
+                cfg.freshness_threshold_s
+            );
+        }
+        // ONLINE sensor_stale_s is locked after start_online. Do not mutate
+        // it. Fail closed if metal.json records a different window.
+        let enforced = session.governor.config().sensor_stale_s;
+        if (cfg.freshness_threshold_s - enforced).abs() > 1e-9 {
+            anyhow::bail!(
+                "metal_freshness_threshold_mismatch_online_locked:metal={} governor={}",
+                cfg.freshness_threshold_s,
+                enforced
+            );
+        }
         let next_sequence = session.governor.ledger().last_sequence().max(0);
         Ok(Self {
             ros: RealityOs::new(),
@@ -220,7 +243,9 @@ impl MetalAuthority {
             "device_capture_s": capture,
             "authority_receive_s": receive,
             "freshness_threshold_s": self.cfg.freshness_threshold_s,
+            "enforced_sensor_stale_s": self.session.governor.config().sensor_stale_s,
             "clock": "OsMonotonicClock",
+            "driver_port": "HardwareDriverPort+Xl330Driver",
             "acquisition": "authority acquire_sensor on propose/sensor; autonomy cannot ingest",
             "vin_0.1v": vin,
             "firmware_id_latched": self.cfg.expected_firmware,
@@ -375,6 +400,8 @@ impl MetalAuthority {
         let e = err.to_ascii_lowercase();
         e.contains("driver not connected")
             || e.contains("dxl_io")
+            || e.contains("dxl_vin_outside_wizard_limits")
+            || e.contains("dxl_vin_unreadable")
             || e.contains("metal_live_io_deadline")
             || e.contains("metal_serial_closed")
     }

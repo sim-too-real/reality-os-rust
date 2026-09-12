@@ -12,6 +12,7 @@ fn main() -> anyhow::Result<()> {
     let mut id = env::var("METAL_CMD_ID").unwrap_or_else(|_| "metal-1".into());
     let mut action: Option<Vec<f64>> = None;
     let mut raw: Option<String> = None;
+    let mut authority_pid: Option<i32> = None;
     let mut args = env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -28,7 +29,7 @@ fn main() -> anyhow::Result<()> {
                 );
             }
             "--authority-pid" => {
-                let _ = args.next();
+                authority_pid = args.next().and_then(|s| s.parse().ok());
             }
             "propose" | "propose-id" | "unsupported" | "oversized" | "replay" | "raw"
             | "hil_fault" | "caller_time" | "os-probe" | "status" | "recover" | "sensor"
@@ -111,7 +112,10 @@ fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string(&call(&root, &r)?)?);
         }
         "os-probe" => {
-            println!("{}", serde_json::to_string_pretty(&os_probe(&root)?)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&os_probe(&root, authority_pid)?)?
+            );
         }
         _ => {
             eprintln!("usage: realityos-metal-propose --root DIR propose|os-probe|...");
@@ -121,7 +125,10 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn os_probe(root: &std::path::Path) -> anyhow::Result<serde_json::Value> {
+fn os_probe(
+    root: &std::path::Path,
+    authority_pid: Option<i32>,
+) -> anyhow::Result<serde_json::Value> {
     let uid = rust_uid();
     let euid = rust_euid();
     let ran_as_root = euid == 0;
@@ -191,9 +198,11 @@ fn os_probe(root: &std::path::Path) -> anyhow::Result<serde_json::Value> {
         status_reached_authority = resp.ok;
     }
 
-    let auth_pid = env::var("METAL_AUTHORITY_PID")
-        .ok()
-        .and_then(|s| s.parse::<i32>().ok());
+    let auth_pid = authority_pid.or_else(|| {
+        env::var("METAL_AUTHORITY_PID")
+            .ok()
+            .and_then(|s| s.parse::<i32>().ok())
+    });
     let mut proc_fd_device = false;
     if let Some(pid) = auth_pid {
         if let Ok(rd) = std::fs::read_dir(format!("/proc/{pid}/fd")) {

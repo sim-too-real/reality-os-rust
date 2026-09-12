@@ -161,6 +161,19 @@ fn xl330_pty_alert_bit_is_not_instruction_failure() {
         .write_action(&[0.0], &ActionParams::empty())
         .expect("hold must accept STATUS_ALERT");
     assert_eq!(recorded_writes(root.join("bus")), 1);
+    let pkt = driver
+        .read_sensor(0.0)
+        .expect("sensor after ALERT goal write");
+    let hw = pkt
+        .samples
+        .iter()
+        .find(|(k, _)| k == "hw_error")
+        .map(|(_, v)| *v);
+    assert_eq!(
+        hw,
+        Some(4.0),
+        "live hw_error sample must re-read register 70 after STATUS_ALERT, not keep the setup-time 0"
+    );
     driver.close();
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -179,6 +192,63 @@ fn xl330_pty_status_return_level_zero_can_still_identify() {
         .expect("hold after SRL poke");
     assert_eq!(recorded_writes(root.join("bus")), 1);
     driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_status_return_level_one_can_still_write() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_SRL1", "1")]);
+    let root = metal_test_root("pty-srl1");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("Wizard Status Return Level 1 must poke 2 before setup WRITE");
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold after SRL=1 poke");
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_retries_when_srl_poke_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_SRL1", "1"),
+        ("REALITYOS_METAL_PTY_DROP_SRL_ONCE", "1"),
+    ]);
+    let root = metal_test_root("pty-srl1-drop-once");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect(
+        "Wizard SRL=1 plus a dropped first poke must retry; identify READs succeed and the next write_reg would time out",
+    );
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold after SRL poke retry");
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_srl_poke_never_sticks() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_SRL1", "1"),
+        ("REALITYOS_METAL_PTY_DROP_SRL", "1"),
+    ]);
+    let root = metal_test_root("pty-srl1-drop");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped SRL poke must not leave WRITE silent"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("dxl_status_return_level_unverified"),
+        "got {err}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -207,6 +277,127 @@ fn xl330_pty_outbound_nudge_at_cage_edge_is_refused() {
 }
 
 #[test]
+fn xl330_pty_refuses_setup_when_leftover_window_cannot_host_nudge() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_TIGHT_WINDOW", "1")]);
+    let root = metal_test_root("pty-tight-window");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("20-tick leftover Wizard window must not torque-on"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("metal_experiment_cage_no_inbound_step"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_setup_when_edge36_would_abort_latch_after_propose() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_EDGE36", "1")]);
+    let root = metal_test_root("pty-edge36");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!(
+            "36-tick leftover edge window must not torque-on; hold+propose hunt abort-latches"
+        ),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("metal_experiment_cage_no_inbound_step"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_setup_when_edge_window_is_eaten_by_hold_still() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_EDGE32", "1")]);
+    let root = metal_test_root("pty-edge32");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("32-tick leftover edge window must not torque-on; hold hunt eats the step"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("metal_experiment_cage_no_inbound_step"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_inbound_nudge_at_wizard_max_window_tracks() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_AT_MAX", "1")]);
+    let root = metal_test_root("pty-at-max-inbound");
+    let cfg = MetalConfig::example(&tty);
+    let action = realityos_metal::config::pick_inbound_nudge_action(
+        2048,
+        2000,
+        2048,
+        cfg.max_position_delta_ticks,
+        cfg.tau_max,
+    )
+    .expect("Wizard leftover max==present still has inbound room");
+    assert!(action < 0.0, "plus 32 ticks is outbound of max=2048");
+    let mut driver = Xl330Driver::open(cfg, &root).expect("identify at Wizard max");
+    driver
+        .read_sensor(0.0)
+        .expect("sensor before inbound nudge");
+    assert_eq!(driver.last_present_position(), 2048);
+    let (emin, emax) = driver.experiment_cage();
+    assert_eq!((emin, emax), (2000, 2048));
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect_err("hardcoded +0.2 must still refuse; do not clamp inward");
+    driver
+        .write_action(&[action], &ActionParams::empty())
+        .expect("inbound -0.2 must write the 32-tick step");
+    driver.read_sensor(0.0).expect("sensor after inbound nudge");
+    let after = driver.last_present_position();
+    assert_eq!(after, 2016, "PTY lands on the inbound 32-tick goal");
+    assert!(
+        after >= emin && after <= emax,
+        "inbound present {after} escaped cage {emin}..{emax}"
+    );
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_at_max_restart_after_inbound_nudge_still_hosts_step() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_AT_MAX", "1")]);
+    let root = metal_test_root("pty-at-max-restart");
+    let cfg = MetalConfig::example(&tty);
+    let mut first = Xl330Driver::open(cfg.clone(), &root).expect("identify at Wizard max");
+    first
+        .write_action(&[-0.2], &ActionParams::empty())
+        .expect("inbound -0.2");
+    first.read_sensor(0.0).expect("sensor after inbound nudge");
+    assert_eq!(first.last_present_position(), 2016);
+    first.abandon_without_eeprom_restore_for_test();
+    drop(first);
+    let mut second = Xl330Driver::open(cfg, &root)
+        .expect("restart cage around 2016 must flip off +32 that slack-misses leftover max");
+    assert_eq!(second.last_present_position(), 2016);
+    let (emin, emax) = second.experiment_cage();
+    assert_eq!((emin, emax), (1968, 2048));
+    second
+        .write_action(&[-0.2], &ActionParams::empty())
+        .expect("inbound -0.2 must still fit after AT_MAX restart");
+    second.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_pwm_operating_mode_is_forced_to_position() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_PWM", "1")]);
@@ -218,6 +409,26 @@ fn xl330_pty_pwm_operating_mode_is_forced_to_position() {
         .expect("hold after forcing position mode");
     assert_eq!(recorded_writes(root.join("bus")), 1);
     driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_operating_mode_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_PWM", "1"),
+        ("REALITYOS_METAL_PTY_DROP_OPERATING_MODE", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-operating-mode");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped position-mode write must not look like mode 3"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_operating_mode_unverified"),
+        "got {err}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -239,15 +450,58 @@ fn xl330_pty_raises_wizard_velocity_limit_so_nudge_can_finish() {
 }
 
 #[test]
+fn xl330_pty_refuses_when_velocity_limit_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_SLOW_VEL", "1"),
+        ("REALITYOS_METAL_PTY_DROP_VELOCITY_LIMIT", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-velocity-limit");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped Velocity Limit write must not look like 20"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_velocity_limit_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_lowers_wizard_moving_threshold_so_moving_can_assert() {
     let _serial = pty_serial();
-    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_HIGH_MOVING_THRESHOLD", "1")]);
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_HIGH_MOVING_THRESHOLD", "1"),
+        ("REALITYOS_METAL_PTY_UNREAD_MOVING_THRESHOLD", "1"),
+    ]);
     let root = metal_test_root("pty-move-th");
     let cfg = MetalConfig::example(&tty);
     let mut driver =
         Xl330Driver::open(cfg, &root).expect("lower Moving Threshold 1023 to factory 10");
     assert_eq!(driver.applied_moving_threshold(), 10);
     driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_moving_threshold_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_HIGH_MOVING_THRESHOLD", "1"),
+        ("REALITYOS_METAL_PTY_DROP_MOVING_THRESHOLD", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-moving-threshold");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped Moving Threshold write must not look like 10"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_moving_threshold_unverified"),
+        "got {err}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -264,15 +518,264 @@ fn xl330_pty_forces_wizard_rc_protocol_type_to_protocol_2() {
 }
 
 #[test]
+fn xl330_pty_refuses_when_protocol_type_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_PROTOCOL_RC", "1"),
+        ("REALITYOS_METAL_PTY_DROP_PROTOCOL_TYPE", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-protocol-type");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped Protocol Type write must not look like 2"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_protocol_type_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_secondary_id_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_SECONDARY", "1"),
+        ("REALITYOS_METAL_PTY_DROP_SECONDARY_ID", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-secondary-id");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped Secondary ID write must not look like 255"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_secondary_id_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_zeros_wizard_position_id_so_nudge_stays_in_cage() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_WIZARD_PID", "1"),
+        ("REALITYOS_METAL_PTY_UNREAD_PID", "1"),
+    ]);
+    let root = metal_test_root("pty-pos-id");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("zero Wizard position I/D");
+    assert_eq!(driver.applied_position_i_gain(), 0);
+    assert_eq!(driver.applied_position_d_gain(), 0);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_restores_factory_pwm_slope_when_wizard_zero() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_PWM_SLOPE", "1")]);
+    let root = metal_test_root("pty-pwm-slope");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("restore factory PWM Slope 140");
+    assert_eq!(driver.applied_pwm_slope(), 140);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_matches_goal_pwm_to_cap_when_wizard_zero() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_GOAL_PWM", "1")]);
+    let root = metal_test_root("pty-zero-goal-pwm");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver =
+        Xl330Driver::open(cfg, &root).expect("Wizard Goal PWM 0 must match the PWM cap");
+    assert_eq!(
+        driver.applied_goal_pwm(),
+        i16::try_from(driver.applied_pwm_limit()).expect("pwm cap fits i16"),
+        "Position Mode uses Goal PWM as the live limiter"
+    );
+    driver.read_sensor(0.0).expect("sensor");
+    let before = driver.last_present_position();
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("nudge after restoring Goal PWM");
+    driver.read_sensor(0.1).expect("sensor");
+    let after = driver.last_present_position();
+    assert_ne!(
+        after, before,
+        "Wizard Goal PWM 0 must not leave present stuck after setup"
+    );
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_matches_goal_pwm_to_cap_when_wizard_too_low() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_LOW_GOAL_PWM", "1")]);
+    let root = metal_test_root("pty-low-goal-pwm");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver =
+        Xl330Driver::open(cfg, &root).expect("Wizard Goal PWM 1 must match the PWM cap");
+    assert_eq!(
+        driver.applied_goal_pwm(),
+        i16::try_from(driver.applied_pwm_limit()).expect("pwm cap fits i16")
+    );
+    driver.read_sensor(0.0).expect("sensor");
+    let before = driver.last_present_position();
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("nudge after raising a legal-but-too-small Goal PWM");
+    driver.read_sensor(0.1).expect("sensor");
+    assert_ne!(
+        driver.last_present_position(),
+        before,
+        "Wizard Goal PWM 1 must not leave present stuck after setup"
+    );
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_restores_factory_pwm_slope_when_wizard_too_low() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_LOW_PWM_SLOPE", "1")]);
+    let root = metal_test_root("pty-low-pwm-slope");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver =
+        Xl330Driver::open(cfg, &root).expect("raise Wizard PWM Slope 1 to factory 140");
+    assert_eq!(driver.applied_pwm_slope(), 140);
+    driver.read_sensor(0.0).expect("sensor");
+    let before = driver.last_present_position();
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("nudge after restoring a legal-but-too-slow slope");
+    driver.read_sensor(0.1).expect("sensor");
+    let after = driver.last_present_position();
+    assert_ne!(
+        after, before,
+        "Wizard PWM Slope 1 must not leave present stuck after setup"
+    );
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_pwm_slope_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_ZERO_PWM_SLOPE", "1"),
+        ("REALITYOS_METAL_PTY_DROP_PWM_SLOPE", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-pwm-slope");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped PWM Slope write must not look like factory 140"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_pwm_slope_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_position_p_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_HIGH_P", "1"),
+        ("REALITYOS_METAL_PTY_DROP_POSITION_P", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-position-p");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped Position P write must not look like factory 400"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_position_p_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_profile_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_DROP_PROFILE", "1")]);
+    let root = metal_test_root("pty-drop-profile");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped profile write must not look like vel=20 accel=10"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_profile_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_zeros_wizard_feedforward_so_nudge_stays_bounded() {
     let _serial = pty_serial();
-    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_FEEDFORWARD", "1")]);
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_FEEDFORWARD", "1"),
+        ("REALITYOS_METAL_PTY_UNREAD_FF", "1"),
+    ]);
     let root = metal_test_root("pty-ff");
     let cfg = MetalConfig::example(&tty);
     let mut driver = Xl330Driver::open(cfg, &root).expect("zero Wizard feedforward");
     assert_eq!(driver.applied_feedforward_1st(), 0);
     assert_eq!(driver.applied_feedforward_2nd(), 0);
     driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_retries_when_recenter_torque_off_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_TORQUE_JUMP_PRESENT", "1"),
+        ("REALITYOS_METAL_PTY_DROP_TORQUE_OFF_ONCE", "1"),
+    ]);
+    let root = metal_test_root("pty-tq-off-drop-once");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("a dropped recenter torque-off must retry; EEPROM Min/Max then access-NAK 0x40");
+    assert_eq!(driver.startup_present(), 2064);
+    let (emin, emax) = driver.experiment_cage();
+    assert_eq!((emin, emax), (2016, 2112));
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("inbound +0.2 after verified torque-off recenter");
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_recenter_torque_off_never_sticks() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_TORQUE_JUMP_PRESENT", "1"),
+        ("REALITYOS_METAL_PTY_DROP_TORQUE_OFF", "1"),
+    ]);
+    let root = metal_test_root("pty-tq-off-drop");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("torque still on must not rewrite EEPROM Min/Max"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("dxl_torque_still_on_before_eeprom"),
+        "got {err}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -286,13 +789,77 @@ fn xl330_pty_rematches_goal_when_torque_on_resets_present() {
         Xl330Driver::open(cfg, &root).expect("rematch goal after torque-on present reset");
     assert_eq!(driver.last_present_position(), 2064);
     assert_eq!(driver.last_goal_position(), Some(2064));
+    assert_eq!(
+        driver.startup_present(),
+        2064,
+        "register wrap is not certified excursion; cage must follow the parked present"
+    );
+    let (emin, emax) = driver.experiment_cage();
+    assert_eq!(
+        (emin, emax),
+        (2016, 2112),
+        "pre-reset cage 2000..2096 leaves +32+slack past 2096 and abort-latches"
+    );
     driver.read_sensor(0.0).expect("sensor");
     assert_eq!(
         driver.last_present_position(),
         2064,
         "goal must already match the post-torque present so the horn does not yank"
     );
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("inbound +0.2 must fit the recentered cage");
     driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_recenters_on_live_present_after_torque_off_drift() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_TORQUE_JUMP_PRESENT", "1"),
+        ("REALITYOS_METAL_PTY_DRIFT_ON_TORQUE_OFF", "1"),
+    ]);
+    let root = metal_test_root("pty-tq-jump-drift");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("recenter must park on the post-torque-off present, not yank back to 2064");
+    assert_eq!(
+        driver.last_present_position(),
+        2084,
+        "torque-off settle +20 from the 2064 wrap must become the park"
+    );
+    assert_eq!(driver.last_goal_position(), Some(2084));
+    assert_eq!(driver.startup_present(), 2084);
+    let (emin, emax) = driver.experiment_cage();
+    assert_eq!(
+        (emin, emax),
+        (2036, 2132),
+        "cage around stale 2064 (2016..2112) leaves +32 from 2084 past 2112"
+    );
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("inbound +0.2 must fit the cage around the live park");
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_second_torque_wrap_after_recenter() {
+    let _serial = pty_serial();
+    let (_guard, tty) =
+        spawn_responder_env(&[("REALITYOS_METAL_PTY_TORQUE_JUMP_EVERY_ENABLE", "1")]);
+    let root = metal_test_root("pty-tq-jump-every");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("a wrap on every torque-on must not loop EEPROM rewrites"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("dxl_present_jumped_twice_after_torque_recenter"),
+        "got {err}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -353,6 +920,32 @@ fn xl330_pty_raises_wizard_zero_p_gain_so_nudge_can_track() {
 }
 
 #[test]
+fn xl330_pty_caps_wizard_high_p_gain_so_nudge_stays_in_cage() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_HIGH_P", "1")]);
+    let root = metal_test_root("pty-high-p");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver =
+        Xl330Driver::open(cfg, &root).expect("cap Wizard Position P Gain 8000 to factory 400");
+    assert_eq!(driver.applied_position_p_gain(), 400);
+    driver.read_sensor(0.0).expect("sensor");
+    let before = driver.last_present_position();
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("nudge after capping high P");
+    driver.read_sensor(0.1).expect("sensor");
+    let after = driver.last_present_position();
+    assert_ne!(after, before, "factory P must still track the 32-tick goal");
+    let traveled = (i64::from(after) - i64::from(before)).abs();
+    assert!(
+        traveled <= 48,
+        "Wizard P=8000 must not throw present past the 48-tick cage: {before}->{after}"
+    );
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_writes_configured_pwm_cap_never_factory_885() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_PWM", "1")]);
@@ -408,6 +1001,26 @@ fn xl330_pty_raises_wizard_zero_velocity_p_so_nudge_can_track() {
 }
 
 #[test]
+fn xl330_pty_refuses_when_velocity_p_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_ZERO_VEL_P", "1"),
+        ("REALITYOS_METAL_PTY_DROP_VELOCITY_P", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-velocity-p");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped Velocity P write must not look like factory 100"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_velocity_p_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_raises_wizard_zero_velocity_i_so_profile_can_settle() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_VEL_I", "1")]);
@@ -421,6 +1034,26 @@ fn xl330_pty_raises_wizard_zero_velocity_i_so_profile_can_settle() {
         .expect("hold after restoring Velocity I");
     assert_eq!(recorded_writes(root.join("bus")), 1);
     driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_velocity_i_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_ZERO_VEL_I", "1"),
+        ("REALITYOS_METAL_PTY_DROP_VELOCITY_I", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-velocity-i");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped Velocity I write must not look like factory 1600"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_velocity_i_unverified"),
+        "got {err}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -465,19 +1098,63 @@ fn xl330_pty_clears_wizard_homing_offset_so_present_is_in_window() {
 }
 
 #[test]
+fn xl330_pty_clears_in_window_homing_offset_so_torque_on_does_not_yank() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_HOMING_IN_WINDOW", "1")]);
+    let root = metal_test_root("pty-homing-in-window");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("in-window Homing Offset 1024 must be cleared before torque-on");
+    assert_eq!(driver.applied_homing_offset(), 0);
+    driver.read_sensor(0.0).expect("sensor");
+    assert_eq!(
+        driver.last_present_position(),
+        1024,
+        "clearing Homing Offset with torque off shifts present in encoder space, not by moving the horn"
+    );
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold after clearing in-window homing offset");
+    assert_eq!(recorded_writes(root.join("bus")), 1);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_homing_offset_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_HOMING_IN_WINDOW", "1"),
+        ("REALITYOS_METAL_PTY_DROP_HOMING_OFFSET", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-homing");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped Homing Offset write must not reach torque-on"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_homing_offset_unverified"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_torque_off_after_hw_error_reboot_so_eeprom_can_write() {
     let _serial = pty_serial();
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_HW_ERROR", "1")]);
     let root = metal_test_root("pty-hw-error");
     let cfg = MetalConfig::example(&tty);
     let mut driver = Xl330Driver::open(cfg, &root)
-        .expect("reboot then torque-off so PWM-mode EEPROM can become position");
+        .expect("clear Startup Configuration before Hardware Error reboot, then torque-off so PWM-mode EEPROM can become position");
     driver.read_sensor(0.0).expect("sensor");
     assert_eq!(
         driver.last_present_position(),
         2048,
-        "stale goal 0 must not yank after Startup Configuration torque-on"
+        "leftover Startup Configuration bit 0 must be cleared before INST_REBOOT; silent-boot torque-on onto Goal 0 used to yank present off 2048"
     );
+    assert_eq!(driver.applied_startup_configuration(), 0);
     driver
         .write_action(&[0.0], &ActionParams::empty())
         .expect("hold after hw-error reboot");
@@ -501,6 +1178,273 @@ fn xl330_pty_refuses_torque_when_present_outside_wizard_limits() {
             .contains("dxl_present_outside_wizard_limits"),
         "got {err}"
     );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_reboots_when_torque_off_present_is_multi_turn() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_PRESENT_MULTITURN", "1")]);
+    let root = metal_test_root("pty-present-multiturn");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("torque-off Present 5000 must reboot-wrap into 0..=4095, not refuse first contact");
+    assert_eq!(
+        driver.startup_present(),
+        904,
+        "Robotis reboot maps 5000 to absolute-within-one-rotation (5000 rem 4096)"
+    );
+    let (min, max) = driver.experiment_cage();
+    assert_eq!(
+        (min, max),
+        (856, 952),
+        "±48 cage around wrapped 904; campaign valid_hold/nudge run here"
+    );
+    driver.read_sensor(0.0).expect("sensor after wrap");
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("inbound +0.2 after +5000 wrap must stay in 856..952");
+    driver.read_sensor(0.0).expect("sensor after wrap nudge");
+    assert_eq!(driver.last_present_position(), 936);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_reboots_when_torque_off_present_is_negative_multi_turn() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_PRESENT_NEGATIVE", "1")]);
+    let root = metal_test_root("pty-present-negative");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect(
+        "torque-off Present −16 must reboot-wrap into 0..=4095, not refuse first contact",
+    );
+    assert_eq!(
+        driver.startup_present(),
+        4080,
+        "Robotis reboot maps −16 to absolute-within-one-rotation (−16 rem 4096)"
+    );
+    let (min, max) = driver.experiment_cage();
+    assert_eq!(
+        (min, max),
+        (4032, 4095),
+        "±48 cage around 4080 clamps to Position Mode max 4095"
+    );
+    driver.read_sensor(0.0).expect("sensor after negative wrap");
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect_err("hardcoded +0.2 from 4080 is past 4095 and abort-latches ONLINE");
+    driver
+        .write_action(&[-0.2], &ActionParams::empty())
+        .expect("inbound −0.2 after −16 wrap must stay in 4032..4095");
+    driver
+        .read_sensor(0.0)
+        .expect("sensor after negative-wrap nudge");
+    assert_eq!(driver.last_present_position(), 4048);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_identifies_after_reboot_longer_than_400ms() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_PRESENT_MULTITURN", "1"),
+        ("REALITYOS_METAL_PTY_SLOW_REBOOT_MS", "600"),
+    ]);
+    let root = metal_test_root("pty-slow-reboot");
+    let cfg = MetalConfig::example(&tty);
+    let started = std::time::Instant::now();
+    let mut driver = Xl330Driver::open(cfg, &root).expect(
+        "hand-turned multiturn reboot that stays silent 600 ms must still identify; a single 400 ms wait missed first contact",
+    );
+    assert!(
+        started.elapsed() >= Duration::from_millis(600),
+        "must actually wait out the silent boot, not only wrap Present: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(driver.startup_present(), 904);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_identifies_when_reboot_answers_ping_before_read() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_PRESENT_MULTITURN", "1"),
+        ("REALITYOS_METAL_PTY_SLOW_REBOOT_MS", "400"),
+        ("REALITYOS_METAL_PTY_REBOOT_PING_ONLY_MS", "400"),
+    ]);
+    let root = metal_test_root("pty-reboot-ping-only");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect(
+        "a reboot that answers PING at 400 ms but not READ until 800 ms must keep polling identify; one ping_and_identify after the first ping aborted first contact",
+    );
+    assert_eq!(driver.startup_present(), 904);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_reboot_identify_stays_silent() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_PRESENT_MULTITURN", "1"),
+        ("REALITYOS_METAL_PTY_SLOW_REBOOT_MS", "2000"),
+    ]);
+    let root = metal_test_root("pty-reboot-silent");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!(
+            "a reboot that stays silent past the 1.5 s poll must not torque-on (setup identify's 16×150 ms recv used to sit through a 2 s boot and then accept the first reply)"
+        ),
+        Err(e) => e,
+    };
+    assert!(err.to_string().contains("dxl_reboot_identify"), "got {err}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_upgrades_wizard_9600_so_live_io_fits_deadline() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_BAUD_9600", "1")]);
+    let root = metal_test_root("pty-baud-9600");
+    let mut cfg = MetalConfig::example(&tty);
+    cfg.baud = 9_600;
+    cfg.save(root.join(CONFIG_FILE)).unwrap();
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("Wizard 9600 must be rewritten to factory 57600 before enter_live_io");
+    assert_eq!(
+        driver.applied_baud(),
+        57_600,
+        "serve must not stay at a rate whose motion-block xfer misses 40 ms"
+    );
+    let saved = MetalConfig::load(root.join(CONFIG_FILE)).expect("metal.json after baud upgrade");
+    assert_eq!(
+        saved.baud, 57_600,
+        "crash-replay serve must open at factory baud, not leftover 9600"
+    );
+    driver
+        .read_sensor(0.0)
+        .expect("live sensor after 9600→57600 upgrade");
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_factory_baud_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_BAUD_9600", "1"),
+        ("REALITYOS_METAL_PTY_DROP_BAUD", "1"),
+    ]);
+    let root = metal_test_root("pty-baud-9600-drop");
+    let mut cfg = MetalConfig::example(&tty);
+    cfg.baud = 9_600;
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped baud write must not enter_live_io at 9600"),
+        Err(e) => e,
+    };
+    assert!(err.to_string().contains("dxl_baud_unverified"), "got {err}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_multi_turn_present_survives_reboot() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_PRESENT_MULTITURN", "1"),
+        ("REALITYOS_METAL_PTY_NO_REBOOT_PRESENT_WRAP", "1"),
+    ]);
+    let root = metal_test_root("pty-present-multiturn-stuck");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("Present 5000 after reboot must not torque-on or loop"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("dxl_present_outside_position_mode_after_reboot"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_mode_change_to_position_wraps_multiturn_without_reboot() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_EXTENDED", "1"),
+        ("REALITYOS_METAL_PTY_PRESENT_MULTITURN", "1"),
+        ("REALITYOS_METAL_PTY_NO_REBOOT_PRESENT_WRAP", "1"),
+    ]);
+    let root = metal_test_root("pty-mode-wrap-multiturn");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect(
+        "Wizard Extended + hand-turned 5000 must wrap on the Position Mode write; reboot is not required",
+    );
+    assert_eq!(
+        driver.startup_present(),
+        904,
+        "e-Manual mode-change wrap maps 5000 to absolute-within-one-rotation"
+    );
+    let (min, max) = driver.experiment_cage();
+    assert_eq!(
+        (min, max),
+        (856, 952),
+        "±48 cage around mode-wrapped 904; campaign valid_hold/nudge run here"
+    );
+    driver.read_sensor(0.0).expect("sensor after mode wrap");
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("inbound +0.2 after mode-change wrap must stay in 856..952");
+    driver
+        .read_sensor(0.0)
+        .expect("sensor after mode-wrap nudge");
+    assert_eq!(driver.last_present_position(), 936);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_mode_change_to_position_wraps_negative_without_reboot() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_EXTENDED", "1"),
+        ("REALITYOS_METAL_PTY_PRESENT_NEGATIVE", "1"),
+        ("REALITYOS_METAL_PTY_NO_REBOOT_PRESENT_WRAP", "1"),
+    ]);
+    let root = metal_test_root("pty-mode-wrap-negative");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect(
+        "Wizard Extended + hand-turned −16 must wrap on the Position Mode write; reboot is not required",
+    );
+    assert_eq!(
+        driver.startup_present(),
+        4080,
+        "e-Manual mode-change wrap maps −16 to absolute-within-one-rotation"
+    );
+    let (min, max) = driver.experiment_cage();
+    assert_eq!(
+        (min, max),
+        (4032, 4095),
+        "±48 cage around 4080 clamps to Position Mode max 4095"
+    );
+    driver
+        .read_sensor(0.0)
+        .expect("sensor after negative mode wrap");
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect_err("hardcoded +0.2 from 4080 is past 4095 and abort-latches ONLINE");
+    driver
+        .write_action(&[-0.2], &ActionParams::empty())
+        .expect("inbound −0.2 after mode-change wrap must stay in 4032..4095");
+    driver
+        .read_sensor(0.0)
+        .expect("sensor after negative mode-wrap nudge");
+    assert_eq!(driver.last_present_position(), 4048);
+    driver.close();
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -541,9 +1485,26 @@ fn xl330_pty_syncs_stale_goal_before_torque_so_present_does_not_jump() {
 }
 
 #[test]
+fn xl330_pty_refuses_when_goal_match_present_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_DROP_GOAL_POSITION", "1")]);
+    let root = metal_test_root("pty-drop-goal");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped goal=present must not reach torque-on"),
+        Err(e) => e,
+    };
+    assert!(err.to_string().contains("dxl_goal_unverified"), "got {err}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn xl330_pty_clears_bus_watchdog_error_so_goal_writes_are_live() {
     let _serial = pty_serial();
-    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_BUS_WATCHDOG", "1")]);
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_BUS_WATCHDOG", "1"),
+        ("REALITYOS_METAL_PTY_UNREAD_WATCHDOG", "1"),
+    ]);
     let root = metal_test_root("pty-bus-wd");
     let cfg = MetalConfig::example(&tty);
     let mut driver = Xl330Driver::open(cfg, &root).expect("clear Bus Watchdog 0xFF before goal");
@@ -571,6 +1532,26 @@ fn xl330_pty_time_based_drive_mode_is_forced_velocity_based() {
         .expect("hold after forcing velocity-based drive");
     assert_eq!(recorded_writes(root.join("bus")), 1);
     driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_when_drive_mode_write_does_not_stick() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_TIME_BASED", "1"),
+        ("REALITYOS_METAL_PTY_DROP_DRIVE_MODE", "1"),
+    ]);
+    let root = metal_test_root("pty-drop-drive-mode");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("ACK'd-but-dropped drive-mode write must not look like velocity-based"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_drive_mode_unverified"),
+        "got {err}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -605,6 +1586,93 @@ fn xl330_pty_refuses_torque_when_vin_cannot_be_read() {
         err.to_string().contains("dxl_vin_unreadable_before_torque"),
         "got {err}"
     );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_torque_when_present_temperature_at_limit() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_HOT", "1")]);
+    let root = metal_test_root("pty-hot");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("present temperature at the EEPROM limit must not torque-on"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("dxl_present_temperature_at_or_above_limit"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_refuses_torque_when_temperature_limit_is_zero() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_TEMP_LIMIT", "1")]);
+    let root = metal_test_root("pty-zero-tlim");
+    let cfg = MetalConfig::example(&tty);
+    let err = match Xl330Driver::open(cfg, &root) {
+        Ok(_) => panic!("Wizard temperature limit 0 must not torque-on"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("dxl_temperature_limit_zero"),
+        "got {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_live_vin_zero_refuses_and_does_not_write() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_LIVE_LOW_VIN", "1")]);
+    let root = metal_test_root("pty-live-vin0");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("setup VIN 5.0 V is in range");
+    assert_eq!(driver.applied_voltage_limits(), (35, 70));
+    driver
+        .read_sensor(0.0)
+        .expect("first live motion sample still has setup VIN");
+    let err = driver
+        .read_sensor(0.0)
+        .expect_err("VIN 0 on a later motion block is not a healthy sample");
+    assert!(err.to_string().contains("dxl_vin_unreadable"), "got {err}");
+    let tx_before = recorded_serial_tx(root.join("bus"));
+    let writes_before = recorded_writes(root.join("bus"));
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect_err("certified write must not follow a live VIN fault");
+    assert_eq!(recorded_serial_tx(root.join("bus")), tx_before);
+    assert_eq!(recorded_writes(root.join("bus")), writes_before);
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_live_vin_below_wizard_min_refuses_and_does_not_write() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_LIVE_BROWN_VIN", "1")]);
+    let root = metal_test_root("pty-live-brown");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("setup VIN 5.0 V is in range");
+    driver
+        .read_sensor(0.0)
+        .expect("first live motion sample still has setup VIN");
+    let err = driver
+        .read_sensor(0.0)
+        .expect_err("VIN 2.0 V is below Wizard min 3.5 V");
+    assert!(
+        err.to_string().contains("dxl_vin_outside_wizard_limits"),
+        "got {err}"
+    );
+    let tx_before = recorded_serial_tx(root.join("bus"));
+    driver
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect_err("cutoff-range VIN must not reach a certified goal write");
+    assert_eq!(recorded_serial_tx(root.join("bus")), tx_before);
+    driver.close();
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -752,6 +1820,39 @@ fn xl330_pty_discover_finds_wizard_id_zero() {
     );
     driver.close();
     assert_eq!(recorded_writes(root.join("bus")), 0);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_quiesces_startup_torque_during_open_settle() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_STARTUP_TORQUE", "1"),
+        ("REALITYOS_METAL_PTY_STARTUP_YANK", "1"),
+        ("REALITYOS_METAL_PTY_UNREAD_STARTUP", "1"),
+    ]);
+    let root = metal_test_root("pty-startup-yank");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("Startup Configuration torque-on must not slam present to goal 0");
+    assert_eq!(
+        driver.applied_startup_configuration(),
+        0,
+        "serve must clear EEPROM torque-on-boot so the next DTR-RESET does not yank"
+    );
+    assert_eq!(
+        driver.startup_present(),
+        2048,
+        "stale goal 0 must not yank during the open-settle / identify window"
+    );
+    driver.read_sensor(0.0).expect("sensor");
+    assert_eq!(driver.last_present_position(), 2048);
+    assert_eq!(
+        recorded_writes(root.join("bus")),
+        0,
+        "settle / identify torque-off is not command egress"
+    );
+    driver.close();
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -1293,6 +2394,67 @@ fn xl330_pty_bus_timeout_requires_online_restart() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Live USB unplug and a DTR-RESET first sensor journal ESTOP via
+/// `note_acquire_err`. Continuity re-engages it on `--restart`. Sensor
+/// can still be `ok=true` (acquire does not check the latch), so the
+/// campaign first hold / post-replug reset hold died as `estop_engaged`
+/// until `--restart` recover-acks the new instance.
+#[test]
+fn xl330_pty_restart_after_bus_loss_estop_needs_recover() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder();
+    let root = metal_test_root("pty-estop-restart");
+    bind_pty_cfg(&root, &tty);
+
+    {
+        let mut auth = MetalAuthority::start(&root, true).expect("first-online");
+        let hold = auth.handle(MetalRequest::propose("pty-estop-hold", "hold"));
+        assert!(hold.ok, "baseline hold: {hold:?}");
+        std::fs::write(root.join("bus/force_io_loss"), b"1").unwrap();
+        let lost = auth.handle(MetalRequest::propose("pty-estop-lost", "hold"));
+        assert!(!lost.ok, "forced I/O loss must refuse: {lost:?}");
+        assert!(
+            lost.violations.iter().any(|v| v.contains("driver not connected")
+                || v.contains("online_hardware_disconnected")),
+            "I/O loss must journal ESTOP, not a vacuous miss: {lost:?}"
+        );
+        let rec = auth.handle(recover_req("pty-estop-same"));
+        assert!(!rec.ok, "same instance must not recover: {rec:?}");
+        assert!(
+            rec.violations
+                .iter()
+                .any(|v| v.contains("hardware_session_requires_online_restart")),
+            "{rec:?}"
+        );
+    }
+    std::fs::remove_file(root.join("bus/force_io_loss")).unwrap();
+
+    {
+        let mut auth =
+            MetalAuthority::start(&root, false).expect("restart after bus-loss ESTOP");
+        let blocked = auth.handle(MetalRequest::propose("pty-estop-hold2", "hold"));
+        assert!(
+            !blocked.ok
+                && blocked
+                    .violations
+                    .iter()
+                    .any(|v| v.contains("estop_engaged") || v.contains("abort_latched")),
+            "continuity must re-apply journal ESTOP until recover: {blocked:?}"
+        );
+        let rec = auth.handle(recover_req("pty-estop-restart"));
+        assert!(
+            rec.ok,
+            "new instance recover is the operator ack: {rec:?}"
+        );
+        let hold = auth.handle(MetalRequest::propose("pty-estop-hold3", "hold"));
+        assert!(
+            hold.ok,
+            "post-replug / DTR-RESET restart hold after recover: {hold:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn xl330_pty_vanished_udev_path_is_not_disconnect() {
     let _serial = pty_serial();
@@ -1475,5 +2637,88 @@ fn xl330_pty_after_serial_tx_before_status_restart_does_not_retransmit() {
     let _ = std::fs::write(root.join("stop_serve"), b"1");
     let _ = restart.kill();
     let _ = restart.wait();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_hw_error_refresh_timeout_does_not_latch_disconnect() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[
+        ("REALITYOS_METAL_PTY_ALERT", "1"),
+        ("REALITYOS_METAL_PTY_HWERR_REFRESH_FAIL", "1"),
+    ]);
+    let root = metal_test_root("pty-hwerr-refresh");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("open with ALERT + refresh fail");
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold latches STATUS_ALERT");
+    driver
+        .read_sensor(0.0)
+        .expect("good motion sample must survive a failed hw_error refresh");
+    assert!(
+        driver.is_connected(),
+        "diagnostic register 70 timeout must not clear connected"
+    );
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("next certified hold must still reach the bus");
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_reenable_torque_rematches_goal_to_present() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_DRIFT_ON_TORQUE_OFF", "1")]);
+    let root = metal_test_root("pty-reenable-match");
+    let cfg = MetalConfig::example(&tty);
+    let mut driver = Xl330Driver::open(cfg, &root).expect("open");
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold");
+    driver.read_sensor(0.0).expect("sensor after hold");
+    let parked = driver.last_present_position();
+    driver.engage_hw_estop("test");
+    driver
+        .clear_hw_estop(true)
+        .expect("clear estop without re-energizing");
+    driver
+        .write_action(&[0.0], &ActionParams::empty())
+        .expect("hold after rematch");
+    let after_reenable = driver.last_present_position();
+    assert_eq!(
+        after_reenable,
+        parked + 20,
+        "re-enable must match goal to drifted present, not yank back to the stale goal"
+    );
+    driver.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn xl330_pty_crash_restart_restores_wizard_window_before_new_cage() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder();
+    let root = metal_test_root("pty-cage-restore");
+    let cfg = MetalConfig::example(&tty);
+    let mut first = Xl330Driver::open(cfg.clone(), &root).expect("first open");
+    let (first_min, first_max) = first.experiment_cage();
+    first
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("nudge toward the cage edge");
+    first.read_sensor(0.0).expect("sensor after nudge");
+    first.abandon_without_eeprom_restore_for_test();
+    drop(first);
+    let mut second = Xl330Driver::open(cfg, &root).expect("reopen after crash-like abandon");
+    let (_min, second_max) = second.experiment_cage();
+    assert!(
+        second_max > first_max,
+        "leftover EEPROM cage must not ratchet the next session window: first={first_min}..{first_max} second_max={second_max}"
+    );
+    second
+        .write_action(&[0.2], &ActionParams::empty())
+        .expect("post-restart nudge needs the restored Wizard window");
+    second.close();
     let _ = std::fs::remove_dir_all(&root);
 }

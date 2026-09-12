@@ -32,7 +32,10 @@ fn main() -> anyhow::Result<()> {
         "init" => {
             std::fs::create_dir_all(&root)?;
             let mut cfg = MetalConfig::example(device.unwrap_or_else(|| "/dev/ttyUSB0".into()));
-            cfg.apply_process_env();
+            // Device path only. REALITYOS_METAL_BAUD / SERVO_ID are probe
+            // scan extras; writing them here left metal.json at 2/3/4 Mbps
+            // before discover, and a failed probe then handed serve that rate.
+            cfg.apply_device_env();
             cfg.save(root.join(CONFIG_FILE))?;
             println!("{}", serde_json::to_string_pretty(&cfg)?);
         }
@@ -47,7 +50,7 @@ fn main() -> anyhow::Result<()> {
             if let Some(d) = device {
                 cfg.device = d;
             }
-            cfg.apply_process_env();
+            cfg.apply_device_env();
             if cfg.device.exists() {
                 let aliases = adapter_identity_aliases(&cfg.device, cfg.servo_id);
                 let live = rematch_discover_device(cfg.device.clone(), &aliases, cfg.servo_id);

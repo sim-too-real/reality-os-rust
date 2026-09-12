@@ -20,6 +20,10 @@ pub const XL330_M288_MODEL: u16 = 1200;
 pub const ADDR_MODEL_NUMBER: u16 = 0;
 pub const ADDR_FIRMWARE_VERSION: u16 = 6;
 pub const ADDR_ID: u16 = 7;
+/// EEPROM. Wizard index 0 is 9 600; factory index 1 is 57 600.
+pub const ADDR_BAUD_RATE: u16 = 8;
+pub const BAUD_INDEX_9600: u8 = 0;
+pub const BAUD_INDEX_57600: u8 = 1;
 /// EEPROM. Bit2=1 is time-based profile (Wizard); 0 = velocity-based.
 pub const ADDR_DRIVE_MODE: u16 = 10;
 pub const DRIVE_MODE_VELOCITY_BASED: u8 = 0;
@@ -64,16 +68,33 @@ pub const XL330_POSITION_MODE_MIN: i32 = 0;
 pub const XL330_POSITION_MODE_MAX: i32 = 4095;
 /// EEPROM. Unit ≈ 0.229 rpm. 0 or 1 makes a 32-tick nudge still Moving=0 at the old present.
 pub const ADDR_VELOCITY_LIMIT: u16 = 44;
+/// EEPROM. Factory 70 °C. Wizard 0 trips Shutdown on any present sample.
+pub const ADDR_TEMPERATURE_LIMIT: u16 = 31;
+pub const FACTORY_TEMPERATURE_LIMIT: u8 = 70;
+/// RAM. Unit 1 °C. Not in the motion block (that block ends at VIN 144).
+pub const ADDR_PRESENT_TEMPERATURE: u16 = 146;
 /// EEPROM. Factory max 4095 / min 0. Wizard can shrink this window.
 pub const ADDR_MAX_POSITION_LIMIT: u16 = 48;
 pub const ADDR_MIN_POSITION_LIMIT: u16 = 52;
+/// EEPROM. Factory 0. Bit 0 = torque on at boot / DTR-RESET.
+/// A Wizard-set bit tracks Goal Position (RAM initial 0) before host I/O.
+pub const ADDR_STARTUP_CONFIGURATION: u16 = 60;
+pub const FACTORY_STARTUP_CONFIGURATION: u8 = 0;
+/// EEPROM. Factory 140. Unit 1.977 mV/msec. Range 1..=255 (e-Manual).
+/// Wizard 0 is outside that range. Wizard 1..=19 is legal but ramps PWM
+/// too slowly for the 32-tick nudge to leave the hold-still band in 1.5 s.
+pub const ADDR_PWM_SLOPE: u16 = 62;
+pub const FACTORY_PWM_SLOPE: u8 = 140;
+/// Below this, restore factory 140. Same class as MIN_POSITION_P_GAIN.
+pub const MIN_PWM_SLOPE: u8 = 20;
 
 /// Raw PWM Limit → documented percentage (not a certified torque figure).
 pub fn pwm_limit_percent(raw: u16) -> f64 {
     f64::from(raw) * XL330_PWM_LIMIT_UNIT_PERCENT
 }
 pub const ADDR_TORQUE_ENABLE: u16 = 64;
-/// RAM. 0 = no status except PING (Wizard); 2 = all instructions (factory).
+/// RAM. 0 = PING only (Wizard); 1 = PING+READ (WRITE has no status);
+/// 2 = all instructions (factory).
 pub const ADDR_STATUS_RETURN_LEVEL: u16 = 68;
 pub const STATUS_RETURN_ALL: u8 = 2;
 pub const ADDR_HARDWARE_ERROR: u16 = 70;
@@ -85,6 +106,9 @@ pub const MIN_VELOCITY_I_GAIN: u16 = 200;
 pub const ADDR_VELOCITY_P_GAIN: u16 = 78;
 pub const FACTORY_VELOCITY_P_GAIN: u16 = 100;
 pub const MIN_VELOCITY_P_GAIN: u16 = 20;
+/// RAM. Factory 0. Wizard PID I/D makes a 32-tick goal overshoot the cage.
+pub const ADDR_POSITION_D_GAIN: u16 = 80;
+pub const ADDR_POSITION_I_GAIN: u16 = 82;
 /// RAM. Factory 400. Wizard 0 means the servo never tracks a goal.
 pub const ADDR_POSITION_P_GAIN: u16 = 84;
 /// RAM. Factory 0. Wizard feedforward makes a 32-tick goal overshoot.
@@ -95,6 +119,12 @@ pub const FACTORY_POSITION_P_GAIN: u16 = 400;
 pub const MIN_POSITION_P_GAIN: u16 = 80;
 /// RAM. Unit 20 ms. 0 = off; 0xFF (-1) = tripped (goal registers read-only).
 pub const ADDR_BUS_WATCHDOG: u16 = 98;
+/// RAM. Signed. In Position Mode this is the live PWM output limiter.
+/// PWM Limit(36) only caps how large this register may be. Wizard 0
+/// (or |Goal PWM| below MIN_PWM_LIMIT) leaves the 32-tick nudge stuck
+/// even after setup writes PWM Limit 200. Factory / reboot typically
+/// copies PWM Limit here; a mode switch also resets it to PWM Limit.
+pub const ADDR_GOAL_PWM: u16 = 100;
 pub const ADDR_PROFILE_ACCEL: u16 = 108;
 pub const ADDR_PROFILE_VELOCITY: u16 = 112;
 pub const ADDR_GOAL_POSITION: u16 = 116;
@@ -369,6 +399,10 @@ pub fn find_header(buf: &[u8]) -> Option<usize> {
 
 pub fn le_u16(b: &[u8]) -> Option<u16> {
     Some(u16::from_le_bytes([*b.first()?, *b.get(1)?]))
+}
+
+pub fn le_i16(b: &[u8]) -> Option<i16> {
+    Some(i16::from_le_bytes([*b.first()?, *b.get(1)?]))
 }
 
 pub fn le_u32(b: &[u8]) -> Option<u32> {

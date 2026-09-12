@@ -9,6 +9,7 @@ import signal
 import struct
 import sys
 import termios
+import time
 import tty
 
 # Host crash_if after write_all+flush closes the slave while we emit status.
@@ -134,16 +135,29 @@ def init_regs() -> bytearray:
     except ValueError:
         own = 1
     regs[7] = own if own != 254 else 1
+    # Factory baud index 1 = 57 600. Wizard index 0 = 9 600.
+    regs[8] = 0 if os.environ.get("REALITYOS_METAL_PTY_BAUD_9600") == "1" else 1
     regs[12] = 255
     if os.environ.get("REALITYOS_METAL_PTY_SECONDARY") == "1":
         regs[12] = 7
     regs[13] = 20 if os.environ.get("REALITYOS_METAL_PTY_PROTOCOL_RC") == "1" else 2
     regs[10] = 4 if os.environ.get("REALITYOS_METAL_PTY_TIME_BASED") == "1" else 0
     regs[11] = 3
+    regs[31] = 80 if os.environ.get("REALITYOS_METAL_PTY_HOT") == "1" else (
+        0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_TEMP_LIMIT") == "1" else 70
+    )
     regs[32:34] = struct.pack("<H", 70)
     regs[34:36] = struct.pack("<H", 60 if os.environ.get("REALITYOS_METAL_PTY_HIGH_MINVIN") == "1" else 35)
     pwm = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_PWM") == "1" else 885
     regs[36:38] = struct.pack("<H", pwm)
+    # Position Mode live limiter. PWM Limit only caps this register.
+    # Reboot / mode-switch copies PWM Limit here; Wizard can leave 0.
+    if os.environ.get("REALITYOS_METAL_PTY_ZERO_GOAL_PWM") == "1":
+        regs[100:102] = struct.pack("<h", 0)
+    elif os.environ.get("REALITYOS_METAL_PTY_LOW_GOAL_PWM") == "1":
+        regs[100:102] = struct.pack("<h", 1)
+    else:
+        regs[100:102] = struct.pack("<h", pwm if pwm <= 32767 else 32767)
     regs[38:40] = struct.pack("<H", 200)
     vel = 1 if os.environ.get("REALITYOS_METAL_PTY_SLOW_VEL") == "1" else 445
     regs[44:48] = struct.pack("<I", vel)
@@ -151,6 +165,20 @@ def init_regs() -> bytearray:
     regs[52:56] = struct.pack("<i", 0)
     if os.environ.get("REALITYOS_METAL_PTY_AT_MAX") == "1":
         regs[48:52] = struct.pack("<i", 2048)
+    if os.environ.get("REALITYOS_METAL_PTY_TIGHT_WINDOW") == "1":
+        # Wizard leftover ~20-tick window around present. Neither ±32 fits.
+        regs[48:52] = struct.pack("<i", 2060)
+        regs[52:56] = struct.pack("<i", 2040)
+    if os.environ.get("REALITYOS_METAL_PTY_EDGE32") == "1":
+        # Leftover max==present with exactly 32 inbound ticks. valid_hold
+        # hunt of 4 then makes -32 miss; setup must refuse before torque-on.
+        regs[48:52] = struct.pack("<i", 2048)
+        regs[52:56] = struct.pack("<i", 2016)
+    if os.environ.get("REALITYOS_METAL_PTY_EDGE36") == "1":
+        # delta+hold_still=36. Hold to 2044 still picks -0.2; propose then
+        # hunts one more tick and write_action abort-latches ONLINE.
+        regs[48:52] = struct.pack("<i", 2048)
+        regs[52:56] = struct.pack("<i", 2012)
     if os.environ.get("REALITYOS_METAL_PTY_PRESENT_OUTSIDE") == "1":
         regs[48:52] = struct.pack("<i", 2100)
         regs[52:56] = struct.pack("<i", 2000)
@@ -159,13 +187,26 @@ def init_regs() -> bytearray:
         regs[52:56] = struct.pack("<i", 3000)
     if os.environ.get("REALITYOS_METAL_PTY_PWM") == "1":
         regs[11] = 16
+    if os.environ.get("REALITYOS_METAL_PTY_EXTENDED") == "1":
+        # Wizard leftover Extended Position (4). Official XL330 wraps
+        # Present when Operating Mode is written to Position (3).
+        regs[11] = 4
     if os.environ.get("REALITYOS_METAL_PTY_HW_ERROR") == "1":
-        # Latched Hardware Error Status. Reboot clears it and (on XL330)
-        # Startup Configuration can re-enable torque; EEPROM then needs torque off.
+        # Latched Hardware Error Status plus leftover Wizard bit 0.
+        # Reboot clears the error; bit 0 torque-ons onto Goal 0 unless
+        # setup writes factory Startup Configuration first.
         regs[70] = 4
+        regs[60] = 1
         regs[11] = 16
-    p_gain = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_P") == "1" else 400
+    if os.environ.get("REALITYOS_METAL_PTY_HIGH_P") == "1":
+        p_gain = 8000
+    else:
+        p_gain = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_P") == "1" else 400
     regs[84:86] = struct.pack("<H", p_gain)
+    if os.environ.get("REALITYOS_METAL_PTY_WIZARD_PID") == "1":
+        # Wizard position I/D. Factory is 0. High I/D overshoots a 32-tick step.
+        regs[80:82] = struct.pack("<H", 4000)
+        regs[82:84] = struct.pack("<H", 4000)
     if os.environ.get("REALITYOS_METAL_PTY_FEEDFORWARD") == "1":
         regs[88:90] = struct.pack("<H", 8000)
         regs[90:92] = struct.pack("<H", 8000)
@@ -179,13 +220,38 @@ def init_regs() -> bytearray:
         regs[98] = 0xFF  # tripped; Goal Position is read-only until written 0
     if os.environ.get("REALITYOS_METAL_PTY_STARTUP_TORQUE") == "1":
         regs[64] = 1
-    regs[68] = 0 if os.environ.get("REALITYOS_METAL_PTY_SRL0") == "1" else 2
+        regs[60] = 1
+    if os.environ.get("REALITYOS_METAL_PTY_STARTUP_YANK") == "1":
+        regs[64] = 1
+        regs[60] = 1
+    if os.environ.get("REALITYOS_METAL_PTY_ZERO_PWM_SLOPE") == "1":
+        regs[62] = 0
+    elif os.environ.get("REALITYOS_METAL_PTY_LOW_PWM_SLOPE") == "1":
+        regs[62] = 1
+    else:
+        regs[62] = 140
+    if os.environ.get("REALITYOS_METAL_PTY_SRL0") == "1":
+        regs[68] = 0
+    elif os.environ.get("REALITYOS_METAL_PTY_SRL1") == "1":
+        # Wizard "PING + READ". WRITE has no status. Identify READs succeed;
+        # setup write_reg then times out unless the SRL poke sticks.
+        regs[68] = 1
+    else:
+        regs[68] = 2
     regs[120:122] = struct.pack("<H", 1234)
     regs[126:128] = struct.pack("<h", 0)
     regs[128:132] = struct.pack("<i", 0)
     regs[132:136] = struct.pack("<i", 2048)
     if os.environ.get("REALITYOS_METAL_PTY_PRESENT_OUTSIDE") == "1":
         regs[132:136] = struct.pack("<i", 100)
+    if os.environ.get("REALITYOS_METAL_PTY_PRESENT_MULTITURN") == "1":
+        # Torque-off Present is a 4-byte continuous encoder. A hand-turned
+        # horn sits outside 0–4095 until reboot / torque-on / mode change.
+        regs[132:136] = struct.pack("<i", 5000)
+    if os.environ.get("REALITYOS_METAL_PTY_PRESENT_NEGATIVE") == "1":
+        # Same continuous encoder, other direction. Docs first-contact
+        # is "5000 or −16". Reboot remainder is 4080 (near Position max).
+        regs[132:136] = struct.pack("<i", -16)
     if os.environ.get("REALITYOS_METAL_PTY_HIGH_MOVING_THRESHOLD") == "1":
         regs[24:28] = struct.pack("<I", 1023)
     else:
@@ -193,7 +259,11 @@ def init_regs() -> bytearray:
     if os.environ.get("REALITYOS_METAL_PTY_HOMING") == "1":
         regs[20:24] = struct.pack("<i", 10000)
         regs[132:136] = struct.pack("<i", 12048)
+    if os.environ.get("REALITYOS_METAL_PTY_HOMING_IN_WINDOW") == "1":
+        regs[20:24] = struct.pack("<i", 1024)
+        regs[132:136] = struct.pack("<i", 2048)
     regs[144:146] = struct.pack("<H", 0 if os.environ.get("REALITYOS_METAL_PTY_NO_VIN") == "1" else 50)
+    regs[146] = 80 if os.environ.get("REALITYOS_METAL_PTY_HOT") == "1" else 25
     return regs
 
 
@@ -210,9 +280,69 @@ def status_wanted(srl: int, inst: int) -> bool:
 
 _motion_block_reads = 0
 _corrupt_next_crc = False
+_silent_next_status = False
+# After INST_REBOOT the real XL330 is silent while it boots. A single
+# 400 ms host wait missed identify. Armed from REALITYOS_METAL_PTY_SLOW_REBOOT_MS.
+# After that, PING can land before READ (SRL / model). Armed from
+# REALITYOS_METAL_PTY_REBOOT_PING_ONLY_MS.
+_silent_until = 0.0
+_ping_only_until = 0.0
 _travel_reads = 0
 _travel_from: int | None = None
 _travel_to: int | None = None
+_boot = time.monotonic()
+# One-shot READ refuses. A failed setup read used to look like factory 0
+# and skip the safe write (Startup Configuration, I/D, feedforward, watchdog).
+_fail_reads: dict[int, int] = {}
+_drop_srl_writes = 0
+if os.environ.get("REALITYOS_METAL_PTY_DROP_SRL") == "1":
+    _drop_srl_writes = 10_000
+elif os.environ.get("REALITYOS_METAL_PTY_DROP_SRL_ONCE") == "1":
+    _drop_srl_writes = 1
+_drop_torque_off_writes = 0
+if os.environ.get("REALITYOS_METAL_PTY_DROP_TORQUE_OFF") == "1":
+    _drop_torque_off_writes = 10_000
+elif os.environ.get("REALITYOS_METAL_PTY_DROP_TORQUE_OFF_ONCE") == "1":
+    _drop_torque_off_writes = 1
+if os.environ.get("REALITYOS_METAL_PTY_UNREAD_STARTUP") == "1":
+    _fail_reads[60] = 1
+if os.environ.get("REALITYOS_METAL_PTY_UNREAD_PID") == "1":
+    _fail_reads[80] = 1
+    _fail_reads[82] = 1
+if os.environ.get("REALITYOS_METAL_PTY_UNREAD_FF") == "1":
+    _fail_reads[88] = 1
+    _fail_reads[90] = 1
+if os.environ.get("REALITYOS_METAL_PTY_UNREAD_WATCHDOG") == "1":
+    _fail_reads[98] = 1
+if os.environ.get("REALITYOS_METAL_PTY_UNREAD_MOVING_THRESHOLD") == "1":
+    _fail_reads[24] = 1
+
+
+def wrap_present_to_one_rotation(regs: bytearray) -> None:
+    """Official: Present becomes absolute-within-one-rotation.
+    After wrap, Present still includes a *valid* Homing Offset
+    (−1024..1024). Invalid leftovers are ignored by the servo."""
+    present = struct.unpack_from("<i", regs, 132)[0]
+    offset = struct.unpack_from("<i", regs, 20)[0]
+    if offset < -1024 or offset > 1024:
+        offset = 0
+    actual = present - offset
+    regs[132:136] = struct.pack("<i", (actual % 4096) + offset)
+
+
+def maybe_startup_yank(regs: bytearray) -> None:
+    """Startup Configuration tracks Goal after DTR-RESET without a host write.
+    After 80 ms (inside the 100 ms PTY open settle) copy goal→present while
+    torque is still on. Open must broadcast torque-off during settle or the
+    stale Wizard goal (0) slams present away from 2048."""
+    if os.environ.get("REALITYOS_METAL_PTY_STARTUP_YANK") != "1":
+        return
+    if regs[64] != 1:
+        return
+    if time.monotonic() - _boot < 0.08:
+        return
+    if regs[116:120] != regs[132:136]:
+        regs[132:136] = regs[116:120]
 
 
 def advance_delayed_travel(regs: bytearray) -> None:
@@ -239,10 +369,15 @@ def advance_delayed_travel(regs: bytearray) -> None:
 
 def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
     global _motion_block_reads
+    maybe_startup_yank(regs)
     if inst == INST_PING:
         return b"", 0
     if inst == INST_READ and len(params) >= 4:
         addr, ln = struct.unpack_from("<HH", params)
+        global _fail_reads
+        if addr in _fail_reads and _fail_reads[addr] > 0:
+            _fail_reads[addr] -= 1
+            return b"", 0x80
         if os.environ.get("REALITYOS_METAL_PTY_NO_PRESENT") == "1" and addr == 132:
             return b"", 0x80  # refuse present so setup cannot invent goal=0
         if os.environ.get("REALITYOS_METAL_PTY_NO_VLIMIT") == "1" and addr in (32, 34):
@@ -253,9 +388,34 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             and regs[64] == 1
         ):
             return b"", 0x80  # torque is on; do not skip the post-enable check
+        if (
+            os.environ.get("REALITYOS_METAL_PTY_HWERR_REFRESH_FAIL") == "1"
+            and addr == 70
+            and regs[70] != 0
+        ):
+            # Setup already read register 70 as 0. After STATUS_ALERT latches
+            # a non-zero error, drop the diagnostic refresh so the driver
+            # must not treat that timeout as bus_lost.
+            global _silent_next_status
+            _silent_next_status = True
+            return bytes([regs[70]]), 0
         if addr == 120:
             _motion_block_reads += 1
             advance_delayed_travel(regs)
+            # Setup reads Present Voltage at addr 144. Live I/O uses the
+            # motion block. Drop VIN only after the first healthy live
+            # sample so start_online can bind, then the next acquire
+            # must refuse instead of publishing a writable session.
+            if (
+                os.environ.get("REALITYOS_METAL_PTY_LIVE_LOW_VIN") == "1"
+                and _motion_block_reads >= 2
+            ):
+                regs[144:146] = struct.pack("<H", 0)
+            if (
+                os.environ.get("REALITYOS_METAL_PTY_LIVE_BROWN_VIN") == "1"
+                and _motion_block_reads >= 2
+            ):
+                regs[144:146] = struct.pack("<H", 20)
         chunk = bytearray(regs[addr : addr + ln])
         # After two motion-block reads, flip model/fw so live confirm_eeprom
         # sees a physical servo swap on the same UART (not just hot_swap.json).
@@ -287,9 +447,10 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
     if inst == INST_WRITE and len(params) >= 2:
         addr = struct.unpack_from("<H", params)[0]
         data = params[2:]
+        # Goal PWM/Current/Velocity/Position are read-only while Watchdog=0xFF.
+        if regs[98] == 0xFF and addr in (100, 102, 104, 116):
+            return b"", 0x08
         if addr == 116 and len(data) >= 4:
-            if regs[98] == 0xFF:
-                return b"", 0x08  # Bus Watchdog error: goal is read-only
             goal = struct.unpack_from("<i", data)[0]
             max_p = struct.unpack_from("<i", regs, 48)[0]
             min_p = struct.unpack_from("<i", regs, 52)[0]
@@ -297,6 +458,12 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
                 return b"", 0x08  # Protocol 2.0 data range
         if addr == 64 and data:
             was = regs[64]
+            if data[0] == 0 and was == 1:
+                global _drop_torque_off_writes
+                if _drop_torque_off_writes > 0:
+                    # ACK but keep torque on. EEPROM then access-NAKs 0x40.
+                    _drop_torque_off_writes -= 1
+                    return b"", 0
             regs[64] = data[0]
             if data[0] == 1 and os.environ.get("REALITYOS_METAL_PTY_TORQUE_DROP") == "1":
                 # Overload Shutdown: torque enable does not stick.
@@ -306,6 +473,9 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             if was == 0 and data[0] == 1 and os.environ.get("REALITYOS_METAL_PTY_HW_AFTER_TORQUE") == "1":
                 # Torque sticks; Hardware Error Status latches after enable.
                 regs[70] = 4
+            if was == 1 and data[0] == 0 and os.environ.get("REALITYOS_METAL_PTY_DRIFT_ON_TORQUE_OFF") == "1":
+                present = struct.unpack_from("<i", regs, 132)[0]
+                regs[132:136] = struct.pack("<i", present + 20)
             if was == 0 and data[0] == 1:
                 goal = struct.unpack_from("<i", regs, 116)[0]
                 present = struct.unpack_from("<i", regs, 132)[0]
@@ -313,13 +483,72 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
                     regs[132:136] = regs[116:120]
                 if os.environ.get("REALITYOS_METAL_PTY_TORQUE_JUMP_PRESENT") == "1":
                     # Robotis resets Present to absolute-within-one-rotation
-                    # on torque-on in Position Control.
-                    jumped = struct.unpack_from("<i", regs, 132)[0] + 16
-                    regs[132:136] = struct.pack("<i", jumped)
+                    # on torque-on in Position Control. Once, not +16 every
+                    # enable — setup may torque-off and re-center the cage.
+                    present_now = struct.unpack_from("<i", regs, 132)[0]
+                    if present_now == 2048:
+                        regs[132:136] = struct.pack("<i", present_now + 16)
+                if os.environ.get("REALITYOS_METAL_PTY_TORQUE_JUMP_EVERY_ENABLE") == "1":
+                    # A wrap that repeats on every torque-on. Recenter must
+                    # refuse rather than loop EEPROM rewrites.
+                    present_now = struct.unpack_from("<i", regs, 132)[0]
+                    regs[132:136] = struct.pack("<i", present_now + 16)
+                offset = struct.unpack_from("<i", regs, 20)[0]
+                if offset != 0:
+                    # Leftover Homing Offset vs that reset throws Present
+                    # past the 48-tick cage even when pre-torque Present
+                    # was still inside 0–4095.
+                    present = struct.unpack_from("<i", regs, 132)[0]
+                    regs[132:136] = struct.pack("<i", present + 64)
             return b"", 0
         # Protocol 2.0 access error: EEPROM (0–63) is read-only while torque is on.
         if addr < 64 and regs[64] == 1:
             return b"", 0x40
+        # ACK but do not store: setup used to trust write_reg Ok and lie
+        # about applied PWM Slope / Position P / profile.
+        if addr == 62 and os.environ.get("REALITYOS_METAL_PTY_DROP_PWM_SLOPE") == "1":
+            return b"", 0
+        if addr == 84 and os.environ.get("REALITYOS_METAL_PTY_DROP_POSITION_P") == "1":
+            return b"", 0
+        if addr in (108, 112) and os.environ.get("REALITYOS_METAL_PTY_DROP_PROFILE") == "1":
+            return b"", 0
+        if addr == 11 and os.environ.get("REALITYOS_METAL_PTY_DROP_OPERATING_MODE") == "1":
+            # ACK-no-store must not wrap Present. A dropped mode write
+            # that still wrapped would hide leftover PWM/Extended.
+            return b"", 0
+        if addr == 11 and len(data) >= 1:
+            # e-Manual: changing Operating Mode to Position Control
+            # resets Present to absolute-within-one-rotation. Wizard
+            # Extended + a hand-turned encoder wraps here; reboot is
+            # not required. Wrap before store so a later read sees
+            # the parked value.
+            if data[0] == 3 and regs[11] != 3:
+                wrap_present_to_one_rotation(regs)
+        if addr == 10 and os.environ.get("REALITYOS_METAL_PTY_DROP_DRIVE_MODE") == "1":
+            return b"", 0
+        if addr == 44 and os.environ.get("REALITYOS_METAL_PTY_DROP_VELOCITY_LIMIT") == "1":
+            return b"", 0
+        if addr == 78 and os.environ.get("REALITYOS_METAL_PTY_DROP_VELOCITY_P") == "1":
+            return b"", 0
+        if addr == 76 and os.environ.get("REALITYOS_METAL_PTY_DROP_VELOCITY_I") == "1":
+            return b"", 0
+        if addr == 116 and os.environ.get("REALITYOS_METAL_PTY_DROP_GOAL_POSITION") == "1":
+            return b"", 0
+        if addr == 13 and os.environ.get("REALITYOS_METAL_PTY_DROP_PROTOCOL_TYPE") == "1":
+            return b"", 0
+        if addr == 12 and os.environ.get("REALITYOS_METAL_PTY_DROP_SECONDARY_ID") == "1":
+            return b"", 0
+        if addr == 20 and os.environ.get("REALITYOS_METAL_PTY_DROP_HOMING_OFFSET") == "1":
+            return b"", 0
+        if addr == 8 and os.environ.get("REALITYOS_METAL_PTY_DROP_BAUD") == "1":
+            return b"", 0
+        if addr == 24 and os.environ.get("REALITYOS_METAL_PTY_DROP_MOVING_THRESHOLD") == "1":
+            return b"", 0
+        if addr == 68:
+            global _drop_srl_writes
+            if _drop_srl_writes > 0:
+                _drop_srl_writes -= 1
+                return b"", 0
         if addr == 20 and len(data) >= 4:
             old = struct.unpack_from("<i", regs, 20)[0]
             new = struct.unpack_from("<i", data)[0]
@@ -328,24 +557,46 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
             regs[132:136] = struct.pack("<i", present - old + new)
             return b"", 0
         regs[addr : addr + len(data)] = data
+        if (
+            addr == 116
+            and os.environ.get("REALITYOS_METAL_PTY_ALERT") == "1"
+            and regs[64] == 1
+        ):
+            # Latch only after torque-on. Setup writes goal=present with
+            # torque off; a boot-time latch would reboot and fail open.
+            regs[70] = 4
         if addr == 116 and len(data) >= 4:
             p_gain = struct.unpack_from("<H", regs, 84)[0]
             pwm_limit = struct.unpack_from("<H", regs, 36)[0]
+            goal_pwm = struct.unpack_from("<h", regs, 100)[0]
             vel_p = struct.unpack_from("<H", regs, 78)[0]
-            if p_gain > 0 and pwm_limit > 0 and vel_p > 0:
+            slope = regs[62]
+            if (
+                p_gain > 0
+                and pwm_limit > 0
+                and abs(goal_pwm) >= 80
+                and vel_p > 0
+                and slope >= 20
+            ):
                 old_present = struct.unpack_from("<i", regs, 132)[0]
                 new_goal = struct.unpack_from("<i", data)[0]
+                # Wizard P above factory 400 overshoots a 32-tick step
+                # past the 48-tick cage. Setup must cap P first.
+                landed = new_goal
+                if p_gain > 400 and new_goal != old_present:
+                    step = new_goal - old_present
+                    landed = new_goal + (32 if step >= 0 else -32)
                 if (
                     new_goal != old_present
                     and os.environ.get("REALITYOS_METAL_PTY_DELAY_MOTION") == "1"
                 ):
                     global _travel_from, _travel_to, _travel_reads
                     _travel_from = old_present
-                    _travel_to = new_goal
+                    _travel_to = landed
                     _travel_reads = 0
                     regs[122] = 0
                 else:
-                    regs[132:136] = data[:4]
+                    regs[132:136] = struct.pack("<i", landed)
                     if new_goal != old_present:
                         regs[122] = 1
         return b"", 0
@@ -353,8 +604,42 @@ def handle(regs: bytearray, inst: int, params: bytes) -> tuple[bytes, int]:
         regs[70] = 0
         regs[68] = 2  # RAM reset; factory Status Return Level
         regs[98] = 0
-        if os.environ.get("REALITYOS_METAL_PTY_HW_ERROR") == "1":
-            regs[64] = 1  # Startup Configuration torque-on after reboot
+        # RAM Goal defaults to 0 after reboot.
+        regs[116:120] = struct.pack("<i", 0)
+        # Robotis: reboot resets Present to absolute-within-one-rotation.
+        if os.environ.get("REALITYOS_METAL_PTY_NO_REBOOT_PRESENT_WRAP") != "1":
+            present = struct.unpack_from("<i", regs, 132)[0]
+            regs[132:136] = struct.pack("<i", present % 4096)
+        # Bit 0 torque-ons and tracks Goal 0. Key off the EEPROM bit,
+        # not PTY_HW_ERROR: setup must clear it before INST_REBOOT.
+        if regs[60] & 1:
+            regs[64] = 1
+            regs[132:136] = regs[116:120]
+        else:
+            regs[64] = 0
+        # Status for this Reboot is still sent; later packets are dropped
+        # until the boot window ends (real XL330 is silent while booting).
+        global _silent_until, _ping_only_until
+        try:
+            silent_s = max(
+                0.0,
+                float(os.environ.get("REALITYOS_METAL_PTY_SLOW_REBOOT_MS", "0")) / 1000.0,
+            )
+        except ValueError:
+            silent_s = 0.0
+        try:
+            ping_only_s = max(
+                0.0,
+                float(os.environ.get("REALITYOS_METAL_PTY_REBOOT_PING_ONLY_MS", "0"))
+                / 1000.0,
+            )
+        except ValueError:
+            ping_only_s = 0.0
+        now = time.monotonic()
+        if silent_s > 0:
+            _silent_until = now + silent_s
+        if ping_only_s > 0:
+            _ping_only_until = now + silent_s + ping_only_s
         return b"", 0
     return b"", 0
 
@@ -380,6 +665,11 @@ def main() -> None:
             continue
         req_id, inst, params, _consumed = parsed
         del buf[:]
+        global _silent_until, _ping_only_until
+        if time.monotonic() < _silent_until:
+            continue
+        if time.monotonic() < _ping_only_until and inst != INST_PING:
+            continue
         own = regs[7]
         secondary = regs[12]
         if req_id not in (254, own) and not (
@@ -405,6 +695,10 @@ def main() -> None:
         payload, inst_err = handle(regs, inst, params)
         # Half-duplex adapters often echo a request-shaped frame before status.
         echo = HEADER + bytes([own, 0x07, 0x00, INST_PING, 0x00, 0x00])
+        global _silent_next_status
+        if _silent_next_status:
+            _silent_next_status = False
+            continue
         if status_wanted(srl, inst):
             pkt = echo + encode_status(own, payload, error=alert | inst_err)
             global _corrupt_next_crc
@@ -422,8 +716,6 @@ def main() -> None:
                 os.write(master, echo)
             except OSError:
                 continue
-
-
 if __name__ == "__main__":
     try:
         main()

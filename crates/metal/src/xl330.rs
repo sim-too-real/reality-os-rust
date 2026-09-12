@@ -6,7 +6,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nix::sys::termios::{tcgetattr, tcsetattr, ControlFlags, SetArg};
 
@@ -18,9 +18,11 @@ use realityos_plant::{
 use serialport::SerialPort;
 
 use crate::config::{
-    candidate_bauds, candidate_servo_ids, discover_baud_attempts, MetalConfig, BUS_DIR,
-    CAGE_EVIDENCE_FILE, GOAL_FILE, LOCK_FILE, MOVING_FILE, PRESENT_FILE, PWM_EVIDENCE_FILE,
-    VIN_FILE,
+    baud_too_slow_for_live_io, cage_allows_inbound_nudge_after_hold_still, candidate_bauds,
+    candidate_servo_ids, chosen_nudge_survives_slack, discover_baud_attempts,
+    pick_inbound_nudge_action, MetalConfig, BUS_DIR, CAGE_EVIDENCE_FILE, CANDIDATE_BAUDS,
+    CONFIG_FILE, FACTORY_BAUD, GOAL_FILE, HOLD_STILL_HEADROOM_TICKS, LOCK_FILE, MOVING_FILE,
+    NUDGE_PRESENT_SLACK_TICKS, PRESENT_FILE, PWM_EVIDENCE_FILE, VIN_FILE,
 };
 use crate::egress::EgressLog;
 use crate::identity::{
@@ -29,20 +31,31 @@ use crate::identity::{
 };
 use crate::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
-    instruction_ok, is_xl330_model, le_i32, le_u16, le_u32, pwm_limit_percent, unique_status_ids,
-    ProtocolError, ADDR_BUS_WATCHDOG, ADDR_CURRENT_LIMIT, ADDR_DRIVE_MODE, ADDR_FEEDFORWARD_1ST,
-    ADDR_FEEDFORWARD_2ND, ADDR_FIRMWARE_VERSION, ADDR_GOAL_POSITION, ADDR_HARDWARE_ERROR,
-    ADDR_HOMING_OFFSET, ADDR_ID, ADDR_MAX_POSITION_LIMIT, ADDR_MAX_VOLTAGE_LIMIT,
-    ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER, ADDR_MOVING,
-    ADDR_MOVING_THRESHOLD, ADDR_OPERATING_MODE, ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION,
-    ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_PROTOCOL_TYPE,
-    ADDR_PWM_LIMIT, ADDR_REALTIME_TICK, ADDR_SECONDARY_ID, ADDR_STATUS_RETURN_LEVEL,
-    ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN,
-    BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED, FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN,
-    FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN, MIN_POSITION_P_GAIN, MIN_VELOCITY_I_GAIN,
-    MIN_VELOCITY_P_GAIN, OPERATING_MODE_POSITION, PROTOCOL_TYPE_2, SECONDARY_ID_DISABLED,
+    instruction_ok, is_xl330_model, le_i16, le_i32, le_u16, le_u32, pwm_limit_percent,
+    unique_status_ids, ProtocolError, ADDR_BAUD_RATE, ADDR_BUS_WATCHDOG, ADDR_CURRENT_LIMIT,
+    ADDR_DRIVE_MODE, ADDR_FEEDFORWARD_1ST, ADDR_FEEDFORWARD_2ND, ADDR_FIRMWARE_VERSION,
+    ADDR_GOAL_POSITION, ADDR_GOAL_PWM, ADDR_HARDWARE_ERROR, ADDR_HOMING_OFFSET, ADDR_ID,
+    ADDR_MAX_POSITION_LIMIT, ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT,
+    ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER, ADDR_MOVING, ADDR_MOVING_THRESHOLD,
+    ADDR_OPERATING_MODE, ADDR_POSITION_D_GAIN, ADDR_POSITION_I_GAIN, ADDR_POSITION_P_GAIN,
+    ADDR_PRESENT_POSITION, ADDR_PRESENT_TEMPERATURE, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL,
+    ADDR_PROFILE_VELOCITY, ADDR_PROTOCOL_TYPE, ADDR_PWM_LIMIT, ADDR_PWM_SLOPE, ADDR_REALTIME_TICK,
+    ADDR_SECONDARY_ID, ADDR_STARTUP_CONFIGURATION, ADDR_STATUS_RETURN_LEVEL,
+    ADDR_TEMPERATURE_LIMIT, ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT,
+    ADDR_VELOCITY_P_GAIN, BAUD_INDEX_57600, BROADCAST_ID, DRIVE_MODE_VELOCITY_BASED,
+    FACTORY_MOVING_THRESHOLD, FACTORY_POSITION_P_GAIN, FACTORY_PWM_SLOPE,
+    FACTORY_STARTUP_CONFIGURATION, FACTORY_VELOCITY_I_GAIN, FACTORY_VELOCITY_P_GAIN,
+    MIN_POSITION_P_GAIN, MIN_PWM_SLOPE, MIN_VELOCITY_I_GAIN, MIN_VELOCITY_P_GAIN,
+    OPERATING_MODE_POSITION, PROTOCOL_TYPE_2, SECONDARY_ID_DISABLED, STATUS_ALERT,
     STATUS_RETURN_ALL, XL330_POSITION_MODE_MAX, XL330_POSITION_MODE_MIN, XL330_PWM_LIMIT_MAX,
 };
+
+/// After INST_REBOOT the servo is silent while it boots. One 400 ms
+/// sleep missed a 500–800 ms XL330. Poll a short identify until this
+/// deadline; setup identify's 16×150 ms recv must not be the wait,
+/// and the first PING must not be the only attempt.
+const REBOOT_IDENTIFY_DEADLINE_MS: u64 = 1_500;
+const REBOOT_IDENTIFY_POLL_MS: u64 = 50;
 
 pub struct Xl330Driver {
     port: Option<Box<dyn SerialPort>>,
@@ -74,6 +87,10 @@ pub struct Xl330Driver {
     latched_node: Option<String>,
     latched_pty: bool,
     last_hw_error: u8,
+    /// STATUS_ALERT on a later packet means Hardware Error Status may
+    /// have changed since setup. Re-read register 70 before publishing
+    /// the `hw_error` sample; do not keep the setup-time latch forever.
+    hw_error_needs_refresh: bool,
     min_position: i32,
     max_position: i32,
     startup_present: i32,
@@ -85,15 +102,27 @@ pub struct Xl330Driver {
     velocity_limit: u32,
     drive_mode: u8,
     position_p_gain: u16,
+    position_i_gain: u16,
+    position_d_gain: u16,
     velocity_p_gain: u16,
     velocity_i_gain: u16,
     pwm_limit: u16,
+    goal_pwm: i16,
     homing_offset: i32,
     bus_watchdog: u8,
     moving_threshold: u32,
     protocol_type: u8,
     feedforward_1st: u16,
     feedforward_2nd: u16,
+    pwm_slope: u8,
+    startup_configuration: u8,
+    min_voltage: u16,
+    max_voltage: u16,
+    /// Live VIN outside Wizard min/max (or unreadable 0) is a supply
+    /// fault / cutoff, not a healthy sample. Latch so write_action
+    /// cannot emit a certified goal after the campaign already saw
+    /// bus/vin drop.
+    vin_fault: bool,
 }
 
 impl Xl330Driver {
@@ -106,6 +135,13 @@ impl Xl330Driver {
         root: impl AsRef<Path>,
         apply_limits: bool,
     ) -> io::Result<Self> {
+        let mut driver = Self::prepare_locked(cfg, root)?;
+        driver.connect_serial()?;
+        driver.finish_open(apply_limits)?;
+        Ok(driver)
+    }
+
+    fn prepare_locked(cfg: MetalConfig, root: impl AsRef<Path>) -> io::Result<Self> {
         let bus = root.as_ref().join(BUS_DIR);
         std::fs::create_dir_all(&bus)?;
         let _ = std::fs::set_permissions(&bus, std::fs::Permissions::from_mode(0o700));
@@ -119,7 +155,7 @@ impl Xl330Driver {
             .open(&lock_path)?;
         lock.try_lock_exclusive()?;
         let egress = EgressLog::open(&bus)?;
-        let mut driver = Self {
+        Ok(Self {
             port: None,
             lock,
             cfg,
@@ -146,6 +182,7 @@ impl Xl330Driver {
             torque_enabled: false,
             live_io: false,
             last_hw_error: 0,
+            hw_error_needs_refresh: false,
             min_position: XL330_POSITION_MODE_MIN,
             max_position: XL330_POSITION_MODE_MAX,
             startup_present: 0,
@@ -157,37 +194,52 @@ impl Xl330Driver {
             velocity_limit: 0,
             drive_mode: 0,
             position_p_gain: 0,
+            position_i_gain: 0,
+            position_d_gain: 0,
             velocity_p_gain: 0,
             velocity_i_gain: 0,
             pwm_limit: 0,
+            goal_pwm: 0,
             homing_offset: 0,
             bus_watchdog: 0,
             moving_threshold: 0,
             protocol_type: 0,
             feedforward_1st: 0,
             feedforward_2nd: 0,
+            pwm_slope: 0,
+            startup_configuration: 0,
+            min_voltage: 0,
+            max_voltage: 0,
+            vin_fault: false,
             latched_usb_serial: None,
             latched_usb_fallback: None,
             latched_node: None,
             latched_pty: false,
-        };
-        driver.connect_serial()?;
-        driver.refresh_identity();
-        if driver.connected && apply_limits {
-            driver
-                .apply_bench_limits()
+        })
+    }
+
+    fn finish_open(&mut self, apply_limits: bool) -> io::Result<()> {
+        self.refresh_identity();
+        if self.connected && apply_limits {
+            self.apply_bench_limits()
                 .map_err(|e| io::Error::other(e.to_string()))?;
-            driver.enter_live_io();
-        } else if driver.connected {
+            self.enter_live_io();
+        } else if self.connected {
             // Startup Configuration can enable torque after a DTR reboot.
             // Identify-only must not leave the horn tracking a stale goal.
-            driver.quiesce_found_torque();
+            self.quiesce_found_torque();
         }
-        Ok(driver)
+        Ok(())
     }
 
     /// Probe-only: try configured baud/id first, then common XL330 bus settings.
     /// Production `serve` keeps using [`Self::open`] with the bound config.
+    ///
+    /// Cheap FTDI/CP2102 boards wire DTR to servo RESET. Each new USB-serial
+    /// open asserts DTR. Discover used to open+close for every sniff and
+    /// again for every identify, so a leftover 1 Mbps / 2/3/4 Mbps scan
+    /// DTR-RESET the horn on every rate. Hold one exclusive fd and retune
+    /// baud in place; reopen only when udev rematches a new node.
     pub fn open_discovering(
         mut cfg: MetalConfig,
         root: impl AsRef<Path>,
@@ -212,6 +264,7 @@ impl Xl330Driver {
         let bauds = discover_baud_attempts(&candidate_bauds(cfg.baud, extra_baud));
         let ids = candidate_servo_ids(cfg.servo_id, extra_id);
         let mut last_err: Option<io::Error> = None;
+        let mut held: Option<HeldDiscover> = None;
         for baud in bauds {
             let live = rematch_discover_device(cfg.device.clone(), &latched_aliases, cfg.servo_id);
             if live != cfg.device {
@@ -227,33 +280,85 @@ impl Xl330Driver {
                     io::ErrorKind::NotFound,
                     format!("metal_device_missing:{}", cfg.device.display()),
                 ));
+                held = None;
                 std::thread::sleep(Duration::from_millis(100));
                 continue;
             }
+            match held.as_mut() {
+                Some(session) => {
+                    if let Err(e) = session.ensure(&cfg.device, baud) {
+                        last_err = Some(e);
+                        held = None;
+                        continue;
+                    }
+                }
+                None => match HeldDiscover::open(cfg.device.clone(), baud) {
+                    Ok(session) => held = Some(session),
+                    Err(e) => {
+                        last_err = Some(e);
+                        continue;
+                    }
+                },
+            }
+            let Some(session) = held.as_mut() else {
+                continue;
+            };
             // Wizard may leave a non-1/2 ID. Broadcast PING still answers at
             // SRL=0 and the status carries the servo's own ID.
-            let sniffed = sniff_servo_ids(&cfg.device, baud)?;
+            let sniffed = sniff_on_port(&mut *session.port, &cfg.device)?;
             let try_ids = prefer_servo_id(&ids, sniffed.first().copied());
+            let mut session = held.take().expect("discover session");
             for id in try_ids {
                 let mut attempt = cfg.clone();
                 attempt.baud = baud;
                 attempt.servo_id = id;
-                match Self::open_inner(attempt.clone(), root.as_ref(), false) {
-                    Ok(driver) => return Ok((driver, attempt)),
+                let mut driver = match Self::prepare_locked(attempt.clone(), root.as_ref()) {
+                    Ok(driver) => driver,
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Err(e),
                     Err(e) => {
                         last_err = Some(e);
-                        // U2D2/FTDI often NAKs the next open if we reopen at a
-                        // new baud immediately after a failed ping.
+                        break;
+                    }
+                };
+                match driver.adopt_held_serial(session.port) {
+                    Ok(()) => {
+                        driver.finish_open(false)?;
+                        return Ok((driver, attempt));
+                    }
+                    Err((e, _port)) if e.kind() == io::ErrorKind::WouldBlock => return Err(e),
+                    Err((e, port)) => {
+                        last_err = Some(e);
+                        session.port = port;
                         std::thread::sleep(Duration::from_millis(100));
                     }
                 }
             }
+            held = Some(session);
         }
-        // Configured pair is first, when the adapter is coldest. One more
-        // attempt after the scan has opened the tty — discover does not
-        // retry a pair, so a single cold first ping would skip the real bus.
-        let configured = cfg.clone();
+        // Factory 57 600 again after the scan has opened the tty. Do not
+        // retry a leftover 2/3/4 Mbps hint here: that open is after the
+        // factory rates and can wedge CH340 so a late identify never
+        // happens. Retune the held fd; do not close+open (DTR-RESET).
+        let mut configured = cfg.clone();
+        configured.baud = CANDIDATE_BAUDS[0];
+        if let Some(mut session) = held.take() {
+            if let Err(e) = session.ensure(&cfg.device, CANDIDATE_BAUDS[0]) {
+                last_err = Some(e);
+            } else {
+                match Self::prepare_locked(configured.clone(), root.as_ref()) {
+                    Ok(mut driver) => match driver.adopt_held_serial(session.port) {
+                        Ok(()) => {
+                            driver.finish_open(false)?;
+                            return Ok((driver, configured));
+                        }
+                        Err((e, _)) if e.kind() == io::ErrorKind::WouldBlock => return Err(e),
+                        Err((e, _)) => return Err(last_err.unwrap_or(e)),
+                    },
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Err(e),
+                    Err(e) => last_err = Some(e),
+                }
+            }
+        }
         match Self::open_inner(configured.clone(), root.as_ref(), false) {
             Ok(driver) => Ok((driver, configured)),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(e),
@@ -271,6 +376,10 @@ impl Xl330Driver {
 
     pub fn last_goal_position(&self) -> Option<i32> {
         self.last_goal
+    }
+
+    pub fn applied_baud(&self) -> u32 {
+        self.cfg.baud
     }
 
     pub fn applied_velocity_limit(&self) -> u32 {
@@ -297,6 +406,10 @@ impl Xl330Driver {
         self.pwm_limit
     }
 
+    pub fn applied_goal_pwm(&self) -> i16 {
+        self.goal_pwm
+    }
+
     pub fn pwm_limit_requested(&self) -> u16 {
         self.pwm_limit_requested
     }
@@ -313,6 +426,10 @@ impl Xl330Driver {
         self.homing_offset
     }
 
+    pub fn applied_startup_configuration(&self) -> u8 {
+        self.startup_configuration
+    }
+
     pub fn applied_bus_watchdog(&self) -> u8 {
         self.bus_watchdog
     }
@@ -325,12 +442,28 @@ impl Xl330Driver {
         self.protocol_type
     }
 
+    pub fn applied_position_i_gain(&self) -> u16 {
+        self.position_i_gain
+    }
+
+    pub fn applied_position_d_gain(&self) -> u16 {
+        self.position_d_gain
+    }
+
     pub fn applied_feedforward_1st(&self) -> u16 {
         self.feedforward_1st
     }
 
     pub fn applied_feedforward_2nd(&self) -> u16 {
         self.feedforward_2nd
+    }
+
+    pub fn applied_pwm_slope(&self) -> u8 {
+        self.pwm_slope
+    }
+
+    pub fn applied_voltage_limits(&self) -> (u16, u16) {
+        (self.min_voltage, self.max_voltage)
     }
 
     pub fn torque_is_enabled(&self) -> bool {
@@ -382,39 +515,20 @@ impl Xl330Driver {
         .adapter_aliases()
     }
 
-    fn connect_serial(&mut self) -> io::Result<()> {
-        if !self.cfg.device.exists() {
-            self.connected = false;
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("metal_device_missing:{}", self.cfg.device.display()),
-            ));
-        }
-        // Latch while the path still resolves. Campaign stabilize prefers
-        // `/dev/serial/by-id` on FTDI/U2D2. chmod + the first exclusive
-        // open emit udev change; that symlink then dangles for 1–3 s.
-        // Latching after open used to re-walk the vanished name, blank
-        // serial, and fail serve as metal_serial_mismatch after a good ping.
-        self.latch_open_adapter_identity();
+    fn ensure_tty_mode_0600(&self) {
         // A no-op chmod still emits udev change on typical Ubuntu — the
         // same class as campaign chown resetting FTDI latency_timer to
         // 16 ms before the first live hold. Skip when already 0600.
-        {
-            let mode = std::fs::metadata(&self.cfg.device)
-                .map(|m| m.permissions().mode() & 0o777)
-                .unwrap_or(0);
-            if mode != 0o600 {
-                let _ = std::fs::set_permissions(
-                    &self.cfg.device,
-                    std::fs::Permissions::from_mode(0o600),
-                );
-            }
+        let mode = std::fs::metadata(&self.cfg.device)
+            .map(|m| m.permissions().mode() & 0o777)
+            .unwrap_or(0);
+        if mode != 0o600 {
+            let _ =
+                std::fs::set_permissions(&self.cfg.device, std::fs::Permissions::from_mode(0o600));
         }
-        // PTY stand-in: TIOCEXCL survives process::exit (crash_if) and the
-        // next serve gets EBUSY. Sidecar flock still serializes. Real tty
-        // keeps exclusive (TIOCEXCL+flock).
-        let port = open_xl330_serial(&self.cfg.device, self.cfg.baud)?;
-        self.port = Some(port);
+    }
+
+    fn adapter_recycled_after_open(&self) -> Option<io::Error> {
         // Path still present after open: it must still be the bound adapter.
         // chmod/open can recycle ttyUSB0 onto a different UART. The pre-open
         // latch would then name adapter A while this fd is adapter B.
@@ -429,16 +543,43 @@ impl Xl330Driver {
                 self.cfg.servo_id,
             )
         {
-            self.port = None;
-            self.connected = false;
-            return Err(io::Error::other(format!(
+            Some(io::Error::other(format!(
                 "metal_adapter_recycled_after_open:expected={} actual={} device={}",
                 self.cfg.expected_serial,
                 crate::identity::adapter_serial_for_tty(&self.cfg.device, self.cfg.servo_id),
                 self.cfg.device.display()
-            )));
+            )))
+        } else {
+            None
         }
-        match self.ping_and_identify() {
+    }
+
+    fn connect_serial(&mut self) -> io::Result<()> {
+        if !self.cfg.device.exists() {
+            self.connected = false;
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("metal_device_missing:{}", self.cfg.device.display()),
+            ));
+        }
+        // Latch while the path still resolves. Campaign stabilize prefers
+        // `/dev/serial/by-id` on FTDI/U2D2. chmod + the first exclusive
+        // open emit udev change; that symlink then dangles for 1–3 s.
+        // Latching after open used to re-walk the vanished name, blank
+        // serial, and fail serve as metal_serial_mismatch after a good ping.
+        self.latch_open_adapter_identity();
+        self.ensure_tty_mode_0600();
+        // PTY stand-in: TIOCEXCL survives process::exit (crash_if) and the
+        // next serve gets EBUSY. Sidecar flock still serializes. Real tty
+        // keeps exclusive (TIOCEXCL+flock).
+        let port = open_xl330_serial(&self.cfg.device, self.cfg.baud)?;
+        self.port = Some(port);
+        if let Some(e) = self.adapter_recycled_after_open() {
+            self.port = None;
+            self.connected = false;
+            return Err(e);
+        }
+        match self.identify_or_recover_factory_baud() {
             Ok(()) => {
                 self.connected = true;
                 Ok(())
@@ -450,12 +591,92 @@ impl Xl330Driver {
         }
     }
 
+    /// Identify on a discover fd that is already exclusive. On failure the
+    /// caller keeps that fd so the next baud is a termios retune, not a
+    /// close+open DTR-RESET.
+    fn adopt_held_serial(
+        &mut self,
+        port: Box<dyn SerialPort>,
+    ) -> Result<(), (io::Error, Box<dyn SerialPort>)> {
+        if !self.cfg.device.exists() {
+            self.connected = false;
+            return Err((
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("metal_device_missing:{}", self.cfg.device.display()),
+                ),
+                port,
+            ));
+        }
+        self.latch_open_adapter_identity();
+        self.ensure_tty_mode_0600();
+        self.port = Some(port);
+        if let Some(e) = self.adapter_recycled_after_open() {
+            self.connected = false;
+            let port = self.port.take().expect("adopted serial");
+            return Err((e, port));
+        }
+        match self.identify_or_recover_factory_baud() {
+            Ok(()) => {
+                self.connected = true;
+                Ok(())
+            }
+            Err(e) => {
+                self.connected = false;
+                let port = self.port.take().expect("adopted serial");
+                Err((e, port))
+            }
+        }
+    }
+
+    /// Probe may bind Wizard 9 600. Serve then writes factory 57 600 so
+    /// the 40 ms live deadline can finish a motion-block read. A crash
+    /// after that EEPROM write, before metal.json is rewritten, leaves
+    /// the next open speaking 9 600 at a 57 600 servo. Retune the held
+    /// fd; do not close+open (DTR-RESET).
+    fn identify_or_recover_factory_baud(&mut self) -> io::Result<()> {
+        match self.ping_and_identify() {
+            Ok(()) => Ok(()),
+            Err(first) if baud_too_slow_for_live_io(self.cfg.baud) => {
+                let slow = self.cfg.baud;
+                {
+                    let port = self
+                        .port
+                        .as_mut()
+                        .ok_or_else(|| io::Error::other("metal_serial_closed"))?;
+                    retune_held_baud(&mut **port, &self.cfg.device, FACTORY_BAUD).map_err(|e| {
+                        io::Error::other(format!("dxl_baud_retune:{e}:after:{first}"))
+                    })?;
+                }
+                match self.ping_and_identify() {
+                    Ok(()) => {
+                        self.cfg.baud = FACTORY_BAUD;
+                        self.persist_measured_baud();
+                        Ok(())
+                    }
+                    Err(second) => {
+                        if let Some(port) = self.port.as_mut() {
+                            let _ = retune_held_baud(&mut **port, &self.cfg.device, slow);
+                        }
+                        Err(second)
+                    }
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     fn ping_and_identify(&mut self) -> io::Result<()> {
         let _ = self.xfer(&encode_ping(self.cfg.servo_id), true)?;
-        // Wizard can set Status Return Level to 0 (PING only). Then READ and
-        // WRITE have no status and identify/setup fail. Poke 2 without
-        // requiring an ack — there may be no status packet to read.
+        // Wizard can set Status Return Level to 0 (PING only) or 1
+        // (PING+READ). WRITE then has no status. Identify READs still
+        // succeed at SRL=1, and the first setup write_reg times out or
+        // decodes the half-duplex echo as dxl_truncated. Poke 2 and
+        // read it back — the poke itself may have no status.
         self.force_status_return_all()?;
+        // Startup Configuration can already be tracking a stale goal.
+        // Identify READs used to run while torque was on.
+        self.force_torque_off_no_egress()?;
         let model_pkt = self.xfer(&encode_read(self.cfg.servo_id, ADDR_MODEL_NUMBER, 2), true)?;
         let model = le_u16(&model_pkt.params).unwrap_or(0);
         let fw_pkt = self.xfer(
@@ -474,6 +695,22 @@ impl Xl330Driver {
     }
 
     fn force_status_return_all(&mut self) -> io::Result<()> {
+        let mut last: Option<u8> = None;
+        for _ in 0..3 {
+            self.poke_status_return_all()?;
+            last = self.peek_status_return_level()?;
+            if last == Some(STATUS_RETURN_ALL) {
+                return Ok(());
+            }
+        }
+        Err(io::Error::other(format!(
+            "dxl_status_return_level_unverified:{}",
+            last.map(|v| v.to_string())
+                .unwrap_or_else(|| "unread".into())
+        )))
+    }
+
+    fn poke_status_return_all(&mut self) -> io::Result<()> {
         let frame = encode_write(
             self.cfg.servo_id,
             ADDR_STATUS_RETURN_LEVEL,
@@ -489,15 +726,15 @@ impl Xl330Driver {
         port.write_all(&frame).map_err(io::Error::other)?;
         port.flush().map_err(io::Error::other)?;
         half_duplex_turnaround(&self.cfg.device);
-        // Factory SRL=2 replies; Wizard SRL=0 does not. Consume an optional
-        // status so a late USB packet is not decoded as the model READ.
-        // 25 ms > default FTDI latency_timer (16 ms).
+        // Factory SRL=2 replies; Wizard SRL=0/1 does not. Consume an
+        // optional status so a late USB packet is not decoded as the
+        // readback or the model READ. 25 ms > default FTDI latency (16 ms).
         port.set_timeout(Duration::from_millis(25))
             .map_err(io::Error::other)?;
         let mut acc = Vec::new();
         let mut tmp = [0u8; 64];
-        let end = std::time::Instant::now() + Duration::from_millis(25);
-        while std::time::Instant::now() < end {
+        let end = Instant::now() + Duration::from_millis(25);
+        while Instant::now() < end {
             match port.read(&mut tmp) {
                 Ok(0) => {}
                 Ok(n) => {
@@ -519,39 +756,109 @@ impl Xl330Driver {
         Ok(())
     }
 
+    /// Identify has not set `connected` yet, so this must not use `read_reg`.
+    /// SRL=0 still has no READ status; treat that as unread and retry the poke.
+    fn peek_status_return_level(&mut self) -> io::Result<Option<u8>> {
+        let frame = encode_read(self.cfg.servo_id, ADDR_STATUS_RETURN_LEVEL, 1);
+        let port = self
+            .port
+            .as_mut()
+            .ok_or_else(|| io::Error::other("metal_serial_closed"))?;
+        let saved = port.timeout();
+        port.clear(serialport::ClearBuffer::Input)
+            .map_err(io::Error::other)?;
+        port.write_all(&frame).map_err(io::Error::other)?;
+        port.flush().map_err(io::Error::other)?;
+        half_duplex_turnaround(&self.cfg.device);
+        port.set_timeout(Duration::from_millis(25))
+            .map_err(io::Error::other)?;
+        let mut acc = Vec::new();
+        let mut tmp = [0u8; 64];
+        let end = Instant::now() + Duration::from_millis(25);
+        let mut got = None;
+        while Instant::now() < end {
+            match port.read(&mut tmp) {
+                Ok(0) => {}
+                Ok(n) => {
+                    acc.extend_from_slice(&tmp[..n]);
+                    if let Ok(st) = decode_status_scan(&acc) {
+                        got = st.params.first().copied();
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::TimedOut => break,
+                Err(e) => {
+                    let _ = port.set_timeout(saved);
+                    return Err(e);
+                }
+            }
+        }
+        port.clear(serialport::ClearBuffer::Input)
+            .map_err(io::Error::other)?;
+        port.set_timeout(saved).map_err(io::Error::other)?;
+        Ok(got)
+    }
+
+    /// Directed torque-off before identify READs. Not command egress.
+    /// `write_reg` needs `connected`, which is only set after identify.
+    fn force_torque_off_no_egress(&mut self) -> io::Result<()> {
+        let frame = encode_write(self.cfg.servo_id, ADDR_TORQUE_ENABLE, &[0]);
+        let port = self
+            .port
+            .as_mut()
+            .ok_or_else(|| io::Error::other("metal_serial_closed"))?;
+        let saved = port.timeout();
+        let _ = port.clear(serialport::ClearBuffer::Input);
+        port.write_all(&frame).map_err(io::Error::other)?;
+        port.flush().map_err(io::Error::other)?;
+        half_duplex_turnaround(&self.cfg.device);
+        port.set_timeout(Duration::from_millis(25))
+            .map_err(io::Error::other)?;
+        let mut tmp = [0u8; 64];
+        let end = Instant::now() + Duration::from_millis(25);
+        while Instant::now() < end {
+            if port.read(&mut tmp).is_err() {
+                break;
+            }
+        }
+        let _ = port.clear(serialport::ClearBuffer::Input);
+        port.set_timeout(saved).map_err(io::Error::other)?;
+        self.torque_enabled = false;
+        Ok(())
+    }
+
     fn apply_bench_limits(&mut self) -> PlantResult<()> {
+        self.apply_bench_limits_pass(false)
+    }
+
+    fn apply_bench_limits_pass(&mut self, already_rebooted_for_multiturn: bool) -> PlantResult<()> {
         self.cfg
             .validate_xl330_limits()
             .map_err(PlantError::refused)?;
         // Current limit / operating mode are EEPROM; only write with torque off, and only if needed.
-        self.write_reg(ADDR_TORQUE_ENABLE, &[0], "setup_torque_off", None, false)?;
-        self.torque_enabled = false;
+        self.write_torque_off_verified("setup_torque_off")?;
         // Protocol 2.0 sets STATUS_ALERT on every packet while Hardware Error
         // Status is latched (Wizard overload, VIN blip). That is not a NAK.
         // Reboot once *before* RAM profile writes — reboot clears RAM.
         if let Ok(b) = self.read_reg(ADDR_HARDWARE_ERROR, 1) {
             self.last_hw_error = b.first().copied().unwrap_or(0);
+            self.hw_error_needs_refresh = false;
         }
         if self.last_hw_error != 0 {
-            let _ = self.xfer(&encode_reboot(self.cfg.servo_id), true);
-            std::thread::sleep(Duration::from_millis(400));
-            self.ping_and_identify()
-                .map_err(|e| PlantError::refused(format!("dxl_reboot_identify:{e}")))?;
-            // Startup Configuration can re-enable torque after reboot.
-            // EEPROM writes then access-NAK, and a stale Wizard goal moves.
-            self.write_reg(
-                ADDR_TORQUE_ENABLE,
-                &[0],
-                "setup_torque_off_after_reboot",
-                None,
-                false,
-            )?;
-            self.torque_enabled = false;
+            // STATUS_ALERT is not a NAK. EEPROM is writable with torque
+            // off while the error is still latched. Write factory 0
+            // *before* INST_REBOOT: leftover bit 0 torque-ons onto
+            // Goal 0 (RAM reset) during the silent boot, and identify
+            // torque-off is too late. After reboot, torque-off again
+            // so later EEPROM writes cannot access-NAK.
+            let _ = self.ensure_startup_configuration_off()?;
+            self.reboot_clear_ram_and_reidentify("setup_torque_off_after_reboot")?;
             self.last_hw_error = self
                 .read_reg(ADDR_HARDWARE_ERROR, 1)
                 .ok()
                 .and_then(|b| b.first().copied())
                 .unwrap_or(self.last_hw_error);
+            self.hw_error_needs_refresh = false;
             if self.last_hw_error != 0 {
                 return Err(PlantError::refused(format!(
                     "dxl_hardware_error_latched:{}",
@@ -559,6 +866,12 @@ impl Xl330Driver {
                 )));
             }
         }
+        // Wizard 9 600 is in the probe scan. A 26-byte motion-block read
+        // at that rate cannot finish inside the 40 ms live deadline, so
+        // the first hold's sensor used to miss as metal_live_io_deadline.
+        // Probe does not write this EEPROM. Persist factory 57 600 before
+        // later setup work so crash-replay serve opens at the live rate.
+        self.apply_factory_baud_if_live_io_too_slow()?;
         let mut eeprom_changed = false;
         let secondary = self
             .read_reg(ADDR_SECONDARY_ID, 1)
@@ -572,6 +885,9 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
+            eeprom_changed = true;
+        }
+        if self.ensure_startup_configuration_off()? {
             eeprom_changed = true;
         }
         let proto = self
@@ -590,7 +906,6 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.protocol_type = PROTOCOL_TYPE_2;
             eeprom_changed = true;
         }
         let drive = self
@@ -606,7 +921,6 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.drive_mode = DRIVE_MODE_VELOCITY_BASED;
             eeprom_changed = true;
         }
         let mode = self
@@ -628,6 +942,53 @@ impl Xl330Driver {
             std::thread::sleep(Duration::from_millis(400));
             self.ping_and_identify()
                 .map_err(|e| PlantError::refused(format!("dxl_mode_identify:{e}")))?;
+        }
+        // A write_reg ACK that does not store used to leave applied
+        // drive/mode lying. Wizard PWM (16) then treats Goal PWM as the
+        // command: setup matching that register to the PWM cap would
+        // spin at torque-on. Time-based drive treats profile 20/10 as
+        // milliseconds, so the 32-tick step is not the rpm cage.
+        let mode_got = self
+            .read_reg(ADDR_OPERATING_MODE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if mode_got != Some(OPERATING_MODE_POSITION) {
+            return Err(PlantError::refused(format!(
+                "dxl_operating_mode_unverified:{mode_got:?}"
+            )));
+        }
+        let drive_got = self
+            .read_reg(ADDR_DRIVE_MODE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if drive_got != Some(DRIVE_MODE_VELOCITY_BASED) {
+            return Err(PlantError::refused(format!(
+                "dxl_drive_mode_unverified:{drive_got:?}"
+            )));
+        }
+        self.drive_mode = DRIVE_MODE_VELOCITY_BASED;
+        // Wizard 20/21/22 at the next DTR-RESET leaves RC boot (auto
+        // torque-on, no Protocol 2.0). A write_reg ACK that does not
+        // store used to leave applied_protocol_type lying as 2.
+        // Secondary ID 255 is this experiment's one-actuator invariant.
+        let proto_got = self
+            .read_reg(ADDR_PROTOCOL_TYPE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if proto_got != Some(PROTOCOL_TYPE_2) {
+            return Err(PlantError::refused(format!(
+                "dxl_protocol_type_unverified:{proto_got:?}"
+            )));
+        }
+        self.protocol_type = PROTOCOL_TYPE_2;
+        let secondary_got = self
+            .read_reg(ADDR_SECONDARY_ID, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if secondary_got != Some(SECONDARY_ID_DISABLED) {
+            return Err(PlantError::refused(format!(
+                "dxl_secondary_id_unverified:{secondary_got:?}"
+            )));
         }
         self.refresh_position_limits()?;
         let want = self.cfg.current_limit_milli;
@@ -659,8 +1020,17 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.velocity_limit = want_vel;
         }
+        let vel_got = self
+            .read_reg(ADDR_VELOCITY_LIMIT, 4)
+            .ok()
+            .and_then(|b| le_u32(&b));
+        let Some(vel_ok) = vel_got.filter(|v| *v >= want_vel) else {
+            return Err(PlantError::refused(format!(
+                "dxl_velocity_limit_unverified:{vel_got:?}"
+            )));
+        };
+        self.velocity_limit = vel_ok;
         self.write_reg(
             ADDR_PROFILE_VELOCITY,
             &self.cfg.max_profile_velocity.to_le_bytes(),
@@ -675,17 +1045,36 @@ impl Xl330Driver {
             None,
             false,
         )?;
+        let prof_v = self
+            .read_reg(ADDR_PROFILE_VELOCITY, 4)
+            .ok()
+            .and_then(|b| le_u32(&b));
+        let prof_a = self
+            .read_reg(ADDR_PROFILE_ACCEL, 4)
+            .ok()
+            .and_then(|b| le_u32(&b));
+        if prof_v != Some(self.cfg.max_profile_velocity)
+            || prof_a != Some(self.cfg.max_profile_acceleration)
+        {
+            return Err(PlantError::refused(format!(
+                "dxl_profile_unverified:vel={prof_v:?}:accel={prof_a:?}"
+            )));
+        }
         let got_mt = self
             .read_reg(ADDR_MOVING_THRESHOLD, 4)
             .ok()
-            .and_then(|b| le_u32(&b))
-            .unwrap_or(0);
-        self.moving_threshold = got_mt;
+            .and_then(|b| le_u32(&b));
+        self.moving_threshold = got_mt.unwrap_or(u32::MAX);
         // Moving=1 only while |velocity| > this. A Wizard value ≥ profile
         // velocity keeps Moving=0 for the whole 32-tick nudge. Campaign
         // settle waits for present≈goal, but lower the threshold so Moving
-        // is still a usable in-motion flag.
-        if got_mt > self.cfg.max_profile_velocity {
+        // is still a usable in-motion flag. A failed read used to look like
+        // safe 0 and skip the write; an ACK that does not store used to
+        // leave applied_moving_threshold lying as factory 10.
+        if got_mt
+            .map(|v| v > self.cfg.max_profile_velocity)
+            .unwrap_or(true)
+        {
             self.write_reg(
                 ADDR_MOVING_THRESHOLD,
                 &FACTORY_MOVING_THRESHOLD.to_le_bytes(),
@@ -693,15 +1082,27 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.moving_threshold = FACTORY_MOVING_THRESHOLD;
         }
+        let mt_got = self
+            .read_reg(ADDR_MOVING_THRESHOLD, 4)
+            .ok()
+            .and_then(|b| le_u32(&b));
+        let Some(mt_ok) = mt_got.filter(|v| *v <= self.cfg.max_profile_velocity) else {
+            return Err(PlantError::refused(format!(
+                "dxl_moving_threshold_unverified:{mt_got:?}"
+            )));
+        };
+        self.moving_threshold = mt_ok;
         let got_p = self
             .read_reg(ADDR_POSITION_P_GAIN, 2)
             .ok()
             .and_then(|b| le_u16(&b))
             .unwrap_or(0);
         self.position_p_gain = got_p;
-        if got_p < MIN_POSITION_P_GAIN {
+        // Factory 400. Below 80 the 32-tick step never tracks. Above
+        // factory a Wizard PID tune overshoots past the 48-tick cage
+        // (same class as I/D and feedforward).
+        if got_p < MIN_POSITION_P_GAIN || got_p > FACTORY_POSITION_P_GAIN {
             self.write_reg(
                 ADDR_POSITION_P_GAIN,
                 &FACTORY_POSITION_P_GAIN.to_le_bytes(),
@@ -709,8 +1110,63 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.position_p_gain = FACTORY_POSITION_P_GAIN;
         }
+        let p_got = self
+            .read_reg(ADDR_POSITION_P_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        let Some(p_ok) =
+            p_got.filter(|p| (MIN_POSITION_P_GAIN..=FACTORY_POSITION_P_GAIN).contains(p))
+        else {
+            return Err(PlantError::refused(format!(
+                "dxl_position_p_unverified:{p_got:?}"
+            )));
+        };
+        self.position_p_gain = p_ok;
+        let got_i = self
+            .read_reg(ADDR_POSITION_I_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        let got_d = self
+            .read_reg(ADDR_POSITION_D_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        self.position_i_gain = got_i.unwrap_or(u16::MAX);
+        self.position_d_gain = got_d.unwrap_or(u16::MAX);
+        // Factory 0. Wizard position I/D overshoots the certified 32-tick
+        // step past the 48-tick session cage. A failed read used to look
+        // like factory 0 and skip the write.
+        if got_i != Some(0) || got_d != Some(0) {
+            self.write_reg(
+                ADDR_POSITION_I_GAIN,
+                &0u16.to_le_bytes(),
+                "setup_position_i_gain_zero",
+                None,
+                false,
+            )?;
+            self.write_reg(
+                ADDR_POSITION_D_GAIN,
+                &0u16.to_le_bytes(),
+                "setup_position_d_gain_zero",
+                None,
+                false,
+            )?;
+        }
+        let i_got = self
+            .read_reg(ADDR_POSITION_I_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        let d_got = self
+            .read_reg(ADDR_POSITION_D_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        if i_got != Some(0) || d_got != Some(0) {
+            return Err(PlantError::refused(format!(
+                "dxl_position_id_unverified:i={i_got:?}:d={d_got:?}"
+            )));
+        }
+        self.position_i_gain = 0;
+        self.position_d_gain = 0;
         let got_vp = self
             .read_reg(ADDR_VELOCITY_P_GAIN, 2)
             .ok()
@@ -725,8 +1181,17 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.velocity_p_gain = FACTORY_VELOCITY_P_GAIN;
         }
+        let vp_got = self
+            .read_reg(ADDR_VELOCITY_P_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        let Some(vp_ok) = vp_got.filter(|v| *v >= MIN_VELOCITY_P_GAIN) else {
+            return Err(PlantError::refused(format!(
+                "dxl_velocity_p_unverified:{vp_got:?}"
+            )));
+        };
+        self.velocity_p_gain = vp_ok;
         let got_vi = self
             .read_reg(ADDR_VELOCITY_I_GAIN, 2)
             .ok()
@@ -741,24 +1206,63 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.velocity_i_gain = FACTORY_VELOCITY_I_GAIN;
         }
+        let vi_got = self
+            .read_reg(ADDR_VELOCITY_I_GAIN, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        let Some(vi_ok) = vi_got.filter(|v| *v >= MIN_VELOCITY_I_GAIN) else {
+            return Err(PlantError::refused(format!(
+                "dxl_velocity_i_unverified:{vi_got:?}"
+            )));
+        };
+        self.velocity_i_gain = vi_ok;
         self.apply_pwm_output_cap()?;
+        let slope = self
+            .read_reg(ADDR_PWM_SLOPE, 1)
+            .ok()
+            .and_then(|b| b.first().copied())
+            .unwrap_or(0);
+        self.pwm_slope = slope;
+        // Factory 140. Wizard 0 is outside the e-Manual 1..=255 range.
+        // Wizard 1..=19 is legal but ramps too slowly for the 32-tick
+        // nudge to leave the hold-still band before settle timeout.
+        if slope < MIN_PWM_SLOPE {
+            self.write_reg(
+                ADDR_PWM_SLOPE,
+                &[FACTORY_PWM_SLOPE],
+                "setup_pwm_slope_factory",
+                None,
+                false,
+            )?;
+        }
+        let slope_got = self
+            .read_reg(ADDR_PWM_SLOPE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        let Some(slope_ok) = slope_got.filter(|s| *s >= MIN_PWM_SLOPE) else {
+            return Err(PlantError::refused(format!(
+                "dxl_pwm_slope_unverified:{}",
+                slope_got
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unread".into())
+            )));
+        };
+        self.pwm_slope = slope_ok;
         let ff2 = self
             .read_reg(ADDR_FEEDFORWARD_2ND, 2)
             .ok()
-            .and_then(|b| le_u16(&b))
-            .unwrap_or(0);
+            .and_then(|b| le_u16(&b));
         let ff1 = self
             .read_reg(ADDR_FEEDFORWARD_1ST, 2)
             .ok()
-            .and_then(|b| le_u16(&b))
-            .unwrap_or(0);
-        self.feedforward_2nd = ff2;
-        self.feedforward_1st = ff1;
+            .and_then(|b| le_u16(&b));
+        self.feedforward_2nd = ff2.unwrap_or(u16::MAX);
+        self.feedforward_1st = ff1.unwrap_or(u16::MAX);
         // Factory 0. Wizard feedforward makes the certified 32-tick step
-        // overshoot; that is not a tiny bounded nudge.
-        if ff1 != 0 || ff2 != 0 {
+        // overshoot. A failed read used to look like factory 0 and skip
+        // the write.
+        if ff1 != Some(0) || ff2 != Some(0) {
             self.write_reg(
                 ADDR_FEEDFORWARD_2ND,
                 &0u16.to_le_bytes(),
@@ -773,9 +1277,22 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.feedforward_2nd = 0;
-            self.feedforward_1st = 0;
         }
+        let ff2_got = self
+            .read_reg(ADDR_FEEDFORWARD_2ND, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        let ff1_got = self
+            .read_reg(ADDR_FEEDFORWARD_1ST, 2)
+            .ok()
+            .and_then(|b| le_u16(&b));
+        if ff1_got != Some(0) || ff2_got != Some(0) {
+            return Err(PlantError::refused(format!(
+                "dxl_feedforward_unverified:ff1={ff1_got:?}:ff2={ff2_got:?}"
+            )));
+        }
+        self.feedforward_2nd = 0;
+        self.feedforward_1st = 0;
         // EEPROM writes can NAK the next instruction if we immediately continue.
         std::thread::sleep(Duration::from_millis(50));
         let max_v = self
@@ -796,10 +1313,32 @@ impl Xl330Driver {
             .and_then(|b| le_u16(&b))
             .filter(|v| *v != 0)
             .ok_or_else(|| PlantError::refused("dxl_vin_unreadable_before_torque"))?;
+        self.min_voltage = min_v;
+        self.max_voltage = max_v;
         self.persist_vin(vin);
         if vin < min_v || vin > max_v {
             return Err(PlantError::refused(format!(
                 "dxl_vin_outside_wizard_limits:vin_0.1v={vin}:min={min_v}:max={max_v}"
+            )));
+        }
+        let temp_limit = self
+            .read_reg(ADDR_TEMPERATURE_LIMIT, 1)
+            .ok()
+            .and_then(|b| b.first().copied())
+            .ok_or_else(|| PlantError::refused("dxl_temperature_limit_unreadable_before_torque"))?;
+        let present_temp = self
+            .read_reg(ADDR_PRESENT_TEMPERATURE, 1)
+            .ok()
+            .and_then(|b| b.first().copied())
+            .ok_or_else(|| {
+                PlantError::refused("dxl_present_temperature_unreadable_before_torque")
+            })?;
+        if temp_limit == 0 {
+            return Err(PlantError::refused("dxl_temperature_limit_zero"));
+        }
+        if present_temp >= temp_limit {
+            return Err(PlantError::refused(format!(
+                "dxl_present_temperature_at_or_above_limit:present={present_temp}:limit={temp_limit}"
             )));
         }
         // Wizard Bus Watchdog (20 ms units). Non-zero trips after a quiet
@@ -807,10 +1346,9 @@ impl Xl330Driver {
         let wd = self
             .read_reg(ADDR_BUS_WATCHDOG, 1)
             .ok()
-            .and_then(|b| b.first().copied())
-            .unwrap_or(0);
-        self.bus_watchdog = wd;
-        if wd != 0 {
+            .and_then(|b| b.first().copied());
+        self.bus_watchdog = wd.unwrap_or(0xFF);
+        if wd != Some(0) {
             self.write_reg(
                 ADDR_BUS_WATCHDOG,
                 &[0],
@@ -818,8 +1356,26 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.bus_watchdog = 0;
         }
+        let wd_got = self
+            .read_reg(ADDR_BUS_WATCHDOG, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if wd_got != Some(0) {
+            return Err(PlantError::refused(format!(
+                "dxl_bus_watchdog_unverified:{}",
+                wd_got
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unread".into())
+            )));
+        }
+        self.bus_watchdog = 0;
+        // Position Mode uses Goal PWM(100) as the live output limiter.
+        // PWM Limit(36) only caps that register. A Wizard leftover 0
+        // (or |Goal PWM| below MIN_PWM_LIMIT) leaves the 32-tick nudge
+        // stuck after we write PWM Limit 200. Match the measured cap
+        // after watchdog is cleared (Goal Values are read-only at 0xFF).
+        self.sync_goal_pwm_to_measured_cap()?;
         // Torque-on tracks Goal Position. A stale Wizard goal (often 0)
         // would move before any certified command. Match present first.
         // Not counted as command egress.
@@ -830,14 +1386,16 @@ impl Xl330Driver {
             .ok_or_else(|| PlantError::refused("dxl_present_unreadable_before_torque"))?;
         // Wizard Homing Offset shifts Present without moving the horn.
         // Limits stay 0–4095, so a "zeroed" horn is outside the window and
-        // goal=present would NAK. Clearing offset with torque off is not motion.
+        // goal=present would NAK. An in-window leftover still lets the
+        // torque-on Present reset throw past the 48-tick cage. Clearing
+        // offset with torque off is not motion. Do not treat a failed
+        // read as 0: that skipped the write.
         let offset = self
             .read_reg(ADDR_HOMING_OFFSET, 4)
             .ok()
-            .and_then(|b| le_i32(&b))
-            .unwrap_or(0);
-        self.homing_offset = offset;
-        if (present < self.min_position || present > self.max_position) && offset != 0 {
+            .and_then(|b| le_i32(&b));
+        self.homing_offset = offset.unwrap_or(i32::MAX);
+        if offset != Some(0) {
             self.write_reg(
                 ADDR_HOMING_OFFSET,
                 &0i32.to_le_bytes(),
@@ -845,13 +1403,41 @@ impl Xl330Driver {
                 None,
                 false,
             )?;
-            self.homing_offset = 0;
+        }
+        let offset_got = self
+            .read_reg(ADDR_HOMING_OFFSET, 4)
+            .ok()
+            .and_then(|b| le_i32(&b));
+        if offset_got != Some(0) {
+            return Err(PlantError::refused(format!(
+                "dxl_homing_offset_unverified:{offset_got:?}"
+            )));
+        }
+        self.homing_offset = 0;
+        if offset != Some(0) {
             std::thread::sleep(Duration::from_millis(50));
             present = self
                 .read_reg(ADDR_PRESENT_POSITION, 4)
                 .ok()
                 .and_then(|b| le_i32(&b))
                 .ok_or_else(|| PlantError::refused("dxl_present_unreadable_before_torque"))?;
+        }
+        // Torque-off Present is a 4-byte continuous encoder (e-Manual).
+        // Robotis resets it to absolute-within-one-rotation on reboot,
+        // torque-on, or a change into Position Mode. A hand-turned bench
+        // horn is the normal first-contact state. Do not torque-on to
+        // wrap — stale Goal (often 0) would yank. Reboot once with
+        // Startup Configuration already 0 and torque off, then re-apply
+        // RAM. A tight Wizard leftover window still refuses below.
+        if present < XL330_POSITION_MODE_MIN || present > XL330_POSITION_MODE_MAX {
+            if !already_rebooted_for_multiturn {
+                self.reboot_clear_ram_and_reidentify("setup_torque_off_after_multiturn_reboot")?;
+                return self.apply_bench_limits_pass(true);
+            }
+            return Err(PlantError::refused(format!(
+                "dxl_present_outside_position_mode_after_reboot:present={present}:min={XL330_POSITION_MODE_MIN}:max={XL330_POSITION_MODE_MAX}:homing_offset={}",
+                self.homing_offset
+            )));
         }
         // Do not yank present onto the Wizard window. Clamping then
         // torque-on would move before any certified command and break
@@ -864,15 +1450,7 @@ impl Xl330Driver {
         }
         self.establish_startup_cage(present)?;
         self.last_present = present;
-        self.write_reg(
-            ADDR_GOAL_POSITION,
-            &present.to_le_bytes(),
-            "setup_goal_match_present",
-            Some(present),
-            false,
-        )?;
-        self.last_goal = Some(present);
-        self.persist_positions();
+        self.write_and_verify_goal(present, "setup_goal_match_present")?;
         // Torque-on here (software watchdog not running yet) so the first
         // certified write is a single goal_position xfer, not torque_on + goal.
         self.write_reg(ADDR_TORQUE_ENABLE, &[1], "setup_torque_on", None, false)?;
@@ -905,6 +1483,7 @@ impl Xl330Driver {
             return Err(PlantError::refused("dxl_hw_error_unreadable_after_torque"));
         };
         self.last_hw_error = hw;
+        self.hw_error_needs_refresh = false;
         if hw != 0 {
             let _ = self.write_reg(
                 ADDR_TORQUE_ENABLE,
@@ -941,31 +1520,430 @@ impl Xl330Driver {
             }
         };
         if after != self.last_present {
-            if after < self.experiment_min || after > self.experiment_max {
-                let _ = self.write_reg(
-                    ADDR_TORQUE_ENABLE,
-                    &[0],
-                    "setup_torque_off_present_jump",
-                    None,
-                    false,
-                );
-                self.torque_enabled = false;
-                return Err(PlantError::refused(format!(
-                    "dxl_present_outside_experiment_cage_after_torque:present={after}:min={}:max={}",
-                    self.experiment_min, self.experiment_max
-                )));
-            }
+            self.recenter_or_rematch_after_torque_present_reset(after)?;
+        }
+        Ok(())
+    }
+
+    fn wizard_legal_window(&self) -> (i32, i32) {
+        let min = self.eeprom_min_saved.unwrap_or(self.min_position);
+        let max = self.eeprom_max_saved.unwrap_or(self.max_position);
+        (
+            XL330_POSITION_MODE_MIN.max(min),
+            XL330_POSITION_MODE_MAX.min(max),
+        )
+    }
+
+    /// Bit 0 torque-ons at the next boot and tracks Goal (RAM 0 after
+    /// reboot). A Hardware Error reboot used to run before this write.
+    /// Probe must not write this EEPROM. A failed read is not 0.
+    fn ensure_startup_configuration_off(&mut self) -> PlantResult<bool> {
+        let startup = self
+            .read_reg(ADDR_STARTUP_CONFIGURATION, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        self.startup_configuration = startup.unwrap_or(0xFF);
+        let mut changed = false;
+        if startup != Some(FACTORY_STARTUP_CONFIGURATION) {
             self.write_reg(
-                ADDR_GOAL_POSITION,
-                &after.to_le_bytes(),
-                "setup_goal_match_present_after_torque",
-                Some(after),
+                ADDR_STARTUP_CONFIGURATION,
+                &[FACTORY_STARTUP_CONFIGURATION],
+                "setup_startup_configuration_off",
+                None,
                 false,
             )?;
-            self.last_present = after;
-            self.last_goal = Some(after);
-            self.persist_positions();
+            changed = true;
         }
+        let startup_got = self
+            .read_reg(ADDR_STARTUP_CONFIGURATION, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if startup_got != Some(FACTORY_STARTUP_CONFIGURATION) {
+            return Err(PlantError::refused(format!(
+                "dxl_startup_configuration_unverified:{}",
+                startup_got
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unread".into())
+            )));
+        }
+        self.startup_configuration = FACTORY_STARTUP_CONFIGURATION;
+        Ok(changed)
+    }
+
+    /// Protocol 2.0 returns the Reboot status, then the servo is silent
+    /// while it boots. A single 400 ms wait plus one identify missed a
+    /// 500–800 ms XL330 (hand-turned multiturn first contact, or a
+    /// Hardware Error reboot). Poll a short identify until it answers;
+    /// do not close+open. The first PING can succeed while READs are
+    /// still dead — one `ping_and_identify` then aborted with time
+    /// left. Setup `recv_status` (16×150 ms) must not be the wait.
+    fn reboot_clear_ram_and_reidentify(&mut self, torque_off_why: &'static str) -> PlantResult<()> {
+        let _ = self.xfer(&encode_reboot(self.cfg.servo_id), true);
+        // Reboot status is INST_STATUS with empty params — the same
+        // shape as PING. PTY `ClearBuffer` is a no-op; leftover RX
+        // must not look like a post-reboot identify.
+        self.drain_rx();
+        let deadline = Instant::now() + Duration::from_millis(REBOOT_IDENTIFY_DEADLINE_MS);
+        let identified = loop {
+            if Instant::now() >= deadline {
+                break Err(io::Error::new(io::ErrorKind::TimedOut, "timeout"));
+            }
+            std::thread::sleep(Duration::from_millis(REBOOT_IDENTIFY_POLL_MS));
+            if Instant::now() >= deadline {
+                break Err(io::Error::new(io::ErrorKind::TimedOut, "timeout"));
+            }
+            match self.identify_after_reboot() {
+                Ok(()) => break Ok(()),
+                Err(e) if Instant::now() >= deadline => break Err(e),
+                Err(_) => {}
+            }
+        };
+        identified.map_err(|e| PlantError::refused(format!("dxl_reboot_identify:{e}")))?;
+        self.write_torque_off_verified(torque_off_why)
+    }
+
+    /// Read-until-quiet. `serialport` `ClearBuffer` on a PTY often
+    /// leaves the Reboot status sitting for the next `xfer`.
+    fn drain_rx(&mut self) {
+        let Some(port) = self.port.as_mut() else {
+            return;
+        };
+        let saved = port.timeout();
+        let _ = port.clear(serialport::ClearBuffer::Input);
+        let _ = port.set_timeout(Duration::from_millis(5));
+        let mut tmp = [0u8; 64];
+        let end = Instant::now() + Duration::from_millis(20);
+        while Instant::now() < end {
+            match port.read(&mut tmp) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        let _ = port.set_timeout(saved);
+        let _ = port.clear(serialport::ClearBuffer::Input);
+    }
+
+    /// One PING with a poll-sized budget. Setup identify's 16×150 ms
+    /// recv would sit through a 1.5 s deadline and then accept the
+    /// first reply after a longer silent boot.
+    fn ping_after_reboot(&mut self) -> io::Result<()> {
+        self.drain_rx();
+        let frame = encode_ping(self.cfg.servo_id);
+        let port = self
+            .port
+            .as_mut()
+            .ok_or_else(|| io::Error::other("metal_serial_closed"))?;
+        let saved = port.timeout();
+        port.clear(serialport::ClearBuffer::Input)
+            .map_err(io::Error::other)?;
+        port.write_all(&frame).map_err(io::Error::other)?;
+        port.flush().map_err(io::Error::other)?;
+        half_duplex_turnaround(&self.cfg.device);
+        port.set_timeout(Duration::from_millis(REBOOT_IDENTIFY_POLL_MS))
+            .map_err(io::Error::other)?;
+        let mut acc = Vec::new();
+        let mut tmp = [0u8; 64];
+        let end = Instant::now() + Duration::from_millis(REBOOT_IDENTIFY_POLL_MS);
+        let mut result = Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "dxl_reboot_ping_timeout",
+        ));
+        while Instant::now() < end {
+            match port.read(&mut tmp) {
+                Ok(0) => {}
+                Ok(n) => {
+                    acc.extend_from_slice(&tmp[..n]);
+                    if let Ok(st) = decode_status_scan(&acc) {
+                        result = if instruction_ok(st.error) {
+                            Ok(())
+                        } else {
+                            Err(io::Error::other(format!("dxl_status_error:{}", st.error)))
+                        };
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::TimedOut => break,
+                Err(e) => {
+                    let _ = port.set_timeout(saved);
+                    return Err(e);
+                }
+            }
+        }
+        let _ = port.set_timeout(saved);
+        result
+    }
+
+    /// Short ping, then identify with the 40 ms live budget so a
+    /// PING-up / READ-dead boot cannot spend 16×150 ms and miss the
+    /// 1.5 s deadline. Caller retries until that deadline.
+    fn identify_after_reboot(&mut self) -> io::Result<()> {
+        self.ping_after_reboot()?;
+        let saved = self.live_io;
+        self.live_io = true;
+        let result = self.ping_and_identify();
+        self.live_io = saved;
+        result
+    }
+
+    /// Leftover Wizard 9 600 cannot host live I/O. Write factory baud
+    /// index 1, take status at the old rate, then retune the held fd.
+    /// Readback must be at 57 600. A dropped write retunes back and
+    /// refuses so serve cannot enter_live_io on a silent 9 600 bus.
+    fn apply_factory_baud_if_live_io_too_slow(&mut self) -> PlantResult<()> {
+        if !baud_too_slow_for_live_io(self.cfg.baud) {
+            return Ok(());
+        }
+        let got = self
+            .read_reg(ADDR_BAUD_RATE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if got != Some(BAUD_INDEX_57600) {
+            self.write_reg(
+                ADDR_BAUD_RATE,
+                &[BAUD_INDEX_57600],
+                "setup_baud_factory",
+                None,
+                false,
+            )?;
+        }
+        let slow = self.cfg.baud;
+        {
+            let port = self
+                .port
+                .as_mut()
+                .ok_or_else(|| PlantError::refused("metal_serial_closed"))?;
+            retune_held_baud(&mut **port, &self.cfg.device, FACTORY_BAUD)
+                .map_err(|e| PlantError::refused(format!("dxl_baud_retune:{e}")))?;
+        }
+        let got = self
+            .read_reg(ADDR_BAUD_RATE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if got != Some(BAUD_INDEX_57600) {
+            if let Some(port) = self.port.as_mut() {
+                let _ = retune_held_baud(&mut **port, &self.cfg.device, slow);
+            }
+            return Err(PlantError::refused(format!(
+                "dxl_baud_unverified:{}",
+                got.map(|v| v.to_string())
+                    .unwrap_or_else(|| "unread".into())
+            )));
+        }
+        self.cfg.baud = FACTORY_BAUD;
+        self.persist_measured_baud();
+        Ok(())
+    }
+
+    fn persist_measured_baud(&self) {
+        let Some(root) = self.bus.parent() else {
+            return;
+        };
+        let path = root.join(CONFIG_FILE);
+        let Ok(mut cfg) = MetalConfig::load(&path) else {
+            return;
+        };
+        if cfg.baud == self.cfg.baud {
+            return;
+        }
+        cfg.baud = self.cfg.baud;
+        let _ = cfg.save(&path);
+    }
+
+    fn write_torque_off_verified(&mut self, why: &'static str) -> PlantResult<()> {
+        for _ in 0..3 {
+            self.write_reg(ADDR_TORQUE_ENABLE, &[0], why, None, false)?;
+            self.torque_enabled = false;
+            let got = self
+                .read_reg(ADDR_TORQUE_ENABLE, 1)
+                .ok()
+                .and_then(|b| b.first().copied());
+            if got == Some(0) {
+                return Ok(());
+            }
+        }
+        Err(PlantError::refused(format!(
+            "dxl_torque_still_on_before_eeprom:{why}"
+        )))
+    }
+
+    fn torque_off_setup(&mut self, why: &'static str) -> PlantResult<()> {
+        self.write_torque_off_verified(why)
+    }
+
+    /// Robotis Present reset is a register wrap, not certified excursion.
+    /// A cage built around the pre-reset number leaves too little inbound
+    /// room: the campaign picker then fails after hold, or `write_action`
+    /// abort-latches ONLINE. EEPROM Min/Max are read-only while torque is
+    /// on, so re-center with torque off. Do not widen the Wizard window.
+    ///
+    /// EEPROM writes are slow. Torque-off lets the horn settle; matching
+    /// Goal to the pre-off number yanks before any certified command.
+    /// Park the new cage on the live Present. A second wrap larger than
+    /// the hold-still band still refuses (do not loop).
+    fn recenter_or_rematch_after_torque_present_reset(&mut self, after: i32) -> PlantResult<()> {
+        let (wizard_min, wizard_max) = self.wizard_legal_window();
+        if after < wizard_min || after > wizard_max {
+            self.torque_off_setup("setup_torque_off_present_jump")?;
+            return Err(PlantError::refused(format!(
+                "dxl_present_outside_wizard_limits_after_torque:present={after}:min={wizard_min}:max={wizard_max}"
+            )));
+        }
+        if !self.in_experiment_cage(after) {
+            self.torque_off_setup("setup_torque_off_present_jump")?;
+            return Err(PlantError::refused(format!(
+                "dxl_present_outside_experiment_cage_after_torque:present={after}:min={}:max={}",
+                self.experiment_min, self.experiment_max
+            )));
+        }
+        // Rematch-only when the preferred +delta still survives slack.
+        // Either-sign cage_allows would keep 2000..2096 after a 16-tick
+        // wrap (minus still fits) and skip the live-park recenter.
+        let old_plus_ok = pick_inbound_nudge_action(
+            after,
+            self.experiment_min,
+            self.experiment_max,
+            self.cfg.max_position_delta_ticks,
+            self.cfg.tau_max,
+        )
+        .ok()
+        .is_some_and(|action| {
+            action > 0.0
+                && chosen_nudge_survives_slack(
+                    after,
+                    self.experiment_min,
+                    self.experiment_max,
+                    self.cfg.max_position_delta_ticks,
+                    action,
+                    NUDGE_PRESENT_SLACK_TICKS,
+                )
+                .is_ok()
+        });
+        if old_plus_ok {
+            if let Err(e) =
+                self.write_and_verify_goal(after, "setup_goal_match_present_after_torque")
+            {
+                self.torque_off_setup("setup_torque_off_goal_unverified")?;
+                return Err(e);
+            }
+            self.last_present = after;
+            return Ok(());
+        }
+        self.torque_off_setup("setup_torque_off_recenter_cage")?;
+        let park = self.live_park_for_recenter()?;
+        self.establish_startup_cage(park)?;
+        let park = self.live_park_for_recenter()?;
+        if !self.in_experiment_cage(park) {
+            return Err(PlantError::refused(format!(
+                "dxl_present_outside_experiment_cage_after_recenter:present={park}:min={}:max={}",
+                self.experiment_min, self.experiment_max
+            )));
+        }
+        cage_allows_inbound_nudge_after_hold_still(
+            park,
+            self.experiment_min,
+            self.experiment_max,
+            self.cfg.max_position_delta_ticks,
+            self.cfg.tau_max,
+        )
+        .map_err(|e| PlantError::refused(format!("metal_experiment_cage_no_inbound_step:{e}")))?;
+        if park != self.startup_present {
+            self.startup_present = park;
+            self.persist_cage_evidence();
+        }
+        self.last_present = park;
+        self.write_and_verify_goal(park, "setup_goal_match_present_after_recenter")?;
+        self.write_reg(
+            ADDR_TORQUE_ENABLE,
+            &[1],
+            "setup_torque_on_after_recenter",
+            None,
+            false,
+        )?;
+        let still_on = self
+            .read_reg(ADDR_TORQUE_ENABLE, 1)
+            .ok()
+            .and_then(|b| b.first().copied());
+        if still_on != Some(1) {
+            self.torque_enabled = false;
+            return Err(PlantError::refused(format!(
+                "dxl_torque_dropped_after_recenter:{}",
+                still_on.unwrap_or(0)
+            )));
+        }
+        let again = self
+            .read_present_setup("dxl_present_unreadable_after_torque")
+            .inspect_err(|_| {
+                let _ = self.torque_off_setup("setup_torque_off_present_unread_recenter");
+            })?;
+        if again != park {
+            let hunt = again.abs_diff(park);
+            let (wizard_min, wizard_max) = self.wizard_legal_window();
+            let still_legal = again >= wizard_min
+                && again <= wizard_max
+                && self.in_experiment_cage(again)
+                && hunt <= HOLD_STILL_HEADROOM_TICKS as u32;
+            if !still_legal {
+                self.torque_off_setup("setup_torque_off_present_jumped_twice")?;
+                return Err(PlantError::refused(format!(
+                    "dxl_present_jumped_twice_after_torque_recenter:first={park}:second={again}"
+                )));
+            }
+            if let Err(e) =
+                self.write_and_verify_goal(again, "setup_goal_match_present_after_recenter_hunt")
+            {
+                self.torque_off_setup("setup_torque_off_goal_unverified")?;
+                return Err(e);
+            }
+            self.last_present = again;
+            if again != self.startup_present {
+                self.startup_present = again;
+                self.persist_cage_evidence();
+            }
+        }
+        self.torque_enabled = true;
+        Ok(())
+    }
+
+    fn read_present_setup(&mut self, unread: &'static str) -> PlantResult<i32> {
+        self.read_reg(ADDR_PRESENT_POSITION, 4)
+            .ok()
+            .and_then(|b| le_i32(&b))
+            .ok_or_else(|| PlantError::refused(unread))
+    }
+
+    /// Torque-off + EEPROM rewrite lets the horn settle. Use the live
+    /// Present, not the pre-off wrap, so Goal match cannot yank.
+    fn live_park_for_recenter(&mut self) -> PlantResult<i32> {
+        let park = self.read_present_setup("dxl_present_unreadable_after_torque")?;
+        let (wizard_min, wizard_max) = self.wizard_legal_window();
+        if park < wizard_min || park > wizard_max {
+            return Err(PlantError::refused(format!(
+                "dxl_present_outside_wizard_limits_after_torque:present={park}:min={wizard_min}:max={wizard_max}"
+            )));
+        }
+        Ok(park)
+    }
+
+    fn write_and_verify_goal(&mut self, present: i32, why: &'static str) -> PlantResult<()> {
+        self.write_reg(
+            ADDR_GOAL_POSITION,
+            &present.to_le_bytes(),
+            why,
+            Some(present),
+            false,
+        )?;
+        let goal_got = self
+            .read_reg(ADDR_GOAL_POSITION, 4)
+            .ok()
+            .and_then(|b| le_i32(&b));
+        if goal_got != Some(present) {
+            return Err(PlantError::refused(format!(
+                "dxl_goal_unverified:got={goal_got:?}:want={present}"
+            )));
+        }
+        self.last_goal = Some(present);
+        self.persist_positions();
         Ok(())
     }
 
@@ -1050,7 +2028,49 @@ impl Xl330Driver {
         Ok(())
     }
 
+    /// Goal PWM is a Goal Value. Bus Watchdog 0xFF makes it read-only,
+    /// so this runs after setup writes watchdog 0.
+    fn sync_goal_pwm_to_measured_cap(&mut self) -> PlantResult<()> {
+        let measured = self.pwm_limit;
+        let want_goal = i16::try_from(measured).map_err(|_| {
+            PlantError::refused(format!("metal_goal_pwm_cap_out_of_range:{measured}"))
+        })?;
+        let got_goal = self
+            .read_reg(ADDR_GOAL_PWM, 2)
+            .ok()
+            .and_then(|b| le_i16(&b));
+        self.goal_pwm = got_goal.unwrap_or(0);
+        if got_goal != Some(want_goal) {
+            self.write_reg(
+                ADDR_GOAL_PWM,
+                &want_goal.to_le_bytes(),
+                "setup_goal_pwm_match_cap",
+                None,
+                false,
+            )?;
+            self.goal_pwm = want_goal;
+        }
+        let measured_goal = self
+            .read_reg(ADDR_GOAL_PWM, 2)
+            .ok()
+            .and_then(|b| le_i16(&b))
+            .ok_or_else(|| PlantError::refused("metal_goal_pwm_readback_unverified"))?;
+        if measured_goal != want_goal {
+            return Err(PlantError::refused(format!(
+                "metal_goal_pwm_readback_mismatch:want={want_goal} measured={measured_goal}"
+            )));
+        }
+        self.goal_pwm = measured_goal;
+        Ok(())
+    }
+
     fn establish_startup_cage(&mut self, present: i32) -> PlantResult<()> {
+        // crash_if skips Drop, so EEPROM still holds the previous session
+        // cage. Intersecting a new ±excursion window with that leftover
+        // cage ratchets headroom away; a later nudge then refuses and the
+        // frozen ONLINE mapping abort-latches the instance. Restore the
+        // recorded Wizard window first (fail-safe while serve is down).
+        self.restore_recorded_wizard_window_before_new_cage()?;
         let excursion = self.cfg.max_total_excursion_ticks;
         if excursion < 0 {
             return Err(PlantError::refused(format!(
@@ -1066,6 +2086,18 @@ impl Xl330Driver {
                 "metal_experiment_cage_empty:present={present}:min={experiment_min}:max={experiment_max}"
             )));
         }
+        // A leftover Wizard window tighter than the certified step (or only
+        // barely 32/36 ticks at the edge) used to pass setup, run valid_hold,
+        // then miss after propose re-acquires last_present and abort-latch
+        // ONLINE. Do not widen EEPROM against a fixture; refuse before write.
+        cage_allows_inbound_nudge_after_hold_still(
+            present,
+            experiment_min,
+            experiment_max,
+            self.cfg.max_position_delta_ticks,
+            self.cfg.tau_max,
+        )
+        .map_err(|e| PlantError::refused(format!("metal_experiment_cage_no_inbound_step:{e}")))?;
         self.startup_present = present;
         self.experiment_min = experiment_min;
         self.experiment_max = experiment_max;
@@ -1122,6 +2154,71 @@ impl Xl330Driver {
             "current_limit_is_not_position_mode_torque_boundary": true,
         });
         let _ = std::fs::write(self.bus.join(PWM_EVIDENCE_FILE), v.to_string());
+    }
+
+    fn restore_recorded_wizard_window_before_new_cage(&mut self) -> PlantResult<()> {
+        let path = self.bus.join(CAGE_EVIDENCE_FILE);
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return Ok(());
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return Ok(());
+        };
+        let Some(min) = v.get("eeprom_previous_min").and_then(|x| x.as_i64()) else {
+            return Ok(());
+        };
+        let Some(max) = v.get("eeprom_previous_max").and_then(|x| x.as_i64()) else {
+            return Ok(());
+        };
+        let min = i32::try_from(min).map_err(|_| {
+            PlantError::refused(format!("metal_wizard_window_restore_min_overflow:{min}"))
+        })?;
+        let max = i32::try_from(max).map_err(|_| {
+            PlantError::refused(format!("metal_wizard_window_restore_max_overflow:{max}"))
+        })?;
+        if !(XL330_POSITION_MODE_MIN..=XL330_POSITION_MODE_MAX).contains(&min)
+            || !(XL330_POSITION_MODE_MIN..=XL330_POSITION_MODE_MAX).contains(&max)
+            || min > max
+        {
+            return Err(PlantError::refused(format!(
+                "metal_wizard_window_restore_invalid:min={min}:max={max}"
+            )));
+        }
+        if min == self.min_position && max == self.max_position {
+            return Ok(());
+        }
+        self.write_reg(
+            ADDR_MIN_POSITION_LIMIT,
+            &min.to_le_bytes(),
+            "setup_restore_wizard_min",
+            None,
+            false,
+        )?;
+        self.write_reg(
+            ADDR_MAX_POSITION_LIMIT,
+            &max.to_le_bytes(),
+            "setup_restore_wizard_max",
+            None,
+            false,
+        )?;
+        let got_min = self
+            .read_reg(ADDR_MIN_POSITION_LIMIT, 4)
+            .ok()
+            .and_then(|b| le_i32(&b))
+            .ok_or_else(|| PlantError::refused("metal_wizard_window_restore_min_unverified"))?;
+        let got_max = self
+            .read_reg(ADDR_MAX_POSITION_LIMIT, 4)
+            .ok()
+            .and_then(|b| le_i32(&b))
+            .ok_or_else(|| PlantError::refused("metal_wizard_window_restore_max_unverified"))?;
+        if got_min != min || got_max != max {
+            return Err(PlantError::refused(format!(
+                "metal_wizard_window_restore_readback_mismatch:want={min}..{max} got={got_min}..{got_max}"
+            )));
+        }
+        self.min_position = min;
+        self.max_position = max;
+        Ok(())
     }
 
     fn persist_cage_evidence(&self) {
@@ -1245,6 +2342,10 @@ impl Xl330Driver {
 
     fn campaign_disconnected(&self) -> bool {
         self.cfg.campaign_hooks && self.bus.join("force_disconnect").exists()
+    }
+
+    fn campaign_io_loss(&self) -> bool {
+        self.cfg.campaign_hooks && self.bus.join("force_io_loss").exists()
     }
 
     fn campaign_fail_sensor(&self) -> bool {
@@ -1391,6 +2492,7 @@ impl Xl330Driver {
         }
         match self.recv_status(true) {
             Ok(st) => {
+                self.note_status_error(st.error);
                 let ok = instruction_ok(st.error);
                 if count_command_egress {
                     let _ = self
@@ -1421,11 +2523,17 @@ impl Xl330Driver {
         }
         let frame = encode_read(self.cfg.servo_id, addr, len);
         match self.xfer(&frame, true) {
-            Ok(st) if instruction_ok(st.error) => Ok(st.params),
-            Ok(st) => Err(PlantError::refused(format!(
-                "dxl_status_error:{}",
-                st.error
-            ))),
+            Ok(st) if instruction_ok(st.error) => {
+                self.note_status_error(st.error);
+                Ok(st.params)
+            }
+            Ok(st) => {
+                self.note_status_error(st.error);
+                Err(PlantError::refused(format!(
+                    "dxl_status_error:{}",
+                    st.error
+                )))
+            }
             Err(e) => {
                 self.connected = false;
                 Err(PlantError::refused(format!("dxl_io:{e}")))
@@ -1445,6 +2553,8 @@ impl Xl330Driver {
         // this exclusive fd is still the live UART. That exists() miss
         // used to look like unplug and abort the first hold as disconnect.
         // A real unplug fails the next xfer and clears `connected`.
+        // VIN fault is a supply/cutoff latch, not a vanished fd — ESTOP
+        // / close must still be able to torque-off on this exclusive port.
         self.connected && self.port.is_some()
     }
 
@@ -1485,6 +2595,97 @@ impl Xl330Driver {
         ) as i32
     }
 
+    fn enable_torque_matched_to_present(&mut self) -> PlantResult<()> {
+        let present = self
+            .read_reg(ADDR_PRESENT_POSITION, 4)
+            .ok()
+            .and_then(|b| le_i32(&b))
+            .ok_or_else(|| PlantError::refused("dxl_present_unreadable_before_torque"))?;
+        if !self.in_experiment_cage(present) {
+            return Err(PlantError::refused(format!(
+                "experiment_cage_violation:present={present}:min={}:max={}",
+                self.experiment_min, self.experiment_max
+            )));
+        }
+        self.last_present = present;
+        self.write_and_verify_goal(present, "reenable_goal_match_present")?;
+        self.write_reg(ADDR_TORQUE_ENABLE, &[1], "torque_on", None, false)?;
+        self.torque_enabled = true;
+        let after = match self
+            .read_reg(ADDR_PRESENT_POSITION, 4)
+            .ok()
+            .and_then(|b| le_i32(&b))
+        {
+            Some(p) => p,
+            None => {
+                let _ = self.write_reg(
+                    ADDR_TORQUE_ENABLE,
+                    &[0],
+                    "reenable_torque_off_present_unread",
+                    None,
+                    false,
+                );
+                self.torque_enabled = false;
+                return Err(PlantError::refused("dxl_present_unreadable_after_torque"));
+            }
+        };
+        if after != present {
+            if !self.in_experiment_cage(after) {
+                let _ = self.write_reg(
+                    ADDR_TORQUE_ENABLE,
+                    &[0],
+                    "reenable_torque_off_present_jump",
+                    None,
+                    false,
+                );
+                self.torque_enabled = false;
+                return Err(PlantError::refused(format!(
+                    "dxl_present_outside_experiment_cage_after_torque:present={after}:min={}:max={}",
+                    self.experiment_min, self.experiment_max
+                )));
+            }
+            if let Err(e) =
+                self.write_and_verify_goal(after, "reenable_goal_match_present_after_torque")
+            {
+                let _ = self.write_reg(
+                    ADDR_TORQUE_ENABLE,
+                    &[0],
+                    "reenable_torque_off_goal_unverified",
+                    None,
+                    false,
+                );
+                self.torque_enabled = false;
+                return Err(e);
+            }
+            self.last_present = after;
+        }
+        Ok(())
+    }
+
+    fn note_status_error(&mut self, error: u8) {
+        if error & STATUS_ALERT != 0 {
+            self.hw_error_needs_refresh = true;
+        }
+    }
+
+    fn refresh_hw_error_status(&mut self) {
+        // Same contract as confirm_eeprom_identity: this extra READ is
+        // diagnostic. A CRC/timeout after a good motion sample must not
+        // latch `connected=false` / bus_lost and kill the session.
+        let was_connected = self.connected;
+        match self.read_reg(ADDR_HARDWARE_ERROR, 1) {
+            Ok(b) => {
+                if let Some(v) = b.first().copied() {
+                    self.last_hw_error = v;
+                    self.hw_error_needs_refresh = false;
+                }
+            }
+            Err(_) => {
+                self.connected = was_connected;
+            }
+        }
+    }
+
     /// Intended goal before cage refuse. Does not clamp outbound steps inward.
     fn intended_goal(&self, action: &[f64]) -> i32 {
         let ticks = self.ticks_from_action(action);
@@ -1503,6 +2704,26 @@ impl Xl330Driver {
     /// or blank the open-time adapter serial.
     pub fn simulate_udev_path_vanished(&mut self) {
         self.cfg.device = PathBuf::from("/dev/realityos-metal-vanished-udev-name");
+    }
+
+    /// crash_if / SIGKILL skip Drop. Tests need the same leftover EEPROM
+    /// cage plus a surviving `position_cage.json` without releasing the
+    /// PTY by restoring Wizard limits.
+    pub fn abandon_without_eeprom_restore_for_test(&mut self) {
+        if self.bus_up() && self.torque_enabled {
+            let _ = self.write_reg(
+                ADDR_TORQUE_ENABLE,
+                &[0],
+                "test_abandon_torque_off",
+                None,
+                false,
+            );
+            self.torque_enabled = false;
+        }
+        self.eeprom_min_saved = None;
+        self.eeprom_max_saved = None;
+        self.port = None;
+        self.connected = false;
     }
 }
 
@@ -1529,8 +2750,17 @@ impl HardwareDriverPort for Xl330Driver {
         if !self.bus_up() {
             return Err(PlantError::Disconnected);
         }
+        // Live USB unplug is dxl_io on a dead xfer. This hook keeps the
+        // PTY up so a process --restart can measure journal ESTOP
+        // continuity without a new pts identity.
+        if self.campaign_io_loss() {
+            return Err(PlantError::Disconnected);
+        }
         if self.campaign_fail_sensor() {
             return Err(PlantError::refused("metal_sensor_missing"));
+        }
+        if self.vin_fault {
+            return Err(PlantError::refused("dxl_vin_unreadable"));
         }
         let t0 = std::time::Instant::now();
         let (pos, vel, cur, volt, tick) = self.read_motion_block()?;
@@ -1542,8 +2772,29 @@ impl HardwareDriverPort for Xl330Driver {
         if self.live_io && t0.elapsed() < Duration::from_millis(15) {
             self.confirm_eeprom_identity();
         }
+        if self.hw_error_needs_refresh
+            && (!self.live_io || t0.elapsed() < Duration::from_millis(15))
+        {
+            self.refresh_hw_error_status();
+        }
         let err = self.last_hw_error;
         self.persist_vin(volt);
+        if self.live_io {
+            if volt == 0 {
+                self.vin_fault = true;
+                return Err(PlantError::refused("dxl_vin_unreadable"));
+            }
+            if self.min_voltage != 0
+                && self.max_voltage != 0
+                && (volt < self.min_voltage || volt > self.max_voltage)
+            {
+                self.vin_fault = true;
+                return Err(PlantError::refused(format!(
+                    "dxl_vin_outside_wizard_limits:vin_0.1v={volt}:min={}:max={}",
+                    self.min_voltage, self.max_voltage
+                )));
+            }
+        }
         self.last_tick_s = f64::from(tick) / 1000.0;
         self.seq = self.seq.saturating_add(1);
         let samples = vec![
@@ -1575,8 +2826,17 @@ impl HardwareDriverPort for Xl330Driver {
         if !self.bus_up() {
             return Err(PlantError::Disconnected);
         }
+        if self.vin_fault {
+            return Err(PlantError::refused("dxl_vin_unreadable"));
+        }
         if !is_xl330_model(self.model) {
             return Err(PlantError::refused("metal_refuses_non_xl330_model"));
+        }
+        // Torque-on tracks Goal Position. After ESTOP the last certified
+        // goal can differ from present. Re-enable without rematching yanks
+        // the horn before the certified write. Match present first.
+        if !self.torque_enabled {
+            self.enable_torque_matched_to_present()?;
         }
         // propose() already acquired sensors. Extra register pokes here would
         // exceed the 100 ms software-watchdog miss on a USB-UART bench.
@@ -1592,10 +2852,6 @@ impl HardwareDriverPort for Xl330Driver {
                 "experiment_cage_violation:present={}:min={}:max={}",
                 self.last_present, self.experiment_min, self.experiment_max
             )));
-        }
-        if !self.torque_enabled {
-            self.write_reg(ADDR_TORQUE_ENABLE, &[1], "torque_on", None, false)?;
-            self.torque_enabled = true;
         }
         self.write_reg(
             ADDR_GOAL_POSITION,
@@ -1699,16 +2955,147 @@ fn half_duplex_turnaround(device: &Path) {
     std::thread::sleep(Duration::from_micros(1500));
 }
 
-fn open_settle(device: &Path) {
+fn early_broadcast_torque_off(port: &mut dyn SerialPort, device: &Path) {
+    let frame = encode_write(BROADCAST_ID, ADDR_TORQUE_ENABLE, &[0]);
+    let _ = port.clear(serialport::ClearBuffer::Input);
+    let _ = port.write_all(&frame);
+    let _ = port.flush();
+    half_duplex_turnaround(device);
+    let saved = port.timeout();
+    let _ = port.set_timeout(Duration::from_millis(10));
+    let mut tmp = [0u8; 64];
+    let end = Instant::now() + Duration::from_millis(10);
+    while Instant::now() < end {
+        if port.read(&mut tmp).is_err() {
+            break;
+        }
+    }
+    let _ = port.set_timeout(saved);
+}
+
+/// Discover's first open is factory 57 600. Wizard 115 200 or 9 600 plus
+/// Startup Configuration bit 0 tracks Goal 0 during that settle unless
+/// we also speak those rates on the held fd. 9 600 is Wizard baud index
+/// 0 and is safe to speak. Do not include 1 Mbps / 2 / 3 / 4 Mbps: a
+/// CH340 can wedge.
+fn settle_quiesce_bauds(open_baud: u32) -> Vec<u32> {
+    let mut out = if open_baud == 115_200 {
+        vec![115_200, 57_600]
+    } else {
+        vec![open_baud, 115_200]
+    };
+    if !out.contains(&9_600) {
+        out.push(9_600);
+    }
+    out
+}
+
+fn broadcast_torque_off_at(
+    port: &mut dyn SerialPort,
+    device: &Path,
+    current: &mut u32,
+    target: u32,
+) {
+    if *current != target {
+        if retune_held_baud(port, device, target).is_err() {
+            return;
+        }
+        *current = target;
+    }
+    early_broadcast_torque_off(port, device);
+}
+
+fn open_settle_and_quiesce(port: &mut dyn SerialPort, device: &Path, baud: u32) -> io::Result<()> {
     // Cheap FTDI/CP2102 DTR-RESET plus low VIN can exceed 300 ms. Robotis
     // documents ~100–300 ms; 500 ms covers the first-open reboot window.
     // PTY has no DTR; keep tests fast.
-    let ms = if is_pty_path(device) { 100 } else { 500 };
-    std::thread::sleep(Duration::from_millis(ms));
+    //
+    // Do not sit silent for that whole window. Startup Configuration bit 0
+    // torque-ons after reboot and tracks Goal (RAM initial 0). Broadcast
+    // torque-off as soon as the servo might answer, then keep retrying.
+    // Alternate the open baud with 115 200 and Wizard 9 600 so those
+    // leftover rates are not left tracking until the later discover
+    // retune. Do not speak 1 Mbps here (CH340 wedge).
+    let total_ms = if is_pty_path(device) { 100 } else { 500 };
+    let step_ms = if is_pty_path(device) { 20 } else { 50 };
+    let end = Instant::now() + Duration::from_millis(total_ms);
+    let bauds = settle_quiesce_bauds(baud);
+    let mut current = baud;
+    let mut step = 0usize;
+    broadcast_torque_off_at(port, device, &mut current, bauds[0]);
+    while Instant::now() < end {
+        let remain = end.saturating_duration_since(Instant::now());
+        if remain.is_zero() {
+            break;
+        }
+        std::thread::sleep(remain.min(Duration::from_millis(step_ms)));
+        if Instant::now() < end {
+            step += 1;
+            broadcast_torque_off_at(port, device, &mut current, bauds[step % bauds.len()]);
+        }
+    }
+    // HeldDiscover records the open baud. An ignored restore left the fd at
+    // 115 200 while sniff still thought 57 600, so a factory servo missed
+    // and the next automatic open was 1 Mbps (CH340 wedge).
+    if current != baud {
+        retune_held_baud(port, device, baud)?;
+    }
+    Ok(())
 }
 
 fn open_xl330_serial(device: &Path, baud: u32) -> io::Result<Box<dyn SerialPort>> {
     open_xl330_serial_with(device, baud, !is_pty_path(device))
+}
+
+/// Discover holds one exclusive fd. `set_baud_rate` must not re-open the
+/// tty: that would assert DTR and RESET a cheap FTDI/CP2102 servo again.
+fn retune_held_baud(port: &mut dyn SerialPort, device: &Path, baud: u32) -> io::Result<()> {
+    port.set_baud_rate(baud)
+        .map_err(|e| io::Error::other(format!("dxl_set_baud:{e}")))?;
+    let _ = port.clear(serialport::ClearBuffer::Input);
+    if !is_pty_path(device) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
+struct HeldDiscover {
+    port: Box<dyn SerialPort>,
+    baud: u32,
+    device: PathBuf,
+}
+
+impl HeldDiscover {
+    fn open(device: PathBuf, baud: u32) -> io::Result<Self> {
+        let port = open_xl330_serial(&device, baud)?;
+        Ok(Self { port, baud, device })
+    }
+
+    fn ensure(&mut self, device: &Path, baud: u32) -> io::Result<()> {
+        if self.device != device {
+            *self = Self::open(device.to_path_buf(), baud)?;
+            return Ok(());
+        }
+        if self.baud == baud {
+            return Ok(());
+        }
+        match retune_held_baud(&mut *self.port, device, baud) {
+            Ok(()) => {
+                self.baud = baud;
+                // This rate may be the live one. Broadcast now; do not wait
+                // for identify while Startup Configuration tracks a stale goal.
+                early_broadcast_torque_off(&mut *self.port, device);
+                Ok(())
+            }
+            Err(_) => {
+                // Adapter rejected an in-place retune. Reopen at the new
+                // rate (one DTR-RESET) rather than walking the rest of the
+                // scan on a wedged termios.
+                *self = Self::open(device.to_path_buf(), baud)?;
+                Ok(())
+            }
+        }
+    }
 }
 
 fn open_xl330_serial_with(
@@ -1719,7 +3106,7 @@ fn open_xl330_serial_with(
     // Real UART takes exclusive on the first open, then clears HUPCL on
     // that fd. PTY skips TIOCEXCL (`process::exit` leaves it on pts).
     let take_exclusive = exclusive && !is_pty_path(device);
-    let port = serialport::new(device.to_string_lossy(), baud)
+    let mut port = serialport::new(device.to_string_lossy(), baud)
         .timeout(Duration::from_millis(150))
         .exclusive(take_exclusive)
         .open_native()
@@ -1730,7 +3117,7 @@ fn open_xl330_serial_with(
     // U2D2/FTDI often drops the first packet if we ping immediately after
     // open. Discover tries each baud/id pair once; a cold miss on the real
     // pair never comes back.
-    open_settle(device);
+    open_settle_and_quiesce(&mut port, device, baud)?;
     Ok(Box::new(port))
 }
 
@@ -1751,17 +3138,7 @@ fn prefer_servo_id(ids: &[u8], found: Option<u8>) -> Vec<u8> {
 
 /// Broadcast PING. Status ID is the servo's own ID even when Status Return Level is 0.
 /// Waits the full window so a second servo on the drop is visible.
-fn sniff_servo_ids(device: &Path, baud: u32) -> io::Result<Vec<u8>> {
-    if !device.exists() {
-        return Ok(Vec::new());
-    }
-    // Real UART takes exclusive so ModemManager cannot AT-probe during
-    // the 500 ms open-settle. Drop before a second open (Secondary ID
-    // check). PTY stays shared (`process::exit` can leave TIOCEXCL).
-    let mut port = match open_xl330_serial_with(device, baud, !is_pty_path(device)) {
-        Ok(p) => p,
-        Err(_) => return Ok(Vec::new()),
-    };
+fn sniff_on_port(port: &mut dyn SerialPort, device: &Path) -> io::Result<Vec<u8>> {
     let frame = encode_ping(BROADCAST_ID);
     if port.clear(serialport::ClearBuffer::Input).is_err()
         || port.write_all(&frame).is_err()
@@ -1782,9 +3159,8 @@ fn sniff_servo_ids(device: &Path, baud: u32) -> io::Result<Vec<u8>> {
         }
     }
     let ids = unique_status_ids(&acc);
-    drop(port);
     if ids.len() > 1 {
-        if let Some(primary) = primary_if_secondary_pair(device, baud, &ids) {
+        if let Some(primary) = primary_if_secondary_pair_on(port, device, &ids) {
             return Ok(vec![primary]);
         }
         return Err(io::Error::other(format!(
@@ -1800,16 +3176,19 @@ fn sniff_servo_ids(device: &Path, baud: u32) -> io::Result<Vec<u8>> {
 
 /// Wizard Secondary ID makes one servo answer two IDs. Both addresses then
 /// read the same ID register. Two distinct servos read two distinct IDs.
-fn primary_if_secondary_pair(device: &Path, baud: u32, ids: &[u8]) -> Option<u8> {
+fn primary_if_secondary_pair_on(
+    port: &mut dyn SerialPort,
+    device: &Path,
+    ids: &[u8],
+) -> Option<u8> {
     if ids.len() != 2 {
         return None;
     }
-    let mut port = open_xl330_serial_with(device, baud, !is_pty_path(device)).ok()?;
     for &id in ids {
-        poke_srl_all(&mut *port, device, id);
+        poke_srl_all(port, device, id);
     }
-    let via_a = read_id_register(&mut *port, device, ids[0])?;
-    let via_b = read_id_register(&mut *port, device, ids[1])?;
+    let via_a = read_id_register(port, device, ids[0])?;
+    let via_b = read_id_register(port, device, ids[1])?;
     if via_a == via_b && via_a != BROADCAST_ID {
         Some(via_a)
     } else {
@@ -1891,6 +3270,67 @@ mod tests {
                 .control_flags
                 .contains(ControlFlags::HUPCL),
             "HUPCL must stay clear on the exclusive fd"
+        );
+        slave
+            .set_baud_rate(115_200)
+            .expect("in-place baud retune must not require reopen");
+        assert!(
+            !tcgetattr(fd)
+                .expect("tcgetattr after set_baud_rate")
+                .control_flags
+                .contains(ControlFlags::HUPCL),
+            "serialport set_baud_rate must not restore HUPCL (discover retune would DTR-RESET on close)"
+        );
+    }
+
+    #[test]
+    fn settle_quiesce_speaks_wizard_115200_without_one_megabit() {
+        let factory = settle_quiesce_bauds(57_600);
+        assert_eq!(factory[0], 57_600);
+        assert_eq!(factory[1], 115_200);
+        assert!(
+            factory.contains(&9_600),
+            "Wizard baud-index 0 tracks Goal 0 during settle unless spoken"
+        );
+        assert!(!factory.contains(&1_000_000));
+        assert!(!factory.contains(&2_000_000));
+        let wizard = settle_quiesce_bauds(115_200);
+        assert_eq!(wizard[0], 115_200);
+        assert_eq!(wizard[1], 57_600);
+        assert!(wizard.contains(&9_600));
+        assert!(!wizard.contains(&1_000_000));
+        let slow = settle_quiesce_bauds(9_600);
+        assert_eq!(slow[0], 9_600);
+        assert_eq!(slow[1], 115_200);
+        assert_eq!(slow.iter().filter(|b| **b == 9_600).count(), 1);
+        assert!(!slow.contains(&1_000_000));
+    }
+
+    #[test]
+    fn settle_restores_factory_open_baud_after_115200_poke() {
+        let (_master, mut slave) = TTYPort::pair().expect("pty pair");
+        slave.set_baud_rate(57_600).expect("open baud");
+        let path = Path::new("/dev/pts/settle-restore");
+        assert!(is_pty_path(path));
+        open_settle_and_quiesce(&mut slave, path, 57_600).expect("settle");
+        assert_eq!(
+            slave.baud_rate().expect("read baud"),
+            57_600,
+            "HeldDiscover still records 57600; a leftover 115200 fd misses the factory servo"
+        );
+    }
+
+    #[test]
+    fn settle_restores_wizard_open_baud_after_factory_poke() {
+        let (_master, mut slave) = TTYPort::pair().expect("pty pair");
+        slave.set_baud_rate(115_200).expect("open baud");
+        let path = Path::new("/dev/pts/settle-restore-wizard");
+        assert!(is_pty_path(path));
+        open_settle_and_quiesce(&mut slave, path, 115_200).expect("settle");
+        assert_eq!(
+            slave.baud_rate().expect("read baud"),
+            115_200,
+            "open at Wizard 115200 must leave the fd at 115200 after the factory poke"
         );
     }
 }
