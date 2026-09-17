@@ -13,6 +13,150 @@ DEVICE="${REALITYOS_METAL_DEVICE:-}"
 CUTOFF_TESTED="${REALITYOS_METAL_CUTOFF_TESTED:-0}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Authority/sudo wrapper lifecycle. Never `wait` a live AUTH_PID: sudo can
+# outlive the smoke child after crash_if / process::exit, and a backgrounded
+# bash function under add_case "$(crash_replay …)" waits forever.
+auth_process_alive() {
+  local pid="${1:-}" rest state
+  [[ -n "$pid" ]] || return 1
+  # A zombie is reapable. kill -0 succeeds on zombies, which would skip
+  # wait and then look like metal_authority_shutdown_timeout.
+  if [[ -r "/proc/$pid/stat" ]]; then
+    rest="$(cat "/proc/$pid/stat" 2>/dev/null || true)"
+    rest="${rest##*)}"
+    state="${rest#"${rest%%[![:space:]]*}"}"
+    state="${state:0:1}"
+    [[ -n "$state" && "$state" != "Z" ]]
+    return
+  fi
+  kill -0 "$pid" 2>/dev/null
+}
+
+# Reap only after the pid is already dead/reapable. Still-running → 1.
+reap_auth_process_if_dead() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] || return 0
+  if auth_process_alive "$pid"; then
+    return 1
+  fi
+  wait "$pid" 2>/dev/null || true
+  return 0
+}
+
+wait_auth_process_bounded() {
+  local pid="${1:-}"
+  local tenths="${2:-20}"
+  local i
+  [[ -n "$pid" ]] || return 0
+  for i in $(seq 1 "$tenths"); do
+    if reap_auth_process_if_dead "$pid"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  reap_auth_process_if_dead "$pid"
+}
+
+# Graceful stop_serve (optional) → bounded wait → TERM → bounded wait →
+# KILL matching wrapper/smoke → bounded confirm. SIGKILL is escalation only.
+# Unconfirmed shutdown: metal_authority_shutdown_timeout (do not start another).
+shutdown_auth_process() {
+  local pid="${1:-}"
+  local graceful="${2:-1}"
+  local grace_tenths="${3:-50}"
+  local term_tenths="${4:-20}"
+  local kill_tenths="${5:-20}"
+
+  if [[ -z "$pid" ]]; then
+    return 0
+  fi
+  if reap_auth_process_if_dead "$pid"; then
+    return 0
+  fi
+
+  if [[ "$graceful" == "1" ]]; then
+    if [[ -n "${ROOT:-}" ]]; then
+      : >"$ROOT/stop_serve" 2>/dev/null || true
+    fi
+    local i
+    for i in $(seq 1 "$grace_tenths"); do
+      if reap_auth_process_if_dead "$pid"; then
+        return 0
+      fi
+      if [[ -n "${ROOT:-}" ]] && declare -F resolve_metal_smoke_pid >/dev/null 2>&1; then
+        if ! resolve_metal_smoke_pid "$ROOT" >/dev/null 2>&1; then
+          break
+        fi
+      fi
+      sleep 0.1
+    done
+  fi
+
+  if reap_auth_process_if_dead "$pid"; then
+    return 0
+  fi
+  kill -TERM "$pid" 2>/dev/null || true
+  if wait_auth_process_bounded "$pid" "$term_tenths"; then
+    return 0
+  fi
+  kill -KILL "$pid" 2>/dev/null || true
+  if [[ -n "${ROOT:-}" && -x "${SCRIPT_DIR:-}/metal-kill-serve.sh" ]]; then
+    "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
+  fi
+  if wait_auth_process_bounded "$pid" "$kill_tenths"; then
+    return 0
+  fi
+  echo "error: metal_authority_shutdown_timeout pid=$pid still running after graceful/TERM/KILL" >&2
+  return 1
+}
+
+metal_authority_lifecycle_self_test() {
+  local pid start now elapsed
+  sleep 30 &
+  pid=$!
+  start="$(date +%s)"
+  if ! shutdown_auth_process "$pid" 0 5 20 20; then
+    echo "error: metal_authority_lifecycle_self_test: cooperative dummy did not shut down" >&2
+    return 1
+  fi
+  now="$(date +%s)"
+  elapsed=$((now - start))
+  if auth_process_alive "$pid"; then
+    echo "error: metal_authority_lifecycle_self_test: cooperative dummy still alive" >&2
+    return 1
+  fi
+  if [[ "$elapsed" -gt 3 ]]; then
+    echo "error: metal_authority_lifecycle_self_test: cooperative dummy took ${elapsed}s" >&2
+    return 1
+  fi
+
+  python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)' &
+  pid=$!
+  start="$(date +%s)"
+  if ! shutdown_auth_process "$pid" 0 5 10 20; then
+    echo "error: metal_authority_lifecycle_self_test: TERM-immune dummy did not shut down" >&2
+    kill -KILL "$pid" 2>/dev/null || true
+    return 1
+  fi
+  now="$(date +%s)"
+  elapsed=$((now - start))
+  if auth_process_alive "$pid"; then
+    echo "error: metal_authority_lifecycle_self_test: TERM-immune dummy still alive" >&2
+    return 1
+  fi
+  if [[ "$elapsed" -gt 5 ]]; then
+    echo "error: metal_authority_lifecycle_self_test: TERM-immune dummy took ${elapsed}s" >&2
+    return 1
+  fi
+  echo "metal-authority-lifecycle-self-test-ok"
+}
+
+if [[ "${1:-}" == "--self-test-authority-lifecycle" ]]; then
+  metal_authority_lifecycle_self_test
+  exit $?
+fi
+
 # shellcheck source=metal-unix-mode.sh
 source "$SCRIPT_DIR/metal-unix-mode.sh"
 # shellcheck source=metal-sensor-drop.sh
@@ -1659,13 +1803,23 @@ start_auth() {
       sleep 0.4
       continue
     fi
+    # Background a real sudo command, not the as_authority function.
+    # crash_replay runs under add_case "$(crash_replay …)" with `{ … } >&2`.
+    # A backgrounded function is waited by that command substitution when
+    # the function returns, so the PTY campaign blocked on AUTH_PID forever.
+    local serve_flag="--restart"
     if [[ "$first" == "1" ]]; then
-      as_authority "$SMOKE" --root "$ROOT" --first-online serve \
-        >"$ROOT/authority.out" 2>"$ROOT/authority.err" &
-    else
-      as_authority "$SMOKE" --root "$ROOT" --restart serve \
-        >"$ROOT/authority.out" 2>"$ROOT/authority.err" &
+      serve_flag="--first-online"
     fi
+    sudo -u "$AUTHORITY_USER" -- env \
+      REALITYOS_METAL_DEVICE="${REALITYOS_METAL_DEVICE:-}" \
+      REALITYOS_METAL_BAUD="${REALITYOS_METAL_BAUD:-}" \
+      REALITYOS_METAL_SERVO_ID="${REALITYOS_METAL_SERVO_ID:-}" \
+      REALITYOS_METAL_CAMPAIGN="${REALITYOS_METAL_CAMPAIGN:-}" \
+      REALITYOS_METAL_ALLOW_PTY="${REALITYOS_METAL_ALLOW_PTY:-}" \
+      REALITYOS_HIL_CRASH="${REALITYOS_HIL_CRASH:-}" \
+      "$SMOKE" --root "$ROOT" "$serve_flag" serve \
+      >"$ROOT/authority.out" 2>"$ROOT/authority.err" &
     AUTH_PID=$!
     local _i
     # Journal replay after many crash events can exceed 4s. The original
@@ -1686,8 +1840,13 @@ start_auth() {
     if [[ -S "$ROOT/ipc.sock" ]]; then
       break
     fi
-    kill "$AUTH_PID" 2>/dev/null || true
-    wait "$AUTH_PID" 2>/dev/null || true
+    if ! shutdown_auth_process "${AUTH_PID:-}" 0 5 20 20; then
+      echo "error: metal_authority_shutdown_timeout during start_auth retry AUTH_PID=${AUTH_PID:-empty}" >&2
+      "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
+      AUTH_PID=""
+      return 1
+    fi
+    AUTH_PID=""
     "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
     sleep 0.2
   done
@@ -1715,20 +1874,29 @@ stop_auth() {
   # Planned stop: ask serve to leave the loop so Drop torque-offs and
   # releases TIOCEXCL. SIGKILL skips Drop; the next open then gets EBUSY
   # (seen on PTY campaign restart) and a real XL330 would keep torque.
-  if [[ -n "$ROOT" ]]; then
-    : >"$ROOT/stop_serve" 2>/dev/null || true
-  fi
-  local i
-  for i in $(seq 1 50); do
-    if ! resolve_metal_smoke_pid "$ROOT" >/dev/null 2>&1; then
-      break
+  # Escalate only after the graceful window. Never wait forever on the
+  # sudo wrapper (AUTH_PID); that wedged PTY crash_replay.
+  if [[ -z "${AUTH_PID:-}" ]]; then
+    if [[ -n "${ROOT:-}" ]]; then
+      "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
+      rm -f "$ROOT/stop_serve" "$ROOT/ipc.sock"
     fi
-    sleep 0.1
-  done
-  kill "$AUTH_PID" 2>/dev/null || true
-  wait "$AUTH_PID" 2>/dev/null || true
+    return 0
+  fi
+  if ! shutdown_auth_process "$AUTH_PID" 1 50 20 20; then
+    echo "error: metal_authority_shutdown_timeout AUTH_PID=${AUTH_PID:-empty} (wrapper still alive after TERM/KILL)" >&2
+    "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
+    rm -f "$ROOT/stop_serve" "$ROOT/ipc.sock"
+    return 1
+  fi
   "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
+  if resolve_metal_smoke_pid "$ROOT" >/dev/null 2>&1 || auth_process_alive "${AUTH_PID:-}"; then
+    echo "error: metal_authority_shutdown_timeout leftover serve AUTH_PID=${AUTH_PID:-empty}" >&2
+    rm -f "$ROOT/stop_serve" "$ROOT/ipc.sock"
+    return 1
+  fi
   rm -f "$ROOT/stop_serve" "$ROOT/ipc.sock"
+  AUTH_PID=""
 }
 
 # After crash_if / USB replug / first serve open, the tty can exist while
@@ -1766,7 +1934,7 @@ raise SystemExit(0 if isinstance(body, dict) and body.get("ok") is True else 1)
 PY
         then
           echo "metal-campaign: --restart recover did not clear journal ESTOP; retry" >&2
-          stop_auth || true
+          stop_auth || return 1
           sleep 0.8
           continue
         fi
@@ -1776,7 +1944,7 @@ PY
         return 0
       fi
       echo "metal-campaign: serve bound but sensor is not live (ok!=true); retry" >&2
-      stop_auth || true
+      stop_auth || return 1
     fi
     sleep 0.8
   done
@@ -2106,7 +2274,14 @@ crash_replay() {
     stop_auth || true
     exit 1
   fi
-  wait "$AUTH_PID" 2>/dev/null || true
+  # crash_if already killed the smoke child (no Drop). Reap the sudo
+  # wrapper with a bound; do not wait indefinitely if sudo ignores TERM.
+  if ! shutdown_auth_process "${AUTH_PID:-}" 0 5 20 20; then
+    echo "error: metal_authority_shutdown_timeout after crash_if $point AUTH_PID=${AUTH_PID:-empty}" >&2
+    "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
+    exit 1
+  fi
+  AUTH_PID=""
   "$SCRIPT_DIR/metal-kill-serve.sh" "$ROOT" || true
   if ! start_auth_until_live 0 "" "$ROOT/crash-${point}-restart.json"; then
     echo "error: restart after $point crash did not become live (DTR-RESET / identify)" >&2

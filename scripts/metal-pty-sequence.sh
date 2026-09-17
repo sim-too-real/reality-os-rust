@@ -98,6 +98,36 @@ run_campaign() {
     rm -f "$REPO/docs/metal_proof.json" "$REPO/docs/METAL_PROOF_REPORT.md"
     exit 1
   fi
+  python3 - "$root/os_metal_cases.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+cases = json.load(open(path))
+by = {c.get("name"): c for c in cases}
+need = [
+    "crash_restart_before_prepare",
+    "crash_restart_after_prepare_before_write",
+    "crash_restart_during_write",
+    "crash_restart_after_serial_tx_before_status",
+    "crash_restart_after_write_before_ack",
+    "crash_restart_after_ack",
+]
+missing = [n for n in need if n not in by]
+if missing:
+    sys.exit("error: missing crash case records: %s" % (missing,))
+for n in need:
+    rec = by[n]
+    tx = int(rec.get("serial_tx_delta") or 0)
+    pw = int(rec.get("physical_writes_delta") or 0)
+    if tx != 0 or pw != 0:
+        sys.exit("error: %s retransmission serial_tx_delta=%s physical_writes_delta=%s" % (n, tx, pw))
+print("pty-crash-matrix-ok")
+PY
+  leftover="$(ps -eo pid,cmd | grep '[r]ealityos-metal-smoke --root' || true)"
+  if [[ -n "$leftover" ]]; then
+    echo "error: leftover realityos-metal-smoke after PTY campaign root=$root" >&2
+    printf '%s\n' "$leftover" >&2
+    exit 1
+  fi
 }
 
 require_nudge_action() {
@@ -225,4 +255,10 @@ run_campaign "$MODE_WRAP_ROOT" "$TTY"
 require_nudge_action "$MODE_WRAP_ROOT" "0.2"
 require_nudge_wrap_park "$MODE_WRAP_ROOT" 904 856 952
 
+leftover="$(ps -eo pid,cmd | grep '[r]ealityos-metal-smoke --root' || true)"
+if [[ -n "$leftover" ]]; then
+  echo "error: leftover realityos-metal-smoke after metal-pty-sequence" >&2
+  printf '%s\n' "$leftover" >&2
+  exit 1
+fi
 echo "metal-pty-sequence finished (not physical evidence)"
