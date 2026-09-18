@@ -43,6 +43,8 @@ Cause: GitHub-hosted runner assignment failed on this private account after 2026
 
 Fix that this agent can apply: none that restores hosted runners without billing. Added `workflow_dispatch` so a run can be retried when minutes exist. Did **not** delete MuJoCo or weaken tests.
 
+This branch `a5bf5f4` authority run [35321428196](https://github.com/sim-too-real/reality-os-rust/actions/runs/35321428196) job `verify` (`105524570417`): `runner_id: 0`, logs 404, ~9s. Same failure mode.
+
 Until a new run shows non-empty steps, Linux execution evidence for *this* SHA remains **blocking / unverifiable** at the Actions oracle (local `cargo test` is not a substitute).
 
 ## 5. Physical campaign readiness
