@@ -39,10 +39,7 @@ impl SkillContract {
         Self {
             id: "skill.grasp".into(),
             name: SkillName::Grasp,
-            required: vec![
-                CapName::CartesianPositionControl,
-                CapName::GripperOpenClose,
-            ],
+            required: vec![CapName::CartesianPositionControl, CapName::GripperOpenClose],
             required_world: vec![
                 "target_object".into(),
                 "target_pose".into(),
@@ -131,7 +128,10 @@ pub fn compile_grasp(
     let cartesian_ok = cap_usable(caps, CapName::CartesianPositionControl);
     let joint_ok = cap_usable(caps, CapName::JointPositionControl);
     let chain_ok = model.ee_joint_chain(ee).is_some_and(|c| !c.is_empty())
-        || model.end_effectors.iter().any(|e| !e.joint_chain.is_empty());
+        || model
+            .end_effectors
+            .iter()
+            .any(|e| !e.joint_chain.is_empty());
     if !(cartesian_ok || (joint_ok && chain_ok)) {
         if model.position_actuators().next().is_none() {
             return Err(SkillRefuse::MissingActuator);
@@ -205,11 +205,7 @@ pub fn compile_grasp(
     });
     let disp = candidate.verify_displacement;
     let mag = (disp[0] * disp[0] + disp[1] * disp[1] + disp[2] * disp[2]).sqrt();
-    let displacement_xyz = if mag < 1e-4 {
-        [0.0, 0.0, 0.03]
-    } else {
-        disp
-    };
+    let displacement_xyz = if mag < 1e-4 { [0.0, 0.0, 0.03] } else { disp };
     plan.steps.push(SkillStep::VerifyMotion(VerifyMotion {
         displacement_xyz,
         bound_m: 0.05,
@@ -368,10 +364,13 @@ mod tests {
             .steps
             .iter()
             .any(|s| matches!(s, SkillStep::Reach { .. })));
-        assert!(plan
-            .steps
-            .iter()
-            .any(|s| matches!(s, SkillStep::ResourceCommand { opening_01: 0.0, .. })));
+        assert!(plan.steps.iter().any(|s| matches!(
+            s,
+            SkillStep::ResourceCommand {
+                opening_01: 0.0,
+                ..
+            }
+        )));
         assert!(plan
             .steps
             .iter()

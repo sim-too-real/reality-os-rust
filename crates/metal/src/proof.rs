@@ -1389,8 +1389,7 @@ mod tests {
         let incomplete =
             MetalProof::from_measured(ok_meta(true), cases, default_unresolved()).unwrap();
         assert_eq!(
-            incomplete.experiment_status,
-            "measured_incomplete_or_failed",
+            incomplete.experiment_status, "measured_incomplete_or_failed",
             "cutoff_live_observed without a VIN-token case is USB-UART death, not cutoff"
         );
         assert!(incomplete.cutoff_live_observed);
@@ -1416,8 +1415,7 @@ mod tests {
         let incomplete =
             MetalProof::from_measured(ok_meta(true), uart_only, default_unresolved()).unwrap();
         assert_eq!(
-            incomplete.experiment_status,
-            "measured_incomplete_or_failed",
+            incomplete.experiment_status, "measured_incomplete_or_failed",
             "a vin_cutoff_live name with only UART tokens must not mint success"
         );
     }

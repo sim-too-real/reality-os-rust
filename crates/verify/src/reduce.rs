@@ -113,8 +113,15 @@ pub fn minimize_manipulation(
     still_fails: impl Fn(&std::collections::BTreeMap<String, f64>) -> bool,
 ) -> MinimalCounterexample {
     let mut reduced = params.clone();
-    for key in ["object.x", "object.y", "object.z", "mass", "friction", "push.distance", "grasp.offset"]
-    {
+    for key in [
+        "object.x",
+        "object.y",
+        "object.z",
+        "mass",
+        "friction",
+        "push.distance",
+        "grasp.offset",
+    ] {
         if let Some(v) = reduced.get(key).copied() {
             for scale in [0.5, 0.25, 0.1] {
                 let mut trial = reduced.clone();
@@ -133,9 +140,7 @@ pub fn minimize_manipulation(
         reduced: reduced.clone(),
         fewer_objects: 0,
         earlier_fail_s: None,
-        narrative: format!(
-            "manipulation seed {seed} reduced to {reduced:?}; robot={robot_id}"
-        ),
+        narrative: format!("manipulation seed {seed} reduced to {reduced:?}; robot={robot_id}"),
         reproducible_from: format!("robot_hash={model_hash} seed={seed}"),
     }
 }

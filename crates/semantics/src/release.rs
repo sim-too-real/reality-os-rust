@@ -64,8 +64,7 @@ pub fn compile_release(
     if resource.command_range.value.is_none() {
         return Err(SkillRefuse::ModelFeatureUnsupported);
     }
-    let resource_ok = resource.qualification
-        == crate::resource::QualificationStatus::Qualified;
+    let resource_ok = resource.qualification == crate::resource::QualificationStatus::Qualified;
     if !resource_ok
         && !cap_usable(caps, CapName::GripperOpenClose)
         && !cap_usable(caps, CapName::ParallelGripper)

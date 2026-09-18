@@ -28,12 +28,14 @@ pub fn support_of(
     finger_bodies: &[String],
     now_s: f64,
 ) -> SupportRelation {
-    let on_table = truth.contacts.iter().any(|c| {
-        pair_has(c, object_id, table_names)
-    });
-    let in_fingers = truth.contacts.iter().any(|c| {
-        finger_bodies.iter().any(|f| c.pair_has(object_id, f))
-    });
+    let on_table = truth
+        .contacts
+        .iter()
+        .any(|c| pair_has(c, object_id, table_names));
+    let in_fingers = truth
+        .contacts
+        .iter()
+        .any(|c| finger_bodies.iter().any(|f| c.pair_has(object_id, f)));
     let kind = match (on_table, in_fingers) {
         (true, true) => SupportKind::Shared,
         (true, false) => SupportKind::SupportedBy,
@@ -191,13 +193,20 @@ pub fn verify_grasp(
         evidence.push("object_follows_ee".into());
     }
 
-    let support = support_of(after, object_id, table_names, &resource.finger_bodies, now_s);
+    let support = support_of(
+        after,
+        object_id,
+        table_names,
+        &resource.finger_bodies,
+        now_s,
+    );
     let support_changed = !matches!(support.kind, SupportKind::SupportedBy);
     if support_changed {
         evidence.push("support_relation_change".into());
     }
 
-    let used_enough = finger_contact && (followed || support_changed || opening_01.unwrap_or(1.0) > 0.08);
+    let used_enough =
+        finger_contact && (followed || support_changed || opening_01.unwrap_or(1.0) > 0.08);
     if !used_enough {
         if !finger_contact {
             return fail(ManipulationFailure::Miss, evidence, notes);
@@ -286,10 +295,7 @@ fn fail(f: ManipulationFailure, evidence: Vec<String>, notes: Vec<String>) -> Pr
         failure: Some(f.as_str().into()),
         evidence_used: evidence,
         support: vec![],
-        unexpected_contact: matches!(
-            f,
-            ManipulationFailure::UnexpectedContact
-        ),
+        unexpected_contact: matches!(f, ManipulationFailure::UnexpectedContact),
         force_bound_unavailable: false,
         object_followed: None,
         opening_ok: None,

@@ -65,7 +65,10 @@ pub fn manipulation_holdout_model_dir() -> PathBuf {
 }
 
 pub fn ensure_manipulation_holdout_model() -> Result<Value, String> {
-    fetch_rel(MANIPULATION_HOLDOUT_RELPATH, &manipulation_holdout_model_dir())
+    fetch_rel(
+        MANIPULATION_HOLDOUT_RELPATH,
+        &manipulation_holdout_model_dir(),
+    )
 }
 
 fn fetch_rel(rel: &str, dest: &Path) -> Result<Value, String> {

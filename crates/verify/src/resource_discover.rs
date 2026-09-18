@@ -212,7 +212,11 @@ fn classify(
     )
 }
 
-fn collect_affected(a: &crate::normalize::ActuatorRecord, tendons: &[TendonWrap], out: &mut BTreeSet<String>) {
+fn collect_affected(
+    a: &crate::normalize::ActuatorRecord,
+    tendons: &[TendonWrap],
+    out: &mut BTreeSet<String>,
+) {
     if a.transmission_kind == "tendon" {
         if let Some(t) = tendons.iter().find(|t| t.tendon == a.transmission_target) {
             for (j, _) in &t.joints {
@@ -271,7 +275,9 @@ fn parse_equalities(inspect: &Value) -> Vec<JointEquality> {
 fn body_children(manifest: &RobotManifest) -> HashMap<String, Vec<String>> {
     let mut m = HashMap::new();
     for b in &manifest.bodies {
-        m.entry(b.parent.clone()).or_insert_with(Vec::new).push(b.name.clone());
+        m.entry(b.parent.clone())
+            .or_insert_with(Vec::new)
+            .push(b.name.clone());
     }
     m
 }
@@ -289,4 +295,3 @@ fn subtree_of(root: &str, children: &HashMap<String, Vec<String>>) -> BTreeSet<S
     }
     out
 }
-

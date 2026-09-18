@@ -4,9 +4,7 @@ use crate::bundle::RobotBundle;
 use crate::mujoco_exec::MujocoInstance;
 use crate::normalize::RobotManifest;
 use crate::runner::load_and_normalize;
-use realityos_semantics::resource::{
-    ControlledResource, QualificationStatus, ResourceTopology,
-};
+use realityos_semantics::resource::{ControlledResource, QualificationStatus, ResourceTopology};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -110,7 +108,10 @@ pub fn qualify_on(
             js.iter().sum::<f64>() / js.len() as f64
         };
         let mut pts = Vec::new();
-        if let Some(xpos) = st.get("state").and_then(|s| s.get("xpos")).and_then(|v| v.as_object())
+        if let Some(xpos) = st
+            .get("state")
+            .and_then(|s| s.get("xpos"))
+            .and_then(|v| v.as_object())
         {
             for name in &resource.finger_bodies {
                 if let Some(p) = xpos.get(name).and_then(|v| v.as_array()) {
@@ -135,7 +136,10 @@ pub fn qualify_on(
             0.0
         };
         let cmd = if let Ok(peek) = inst.peek_ctrl() {
-            act_idx.first().and_then(|i| peek.0.get(*i).copied()).unwrap_or(0.0)
+            act_idx
+                .first()
+                .and_then(|i| peek.0.get(*i).copied())
+                .unwrap_or(0.0)
         } else {
             0.0
         };
@@ -150,7 +154,10 @@ pub fn qualify_on(
                 if act_idx.contains(&i) {
                     continue;
                 }
-                if let Some(j) = manifest.joints.iter().find(|j| j.name == a.transmission_target)
+                if let Some(j) = manifest
+                    .joints
+                    .iter()
+                    .find(|j| j.name == a.transmission_target)
                 {
                     if let Some(v) = q.get(j.qpos_address as usize) {
                         if i < ctrl.len() {
@@ -216,7 +223,9 @@ pub fn qualify_on(
     let repeatable = (q_open2 - q_open).abs() < 0.2 * (q_open - q_close).abs().max(1e-4);
     let coupling_ok = if j_open.len() >= 2 {
         let d: Vec<f64> = j_open.iter().zip(j0.iter()).map(|(a, b)| a - b).collect();
-        d.windows(2).all(|w| (w[0] - w[1]).abs() < 0.15 || w[0].signum() == w[1].signum() || w[0].abs() < 1e-4)
+        d.windows(2).all(|w| {
+            (w[0] - w[1]).abs() < 0.15 || w[0].signum() == w[1].signum() || w[0].abs() < 1e-4
+        })
     } else {
         true
     };
@@ -224,7 +233,8 @@ pub fn qualify_on(
         detail.push("coupled joint motion mismatch".into());
     }
     let actuator_saturation = (q_sat - q_open).abs() < (q_open - q_close).abs().max(1e-3) + 0.05;
-    let hold_behavior = (hold_after - hold_before).abs() < (q_open - q_close).abs().max(1e-3) * 0.5 + 0.01;
+    let hold_behavior =
+        (hold_after - hold_before).abs() < (q_open - q_close).abs().max(1e-3) * 0.5 + 0.01;
 
     let _ = inst.reset(None, None);
     drive(inst, hi)?;

@@ -2,11 +2,12 @@
 
 use crate::bundle::RobotBundle;
 use crate::manipulation::{
-    run_grasp_matrix, run_push_matrix, run_release_matrix, write_phase_b_evidence, ManipulationMetrics,
+    run_grasp_matrix, run_push_matrix, run_release_matrix, write_phase_b_evidence,
+    ManipulationMetrics,
 };
 use crate::menagerie::{
-    ensure_manipulation_holdout_model, manipulation_holdout_bundle_dir, manipulation_holdout_model_dir,
-    MENAGERIE_REPO, MENAGERIE_SHA,
+    ensure_manipulation_holdout_model, manipulation_holdout_bundle_dir,
+    manipulation_holdout_model_dir, MENAGERIE_REPO, MENAGERIE_SHA,
 };
 use crate::resource_discover::discover_resources;
 use crate::runner::load_and_normalize;
@@ -219,10 +220,13 @@ pub fn run_manipulation_holdout_first_score(
         robot_id: bundle.manifest.robot_id,
         model_hash: manifest.model_hash,
         provenance,
-        resource_discovery: json!(discovered.iter().map(|r| json!({
-            "id": r.id, "topology": r.topology, "actuators": r.actuator_inputs,
-            "joints": r.affected_joints, "unsupported": r.unsupported_detail
-        })).collect::<Vec<_>>()),
+        resource_discovery: json!(discovered
+            .iter()
+            .map(|r| json!({
+                "id": r.id, "topology": r.topology, "actuators": r.actuator_inputs,
+                "joints": r.affected_joints, "unsupported": r.unsupported_detail
+            }))
+            .collect::<Vec<_>>()),
         resource_qualification: json!({}),
         release: json!({"n": rel.len(), "metrics": rel_m}),
         grasp: json!({"n": gr.len(), "metrics": gr_m}),
@@ -234,7 +238,10 @@ pub fn run_manipulation_holdout_first_score(
     })
 }
 
-pub fn write_holdout_score(score: &ManipulationHoldoutFirstScore, out_dir: &Path) -> Result<(), String> {
+pub fn write_holdout_score(
+    score: &ManipulationHoldoutFirstScore,
+    out_dir: &Path,
+) -> Result<(), String> {
     std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(score).map_err(|e| e.to_string())?;
     std::fs::write(out_dir.join("manipulation_holdout_first_score.json"), json)
@@ -250,7 +257,10 @@ mod tests {
 
     #[test]
     fn holdout_is_gated_on_freeze_sha() {
-        if std::env::var("MANIPULATION_V1_FREEZE_SHA").unwrap_or_default().is_empty() {
+        if std::env::var("MANIPULATION_V1_FREEZE_SHA")
+            .unwrap_or_default()
+            .is_empty()
+        {
             return;
         }
         if !ensure_mujoco_or_skip() {

@@ -55,7 +55,9 @@ pub struct ManipulationScenario {
 
 pub fn is_planar_model(joint_axes: &[[f64; 3]]) -> bool {
     !joint_axes.is_empty()
-        && joint_axes.iter().all(|a| a[0].abs() < 0.2 && a[1].abs() < 0.2 && a[2].abs() > 0.8)
+        && joint_axes
+            .iter()
+            .all(|a| a[0].abs() < 0.2 && a[1].abs() < 0.2 && a[2].abs() > 0.8)
 }
 
 /// Planarity of the *arm*, not the gripper. Slide finger joints have lateral
@@ -207,7 +209,15 @@ pub fn grasp_scenario(seed: u64, planar: bool, idx: usize) -> ManipulationScenar
             idx,
         );
     }
-    let mut objects = vec![object_json("obj0", geom, [x, y, z], size, mass, friction, true)];
+    let mut objects = vec![object_json(
+        "obj0",
+        geom,
+        [x, y, z],
+        size,
+        mass,
+        friction,
+        true,
+    )];
     if planar {
         objects.insert(
             0,
@@ -219,7 +229,10 @@ pub fn grasp_scenario(seed: u64, planar: bool, idx: usize) -> ManipulationScenar
             json!({"name":"table","type":"box","pos":[0.45,0.0,0.40],"size":[0.25,0.25,0.02],"mass":20.0,"movable":false,"rgba":[0.45,0.4,0.35,1]}),
         );
     }
-    if matches!(neg, Some(NegKind::UnexpectedContact) | Some(NegKind::BlockedGrasp)) {
+    if matches!(
+        neg,
+        Some(NegKind::UnexpectedContact) | Some(NegKind::BlockedGrasp)
+    ) {
         objects.push(json!({
             "name":"obstacle",
             "type":"box",
@@ -303,9 +316,17 @@ pub fn push_scenario(seed: u64, planar: bool, idx: usize) -> ManipulationScenari
     };
     let size = rng.gen_range(0.02..0.04);
     let (x, y, z) = if planar {
-        (rng.gen_range(0.20..0.30), rng.gen_range(-0.03..0.03), 0.12 + size)
+        (
+            rng.gen_range(0.20..0.30),
+            rng.gen_range(-0.03..0.03),
+            0.12 + size,
+        )
     } else {
-        (rng.gen_range(0.40..0.55), rng.gen_range(-0.10..0.10), 0.42 + size)
+        (
+            rng.gen_range(0.40..0.55),
+            rng.gen_range(-0.10..0.10),
+            0.42 + size,
+        )
     };
     let dir = if planar {
         [1.0, 0.0, 0.0]
@@ -355,7 +376,15 @@ fn scenario_with_object(
     neg: Option<NegKind>,
     _idx: usize,
 ) -> ManipulationScenario {
-    let mut objects = vec![object_json("obj0", geom, pos, size, mass, friction, mass < 20.0)];
+    let mut objects = vec![object_json(
+        "obj0",
+        geom,
+        pos,
+        size,
+        mass,
+        friction,
+        mass < 20.0,
+    )];
     objects.insert(
         0,
         if planar {

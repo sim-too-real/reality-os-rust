@@ -103,7 +103,10 @@ pub fn compile_push(
     let cartesian_ok = cap_usable(caps, CapName::CartesianPositionControl);
     let joint_ok = cap_usable(caps, CapName::JointPositionControl);
     let chain_ok = model.ee_joint_chain(ee).is_some_and(|c| !c.is_empty())
-        || model.end_effectors.iter().any(|e| !e.joint_chain.is_empty());
+        || model
+            .end_effectors
+            .iter()
+            .any(|e| !e.joint_chain.is_empty());
     if !(cartesian_ok || (joint_ok && chain_ok)) {
         if model.position_actuators().next().is_none() {
             return Err(SkillRefuse::MissingActuator);
@@ -125,10 +128,10 @@ pub fn compile_push(
 
     let contact_id = InteractionFrameKind::PushContact.frame_id(&candidate.object_id);
     let approach_id = InteractionFrameKind::Approach.frame_id(&candidate.object_id);
-    let contact = world_pose_of(transforms, &contact_id, now_s, freshness_s)
-        .unwrap_or(candidate.contact);
-    let approach = world_pose_of(transforms, &approach_id, now_s, freshness_s)
-        .unwrap_or(candidate.approach);
+    let contact =
+        world_pose_of(transforms, &contact_id, now_s, freshness_s).unwrap_or(candidate.contact);
+    let approach =
+        world_pose_of(transforms, &approach_id, now_s, freshness_s).unwrap_or(candidate.approach);
     let n = (candidate.direction[0].powi(2)
         + candidate.direction[1].powi(2)
         + candidate.direction[2].powi(2))
