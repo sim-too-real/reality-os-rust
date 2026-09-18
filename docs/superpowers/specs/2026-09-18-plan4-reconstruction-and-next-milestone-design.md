@@ -108,13 +108,13 @@ Cargo is acyclic. Conceptual cycles exist: governor **does** import `CertifiedCo
 ## 4. Weaknesses (ranked)
 
 1. **No measured physical evidence.** Gate E not started on hardware. This is the credibility bottleneck.
-2. **Untrusted production `recover` is operator ack** and `EstopLatch::clear` wipes `abort_latched`. Reproduced P0 on the research branch; **unpatched on main**. New `command_id` can write after unknown_outcome or replay latch. Spent IDs remain spent.
+2. **Untrusted production `recover` is still an ESTOP-ack analog** (NAMED_HOLE: no authenticated operator channel). Software latch on PATCHED `709a079` refuses integrity recover before `Plant::clear_estop`. PRE-FIX `2f68a5d` is intentionally vulnerable and retained only as the frozen pre-fix physical baseline. UART / real XL330 still **not measured**.
 3. **`abort_latched` / `unknown_outcome` are not rehydrated from journal.** A crash after unknown can authorize a new id on restart without recover.
 4. **Two products glued by verify.** Semantics/manipulation are a SIM research OS. Metal is verb+action. An external roboticist cannot add a robot without both internals (Gate J fail).
 5. **Policy is scored on privileged sim truth.** `graph_from_truth`, `PerfectPerception`, candidate fallback. Grasp “acquisition” OR-chain (panda 220 acq vs 12 verified holds).
 6. **wx250s manipulation hold-out failed at resource + approach**, not at authority (`MANIPULATION GENERALIZATION LIMIT FOUND`: release 0/20, grasp 2/20, push task 0/20).
 7. **Error strings are the authority protocol.** Ledger phrases ↔ `LATCHING_PREFIXES` ↔ metal `op: String`. `ViolationCode` is unused on the wire.
-8. **CI jobs on `c82c78c` / `2f68a5d` complete in ~2s with empty steps and no runner.** Workflow/runner failure, not a demonstrated test failure. `authority.yml` verify job still uses `@stable` while MuJoCo job pins `1.95.0`.
+8. **CI jobs on recent private-repo SHAs complete in ~2s with empty steps and `runner_id: 0`.** Last hosted-runner success: 2026-09-10 (`9806282`, authority verify ran checkout/toolchain/fmt/clippy/test). Not a demonstrated Rust test failure. Root cause is GitHub-hosted runner assignment on this private account (Actions enabled; no self-hosted runners), not workflow step deletion.
 9. **Windows cannot build default-members** (unix-only metal/hil/vport).
 10. **`screen_proposal` is telemetry.** A numeric proposal that passes envelope becomes `IssuedCommand`. Metal always labels autonomy as operator.
 

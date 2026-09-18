@@ -9,6 +9,18 @@
 > **Plan5 correction (do not implement the Task 1 `AbortClass` sketch as written).**
 > `AbortClass { None, Estop, Integrity }` with `engage() -> Estop` can overwrite Integrity and re-open recover. That violates invariant A1 (`None < RecoverableEstop < IntegrityAbort`; transitions may move right, not left). Do not special-case the reason string `"unknown_outcome"`. Production `op=recover` remains an untrusted ESTOP-ack analog, not authenticated operator recovery.
 
+**Status (plan6, do not rewrite history):**
+
+| Token | Value |
+|---|---|
+| PRE-FIX BASELINE | `2f68a5d82fec5e7e2c0b78ca88fe65d8a8a4acfc` — intentionally vulnerable to the known recover-integrity bug; retained only as the frozen pre-fix physical baseline |
+| PATCHED SOFTWARE | `709a0793fcf5e1706b059c27f1ed5a8dba0ca1f1` (and descendants) — candidate for post-fix physical authority evidence |
+| LINUX PTY STATUS | pending on this Windows host; composition tests committed (`xl330_pty_untrusted_recover_after_replay_does_not_write`, `xl330_pty_recover_after_integrity_then_watchdog_does_not_write`) |
+| REAL XL330 STATUS | not measured |
+| AUTHENTICATED OPERATOR RECOVERY | NAMED_HOLE |
+
+Task 1's `AbortClass` code block below is a **rejected sketch**, kept as historical plan text. Landed code uses independent facts.
+
 **Tech Stack:** Rust 1.95.0 workspace; `realityos-governor` + `realityos-metal` PTY tests on Linux; existing `SimPlant` ONLINE helpers in `crates/governor/src/lib.rs`.
 
 ## Global Constraints
@@ -427,6 +439,6 @@ git commit -m "docs: production recover is ESTOP ack, not integrity unlatch"
 
 1. **Spec coverage:** Immediate metal milestone is Part 0 (no code). Recover ESTOP-vs-integrity is Tasks 1–4. Privileged perception, WorldState, HAL, PLACE are out of scope.
 2. **Placeholders:** none. Helpers (`online_gov`, `decide_hold`, `recover_req`) exist in the cited files; metal serve helper names must be copied from `xl330_pty.rs` at execution time if they differ.
-3. **Types:** `is_integrity_abort`, `AbortClass`, `latch_abort("unknown_outcome")` used consistently.
+3. **Types (landed):** independent `engaged` + `integrity_aborted` facts; `EstopLatch::latch_abort` is the only integrity API; recover token `integrity_abort_requires_online_restart`. The Task 1 `AbortClass` sketch is **rejected** (plan5 A1) and is not the current design.
 
 **Do not execute Part 1–4 on `main` or on `2f68a5d` without an explicit operator choice to work in a research worktree.**

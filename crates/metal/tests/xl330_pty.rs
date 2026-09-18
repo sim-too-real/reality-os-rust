@@ -1216,9 +1216,8 @@ fn xl330_pty_reboots_when_torque_off_present_is_negative_multi_turn() {
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_PRESENT_NEGATIVE", "1")]);
     let root = metal_test_root("pty-present-negative");
     let cfg = MetalConfig::example(&tty);
-    let mut driver = Xl330Driver::open(cfg, &root).expect(
-        "torque-off Present −16 must reboot-wrap into 0..=4095, not refuse first contact",
-    );
+    let mut driver = Xl330Driver::open(cfg, &root)
+        .expect("torque-off Present −16 must reboot-wrap into 0..=4095, not refuse first contact");
     assert_eq!(
         driver.startup_present(),
         4080,
@@ -1986,6 +1985,80 @@ fn xl330_pty_same_command_id_is_not_a_second_write() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Composition: autonomy IPC → MetalAuthority → replay integrity abort →
+/// `op=recover` → fresh command_id. Recover must refuse before a new write.
+#[test]
+fn xl330_pty_untrusted_recover_after_replay_does_not_write() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder();
+    let root = metal_test_root("recover-replay");
+    bind_pty_cfg(&root, &tty);
+    let mut auth = MetalAuthority::start(&root, true).expect("start_online");
+    let first = auth.handle(MetalRequest::propose("rt-hold", "hold"));
+    assert!(first.ok, "first hold must write: {first:?}");
+    let writes = auth.physical_writes();
+    let replay = auth.handle(MetalRequest::propose("rt-hold", "hold"));
+    assert!(!replay.ok, "replay must refuse: {replay:?}");
+    assert!(
+        replay
+            .violations
+            .iter()
+            .any(|v| v.contains("replayed command_id") || v.contains("abort_latched")),
+        "replay must be an integrity-class refuse: {replay:?}"
+    );
+    let rec = auth.handle(recover_req("rt-rec"));
+    assert!(!rec.ok, "integrity recover must refuse: {rec:?}");
+    assert!(
+        rec.violations.iter().any(
+            |v| v == "integrity_abort_requires_online_restart" || v.contains("integrity_abort")
+        ),
+        "recover must surface integrity_abort_requires_online_restart: {rec:?}"
+    );
+    assert_eq!(
+        auth.physical_writes(),
+        writes,
+        "recover must not add physical writes"
+    );
+    let second = auth.handle(MetalRequest::propose("rt-hold-2", "hold"));
+    assert!(
+        !second.ok,
+        "fresh command_id must not write after untrusted recover: {second:?}"
+    );
+    assert_eq!(auth.physical_writes(), writes);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Integrity abort then a later watchdog ESTOP must not make recover writable.
+#[test]
+fn xl330_pty_recover_after_integrity_then_watchdog_does_not_write() {
+    let _serial = pty_serial();
+    let (_guard, tty) = spawn_responder();
+    let root = metal_test_root("recover-downgrade");
+    bind_pty_cfg(&root, &tty);
+    let mut auth = MetalAuthority::start(&root, true).expect("start_online");
+    let first = auth.handle(MetalRequest::propose("rt-dg-hold", "hold"));
+    assert!(first.ok, "first hold: {first:?}");
+    let writes = auth.physical_writes();
+    let replay = auth.handle(MetalRequest::propose("rt-dg-hold", "hold"));
+    assert!(!replay.ok, "replay: {replay:?}");
+    // ONLINE software watchdog misses at 100 ms. The next handle() pets it
+    // and engages ESTOP without clearing integrity.
+    std::thread::sleep(Duration::from_millis(150));
+    let rec = auth.handle(recover_req("rt-dg-rec"));
+    assert!(
+        !rec.ok,
+        "recover after integrity+watchdog must refuse: {rec:?}"
+    );
+    assert_eq!(auth.physical_writes(), writes);
+    let second = auth.handle(MetalRequest::propose("rt-dg-hold-2", "hold"));
+    assert!(
+        !second.ok,
+        "fresh id must not write after integrity then ESTOP: {second:?}"
+    );
+    assert_eq!(auth.physical_writes(), writes);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 fn recover_req(id: &str) -> MetalRequest {
     let mut r = MetalRequest::propose(id, "hold");
     r.op = "recover".into();
@@ -2414,8 +2487,10 @@ fn xl330_pty_restart_after_bus_loss_estop_needs_recover() {
         let lost = auth.handle(MetalRequest::propose("pty-estop-lost", "hold"));
         assert!(!lost.ok, "forced I/O loss must refuse: {lost:?}");
         assert!(
-            lost.violations.iter().any(|v| v.contains("driver not connected")
-                || v.contains("online_hardware_disconnected")),
+            lost.violations
+                .iter()
+                .any(|v| v.contains("driver not connected")
+                    || v.contains("online_hardware_disconnected")),
             "I/O loss must journal ESTOP, not a vacuous miss: {lost:?}"
         );
         let rec = auth.handle(recover_req("pty-estop-same"));
@@ -2430,8 +2505,7 @@ fn xl330_pty_restart_after_bus_loss_estop_needs_recover() {
     std::fs::remove_file(root.join("bus/force_io_loss")).unwrap();
 
     {
-        let mut auth =
-            MetalAuthority::start(&root, false).expect("restart after bus-loss ESTOP");
+        let mut auth = MetalAuthority::start(&root, false).expect("restart after bus-loss ESTOP");
         let blocked = auth.handle(MetalRequest::propose("pty-estop-hold2", "hold"));
         assert!(
             !blocked.ok
@@ -2442,10 +2516,7 @@ fn xl330_pty_restart_after_bus_loss_estop_needs_recover() {
             "continuity must re-apply journal ESTOP until recover: {blocked:?}"
         );
         let rec = auth.handle(recover_req("pty-estop-restart"));
-        assert!(
-            rec.ok,
-            "new instance recover is the operator ack: {rec:?}"
-        );
+        assert!(rec.ok, "new instance recover is the operator ack: {rec:?}");
         let hold = auth.handle(MetalRequest::propose("pty-estop-hold3", "hold"));
         assert!(
             hold.ok,

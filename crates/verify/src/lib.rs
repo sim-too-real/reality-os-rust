@@ -10,6 +10,7 @@ pub mod evidence;
 pub mod external_generality;
 pub mod external_holdout;
 pub mod external_holdout_v2;
+pub mod failure_diagnosis;
 pub mod families;
 pub mod fk_oracle;
 pub mod format;
