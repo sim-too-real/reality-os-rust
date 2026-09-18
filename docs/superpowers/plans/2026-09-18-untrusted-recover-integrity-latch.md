@@ -15,7 +15,7 @@
 |---|---|
 | PRE-FIX BASELINE | `2f68a5d82fec5e7e2c0b78ca88fe65d8a8a4acfc` — intentionally vulnerable to the known recover-integrity bug; retained only as the frozen pre-fix physical baseline |
 | PATCHED SOFTWARE | `709a0793fcf5e1706b059c27f1ed5a8dba0ca1f1` (and descendants) — candidate for post-fix physical authority evidence |
-| LINUX PTY STATUS | pending on this Windows host; composition tests committed (`xl330_pty_untrusted_recover_after_replay_does_not_write`, `xl330_pty_recover_after_integrity_then_watchdog_does_not_write`) |
+| LINUX PTY STATUS | passed on GitHub Actions Linux (`35322120250` test-metal: `xl330_pty_untrusted_recover_after_replay_does_not_write`, `xl330_pty_recover_after_integrity_then_watchdog_does_not_write`). Not metal. |
 | REAL XL330 STATUS | not measured |
 | AUTHENTICATED OPERATOR RECOVERY | NAMED_HOLE |
 

@@ -15,7 +15,7 @@ Remaining concrete defects / holes (not latch redesign):
 
 ## 2. Linux PTY status
 
-**pending** on Windows (`ENVIRONMENT_SETUP_FAILURE`: `std::os::unix`).
+**passed** on GitHub-hosted Linux (Actions run [35322120250](https://github.com/sim-too-real/reality-os-rust/actions/runs/35322120250), `test-metal` 102 passed including the two recover composition tests). Still **pending/unrunnable** as a local Windows compile (`std::os::unix`). Local PTY is not metal.
 
 Committed tests in `crates/metal/tests/xl330_pty.rs`:
 
@@ -45,7 +45,7 @@ Fix that this agent can apply: none that restores hosted runners without billing
 
 This branch `a5bf5f4` authority run [35321428196](https://github.com/sim-too-real/reality-os-rust/actions/runs/35321428196) job `verify` (`105524570417`): `runner_id: 0`, logs 404, ~9s. Same failure mode.
 
-Until a new run shows non-empty steps, Linux execution evidence for *this* SHA remains **blocking / unverifiable** at the Actions oracle (local `cargo test` is not a substitute).
+**Fix that restored runners:** the repository was private and GitHub-hosted jobs completed with `runner_id: 0`. Setting visibility to **public** made standard hosted minutes available. Re-run [35322120250](https://github.com/sim-too-real/reality-os-rust/actions/runs/35322120250) job `verify` (`105526744855`, `runner_id=1000006152`) executed checkout, `dtolnay/rust-toolchain@1.95.0`, fmt, clippy, `test-metal` (including `xl330_pty_untrusted_recover_after_replay_does_not_write` and `xl330_pty_recover_after_integrity_then_watchdog_does_not_write`), and workspace `test` — all success. `verify-mujoco` also succeeded.
 
 ## 5. Physical campaign readiness
 
