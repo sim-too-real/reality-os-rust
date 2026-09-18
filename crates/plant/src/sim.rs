@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::caps::{check_hard_action_bounds, ActionParams, PlantCaps, PlantRealized};
@@ -13,6 +14,8 @@ pub struct SimPlant {
     estop: bool,
     last_action: Vec<f64>,
     writes: u32,
+    clear_estop_calls: AtomicU32,
+    fail_next_act: Arc<AtomicBool>,
     backend: Option<crate::dynamics::BoxBackend>,
     production: bool,
     production_key_hash: Option<String>,
@@ -28,6 +31,8 @@ impl SimPlant {
             estop: false,
             last_action: vec![0.0; action_dim.max(1)],
             writes: 0,
+            clear_estop_calls: AtomicU32::new(0),
+            fail_next_act: Arc::new(AtomicBool::new(false)),
             backend: None,
             production: false,
             production_key_hash: None,
@@ -80,6 +85,16 @@ impl SimPlant {
     pub fn replace_measured_identity(&mut self, id: HardwareIdentity) {
         let _ = self.bind_measured_identity(id);
     }
+
+    /// Invocation count of [`Plant::clear_estop`], including refused acks.
+    pub fn clear_estop_count(&self) -> u32 {
+        self.clear_estop_calls.load(Ordering::SeqCst)
+    }
+
+    /// Test tripwire: next certified `act` returns [`PlantError::UnknownOutcome`].
+    pub fn fail_next_act_handle(&self) -> Arc<AtomicBool> {
+        self.fail_next_act.clone()
+    }
 }
 
 impl Plant for SimPlant {
@@ -93,6 +108,9 @@ impl Plant for SimPlant {
 
     fn act(&mut self, action: &[f64], _params: &ActionParams) -> PlantResult<PlantRealized> {
         refuse_uncertified_online_write(self, "act")?;
+        if self.fail_next_act.swap(false, Ordering::SeqCst) {
+            return Err(PlantError::UnknownOutcome);
+        }
         if self.estop {
             return Err(PlantError::EstopEngaged);
         }
@@ -123,6 +141,7 @@ impl Plant for SimPlant {
     }
 
     fn clear_estop(&mut self, operator_ack: bool) -> PlantResult<()> {
+        self.clear_estop_calls.fetch_add(1, Ordering::SeqCst);
         if self.online && !operator_ack {
             return Err(PlantError::OperatorAckRequired);
         }

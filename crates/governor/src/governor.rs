@@ -293,6 +293,10 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
         self.latch.abort_latched
     }
 
+    pub fn integrity_aborted(&self) -> bool {
+        self.latch.is_integrity_abort()
+    }
+
     fn watchdog_tick_at(&mut self, now_s: f64) -> RuntimeTrace {
         if !now_s.is_finite() {
             return self.engage_estop_at("watchdog_non_finite_time", 0.0);
@@ -444,6 +448,15 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
             return self.emit(
                 RuntimeTrace::new(false, "recovery_refused", now_s)
                     .with_violations(vec!["hardware_session_requires_online_restart".into()]),
+            );
+        }
+        // Production `op=recover` is an ESTOP-ack analog from untrusted autonomy
+        // IPC, not an authenticated operator channel. Integrity abort is not
+        // recoverable on this ONLINE instance: refuse before any plant I/O.
+        if self.latch.is_integrity_abort() {
+            return self.emit(
+                RuntimeTrace::new(false, "recovery_refused", now_s)
+                    .with_violations(vec!["integrity_abort_requires_online_restart".into()]),
             );
         }
         if !operator_ack {
@@ -604,10 +617,9 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
         if !pre.is_empty() {
             if pre
                 .iter()
-                .any(|e| e.contains("release_hash") || e.contains("estop") || e == "time_rollback")
+                .any(|e| e.contains("release_hash") || e == "time_rollback")
             {
-                self.latch.abort_latched = true;
-                self.latch.reason = Some(pre[0].clone());
+                self.latch.latch_abort(pre[0].clone());
             }
             return self.emit(
                 RuntimeTrace::new(false, "driver_write_refused", now_s)
@@ -645,8 +657,7 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
         self.last_now_s = now_s;
         let ok = result.ok && result.executed;
         if result.outcome == realityos_kernel::CommandOutcome::Unknown {
-            self.latch.abort_latched = true;
-            self.latch.reason = Some("unknown_outcome".into());
+            self.latch.latch_abort("unknown_outcome");
             return self.emit(
                 RuntimeTrace::new(false, "driver_write_unknown", now_s)
                     .with_command(result.command_id)
@@ -659,8 +670,7 @@ impl<P: Plant, R: Rail> RuntimeGovernor<P, R> {
                 .iter()
                 .any(|v| LATCHING_PREFIXES.iter().any(|p| v.starts_with(p)))
         {
-            self.latch.abort_latched = true;
-            self.latch.reason = Some(result.violations.join(","));
+            self.latch.latch_abort(result.violations.join(","));
         }
         self.emit(
             RuntimeTrace::new(

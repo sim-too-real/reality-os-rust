@@ -281,7 +281,7 @@ Dependency: 12 (metal) does not depend on 13.1. 13.1 must not merge into the tre
 
 **Evidence:** `crates/metal/src/authority.rs:214-222`; `crates/governor/src/latch.rs:110-114`; `crates/governor/src/governor.rs:647-664`; research `docs/research/adversarial-v1/red_team.md`; campaign `scripts/metal-campaign.sh:1919-1926`.
 
-**New abstraction:** distinguish **ESTOP** (`engaged`, recoverable by recover on a live session that is not `hardware_session_dead` / `bus_lost`) from **integrity abort** (`abort_latched` with reason in `LATCHING_PREFIXES` or `unknown_outcome`, not cleared by production recover). Do not add a new crate.
+**New abstraction:** distinguish **ESTOP** (`engaged`, recoverable by recover on a live session that is not `hardware_session_dead` / `bus_lost`) from **integrity abort** (independent `integrity_aborted` fact set only through `latch_abort()`, covering unknown physical outcome, replay/`LATCHING_PREFIXES`, release/binding mismatch, time rollback, and existing identity/journal continuity integrity). Do **not** encode this as a single `AbortClass` enum whose `engage()` assignment can overwrite Integrity. Recover must refuse with `integrity_abort_requires_online_restart` **before** `Plant::clear_estop`. Do not add a new crate. Production `op=recover` is still an untrusted ESTOP-ack analog.
 
 **Why more general:** operator ack is a role, not a JSON op available to every IPC peer. Matches HIL production (already refuses recover) and `PHILOSOPHY.md` (“integrity failures do latch”).
 

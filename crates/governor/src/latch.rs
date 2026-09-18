@@ -92,6 +92,9 @@ impl SafeStateLatch {
 pub struct EstopLatch {
     pub engaged: bool,
     pub abort_latched: bool,
+    /// Independent of [`Self::engaged`]. Once true on this ONLINE instance,
+    /// `engage()` / recover / `clear()` must not make it false.
+    integrity_aborted: bool,
     pub reason: Option<String>,
 }
 
@@ -99,17 +102,88 @@ impl EstopLatch {
     pub fn engage(&mut self, reason: impl Into<String>) {
         self.engaged = true;
         self.abort_latched = true;
-        self.reason = Some(reason.into());
+        // Watchdog / ESTOP must not downgrade an integrity abort into a
+        // recoverable ESTOP by overwriting the stronger fact or its reason.
+        if !self.integrity_aborted {
+            self.reason = Some(reason.into());
+        }
     }
 
     pub fn latch_abort(&mut self, reason: impl Into<String>) {
+        self.integrity_aborted = true;
         self.abort_latched = true;
         self.reason = Some(reason.into());
     }
 
+    pub fn is_integrity_abort(&self) -> bool {
+        self.integrity_aborted
+    }
+
     pub fn clear(&mut self) {
         self.engaged = false;
+        if self.integrity_aborted {
+            self.abort_latched = true;
+            return;
+        }
         self.abort_latched = false;
         self.reason = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EstopLatch;
+
+    #[test]
+    fn recover_clears_estop_including_abort_latched() {
+        let mut l = EstopLatch::default();
+        l.engage("operator_estop");
+        assert!(l.engaged);
+        assert!(l.abort_latched);
+        assert!(!l.is_integrity_abort());
+        l.clear();
+        assert!(!l.engaged);
+        assert!(!l.abort_latched);
+        assert!(!l.is_integrity_abort());
+        assert!(l.reason.is_none());
+    }
+
+    #[test]
+    fn recover_does_not_clear_integrity_abort() {
+        let mut l = EstopLatch::default();
+        l.latch_abort("unknown_outcome");
+        assert!(!l.engaged);
+        assert!(l.abort_latched);
+        assert!(l.is_integrity_abort());
+        l.clear();
+        assert!(!l.engaged);
+        assert!(l.abort_latched);
+        assert_eq!(l.reason.as_deref(), Some("unknown_outcome"));
+        assert!(l.is_integrity_abort());
+    }
+
+    #[test]
+    fn engage_does_not_downgrade_integrity_abort() {
+        let mut l = EstopLatch::default();
+        l.latch_abort("replayed command_id");
+        l.engage("software_watchdog_miss");
+        assert!(l.engaged);
+        assert!(l.is_integrity_abort());
+        l.clear();
+        assert!(l.is_integrity_abort());
+        assert!(l.abort_latched);
+    }
+
+    #[test]
+    fn integrity_is_not_a_reason_string_special_case() {
+        let mut a = EstopLatch::default();
+        a.latch_abort("time_rollback");
+        assert!(a.is_integrity_abort());
+        let mut b = EstopLatch::default();
+        b.latch_abort("identity_continuity_firmware_mismatch");
+        assert!(b.is_integrity_abort());
+        let mut c = EstopLatch::default();
+        c.engage("operator_estop");
+        assert!(!c.is_integrity_abort());
     }
 }

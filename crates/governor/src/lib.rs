@@ -762,4 +762,244 @@ mod tests {
             g.last_sensor_s()
         );
     }
+
+    fn assert_fresh_command_does_not_execute(
+        g: &mut RuntimeGovernor<SimPlant, OnlineLocked>,
+        seq: i64,
+        now_s: f64,
+        writes_before: u32,
+    ) {
+        use realityos_plant::ActionParams;
+        if let Ok(write) = g.authorize_issued(decide_hold(seq, now_s)) {
+            let t = g.write_online(&write, &ActionParams::empty(), now_s);
+            assert!(
+                !t.ok,
+                "fresh command_id must not execute after integrity abort: {t:?}"
+            );
+        }
+        assert_eq!(
+            g.plant().write_count(),
+            writes_before,
+            "fresh command_id produced physical writes"
+        );
+    }
+
+    fn assert_recover_refused_integrity(
+        rec: &RuntimeTrace,
+        clears_before: u32,
+        g: &RuntimeGovernor<SimPlant, OnlineLocked>,
+    ) {
+        assert!(!rec.ok, "integrity recover must refuse: {rec:?}");
+        assert_eq!(rec.event, "recovery_refused");
+        assert!(
+            rec.violations
+                .iter()
+                .any(|v| v == "integrity_abort_requires_online_restart"),
+            "missing integrity_abort_requires_online_restart: {rec:?}"
+        );
+        assert!(
+            g.integrity_aborted(),
+            "integrity must stay latched: {rec:?}"
+        );
+        assert_eq!(
+            g.plant().clear_estop_count(),
+            clears_before,
+            "Plant::clear_estop must not be invoked on integrity recover"
+        );
+    }
+
+    #[test]
+    fn recover_after_ordinary_estop_clears_and_allows_new_command() {
+        use realityos_plant::ActionParams;
+        let mut g = online_gov(
+            "rec-estop",
+            online_identity(),
+            b"online-cap-key",
+            vec!["joint-0".into()],
+        );
+        let _ = g.engage_estop_now("operator_estop");
+        assert!(g.estop());
+        assert!(g.abort_latched());
+        assert!(
+            !g.integrity_aborted(),
+            "ordinary ESTOP must not classify as integrity abort"
+        );
+        let clears_before = g.plant().clear_estop_count();
+        let rec = g.clear_estop_requires_recovery_now(true);
+        assert!(rec.ok, "ordinary ESTOP must remain recoverable: {rec:?}");
+        assert_eq!(g.plant().clear_estop_count(), clears_before + 1);
+        assert!(!g.estop());
+        assert!(!g.abort_latched());
+        assert!(!g.integrity_aborted());
+        let write = g
+            .authorize_issued(decide_hold(1, 10.0))
+            .expect("authorize after ESTOP recover");
+        assert!(g.write_online(&write, &ActionParams::empty(), 10.0).ok);
+        assert_eq!(g.plant().write_count(), 1);
+    }
+
+    #[test]
+    fn recover_after_unknown_outcome_refuses_before_clear_estop() {
+        use realityos_plant::ActionParams;
+        use std::sync::atomic::Ordering;
+        let mut g = online_gov(
+            "rec-unk",
+            online_identity(),
+            b"online-cap-key",
+            vec!["joint-0".into()],
+        );
+        g.plant()
+            .fail_next_act_handle()
+            .store(true, Ordering::SeqCst);
+        let write = g.authorize_issued(decide_hold(1, 10.0)).unwrap();
+        let t = g.write_online(&write, &ActionParams::empty(), 10.0);
+        assert!(!t.ok, "injected plant unknown must fail the write: {t:?}");
+        assert_eq!(t.event, "driver_write_unknown");
+        assert!(
+            g.integrity_aborted(),
+            "unknown_outcome must integrity-abort: {t:?}"
+        );
+        assert!(!g.estop());
+        let clears_before = g.plant().clear_estop_count();
+        let writes_before = g.plant().write_count();
+        let rec = g.clear_estop_requires_recovery_now(true);
+        assert_recover_refused_integrity(&rec, clears_before, &g);
+        assert_fresh_command_does_not_execute(&mut g, 2, 10.0, writes_before);
+    }
+
+    #[test]
+    fn recover_after_replay_refuses_and_fresh_id_cannot_execute() {
+        use realityos_plant::ActionParams;
+        let mut g = online_gov(
+            "rec-replay",
+            online_identity(),
+            b"online-cap-key",
+            vec!["joint-0".into()],
+        );
+        let write = g.authorize_issued(decide_hold(1, 10.0)).unwrap();
+        assert!(g.write_online(&write, &ActionParams::empty(), 10.0).ok);
+        let replay = g.write_online(&write, &ActionParams::empty(), 10.1);
+        assert!(!replay.ok);
+        assert!(
+            g.integrity_aborted(),
+            "replay must integrity-latch: {replay:?}"
+        );
+        let clears_before = g.plant().clear_estop_count();
+        let writes_before = g.plant().write_count();
+        assert_eq!(writes_before, 1);
+        let rec = g.clear_estop_requires_recovery_now(true);
+        assert_recover_refused_integrity(&rec, clears_before, &g);
+        assert_eq!(g.plant().write_count(), writes_before);
+        assert_fresh_command_does_not_execute(&mut g, 2, 10.2, writes_before);
+    }
+
+    #[test]
+    fn recover_after_integrity_then_engage_estop_still_refused() {
+        use realityos_plant::ActionParams;
+        use std::sync::atomic::Ordering;
+        let mut g = online_gov(
+            "rec-downgrade",
+            online_identity(),
+            b"online-cap-key",
+            vec!["joint-0".into()],
+        );
+        g.plant()
+            .fail_next_act_handle()
+            .store(true, Ordering::SeqCst);
+        let write = g.authorize_issued(decide_hold(1, 10.0)).unwrap();
+        let unknown = g.write_online(&write, &ActionParams::empty(), 10.0);
+        assert!(!unknown.ok);
+        assert!(g.integrity_aborted());
+        let _ = g.engage_estop_now("software_watchdog_miss");
+        assert!(g.estop());
+        assert!(
+            g.integrity_aborted(),
+            "engage/watchdog must not downgrade integrity abort"
+        );
+        let clears_before = g.plant().clear_estop_count();
+        let writes_before = g.plant().write_count();
+        let rec = g.clear_estop_requires_recovery_now(true);
+        assert_recover_refused_integrity(&rec, clears_before, &g);
+        assert_eq!(g.plant().write_count(), writes_before);
+        assert_fresh_command_does_not_execute(&mut g, 2, 10.0, writes_before);
+    }
+
+    #[test]
+    fn recover_after_time_rollback_integrity_refuses() {
+        use realityos_plant::ActionParams;
+        let mut g = online_gov(
+            "rec-rollback",
+            online_identity(),
+            b"online-cap-key",
+            vec!["joint-0".into()],
+        );
+        let write = g.authorize_issued(decide_hold(1, 10.0)).unwrap();
+        assert!(g.write_online(&write, &ActionParams::empty(), 10.0).ok);
+        let later = g
+            .authorize_issued(decide_hold(2, 10.0))
+            .expect("fresh id before rollback write");
+        let rolled = g.write_online(&later, &ActionParams::empty(), 9.0);
+        assert!(!rolled.ok, "time rollback must refuse: {rolled:?}");
+        assert!(
+            g.integrity_aborted(),
+            "time_rollback must integrity-abort via the same API, not a unknown_outcome string special case: {rolled:?}"
+        );
+        let clears_before = g.plant().clear_estop_count();
+        let writes_before = g.plant().write_count();
+        let rec = g.clear_estop_requires_recovery_now(true);
+        assert_recover_refused_integrity(&rec, clears_before, &g);
+        assert_fresh_command_does_not_execute(&mut g, 3, 10.0, writes_before);
+    }
+
+    #[test]
+    fn journaled_estop_after_restart_still_recovers() {
+        use realityos_plant::ActionParams;
+        let journal = temp_journal("estop-restart");
+        {
+            let mut g = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+                online_identity(),
+                online_plant(&online_identity()),
+                &journal,
+                b"online-cap-key".to_vec(),
+                true,
+                vec!["joint-0".into()],
+                test_clock(10.0),
+            )
+            .unwrap();
+            g.ingest_sensor_packet(SensorPacket::from_samples(vec![("q0".into(), 0.0)], 10.0))
+                .unwrap();
+            let _ = g.engage_estop_now("operator_estop");
+            assert!(g.estop());
+            assert!(!g.integrity_aborted());
+        }
+        let mut g = RuntimeGovernor::<SimPlant, OnlineLocked>::new_online(
+            online_identity(),
+            online_plant(&online_identity()),
+            &journal,
+            b"online-cap-key".to_vec(),
+            false,
+            vec!["joint-0".into()],
+            test_clock(10.0),
+        )
+        .expect("restart with journaled ESTOP must start");
+        g.ingest_sensor_packet(SensorPacket::from_samples(vec![("q0".into(), 0.0)], 10.0))
+            .unwrap();
+        assert!(g.estop(), "continuity must re-engage journaled ESTOP");
+        assert!(
+            !g.integrity_aborted(),
+            "journaled ESTOP after --restart is not an integrity abort"
+        );
+        let rec = g.clear_estop_requires_recovery_now(true);
+        assert!(
+            rec.ok,
+            "journal-carried ESTOP after restart must recover: {rec:?}"
+        );
+        assert!(!g.estop());
+        assert!(!g.abort_latched());
+        let write = g
+            .authorize_issued(decide_hold(1, 10.0))
+            .expect("authorize after restart ESTOP recover");
+        assert!(g.write_online(&write, &ActionParams::empty(), 10.0).ok);
+        assert_eq!(g.plant().write_count(), 1);
+    }
 }

@@ -216,6 +216,9 @@ impl MetalAuthority {
             return self.refuse_bus_lost();
         }
         self.pet_heartbeat();
+        // Autonomy IPC `op=recover` is an ESTOP-ack analog, not authenticated
+        // operator recovery and not an integrity unlatch. Integrity abort is
+        // refused inside the governor before `Plant::clear_estop`.
         let t = self
             .session
             .governor

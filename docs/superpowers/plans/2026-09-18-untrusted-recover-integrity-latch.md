@@ -4,7 +4,10 @@
 
 **Goal:** Production `op=recover` still clears journaled ESTOP (campaign `--restart`) but cannot unlatch integrity `abort_latched` (`unknown_outcome`, `replayed command_id`) on a live ONLINE instance.
 
-**Architecture:** Keep `EstopLatch`. Add an internal kind: ESTOP vs Integrity. `engage()` is ESTOP (recoverable). `latch_abort()` and the unknown-outcome path are Integrity (not cleared by `clear_estop_requires_recovery_now`). Do not add a crate. Do not change `IssuedCommand` / `OnlineWrite` / XL330 driver / metal proof schema.
+**Architecture:** Keep `EstopLatch`. Represent ESTOP (`engaged`) and integrity (`integrity_aborted`) as independent monotonic facts. `engage()` is recoverable ESTOP and must **not** clear or overwrite integrity. `latch_abort()` is the only production integrity transition. `clear_estop_requires_recovery_*` refuses integrity abort **before** `Plant::clear_estop` with `integrity_abort_requires_online_restart`. Do not add a crate. Do not change `IssuedCommand` / `OnlineWrite` / XL330 driver / metal proof schema.
+
+> **Plan5 correction (do not implement the Task 1 `AbortClass` sketch as written).**
+> `AbortClass { None, Estop, Integrity }` with `engage() -> Estop` can overwrite Integrity and re-open recover. That violates invariant A1 (`None < RecoverableEstop < IntegrityAbort`; transitions may move right, not left). Do not special-case the reason string `"unknown_outcome"`. Production `op=recover` remains an untrusted ESTOP-ack analog, not authenticated operator recovery.
 
 **Tech Stack:** Rust 1.95.0 workspace; `realityos-governor` + `realityos-metal` PTY tests on Linux; existing `SimPlant` ONLINE helpers in `crates/governor/src/lib.rs`.
 
