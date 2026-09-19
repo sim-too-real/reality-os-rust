@@ -3241,6 +3241,17 @@ fn read_id_register(port: &mut dyn SerialPort, device: &Path, id: u8) -> Option<
                     let _ = port.set_timeout(saved);
                     return st.params.first().copied();
                 }
+                // Wizard Secondary ID: the servo may put its primary ID in
+                // the status header while answering a directed READ to the
+                // shadow. One CRC-valid responder in this window is still
+                // this actuator, not a second device.
+                let seen = unique_status_ids(&acc);
+                if seen.len() == 1 {
+                    if let Ok(st) = decode_status_scan_for(&acc, seen[0]) {
+                        let _ = port.set_timeout(saved);
+                        return st.params.first().copied();
+                    }
+                }
             }
             Err(_) => break,
         }
