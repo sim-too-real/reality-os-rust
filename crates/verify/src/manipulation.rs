@@ -1,6 +1,6 @@
 //! Manipulation episode runner. Skills propose; Reality OS authorizes; verifier judges.
 
-use crate::authority::{AuthorityOutcome, SimAuthority};
+use crate::authority::SimAuthority;
 use crate::bundle::RobotBundle;
 use crate::driver::{SharedMujoco, SharedSimPort};
 use crate::honesty::SIMULATION_ONLY;
@@ -771,6 +771,7 @@ fn execute_plan(
     let mut truth = initial.clone();
     let before = initial.clone();
     let mut unauthorized = 0u64;
+    let mut last_spent_command_id: Option<String> = None;
     let episode_id = format!("manip-{}-{}", plan.contract_id, sc.seed);
 
     for (si, step) in plan.steps.iter().enumerate() {
@@ -858,6 +859,12 @@ fn execute_plan(
                             rec.outcome, rec.status, rec.physical_reason
                         ));
                         commands.push(json!({"step": si, "kind": "reach", "target": xyz}));
+                        if let Some(spent) = crate::authority::spent_command_for_replay(
+                            rec.executed,
+                            rec.command_id.as_deref(),
+                        ) {
+                            last_spent_command_id = Some(spent);
+                        }
                         maybe_replay_or_restart(
                             &mut auth,
                             &shared,
@@ -868,6 +875,7 @@ fn execute_plan(
                             now,
                             &mut decisions,
                             &mut unauthorized,
+                            last_spent_command_id.as_deref(),
                         )?;
                         let (t, n) = step_sim(&shared, &manifest, &mut auth, now)?;
                         truth = t;
@@ -931,6 +939,12 @@ fn execute_plan(
                                 };
                                 decisions
                                     .push(format!("reach-retry:{:?}:{}", rec.outcome, rec.status));
+                                if let Some(spent) = crate::authority::spent_command_for_replay(
+                                    rec.executed,
+                                    rec.command_id.as_deref(),
+                                ) {
+                                    last_spent_command_id = Some(spent);
+                                }
                                 let (t, n) = step_sim(&shared, &manifest, &mut auth, now)?;
                                 truth = t;
                                 now = n;
@@ -1009,8 +1023,11 @@ fn execute_plan(
                     rec.outcome, rec.status, rec.physical_reason
                 ));
                 commands.push(json!({"step": si, "kind": "resource", "opening": opening_01}));
-                if rec.outcome != AuthorityOutcome::Allowed && sc.replay {
-                    unauthorized = 0;
+                if let Some(spent) = crate::authority::spent_command_for_replay(
+                    rec.executed,
+                    rec.command_id.as_deref(),
+                ) {
+                    last_spent_command_id = Some(spent);
                 }
                 let (t, n) = step_sim(&shared, &manifest, &mut auth, now)?;
                 truth = t;
@@ -1032,6 +1049,7 @@ fn execute_plan(
                     now,
                     &mut decisions,
                     &mut unauthorized,
+                    last_spent_command_id.as_deref(),
                 )?;
             }
             SkillStep::VerifyMotion(vm) => {
@@ -2078,11 +2096,15 @@ fn maybe_replay_or_restart(
     now: f64,
     decisions: &mut Vec<String>,
     unauthorized: &mut u64,
+    last_spent_command_id: Option<&str>,
 ) -> Result<(), String> {
     if !sc.replay && !sc.restart_replay {
         return Ok(());
     }
-    let command_id = format!("{episode_id}:obs-{si}");
+    let Some(command_id) = last_spent_command_id.map(str::to_string) else {
+        decisions.push("replay:skipped:no_spent_command".into());
+        return Ok(());
+    };
     let truth = {
         let mut g = shared.inst.lock().map_err(|e| e.to_string())?;
         let st = g.step(0).map_err(|e| e.to_string())?;
@@ -2598,17 +2620,11 @@ mod tests {
     ) -> Vec<Value> {
         let mut recs = Vec::new();
         for ep in eps {
-            if ep.unauthorized_writes > 0 {
-                assert!(
-                    ep.expected_refusal && ep.task_result != "success",
-                    "unauthorized writes only on expected-refusal negatives, robot={} seed={} tax={:?} result={} writes={}",
-                    ep.robot_id,
-                    ep.world_seed,
-                    ep.failure_taxonomy,
-                    ep.task_result,
-                    ep.unauthorized_writes
-                );
-            }
+            assert_eq!(
+                ep.unauthorized_writes, 0,
+                "PUSH must not mint unauthorized writes robot={} seed={} tax={:?} expected={}",
+                ep.robot_id, ep.world_seed, ep.failure_taxonomy, ep.expected_refusal
+            );
             let ev = crate::push_pipeline::evidence_from_episode_fields(
                 &ep.task_result,
                 ep.failure_taxonomy.as_deref().unwrap_or(""),
@@ -2681,6 +2697,10 @@ mod tests {
                         funnel.p_task_given_contact(),
                         funnel.n_unauthorized_writes
                     );
+                    assert_eq!(
+                        funnel.n_unauthorized_writes, 0,
+                        "{label} PUSH unauthorized_writes must stay 0"
+                    );
                     let mut block = funnel_rates(&funnel);
                     block["episodes"] = json!(recs);
                     robots.insert(label.to_string(), block);
@@ -2700,6 +2720,7 @@ mod tests {
                 }
             }
         }
+        assert_eq!(overall.n_unauthorized_writes, 0);
         assert!(
             robots.contains_key("arm_gripper"),
             "arm_gripper development funnel is required"

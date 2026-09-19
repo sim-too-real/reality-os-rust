@@ -421,6 +421,16 @@ impl<P: HardwareDriverPort> SimAuthority<P> {
     }
 }
 
+/// Replay/restart injection may only reuse a command that actually executed.
+/// A refused first write must not mint a fresh drive under a never-spent id.
+pub fn spent_command_for_replay(executed: bool, command_id: Option<&str>) -> Option<String> {
+    if executed {
+        command_id.filter(|s| !s.is_empty()).map(str::to_string)
+    } else {
+        None
+    }
+}
+
 fn persist_lease(journal: &Path, lease: Option<&CommandLease>) {
     if let Some(lease) = lease {
         if let Ok(s) = serde_json::to_string(lease) {
@@ -584,6 +594,16 @@ mod tests {
             .iter()
             .any(|v| v.contains("REPLAY") || v.contains("DUPLICATE")));
         assert_eq!(probe.snapshot().write_count, 1);
+    }
+
+    #[test]
+    fn refused_write_is_not_a_spent_command_for_replay() {
+        assert!(spent_command_for_replay(false, Some("ep:obs-0")).is_none());
+        assert!(spent_command_for_replay(true, None).is_none());
+        assert_eq!(
+            spent_command_for_replay(true, Some("ep:obs-0")).as_deref(),
+            Some("ep:obs-0")
+        );
     }
 
     #[test]
