@@ -234,6 +234,7 @@ pub fn verify_push(
     min_dist: f64,
     unexpected_bodies: &[String],
     immovable: bool,
+    intended_bodies: &[String],
 ) -> PrivilegedVerdict {
     let mut evidence = Vec::new();
     let notes = Vec::new();
@@ -253,10 +254,14 @@ pub fn verify_push(
     if unexpected {
         return fail(ManipulationFailure::UnexpectedContact, evidence, notes);
     }
-    let contact = after
-        .contacts
-        .iter()
-        .any(|c| crate::push_pipeline::names_are_ee_object_contact(&c.body1, &c.body2, object_id));
+    let contact = after.contacts.iter().any(|c| {
+        crate::push_pipeline::names_are_ee_object_contact(
+            &c.body1,
+            &c.body2,
+            object_id,
+            intended_bodies,
+        )
+    });
     if contact {
         evidence.push("controlled_contact_established".into());
     }

@@ -51,7 +51,7 @@ impl PushStage {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PushEvidence {
     pub target_available: bool,
     pub reachable: bool,
@@ -68,6 +68,12 @@ pub struct PushEvidence {
     pub feasible_maneuver: bool,
     #[serde(default)]
     pub contact_pose_reached: bool,
+    #[serde(default)]
+    pub intended_tool_contact: bool,
+    #[serde(default)]
+    pub unintended_robot_contact: bool,
+    #[serde(default)]
+    pub apparent_robot_object_contact: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,11 +135,11 @@ fn taxonomy_is_slip(taxonomy: &str) -> bool {
 
 /// Support/table/floor is not PUSH contact. The other body must be the object.
 pub fn is_support_surface(name: &str) -> bool {
-    let n = name.to_ascii_lowercase();
-    n == "table" || n == "floor" || n == "world" || n.contains("ground") || n.ends_with("/table")
+    realityos_semantics::contact::is_support_surface_name(name)
 }
 
-pub fn names_are_ee_object_contact(a: &str, b: &str, object_id: &str) -> bool {
+/// Old broad metric: any non-support robot body vs object. Not PUSH contact.
+pub fn names_are_apparent_robot_object_contact(a: &str, b: &str, object_id: &str) -> bool {
     if object_id.is_empty() {
         return false;
     }
@@ -144,6 +150,11 @@ pub fn names_are_ee_object_contact(a: &str, b: &str, object_id: &str) -> bool {
     }
     let other = if obj_a { b } else { a };
     !is_support_surface(other)
+}
+
+/// PUSH contact: target object ↔ declared manipulation contact geometry.
+pub fn names_are_ee_object_contact(a: &str, b: &str, object_id: &str, intended: &[String]) -> bool {
+    realityos_semantics::contact::names_are_intended_tool_object_contact(a, b, object_id, intended)
 }
 
 pub fn evidence_from_episode_fields(
@@ -171,6 +182,9 @@ pub fn evidence_from_episode_fields(
             expected_refusal: true,
             feasible_maneuver: false,
             contact_pose_reached: false,
+            intended_tool_contact: false,
+            unintended_robot_contact: false,
+            apparent_robot_object_contact: false,
         };
     }
     let contacted = has_ee_object_contact;
@@ -191,6 +205,9 @@ pub fn evidence_from_episode_fields(
         expected_refusal: false,
         feasible_maneuver: false,
         contact_pose_reached: false,
+        intended_tool_contact: contacted,
+        unintended_robot_contact: false,
+        apparent_robot_object_contact: false,
     }
 }
 
@@ -307,6 +324,38 @@ pub fn push_diagnostic_field_catalog() -> &'static [TaggedField] {
             tag: FieldTag::PrivilegedSimLabelOnly,
         },
         TaggedField {
+            name: "intended_tool_contact",
+            tag: FieldTag::PrivilegedSimLabelOnly,
+        },
+        TaggedField {
+            name: "unintended_robot_contact",
+            tag: FieldTag::PrivilegedSimLabelOnly,
+        },
+        TaggedField {
+            name: "support_contact",
+            tag: FieldTag::PrivilegedSimLabelOnly,
+        },
+        TaggedField {
+            name: "self_collision",
+            tag: FieldTag::PrivilegedSimLabelOnly,
+        },
+        TaggedField {
+            name: "obstacle_contact",
+            tag: FieldTag::PrivilegedSimLabelOnly,
+        },
+        TaggedField {
+            name: "apparent_robot_object_contact",
+            tag: FieldTag::PrivilegedSimLabelOnly,
+        },
+        TaggedField {
+            name: "world_construction",
+            tag: FieldTag::TargetLabel,
+        },
+        TaggedField {
+            name: "selected_rank_why",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
             name: "provenance",
             tag: FieldTag::PostHocObserved,
         },
@@ -361,6 +410,12 @@ pub struct PushFunnel {
     pub n_feasible_maneuver: u64,
     #[serde(default)]
     pub n_contact_pose_reached: u64,
+    #[serde(default)]
+    pub n_intended_tool_contact: u64,
+    #[serde(default)]
+    pub n_unintended_robot_contact: u64,
+    #[serde(default)]
+    pub n_apparent_robot_object_contact: u64,
 }
 
 impl PushFunnel {
@@ -378,6 +433,15 @@ impl PushFunnel {
         }
         if ev.approach_reached {
             self.n_approach += 1;
+        }
+        if ev.intended_tool_contact {
+            self.n_intended_tool_contact += 1;
+        }
+        if ev.unintended_robot_contact {
+            self.n_unintended_robot_contact += 1;
+        }
+        if ev.apparent_robot_object_contact {
+            self.n_apparent_robot_object_contact += 1;
         }
         if ev.contact_established {
             self.n_contact += 1;
@@ -489,6 +553,7 @@ mod tests {
             expected_refusal: false,
             feasible_maneuver: false,
             contact_pose_reached: false,
+            ..Default::default()
         };
         let t = classify_push_pipeline(&ev);
         assert_eq!(t.first_stage_entered, Some(PushStage::TargetAvailable));
@@ -523,11 +588,40 @@ mod tests {
 
     #[test]
     fn table_or_floor_contact_is_not_ee_object_contact() {
-        assert!(!names_are_ee_object_contact("table", "obj0", "obj0"));
-        assert!(!names_are_ee_object_contact("obj0", "floor", "obj0"));
-        assert!(!names_are_ee_object_contact("world", "obj0", "obj0"));
-        assert!(names_are_ee_object_contact("link7", "obj0", "obj0"));
-        assert!(names_are_ee_object_contact("obj0", "finger", "obj0"));
+        assert!(!names_are_ee_object_contact(
+            "table",
+            "obj0",
+            "obj0",
+            &["finger".into()]
+        ));
+        assert!(!names_are_ee_object_contact(
+            "obj0",
+            "floor",
+            "obj0",
+            &["finger".into()]
+        ));
+        assert!(!names_are_ee_object_contact(
+            "world",
+            "obj0",
+            "obj0",
+            &["finger".into()]
+        ));
+        assert!(
+            !names_are_ee_object_contact("link7", "obj0", "obj0", &["finger".into()]),
+            "forearm/link collision is not PUSH contact"
+        );
+        assert!(names_are_ee_object_contact(
+            "obj0",
+            "finger",
+            "obj0",
+            &["finger".into()]
+        ));
+        assert!(names_are_apparent_robot_object_contact(
+            "link7", "obj0", "obj0"
+        ));
+        assert!(names_are_apparent_robot_object_contact(
+            "obj0", "finger", "obj0"
+        ));
     }
 
     #[test]
@@ -608,6 +702,13 @@ mod tests {
             "provenance",
             "mujoco_contact_force",
             "mujoco_ee_object_contact",
+            "intended_tool_contact",
+            "unintended_robot_contact",
+            "support_contact",
+            "self_collision",
+            "obstacle_contact",
+            "apparent_robot_object_contact",
+            "world_construction",
             "robot_id",
             "unauthorized_writes",
         ] {
@@ -674,6 +775,7 @@ mod tests {
             expected_refusal: false,
             feasible_maneuver: true,
             contact_pose_reached: true,
+            ..Default::default()
         };
         let contact_ok = PushEvidence {
             object_displaced: true,
@@ -708,6 +810,7 @@ mod tests {
             expected_refusal: false,
             feasible_maneuver: false,
             contact_pose_reached: false,
+            ..Default::default()
         };
         let stroke_without_displace = PushEvidence {
             object_displaced: false,

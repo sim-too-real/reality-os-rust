@@ -3,6 +3,7 @@
 pub mod adapter;
 pub mod capability;
 pub mod command;
+pub mod command_domain;
 pub mod contact;
 pub mod contact_maneuver;
 pub mod embodiment;

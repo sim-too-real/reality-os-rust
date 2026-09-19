@@ -2,6 +2,7 @@
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use realityos_semantics::contact_maneuver::WorldConstructionMode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -51,6 +52,8 @@ pub struct ManipulationScenario {
     pub push_dir: [f64; 3],
     pub push_dist: f64,
     pub required_opening: f64,
+    #[serde(default)]
+    pub world_construction: WorldConstructionMode,
 }
 
 pub fn is_planar_model(joint_axes: &[[f64; 3]]) -> bool {
@@ -138,6 +141,7 @@ pub fn release_scenario(seed: u64, n: usize) -> ManipulationScenario {
         push_dir: [0.0, 0.0, 0.0],
         push_dist: 0.0,
         required_opening: 1.0 - opening * 0.1,
+        world_construction: WorldConstructionMode::FixedWorld,
     }
 }
 
@@ -278,6 +282,7 @@ pub fn grasp_scenario(seed: u64, planar: bool, idx: usize) -> ManipulationScenar
         push_dir: [0.0, 0.0, 0.0],
         push_dist: 0.0,
         required_opening: if empty { 0.2 } else { 0.85 },
+        world_construction: WorldConstructionMode::FixedWorld,
     }
 }
 
@@ -420,6 +425,7 @@ fn scenario_with_object(
         push_dir: [1.0, 0.0, 0.0],
         push_dist: 0.06,
         required_opening: 0.8,
+        world_construction: WorldConstructionMode::FixedWorld,
     }
 }
 

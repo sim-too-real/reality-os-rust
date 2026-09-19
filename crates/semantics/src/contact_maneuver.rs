@@ -42,12 +42,43 @@ pub fn current_contact_establishment_mode() -> ContactEstablishmentMode {
     CONTACT_ESTABLISHMENT_MODE.with(Cell::get)
 }
 
+/// How the world was constructed for an episode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorldConstructionMode {
+    /// Object/support poses are immutable. The robot adapts.
+    #[default]
+    FixedWorld,
+    /// Object/support may be generated to match a sampled configuration.
+    /// Labeled as generated test conditions, not a planning result.
+    CapabilitySynthesis,
+}
+
+thread_local! {
+    static WORLD_CONSTRUCTION_MODE: Cell<WorldConstructionMode> =
+        const { Cell::new(WorldConstructionMode::FixedWorld) };
+}
+
+pub fn with_world_construction_mode<R>(mode: WorldConstructionMode, f: impl FnOnce() -> R) -> R {
+    WORLD_CONSTRUCTION_MODE.with(|c| {
+        let prev = c.replace(mode);
+        let out = f();
+        c.set(prev);
+        out
+    })
+}
+
+pub fn current_world_construction_mode() -> WorldConstructionMode {
+    WORLD_CONSTRUCTION_MODE.with(Cell::get)
+}
+
 /// FK sample that includes orientation and the joint vector that produced it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SampledEePose {
     pub xyz: [f64; 3],
     pub quat_wxyz: [f64; 4],
     pub q: Vec<f64>,
+    pub joint_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -96,7 +127,9 @@ impl ContactManeuverSpec {
             min_stroke: (stroke * 0.5).max(0.02),
             min_support_clearance: 0.004,
             face_gap: 0.015,
-            max_approach_match: 0.55,
+            // Must be < approach standoff so the contact pose itself cannot
+            // satisfy approach feasibility.
+            max_approach_match: (push_contact_success_radius() * 2.0).clamp(0.025, 0.04),
         }
     }
 }
@@ -173,6 +206,8 @@ pub struct ContactManeuver {
 
 const TOOL_LEN_MIN: f64 = 0.008;
 const STROKE_CORRIDOR_M: f64 = 0.08;
+/// Neighborhood in which a sampled q can seed IK to a geometric contact pose.
+const IK_SEED_RADIUS_M: f64 = 0.15;
 
 fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
@@ -213,21 +248,8 @@ fn support_clearance_of(point: [f64; 3], support: SupportPlane, ee_radius: f64) 
     dot3(sub3(point, support.origin), n) - ee_radius
 }
 
-fn joint_margin_of(q: &[f64], joints: &[Joint]) -> f64 {
-    if q.is_empty() {
-        return 1.0;
-    }
-    let mut worst = 1.0_f64;
-    let n = q.len().min(joints.len());
-    for i in 0..n {
-        let (Some(lo), Some(hi)) = (joints[i].q_min.value, joints[i].q_max.value) else {
-            continue;
-        };
-        let span = (hi - lo).abs().max(1e-6);
-        let d = (q[i] - lo).min(hi - q[i]).max(0.0);
-        worst = worst.min(d / span);
-    }
-    worst.clamp(0.0, 1.0)
+fn joint_margin_of(sample: &SampledEePose, joints: &[Joint]) -> f64 {
+    crate::command_domain::named_joint_limit_margin(&sample.q, &sample.joint_names, joints)
 }
 
 fn available_stroke_along(cloud: &[SampledEePose], contact_xyz: [f64; 3], push: [f64; 3]) -> f64 {
@@ -323,7 +345,8 @@ pub fn evaluate_sampled_push(
     }
 
     let available = available_stroke_along(cloud, sample.xyz, push);
-    if available + 1e-9 < spec.min_stroke {
+    let mid = spec.min_stroke * 0.5;
+    if available + 1e-9 < mid || available + 1e-9 < spec.min_stroke {
         return Err(ContactInfeasible::InsufficientRemainingStroke);
     }
 
@@ -340,7 +363,7 @@ pub fn evaluate_sampled_push(
         requested_stroke: spec.requested_stroke,
         available_stroke: available,
         support_clearance: clearance,
-        joint_margin: joint_margin_of(&sample.q, joints),
+        joint_margin: joint_margin_of(sample, joints),
         orientation_error,
         object_center: object.center,
         support_top_z,
@@ -447,6 +470,152 @@ pub fn select_push_maneuver(
     Ok((feasible[idx].clone(), why))
 }
 
+fn nearest_sample(cloud: &[SampledEePose], xyz: [f64; 3]) -> Option<&SampledEePose> {
+    cloud.iter().min_by(|a, b| {
+        dist3(a.xyz, xyz)
+            .partial_cmp(&dist3(b.xyz, xyz))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })
+}
+
+struct GeometricContact {
+    ee: [f64; 3],
+    push: [f64; 3],
+}
+
+fn geometric_contact_ee(
+    object: BoxObject,
+    spec: &ContactManeuverSpec,
+    seed: &SampledEePose,
+    support: SupportPlane,
+    cloud: &[SampledEePose],
+) -> Result<GeometricContact, ContactInfeasible> {
+    let _ = (support, cloud);
+    let push = plane_push(spec.push_direction).ok_or(ContactInfeasible::WrongContactGeometry)?;
+    let face = half_along_push(object.half_extents, push) + spec.face_gap.max(0.0);
+    let tool_at_face = sub3(object.center, scale3(push, face));
+    let tool_off = tool_world_offset(seed, spec.tool_offset_ee);
+    let ee = sub3(tool_at_face, tool_off);
+    Ok(GeometricContact { ee, push })
+}
+
+/// Mode B: object and support are immutable. Generate the contact pose from
+/// object geometry, then seed IK from the nearest sampled configuration.
+pub fn select_fixed_world_push(
+    cloud: &[SampledEePose],
+    object: BoxObject,
+    support: SupportPlane,
+    spec: &ContactManeuverSpec,
+    joints: &[Joint],
+) -> Result<(ContactManeuver, RankWhy), ContactInfeasible> {
+    if cloud.is_empty() {
+        return Err(ContactInfeasible::NoFeasibleContactPose);
+    }
+    let mut feasible = Vec::new();
+    let mut last_err = ContactInfeasible::NoFeasibleContactPose;
+    for sample in cloud {
+        match evaluate_sampled_push(sample, cloud, object, support, spec, joints) {
+            Ok(m) => {
+                debug_assert_eq!(m.object_center, object.center);
+                feasible.push(m);
+            }
+            Err(e) => last_err = e,
+        }
+    }
+    if let Some((idx, why)) = select_contact_maneuver(&feasible, spec) {
+        return Ok((feasible[idx].clone(), why));
+    }
+
+    let mut geometric = Vec::new();
+    for seed in cloud {
+        match maneuver_from_fixed_object(seed, cloud, object, support, spec, joints) {
+            Ok(m) => geometric.push(m),
+            Err(e) => last_err = e,
+        }
+    }
+    let (idx, why) = select_contact_maneuver(&geometric, spec).ok_or(last_err)?;
+    Ok((geometric[idx].clone(), why))
+}
+
+fn maneuver_from_fixed_object(
+    seed: &SampledEePose,
+    cloud: &[SampledEePose],
+    object: BoxObject,
+    support: SupportPlane,
+    spec: &ContactManeuverSpec,
+    joints: &[Joint],
+) -> Result<ContactManeuver, ContactInfeasible> {
+    let geo = geometric_contact_ee(object, spec, seed, support, cloud)?;
+    let push = geo.push;
+    // Contact pose is the reachable sample. Accept a seed near the geometric
+    // EE *or* near the object face (tool offset can shift the EE target).
+    let face = half_along_push(object.half_extents, geo.push) + spec.face_gap.max(0.0);
+    let tool_at_face = sub3(object.center, scale3(geo.push, face));
+    if dist3(seed.xyz, geo.ee).min(dist3(seed.xyz, tool_at_face)) > IK_SEED_RADIUS_M {
+        return Err(ContactInfeasible::NoFeasibleContactPose);
+    }
+    let tool_off = tool_world_offset(seed, spec.tool_offset_ee);
+    let tool_len = norm3(tool_off);
+    if tool_len >= TOOL_LEN_MIN {
+        let axis = normalize3(tool_off).ok_or(ContactInfeasible::OrientationInfeasible)?;
+        if dot3(axis, push) < spec.min_align {
+            return Err(ContactInfeasible::OrientationInfeasible);
+        }
+    }
+    let ee_contact = seed.xyz;
+    let tool_at = add3(ee_contact, tool_off);
+    let clearance = support_clearance_of(ee_contact, support, spec.ee_radius);
+    if clearance < spec.min_support_clearance {
+        return Err(ContactInfeasible::SupportPlaneBlocksEe);
+    }
+    let standoff = spec
+        .approach_standoff
+        .max(push_contact_success_radius() + 1e-4);
+    let approach_xyz = [
+        ee_contact[0] - push[0] * standoff,
+        ee_contact[1] - push[1] * standoff,
+        ee_contact[2],
+    ];
+    let approach_clear = support_clearance_of(approach_xyz, support, spec.ee_radius);
+    if approach_clear < spec.min_support_clearance {
+        return Err(ContactInfeasible::ApproachCollidesBeforeContact);
+    }
+    let approach_seed = nearest_sample(cloud, approach_xyz);
+    let near_approach = approach_seed
+        .is_some_and(|s| dist3(s.xyz, approach_xyz) <= IK_SEED_RADIUS_M)
+        || dist3(spec.current_ee_xyz, approach_xyz) <= spec.max_approach_match
+        || dist3(spec.current_ee_xyz, approach_xyz) <= IK_SEED_RADIUS_M;
+    if !near_approach {
+        return Err(ContactInfeasible::ContactPoseUnreachableFromApproach);
+    }
+    let available = available_stroke_along(cloud, ee_contact, push);
+    if available + 1e-9 < spec.min_stroke {
+        return Err(ContactInfeasible::InsufficientRemainingStroke);
+    }
+    let contact_pose = pose(ee_contact, seed.quat_wxyz)?;
+    let approach_pose = pose(approach_xyz, seed.quat_wxyz)?;
+    let tool_axis = if tool_len >= TOOL_LEN_MIN {
+        normalize3(tool_off)
+    } else {
+        None
+    };
+    Ok(ContactManeuver {
+        contact_pose,
+        approach_pose,
+        contact_point: tool_at,
+        contact_normal: scale3(push, -1.0),
+        push_direction: push,
+        requested_stroke: spec.requested_stroke,
+        available_stroke: available,
+        support_clearance: clearance,
+        joint_margin: joint_margin_of(seed, joints),
+        orientation_error: orientation_error_of(tool_axis, push),
+        object_center: object.center,
+        support_top_z: support.origin[2],
+        sampled_q: seed.q.clone(),
+    })
+}
+
 /// Evidence-backed pre-contact label. Privileged collision flags are
 /// evaluation-only inputs to this classifier, never ranking inputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -545,6 +714,7 @@ mod tests {
             xyz,
             quat_wxyz: quat,
             q: vec![0.1, 0.2],
+            joint_names: vec!["j0".into(), "j1".into()],
         }
     }
 
@@ -615,7 +785,8 @@ mod tests {
             half_extents: [0.03, 0.03, 0.03],
         };
         let support = support_under(object.center, 0.03);
-        let err = evaluate_sampled_push(&s, &[s.clone()], object, support, &spec, &[]).unwrap_err();
+        let err = evaluate_sampled_push(&s, std::slice::from_ref(&s), object, support, &spec, &[])
+            .unwrap_err();
         assert_eq!(err, ContactInfeasible::InsufficientRemainingStroke);
     }
 
@@ -738,6 +909,199 @@ mod tests {
         assert_eq!(
             classify_pre_contact(&ev),
             PreContactTaxonomy::OrientationInfeasible
+        );
+    }
+
+    #[test]
+    fn approach_half_meter_match_is_not_feasibility() {
+        let contact = sample([0.25, 0.0, 0.16], identity_quat());
+        let ahead = sample([0.36, 0.0, 0.16], identity_quat());
+        let spec = spec_at([0.75, 0.0, 0.16], [0.0, 0.0, 0.0]);
+        let object = BoxObject {
+            center: [0.29, 0.0, 0.16],
+            half_extents: [0.03, 0.03, 0.03],
+        };
+        let support = support_under(object.center, 0.03);
+        let err = evaluate_sampled_push(
+            &contact,
+            &[contact.clone(), ahead],
+            object,
+            support,
+            &spec,
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            ContactInfeasible::ContactPoseUnreachableFromApproach,
+            "0.55 m current-EE proximity must not count as approach feasibility"
+        );
+    }
+
+    #[test]
+    fn xyz_contact_without_approach_or_stroke_is_rejected() {
+        let contact = sample([0.25, 0.0, 0.16], identity_quat());
+        let spec = spec_at([0.90, 0.0, 0.16], [0.0, 0.0, 0.0]);
+        let object = BoxObject {
+            center: [0.29, 0.0, 0.16],
+            half_extents: [0.03, 0.03, 0.03],
+        };
+        let support = support_under(object.center, 0.03);
+        let err = evaluate_sampled_push(
+            &contact,
+            std::slice::from_ref(&contact),
+            object,
+            support,
+            &spec,
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ContactInfeasible::ContactPoseUnreachableFromApproach
+                    | ContactInfeasible::InsufficientRemainingStroke
+            ),
+            "XYZ-only reachability is not a feasible maneuver, got {err:?}"
+        );
+    }
+
+    fn test_joint(name: &str, lo: f64, hi: f64) -> Joint {
+        use crate::embodiment::{unknown_se3, JointKind};
+        use crate::provenance::Provenanced;
+        Joint {
+            name: name.into(),
+            kind: JointKind::Hinge,
+            axis: Provenanced::declared([0.0, 0.0, 1.0], "test", 0.0),
+            qpos_dim: 1,
+            dof_dim: 1,
+            parent_body: "p".into(),
+            child_body: name.into(),
+            q_min: Provenanced::declared(lo, "test", 0.0),
+            q_max: Provenanced::declared(hi, "test", 0.0),
+            dq_max: Provenanced::unknown("test", 0.0),
+            effort_max: Provenanced::unknown("test", 0.0),
+            origin_in_child: Provenanced::declared([0.0, 0.0, 0.0], "test", 0.0),
+            parent_to_joint: unknown_se3("test"),
+            joint_to_child: unknown_se3("test"),
+            qpos_adr: None,
+            dof_adr: None,
+        }
+    }
+
+    #[test]
+    fn joint_margin_uses_named_joints_not_model_order() {
+        let joints = vec![
+            test_joint("finger_a", 0.0, 0.04),
+            test_joint("j0", -2.0, 2.0),
+            test_joint("j1", -2.0, 2.0),
+        ];
+        let contact = SampledEePose {
+            xyz: [0.25, 0.0, 0.16],
+            quat_wxyz: identity_quat(),
+            q: vec![0.5, 0.4],
+            joint_names: vec!["j0".into(), "j1".into()],
+        };
+        let ahead = sample([0.36, 0.0, 0.16], identity_quat());
+        let spec = spec_at([0.22, 0.0, 0.16], [0.04, 0.0, 0.0]);
+        let center = object_center_for_sample(
+            &contact,
+            spec.tool_offset_ee,
+            spec.push_direction,
+            [0.03, 0.03, 0.03],
+            spec.face_gap,
+        )
+        .unwrap();
+        let object = BoxObject {
+            center,
+            half_extents: [0.03, 0.03, 0.03],
+        };
+        let support = support_under(center, 0.03);
+        let m = evaluate_sampled_push(
+            &contact,
+            &[contact.clone(), ahead],
+            object,
+            support,
+            &spec,
+            &joints,
+        )
+        .expect("feasible");
+        assert!(
+            m.joint_margin > 0.2,
+            "chain q must not be scored against finger [0,0.04] by index, margin={}",
+            m.joint_margin
+        );
+    }
+
+    #[test]
+    fn fixed_world_select_does_not_move_object() {
+        let contact = sample([0.25, 0.0, 0.16], identity_quat());
+        let ahead = sample([0.36, 0.0, 0.16], identity_quat());
+        let spec = spec_at([0.22, 0.0, 0.16], [0.04, 0.0, 0.0]);
+        let object = BoxObject {
+            center: [0.305, 0.0, 0.16],
+            half_extents: [0.03, 0.03, 0.03],
+        };
+        let support = support_under(object.center, 0.03);
+        let (m, _) = select_fixed_world_push(&[contact, ahead], object, support, &spec, &[])
+            .expect("fixed-world feasible");
+        assert!(
+            (m.object_center[0] - 0.305).abs() < 1e-12,
+            "Mode B must keep object center, got {:?}",
+            m.object_center
+        );
+        assert!((m.object_center[1] - 0.0).abs() < 1e-12);
+        assert!((m.object_center[2] - 0.16).abs() < 1e-12);
+    }
+
+    #[test]
+    fn fixed_world_object_first_does_not_require_sample_on_the_face() {
+        let near = sample([0.34, 0.0, 0.16], identity_quat());
+        let ahead = sample([0.46, 0.0, 0.16], identity_quat());
+        let near_x = near.xyz[0];
+        let ahead_x = ahead.xyz[0];
+        let spec = spec_at([0.22, 0.0, 0.16], [0.04, 0.0, 0.0]);
+        let object = BoxObject {
+            center: [0.42, 0.0, 0.16],
+            half_extents: [0.03, 0.03, 0.03],
+        };
+        let support = support_under(object.center, 0.03);
+        let (m, _) = select_fixed_world_push(&[near, ahead], object, support, &spec, &[])
+            .expect("object-first Mode B should seed from nearest sample");
+        assert!(
+            (m.object_center[0] - 0.42).abs() < 1e-12,
+            "object must stay put, got {:?}",
+            m.object_center
+        );
+        let face = half_along_push(object.half_extents, m.push_direction) + spec.face_gap;
+        let expected_tool_x = object.center[0] - m.push_direction[0] * face;
+        assert!(
+            (m.contact_point[0] - expected_tool_x).abs() < 0.04,
+            "contact should be on the object face, tool={} expected={}",
+            m.contact_point[0],
+            expected_tool_x
+        );
+        assert!(
+            (m.contact_pose.xyz[0] - near_x).abs() < 1e-12
+                || (m.contact_pose.xyz[0] - ahead_x).abs() < 1e-12,
+            "contact pose must be a reachable sample, got {:?}",
+            m.contact_pose.xyz
+        );
+    }
+
+    #[test]
+    fn synthesis_mode_is_distinct_from_fixed_world() {
+        assert_ne!(
+            WorldConstructionMode::CapabilitySynthesis,
+            WorldConstructionMode::FixedWorld
+        );
+        let saw = with_world_construction_mode(WorldConstructionMode::CapabilitySynthesis, || {
+            current_world_construction_mode()
+        });
+        assert_eq!(saw, WorldConstructionMode::CapabilitySynthesis);
+        assert_eq!(
+            current_world_construction_mode(),
+            WorldConstructionMode::FixedWorld
         );
     }
 }

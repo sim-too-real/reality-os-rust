@@ -1,5 +1,6 @@
 use crate::capability::{CapName, CapStatus, CapabilityGraph};
 use crate::command::{ActuatorCommandSet, HoldSemantics, IkTrace, JointTarget, JointTargetSet};
+use crate::command_domain::authorize_actuator_command;
 use crate::embodiment::{Actuator, EmbodimentModel, JointKind};
 use crate::kinematics::{resolve_chain_joints, solve_ik};
 use crate::observation::ObservationFrame;
@@ -272,6 +273,7 @@ pub fn lower_actuator_commands(
         if act.control_mode != c.control_mode {
             return Err(SkillRefuse::InvalidCommand);
         }
+        authorize_actuator_command(act, v)?;
         requested.insert(act.name.as_str(), v);
     }
     fill_holds(
@@ -291,6 +293,7 @@ pub fn lower_named_targets(
     let mut requested = HashMap::new();
     for t in &targets.targets {
         let act = bind_joint_target(model, t)?;
+        authorize_actuator_command(act, t.value)?;
         if requested.insert(act.name.as_str(), t.value).is_some() {
             return Err(SkillRefuse::InvalidCommand);
         }
@@ -992,5 +995,60 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(err, SkillRefuse::MissingJointState);
+    }
+
+    #[test]
+    fn declared_ctrlrange_allows_in_range_and_refuses_out() {
+        let mut model = synth_planar_two_link();
+        model.actuators[0].ctrlrange = Provenanced::declared([0.0, 1.0], "test", 0.0);
+        model.actuators[1].ctrlrange = Provenanced::declared([0.0, 1.0], "test", 0.0);
+        let ok = ActuatorCommandSet {
+            commands: vec![cmd("a0", 0.4, "position")],
+            hold_outside: HoldSemantics::KeepCurrent,
+            explicit_safe: Default::default(),
+        };
+        assert!(lower_actuator_commands(&model, &ok, &current_complete()).is_ok());
+        let bad = ActuatorCommandSet {
+            commands: vec![cmd("a0", 1.5, "position")],
+            hold_outside: HoldSemantics::KeepCurrent,
+            explicit_safe: Default::default(),
+        };
+        assert_eq!(
+            lower_actuator_commands(&model, &bad, &current_complete()).unwrap_err(),
+            SkillRefuse::InvalidCommand
+        );
+    }
+
+    #[test]
+    fn tendon_full_scale_command_is_not_joint_limited() {
+        let mut model = synth_planar_two_link();
+        model.actuators.push(Actuator {
+            name: "split".into(),
+            target_joint: "finger_a".into(),
+            control_mode: "position".into(),
+            transmission_kind: "tendon".into(),
+            ctrlrange: Provenanced::declared([0.0, 255.0], "test", 0.0),
+            forcerange: Provenanced::unknown("test", 0.0),
+            gear: Provenanced::unknown("test", 0.0),
+        });
+        let mut current = current_complete();
+        current.insert("split".into(), 0.0);
+        let set = ActuatorCommandSet {
+            commands: vec![cmd("split", 255.0, "position")],
+            hold_outside: HoldSemantics::KeepCurrent,
+            explicit_safe: Default::default(),
+        };
+        let out = lower_actuator_commands(&model, &set, &current).unwrap();
+        let split = out.iter().find(|(n, _)| n == "split").unwrap();
+        assert!((split.1 - 255.0).abs() < 1e-12);
+        let over = ActuatorCommandSet {
+            commands: vec![cmd("split", 256.0, "position")],
+            hold_outside: HoldSemantics::KeepCurrent,
+            explicit_safe: Default::default(),
+        };
+        assert_eq!(
+            lower_actuator_commands(&model, &over, &current).unwrap_err(),
+            SkillRefuse::InvalidCommand
+        );
     }
 }

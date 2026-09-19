@@ -56,6 +56,7 @@ pub fn reachable_ee_poses(model: &EmbodimentModel, ee: &str, units: &[f64]) -> V
                     xyz: fk.ee.xyz,
                     quat_wxyz: fk.ee.quat_wxyz,
                     q,
+                    joint_names: chain.clone(),
                 });
             }
         }

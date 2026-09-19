@@ -25,10 +25,15 @@ use realityos_semantics::adapter::{
     lower_actuator_commands, lower_named_targets, ChainIkPositionPdAdapter, CompiledCtrl,
 };
 use realityos_semantics::capability::{apply_resource_qualification, derive_capabilities};
+use realityos_semantics::contact::{
+    classify_contact_pair, declared_manipulation_contact_bodies, ContactClassContext,
+    ContactEvidenceClass,
+};
 use realityos_semantics::contact_maneuver::{
-    classify_pre_contact, current_contact_establishment_mode, select_push_maneuver,
-    tool_offset_in_ee, ContactEstablishmentMode, ContactInfeasible, ContactManeuver,
-    ContactManeuverSpec, PreContactEvidence, SampledEePose,
+    classify_pre_contact, current_contact_establishment_mode, current_world_construction_mode,
+    select_fixed_world_push, select_push_maneuver, tool_offset_in_ee, BoxObject,
+    ContactEstablishmentMode, ContactInfeasible, ContactManeuver, ContactManeuverSpec,
+    PreContactEvidence, SampledEePose, SupportPlane, WorldConstructionMode,
 };
 use realityos_semantics::embodiment::EmbodimentModel;
 use realityos_semantics::failure::ManipulationFailure;
@@ -112,6 +117,22 @@ pub struct ManipulationEpisode {
     pub contact_pose_reached: bool,
     #[serde(default)]
     pub selected_rank_why: String,
+    #[serde(default)]
+    pub world_construction: String,
+    #[serde(default)]
+    pub intended_tool_contact: bool,
+    #[serde(default)]
+    pub unintended_robot_contact: bool,
+    #[serde(default)]
+    pub support_contact: bool,
+    #[serde(default)]
+    pub self_collision: bool,
+    #[serde(default)]
+    pub obstacle_contact: bool,
+    #[serde(default)]
+    pub apparent_robot_object_contact: bool,
+    #[serde(default)]
+    pub world_adapted_to_robot: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -891,6 +912,9 @@ fn execute_plan(
                         );
                         ep.ctrl_writes = writes;
                         ep.authority_decisions = decisions;
+                        ep.had_feasible_contact_maneuver = placement.maneuver.is_some();
+                        ep.selected_rank_why = placement.rank_why.clone();
+                        ep.world_adapted_to_robot = placement.adapted_world;
                         return Ok((ep, inst));
                     }
                     Ok(ctrl) => {
@@ -903,7 +927,7 @@ fn execute_plan(
                             &episode_id,
                             si,
                             now,
-                            "reach",
+                            "drive",
                             xyz,
                         ) {
                             Ok(rec) => rec,
@@ -919,6 +943,7 @@ fn execute_plan(
                                     auth,
                                     decisions,
                                     sc.polarity != Polarity::Positive,
+                                    placement,
                                 );
                             }
                         };
@@ -990,7 +1015,7 @@ fn execute_plan(
                                     &episode_id,
                                     si * 10 + attempt as usize,
                                     now,
-                                    "reach",
+                                    "drive",
                                     xyz,
                                 ) {
                                     Ok(rec) => rec,
@@ -1006,6 +1031,7 @@ fn execute_plan(
                                             auth,
                                             decisions,
                                             sc.polarity != Polarity::Positive,
+                                            placement,
                                         );
                                     }
                                 };
@@ -1067,6 +1093,7 @@ fn execute_plan(
                             auth,
                             decisions,
                             sc.polarity != Polarity::Positive,
+                            placement,
                         );
                     }
                 };
@@ -1084,6 +1111,7 @@ fn execute_plan(
                             auth,
                             decisions,
                             sc.polarity != Polarity::Positive,
+                            placement,
                         );
                     }
                 };
@@ -1188,7 +1216,7 @@ fn execute_plan(
                                 &episode_id,
                                 si,
                                 now,
-                                "reach",
+                                "drive",
                                 t,
                             ) {
                                 Ok(rec) => rec,
@@ -1204,6 +1232,7 @@ fn execute_plan(
                                         auth,
                                         decisions,
                                         sc.polarity != Polarity::Positive,
+                                        placement,
                                     );
                                 }
                             };
@@ -1242,6 +1271,7 @@ fn execute_plan(
             sc.push_dist,
             &unexpected,
             sc.immovable,
+            &declared_manipulation_contact_bodies(model, Some(resource), &semantic_ee(bundle)),
         ),
         _ => {
             let ee = privileged_ee(bundle);
@@ -1274,7 +1304,7 @@ fn execute_plan(
             ctrl_writes,
             unauthorized,
             None,
-            &placement,
+            placement,
             approach_err,
             contact_err,
             approach_radius,
@@ -1370,8 +1400,34 @@ fn finish_episode(
         approach_pose_reached: approach_err.map(|d| d <= approach_radius).unwrap_or(false),
         contact_pose_reached: contact_err.map(|d| d <= contact_radius).unwrap_or(false),
         selected_rank_why: placement.rank_why.clone(),
+        world_construction: world_construction_label(sc),
+        intended_tool_contact: false,
+        unintended_robot_contact: false,
+        support_contact: false,
+        self_collision: false,
+        obstacle_contact: false,
+        apparent_robot_object_contact: false,
+        world_adapted_to_robot: placement.adapted_world,
     };
-    let ee_object_contact = episode_ee_object_contact(&ep, &sc.object_id);
+    let ee_name = semantic_ee(bundle);
+    let intended = declared_manipulation_contact_bodies(model, Some(resource), &ee_name);
+    let robot_bodies: Vec<String> = model.bodies.iter().map(|b| b.name.clone()).collect();
+    let obstacles: Vec<String> = sc
+        .objects
+        .iter()
+        .filter_map(|o| o.get("name").and_then(|v| v.as_str()))
+        .filter(|n| *n == "obstacle")
+        .map(|s| s.to_string())
+        .collect();
+    let (intended_tool, unintended, support, self_c, obstacle, apparent) =
+        episode_contact_flags(&ep, &sc.object_id, &intended, &robot_bodies, &obstacles);
+    ep.intended_tool_contact = intended_tool && ep.ctrl_writes > 0 && !ep.expected_refusal;
+    ep.unintended_robot_contact = unintended;
+    ep.support_contact = support;
+    ep.self_collision = self_c;
+    ep.obstacle_contact = obstacle;
+    ep.apparent_robot_object_contact = apparent && ep.ctrl_writes > 0 && !ep.expected_refusal;
+    let ee_object_contact = episode_ee_object_contact(&ep, &sc.object_id, &intended);
     if ep.skill_contract == "skill.push" && !ep.expected_refusal {
         let pre = PreContactEvidence {
             positive_reachable: ep.failure_taxonomy.as_deref() != Some("UNREACHABLE"),
@@ -1414,6 +1470,9 @@ fn finish_episode(
     );
     pev.feasible_maneuver = ep.had_feasible_contact_maneuver;
     pev.contact_pose_reached = ep.contact_pose_reached;
+    pev.intended_tool_contact = ep.intended_tool_contact;
+    pev.unintended_robot_contact = ep.unintended_robot_contact;
+    pev.apparent_robot_object_contact = ep.apparent_robot_object_contact;
     if ep.approach_pose_reached {
         pev.approach_reached = true;
     }
@@ -1445,6 +1504,7 @@ fn refuse_in_flight(
     auth: SimAuthority<SharedSimPort>,
     decisions: Vec<String>,
     expected: bool,
+    placement: &PlacementOutcome,
 ) -> Result<(ManipulationEpisode, crate::mujoco_exec::MujocoInstance), String> {
     let writes = shared.probe.snapshot().policy_ctrl_writes;
     drop(auth);
@@ -1460,6 +1520,9 @@ fn refuse_in_flight(
     );
     ep.ctrl_writes = writes;
     ep.authority_decisions = decisions;
+    ep.had_feasible_contact_maneuver = placement.maneuver.is_some();
+    ep.selected_rank_why = placement.rank_why.clone();
+    ep.world_adapted_to_robot = placement.adapted_world;
     Ok((ep, inst))
 }
 
@@ -1520,17 +1583,93 @@ fn refused_episode(
         approach_pose_reached: false,
         contact_pose_reached: false,
         selected_rank_why: String::new(),
+        world_construction: world_construction_label(sc),
+        intended_tool_contact: false,
+        unintended_robot_contact: false,
+        support_contact: false,
+        self_collision: false,
+        obstacle_contact: false,
+        apparent_robot_object_contact: false,
+        world_adapted_to_robot: false,
     }
 }
 
-fn episode_ee_object_contact(ep: &ManipulationEpisode, object_id: &str) -> bool {
+fn world_construction_label(sc: &ManipulationScenario) -> String {
+    let mode = if sc.world_construction == WorldConstructionMode::CapabilitySynthesis
+        || current_world_construction_mode() == WorldConstructionMode::CapabilitySynthesis
+    {
+        WorldConstructionMode::CapabilitySynthesis
+    } else {
+        WorldConstructionMode::FixedWorld
+    };
+    match mode {
+        WorldConstructionMode::FixedWorld => "fixed_world".into(),
+        WorldConstructionMode::CapabilitySynthesis => "capability_synthesis".into(),
+    }
+}
+
+fn is_push_synthesis(sc: &ManipulationScenario) -> bool {
+    sc.world_construction == WorldConstructionMode::CapabilitySynthesis
+        || current_world_construction_mode() == WorldConstructionMode::CapabilitySynthesis
+}
+
+fn episode_contact_flags(
+    ep: &ManipulationEpisode,
+    object_id: &str,
+    intended: &[String],
+    robot_bodies: &[String],
+    obstacles: &[String],
+) -> (bool, bool, bool, bool, bool, bool) {
+    let ctx = ContactClassContext {
+        object_id,
+        intended,
+        robot_bodies,
+        support_bodies: &[],
+        obstacle_bodies: obstacles,
+    };
+    let mut intended_tool = false;
+    let mut unintended = false;
+    let mut support = false;
+    let mut self_c = false;
+    let mut obstacle = false;
+    let mut apparent = false;
+    for c in &ep.contacts {
+        let a = c.get("a").and_then(|v| v.as_str()).unwrap_or("");
+        let b = c.get("b").and_then(|v| v.as_str()).unwrap_or("");
+        if crate::push_pipeline::names_are_apparent_robot_object_contact(a, b, object_id) {
+            apparent = true;
+        }
+        match classify_contact_pair(a, b, &ctx) {
+            Some(ContactEvidenceClass::IntendedToolContact) => intended_tool = true,
+            Some(ContactEvidenceClass::UnintendedRobotContact) => unintended = true,
+            Some(ContactEvidenceClass::SupportContact) => support = true,
+            Some(ContactEvidenceClass::SelfCollision) => self_c = true,
+            Some(ContactEvidenceClass::ObstacleContact) => obstacle = true,
+            None => {}
+        }
+    }
+    (
+        intended_tool,
+        unintended,
+        support,
+        self_c,
+        obstacle,
+        apparent,
+    )
+}
+
+fn episode_ee_object_contact(
+    ep: &ManipulationEpisode,
+    object_id: &str,
+    intended: &[String],
+) -> bool {
     if ep.expected_refusal || ep.ctrl_writes == 0 {
         return false;
     }
     ep.contacts.iter().any(|c| {
         let a = c.get("a").and_then(|v| v.as_str()).unwrap_or("");
         let b = c.get("b").and_then(|v| v.as_str()).unwrap_or("");
-        crate::push_pipeline::names_are_ee_object_contact(a, b, object_id)
+        crate::push_pipeline::names_are_ee_object_contact(a, b, object_id, intended)
     })
 }
 
@@ -1556,12 +1695,7 @@ pub fn tagged_push_episode_record(ep: &ManipulationEpisode) -> Value {
         .find(|o| o["name"] == "obj0")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let object_id = ep
-        .object_evidence
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("obj0");
-    let contact_established = episode_ee_object_contact(ep, object_id);
+    let contact_established = ep.intended_tool_contact;
     let displaced = ep
         .evidence_used
         .iter()
@@ -1667,6 +1801,20 @@ pub fn tagged_push_episode_record(ep: &ManipulationEpisode) -> Value {
         ),
         ("contact_pose_reached", json!(ep.contact_pose_reached)),
         ("mujoco_ee_object_contact", json!(contact_established)),
+        ("intended_tool_contact", json!(ep.intended_tool_contact)),
+        (
+            "unintended_robot_contact",
+            json!(ep.unintended_robot_contact),
+        ),
+        ("support_contact", json!(ep.support_contact)),
+        ("self_collision", json!(ep.self_collision)),
+        ("obstacle_contact", json!(ep.obstacle_contact)),
+        (
+            "apparent_robot_object_contact",
+            json!(ep.apparent_robot_object_contact),
+        ),
+        ("world_construction", json!(ep.world_construction)),
+        ("selected_rank_why", json!(ep.selected_rank_why)),
         (
             "provenance",
             json!({
@@ -1977,17 +2125,17 @@ fn clamp_qpos_to_joint_limits(
     let lo = manifest.q_min();
     let hi = manifest.q_max();
     let mut changed = false;
-    for i in 0..q.len() {
-        if !q[i].is_finite() {
-            q[i] = 0.0;
+    for (i, qi) in q.iter_mut().enumerate() {
+        if !qi.is_finite() {
+            *qi = 0.0;
             changed = true;
             continue;
         }
         let l = *lo.get(i).unwrap_or(&-1e6);
         let h = *hi.get(i).unwrap_or(&1e6);
-        let c = q[i].clamp(l.min(h), l.max(h));
-        if (c - q[i]).abs() > 1e-9 {
-            q[i] = c;
+        let c = qi.clamp(l.min(h), l.max(h));
+        if (c - *qi).abs() > 1e-9 {
+            *qi = c;
             changed = true;
         }
     }
@@ -2248,6 +2396,7 @@ struct PlacementOutcome {
     maneuver: Option<ContactManeuver>,
     reject: Option<ContactInfeasible>,
     rank_why: String,
+    adapted_world: bool,
 }
 
 fn ee_pose_from_truth(truth: &VerifierTruth, bundle: &RobotBundle) -> Option<Se3> {
@@ -2350,6 +2499,7 @@ fn local_ee_poses(
                     xyz: fk.ee.xyz,
                     quat_wxyz: fk.ee.quat_wxyz,
                     q,
+                    joint_names: chain.to_vec(),
                 });
             }
         }
@@ -2465,7 +2615,10 @@ fn place_object_in_workspace(
             [1.8, 0.0, 0.2]
         };
         apply_object_and_support(inst, sc, pos, anchor, !sc.planar);
-        return Ok(PlacementOutcome::default());
+        return Ok(PlacementOutcome {
+            adapted_world: true,
+            ..PlacementOutcome::default()
+        });
     }
     if sc.skill != "PUSH" {
         let pos = if sc.planar {
@@ -2475,40 +2628,82 @@ fn place_object_in_workspace(
             [anchor[0], anchor[1], z]
         };
         apply_object_and_support(inst, sc, pos, anchor, !sc.planar);
-        return Ok(PlacementOutcome::default());
+        return Ok(PlacementOutcome {
+            adapted_world: true,
+            ..PlacementOutcome::default()
+        });
     }
 
     let mut outcome = PlacementOutcome::default();
+    let synthesis = is_push_synthesis(sc);
     let use_v2 = current_contact_establishment_mode() == ContactEstablishmentMode::ManeuverV2;
-    if use_v2 {
-        let units = sample_push_units(model, ee_name, sc.seed, 96);
-        let mut cloud = realityos_semantics::workspace::reachable_ee_poses(model, ee_name, &units);
-        if let Some(q) = chain_q_from_qpos(model, ee_name, qpos) {
-            if let Some(chain) = model.ee_joint_chain(ee_name) {
-                if let Ok(fk) = forward_kinematics(model, &chain, ee_name, &q) {
-                    cloud.insert(
-                        0,
-                        SampledEePose {
-                            xyz: fk.ee.xyz,
-                            quat_wxyz: fk.ee.quat_wxyz,
-                            q: q.clone(),
-                        },
-                    );
+    let units = sample_push_units(model, ee_name, sc.seed, 96);
+    let mut cloud = realityos_semantics::workspace::reachable_ee_poses(model, ee_name, &units);
+    if let Some(q) = chain_q_from_qpos(model, ee_name, qpos) {
+        if let Some(chain) = model.ee_joint_chain(ee_name) {
+            if let Ok(fk) = forward_kinematics(model, &chain, ee_name, &q) {
+                cloud.insert(
+                    0,
+                    SampledEePose {
+                        xyz: fk.ee.xyz,
+                        quat_wxyz: fk.ee.quat_wxyz,
+                        q: q.clone(),
+                        joint_names: chain.clone(),
+                    },
+                );
+            }
+            cloud.extend(local_ee_poses(model, ee_name, &chain, &q, sc.seed, 32));
+        }
+    }
+    let mut tool_ee = [0.0, 0.0, 0.0];
+    if let Some(tip) = finger_tip {
+        tool_ee = tool_offset_in_ee(ee_quat, tip, ee);
+        let n =
+            (tool_ee[0] * tool_ee[0] + tool_ee[1] * tool_ee[1] + tool_ee[2] * tool_ee[2]).sqrt();
+        if n > 0.15 {
+            let s = 0.15 / n;
+            tool_ee = [tool_ee[0] * s, tool_ee[1] * s, tool_ee[2] * s];
+        }
+    }
+    let spec = ContactManeuverSpec::table_push(sc.push_dir, sc.push_dist, ee, tool_ee);
+
+    if !synthesis {
+        // Mode B: object and support stay where the scenario put them.
+        if let Some(center) = scenario_body_xyz(sc, &sc.object_id) {
+            let table = scenario_body_xyz(sc, "table").unwrap_or([center[0], center[1], 0.40]);
+            let tz = table_half_z(sc);
+            let support = SupportPlane {
+                origin: [table[0], table[1], table[2] + tz],
+                normal: [0.0, 0.0, 1.0],
+            };
+            let object = BoxObject {
+                center,
+                half_extents: half_xyz,
+            };
+            if use_v2 {
+                match select_fixed_world_push(&cloud, object, support, &spec, &model.joints) {
+                    Ok((maneuver, why)) => {
+                        outcome.rank_why = format!(
+                            "score={} approach={:.4} stroke={:.4} orient={:.4} clear={:.4}",
+                            why.score,
+                            why.inputs.approach_distance,
+                            why.inputs.remaining_stroke,
+                            why.inputs.orientation_error,
+                            why.inputs.support_clearance
+                        );
+                        outcome.maneuver = Some(maneuver);
+                    }
+                    Err(e) => {
+                        outcome.reject = Some(e);
+                        outcome.rank_why = format!("reject={} cloud={}", e.as_str(), cloud.len());
+                    }
                 }
-                cloud.extend(local_ee_poses(model, ee_name, &chain, &q, sc.seed, 32));
             }
         }
-        let mut tool_ee = [0.0, 0.0, 0.0];
-        if let Some(tip) = finger_tip {
-            tool_ee = tool_offset_in_ee(ee_quat, tip, ee);
-            let n = (tool_ee[0] * tool_ee[0] + tool_ee[1] * tool_ee[1] + tool_ee[2] * tool_ee[2])
-                .sqrt();
-            if n > 0.15 {
-                let s = 0.15 / n;
-                tool_ee = [tool_ee[0] * s, tool_ee[1] * s, tool_ee[2] * s];
-            }
-        }
-        let spec = ContactManeuverSpec::table_push(sc.push_dir, sc.push_dist, ee, tool_ee);
+        return Ok(outcome);
+    }
+
+    if use_v2 {
         match select_push_maneuver(&cloud, &spec, half_xyz, [0.0, 0.0, 1.0], &model.joints) {
             Ok((maneuver, why)) => {
                 outcome.rank_why = format!(
@@ -2522,6 +2717,7 @@ fn place_object_in_workspace(
                 let pos = maneuver.object_center;
                 apply_object_and_support(inst, sc, pos, pos, true);
                 outcome.maneuver = Some(maneuver);
+                outcome.adapted_world = true;
                 return Ok(outcome);
             }
             Err(e) => {
@@ -2533,7 +2729,17 @@ fn place_object_in_workspace(
 
     let pos = xyz_push_object_pos(sc, model, ee_name, ee, anchor, half);
     apply_object_and_support(inst, sc, pos, anchor, !sc.planar);
+    outcome.adapted_world = true;
     Ok(outcome)
+}
+
+fn scenario_body_xyz(sc: &ManipulationScenario, name: &str) -> Option<[f64; 3]> {
+    let obj = sc.objects.iter().find(|o| o["name"] == name)?;
+    let a = obj["pos"].as_array()?;
+    if a.len() < 3 {
+        return None;
+    }
+    Some([a[0].as_f64()?, a[1].as_f64()?, a[2].as_f64()?])
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3066,6 +3272,9 @@ mod tests {
             "n_positive_reachable": funnel.n_positive_reachable,
             "n_feasible_maneuver": funnel.n_feasible_maneuver,
             "n_contact_pose_reached": funnel.n_contact_pose_reached,
+            "n_intended_tool_contact": funnel.n_intended_tool_contact,
+            "n_unintended_robot_contact": funnel.n_unintended_robot_contact,
+            "n_apparent_robot_object_contact": funnel.n_apparent_robot_object_contact,
             "unauthorized_writes": funnel.n_unauthorized_writes,
         })
     }
@@ -3081,20 +3290,18 @@ mod tests {
                 "PUSH must not mint unauthorized writes robot={} seed={} tax={:?} expected={}",
                 ep.robot_id, ep.world_seed, ep.failure_taxonomy, ep.expected_refusal
             );
-            let object_id = ep
-                .object_evidence
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("obj0");
             let mut ev = crate::push_pipeline::evidence_from_episode_fields(
                 &ep.task_result,
                 ep.failure_taxonomy.as_deref().unwrap_or(""),
                 &ep.evidence_used,
-                super::episode_ee_object_contact(ep, object_id),
+                ep.intended_tool_contact,
                 ep.expected_refusal,
             );
             ev.feasible_maneuver = ep.had_feasible_contact_maneuver;
             ev.contact_pose_reached = ep.contact_pose_reached;
+            ev.intended_tool_contact = ep.intended_tool_contact;
+            ev.unintended_robot_contact = ep.unintended_robot_contact;
+            ev.apparent_robot_object_contact = ep.apparent_robot_object_contact;
             if ep.approach_pose_reached {
                 ev.approach_reached = true;
             }
@@ -3150,20 +3357,18 @@ mod tests {
                     let mut funnel = crate::push_pipeline::PushFunnel::default();
                     let recs = absorb_push_episodes(&mut funnel, &eps);
                     for ep in &eps {
-                        let object_id = ep
-                            .object_evidence
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("obj0");
                         let mut ev = crate::push_pipeline::evidence_from_episode_fields(
                             &ep.task_result,
                             ep.failure_taxonomy.as_deref().unwrap_or(""),
                             &ep.evidence_used,
-                            super::episode_ee_object_contact(ep, object_id),
+                            ep.intended_tool_contact,
                             ep.expected_refusal,
                         );
                         ev.feasible_maneuver = ep.had_feasible_contact_maneuver;
                         ev.contact_pose_reached = ep.contact_pose_reached;
+                        ev.intended_tool_contact = ep.intended_tool_contact;
+                        ev.unintended_robot_contact = ep.unintended_robot_contact;
+                        ev.apparent_robot_object_contact = ep.apparent_robot_object_contact;
                         if ep.approach_pose_reached {
                             ev.approach_reached = true;
                         }
@@ -3276,15 +3481,14 @@ mod tests {
             compared += 1;
             let bc = b["n_contact"].as_u64().unwrap_or(0);
             let ac = a["n_contact"].as_u64().unwrap_or(0);
+            let a_int = a["n_intended_tool_contact"].as_u64().unwrap_or(0);
+            let a_app = a["n_apparent_robot_object_contact"].as_u64().unwrap_or(0);
             if ac > bc {
                 improved += 1;
             }
-            if bc > 0 {
-                assert!(
-                    ac > 0,
-                    "{label} had baseline contact={bc} but Contact V2 lost all contact"
-                );
-            }
+            eprintln!(
+                "plan10 honest contact {label} xyz_contact={bc} v2_intended={a_int} v2_apparent={a_app}"
+            );
             for recs in [b["episodes"].as_array(), a["episodes"].as_array()]
                 .into_iter()
                 .flatten()
@@ -3296,8 +3500,18 @@ mod tests {
                         rec["mujoco_ee_object_contact"]["tag"],
                         "PRIVILEGED_SIM_LABEL_ONLY"
                     );
+                    assert_eq!(
+                        rec["intended_tool_contact"]["tag"],
+                        "PRIVILEGED_SIM_LABEL_ONLY"
+                    );
                     assert_eq!(rec["pre_contact_taxonomy"]["tag"], "TARGET_LABEL");
                     assert!(rec.get("pre_contact_taxonomy").is_some());
+                    assert_eq!(rec["world_construction"]["value"], "fixed_world");
+                    assert_eq!(
+                        rec["mujoco_ee_object_contact"]["value"],
+                        rec["intended_tool_contact"]["value"],
+                        "PUSH contact metric must be intended-tool, not apparent robot-object"
+                    );
                 }
             }
         }
@@ -3307,18 +3521,12 @@ mod tests {
                 ["arm_gripper", "panda", "ur5e", "iiwa14"].contains(&k.as_str()),
                 "development matrix must not include extra robot {k}"
             );
-        }
-        if n > 16 {
             assert!(
-                improved >= 3,
-                "Contact V2 must raise same-seed contact on >=3 development robots, improved={improved} n={n}"
+                !k.to_ascii_lowercase().contains("wx250"),
+                "development matrix must not include holdout {k}"
             );
-            if v2.0.n_contact > 0 {
-                let p = v2.0.p_task_given_contact();
-                assert!(p >= 0.5, "P(task|contact) collapsed under Contact V2: {p}");
-            }
         }
-        if let Some(path) = std::env::var("REALITYOS_CONTACT_V2_OUT").ok() {
+        if let Ok(path) = std::env::var("REALITYOS_CONTACT_V2_OUT") {
             let report = json!({
                 "n": n,
                 "idx_offset": 9,
@@ -3382,5 +3590,116 @@ mod tests {
         report["tuned_on_holdout"] = json!(false);
         report["episodes"] = json!(recs);
         std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn default_push_scenario_is_fixed_world_not_synthesis() {
+        let sc = push_scenario(11, false, 20);
+        assert_eq!(sc.world_construction, WorldConstructionMode::FixedWorld);
+        assert!(!super::is_push_synthesis(&sc));
+    }
+
+    #[test]
+    fn forearm_contact_is_not_push_contact() {
+        let intended = vec!["finger".into()];
+        let robot = vec!["forearm".into(), "finger".into(), "link7".into()];
+        let ep = ManipulationEpisode {
+            software_sha: "t".into(),
+            robot_id: "uuid".into(),
+            model_hash: "h".into(),
+            object_definitions: vec![],
+            world_seed: 1,
+            skill_contract: "skill.push".into(),
+            semantic_resource: None,
+            resource_topology: None,
+            joint_state: json!([]),
+            object_evidence: json!({"id":"obj0"}),
+            commands: vec![],
+            authority_decisions: vec![],
+            contacts: vec![json!({"a":"forearm","b":"obj0","fn":1.0,"ft":0.0})],
+            support_relations: vec![],
+            task_result: "fail".into(),
+            failure_taxonomy: None,
+            evidence_used: vec![],
+            physical_violations: vec![],
+            ctrl_writes: 1,
+            unauthorized_writes: 0,
+            replay_write_delta: None,
+            metal: false,
+            evidence_status: SIMULATION_ONLY.into(),
+            perception: "PERFECT_PERCEPTION".into(),
+            simulation_only: true,
+            expected_refusal: false,
+            earliest_failure_stage: String::new(),
+            first_stage_entered: String::new(),
+            last_stage_completed: String::new(),
+            earliest_pipeline_failed: String::new(),
+            requested_push_direction: [1.0, 0.0, 0.0],
+            requested_push_distance_m: 0.05,
+            contact_establishment: "maneuver_v2".into(),
+            had_feasible_contact_maneuver: false,
+            pre_contact_taxonomy: String::new(),
+            approach_pose_error_m: f64::NAN,
+            contact_pose_error_m: f64::NAN,
+            approach_pose_reached: false,
+            contact_pose_reached: false,
+            selected_rank_why: String::new(),
+            world_construction: "fixed_world".into(),
+            intended_tool_contact: false,
+            unintended_robot_contact: false,
+            support_contact: false,
+            self_collision: false,
+            obstacle_contact: false,
+            apparent_robot_object_contact: false,
+            world_adapted_to_robot: false,
+        };
+        let (tool, unintended, _, _, _, apparent) =
+            super::episode_contact_flags(&ep, "obj0", &intended, &robot, &[]);
+        assert!(!tool);
+        assert!(unintended);
+        assert!(apparent);
+        assert!(!super::episode_ee_object_contact(&ep, "obj0", &intended));
+        let finger = json!({"a":"finger","b":"obj0","fn":1.0,"ft":0.0});
+        let mut ep2 = ep.clone();
+        ep2.contacts = vec![finger];
+        assert!(super::episode_ee_object_contact(&ep2, "obj0", &intended));
+    }
+
+    #[test]
+    fn fixed_world_push_episode_does_not_adapt_world_to_robot() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(corpus::robot_dir("arm_gripper")).unwrap();
+        let (eps, _) = run_push_matrix_from(&b, 1, "sha", 20).expect("episode");
+        let ep = &eps[0];
+        assert_eq!(ep.world_construction, "fixed_world");
+        assert!(
+            !ep.world_adapted_to_robot,
+            "Mode B must not move object/support to the robot"
+        );
+        assert_eq!(ep.unauthorized_writes, 0);
+        assert_eq!(ep.evidence_status, SIMULATION_ONLY);
+    }
+
+    #[test]
+    fn arm_gripper_fixed_world_records_reject_or_rank_why() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(corpus::robot_dir("arm_gripper")).unwrap();
+        let (eps, _) = run_push_matrix_from(&b, 4, "sha", 20).expect("eps");
+        for ep in &eps {
+            assert_eq!(ep.unauthorized_writes, 0);
+            assert_eq!(ep.world_construction, "fixed_world");
+            assert!(
+                !ep.world_adapted_to_robot,
+                "Mode B must not move the world to the robot"
+            );
+            assert!(
+                !ep.selected_rank_why.is_empty(),
+                "fixed-world episodes must record candidate reject/rank why"
+            );
+        }
     }
 }
