@@ -215,6 +215,7 @@ pub enum ProtocolError {
     BadCrc,
     BadInstruction,
     Truncated,
+    UnexpectedId,
 }
 
 impl fmt::Display for ProtocolError {
@@ -225,6 +226,7 @@ impl fmt::Display for ProtocolError {
             Self::BadCrc => f.write_str("dxl_bad_crc"),
             Self::BadInstruction => f.write_str("dxl_bad_instruction"),
             Self::Truncated => f.write_str("dxl_truncated"),
+            Self::UnexpectedId => f.write_str("dxl_unexpected_id"),
         }
     }
 }
@@ -390,6 +392,40 @@ pub fn decode_status_scan(buf: &[u8]) -> Result<StatusPacket, ProtocolError> {
         }
     }
     Err(last_err)
+}
+
+/// Directed transaction: skip CRC-valid status frames until `status.id`
+/// equals `expected_id`, then return that packet. A later unrelated ID
+/// cannot mutate the result. Broadcast sniff uses [`unique_status_ids`].
+pub fn decode_status_scan_for(buf: &[u8], expected_id: u8) -> Result<StatusPacket, ProtocolError> {
+    let mut search = 0;
+    let mut last_err = ProtocolError::UnexpectedId;
+    let mut saw_status = false;
+    while search < buf.len() {
+        let Some(rel) = find_header(&buf[search..]) else {
+            break;
+        };
+        let start = search + rel;
+        match decode_status(&buf[start..]) {
+            Ok(st) if st.id == expected_id => return Ok(st),
+            Ok(_) => {
+                saw_status = true;
+                search = start + 4;
+            }
+            Err(ProtocolError::Truncated) | Err(ProtocolError::TooShort) => {
+                return Err(ProtocolError::Truncated);
+            }
+            Err(e) => {
+                last_err = e;
+                search = start + 1;
+            }
+        }
+    }
+    if saw_status {
+        Err(ProtocolError::UnexpectedId)
+    } else {
+        Err(last_err)
+    }
 }
 
 /// Unique servo IDs from every status frame in `buf`. Broadcast sniff uses
@@ -646,6 +682,71 @@ mod tests {
         assert_eq!(unique_status_ids(&both), vec![1, 7]);
         let zero = encode_packet(0, INST_STATUS, &[0]);
         assert_eq!(unique_status_ids(&zero), vec![0]);
+    }
+
+    #[test]
+    fn directed_scan_correct_id_only_succeeds() {
+        let st = encode_status(1, 0, &[]);
+        let got = decode_status_scan_for(&st, 1).expect("id 1");
+        assert_eq!(got.id, 1);
+        assert_eq!(got.error, 0);
+    }
+
+    #[test]
+    fn directed_scan_wrong_id_only_does_not_satisfy() {
+        let st = encode_status(7, 0, &[]);
+        assert_eq!(
+            decode_status_scan_for(&st, 1),
+            Err(ProtocolError::UnexpectedId)
+        );
+    }
+
+    #[test]
+    fn directed_scan_wrong_then_correct_accepts_correct() {
+        let mut buf = encode_status(7, 0, &[0xAA]);
+        buf.extend_from_slice(&encode_status(1, 0, &[0xBB]));
+        let got = decode_status_scan_for(&buf, 1).expect("skip 7, take 1");
+        assert_eq!(got.id, 1);
+        assert_eq!(got.params, vec![0xBB]);
+    }
+
+    #[test]
+    fn directed_scan_correct_then_wrong_keeps_first() {
+        let mut buf = encode_status(1, 0, &[0x11]);
+        buf.extend_from_slice(&encode_status(7, 0, &[0x22]));
+        let got = decode_status_scan_for(&buf, 1).expect("first expected");
+        assert_eq!(got.id, 1);
+        assert_eq!(got.params, vec![0x11]);
+    }
+
+    #[test]
+    fn directed_scan_wrong_id_write_status_is_not_ack() {
+        let ack_other = encode_status(7, 0, &[]);
+        assert_eq!(
+            decode_status_scan_for(&ack_other, 1),
+            Err(ProtocolError::UnexpectedId)
+        );
+    }
+
+    #[test]
+    fn directed_scan_wrong_id_read_cannot_poison_payload() {
+        let poison = 3000i32.to_le_bytes();
+        let st = encode_status(7, 0, &poison);
+        assert_eq!(
+            decode_status_scan_for(&st, 1),
+            Err(ProtocolError::UnexpectedId)
+        );
+    }
+
+    #[test]
+    fn broadcast_sniff_still_sees_multiple_ids_after_directed_scan() {
+        let a = encode_status(1, 0, &[]);
+        let b = encode_status(7, 0, &[]);
+        let mut both = a;
+        both.extend_from_slice(&b);
+        assert_eq!(unique_status_ids(&both), vec![1, 7]);
+        assert_eq!(decode_status_scan_for(&both, 1).unwrap().id, 1);
+        assert_eq!(decode_status_scan_for(&both, 7).unwrap().id, 7);
     }
 
     #[test]

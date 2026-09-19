@@ -30,7 +30,7 @@ use crate::identity::{
     rematch_discover_device, usb_identity_for_tty, MeasuredIdentity,
 };
 use crate::protocol::{
-    decode_status_scan, encode_ping, encode_read, encode_reboot, encode_write, find_header,
+    decode_status_scan_for, encode_ping, encode_read, encode_reboot, encode_write, find_header,
     instruction_ok, is_xl330_model, le_i16, le_i32, le_u16, le_u32, pwm_limit_percent,
     unique_status_ids, ProtocolError, ADDR_BAUD_RATE, ADDR_BUS_WATCHDOG, ADDR_CURRENT_LIMIT,
     ADDR_DRIVE_MODE, ADDR_FEEDFORWARD_1ST, ADDR_FEEDFORWARD_2ND, ADDR_FIRMWARE_VERSION,
@@ -739,7 +739,7 @@ impl Xl330Driver {
                 Ok(0) => {}
                 Ok(n) => {
                     acc.extend_from_slice(&tmp[..n]);
-                    if decode_status_scan(&acc).is_ok() {
+                    if decode_status_scan_for(&acc, self.cfg.servo_id).is_ok() {
                         break;
                     }
                 }
@@ -781,7 +781,7 @@ impl Xl330Driver {
                 Ok(0) => {}
                 Ok(n) => {
                     acc.extend_from_slice(&tmp[..n]);
-                    if let Ok(st) = decode_status_scan(&acc) {
+                    if let Ok(st) = decode_status_scan_for(&acc, self.cfg.servo_id) {
                         got = st.params.first().copied();
                         break;
                     }
@@ -1661,7 +1661,7 @@ impl Xl330Driver {
                 Ok(0) => {}
                 Ok(n) => {
                     acc.extend_from_slice(&tmp[..n]);
-                    if let Ok(st) = decode_status_scan(&acc) {
+                    if let Ok(st) = decode_status_scan_for(&acc, self.cfg.servo_id) {
                         result = if instruction_ok(st.error) {
                             Ok(())
                         } else {
@@ -2447,7 +2447,7 @@ impl Xl330Driver {
                 Err(e) => return Err(e),
             }
             if find_header(&acc).is_some() && acc.len() >= 11 {
-                match decode_status_scan(&acc) {
+                match decode_status_scan_for(&acc, self.cfg.servo_id) {
                     Ok(st) => return Ok(st),
                     Err(ProtocolError::Truncated) | Err(ProtocolError::TooShort) => {}
                     Err(ProtocolError::BadCrc) => {
@@ -2459,7 +2459,7 @@ impl Xl330Driver {
                 }
             }
         }
-        decode_status_scan(&acc).map_err(|e| io::Error::other(e.to_string()))
+        decode_status_scan_for(&acc, self.cfg.servo_id).map_err(|e| io::Error::other(e.to_string()))
     }
 
     fn write_reg(
@@ -3237,7 +3237,7 @@ fn read_id_register(port: &mut dyn SerialPort, device: &Path, id: u8) -> Option<
             Ok(0) => {}
             Ok(n) => {
                 acc.extend_from_slice(&tmp[..n]);
-                if let Ok(st) = decode_status_scan(&acc) {
+                if let Ok(st) = decode_status_scan_for(&acc, id) {
                     let _ = port.set_timeout(saved);
                     return st.params.first().copied();
                 }

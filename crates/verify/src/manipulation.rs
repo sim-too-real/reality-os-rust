@@ -80,6 +80,12 @@ pub struct ManipulationEpisode {
     pub expected_refusal: bool,
     #[serde(default)]
     pub earliest_failure_stage: String,
+    #[serde(default)]
+    pub first_stage_entered: String,
+    #[serde(default)]
+    pub last_stage_completed: String,
+    #[serde(default)]
+    pub earliest_pipeline_failed: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -266,6 +272,15 @@ pub fn run_push_matrix(
     n: usize,
     sha: &str,
 ) -> Result<(Vec<ManipulationEpisode>, ManipulationMetrics), String> {
+    run_push_matrix_from(bundle, n, sha, 0)
+}
+
+pub fn run_push_matrix_from(
+    bundle: &RobotBundle,
+    n: usize,
+    sha: &str,
+    idx_offset: usize,
+) -> Result<(Vec<ManipulationEpisode>, ManipulationMetrics), String> {
     let (probe, man_probe) = load_and_normalize(bundle, &[], 0)?;
     let planar = manifest_arm_is_planar(&man_probe);
     checkin_worker(probe);
@@ -275,7 +290,7 @@ pub fn run_push_matrix(
     let mut metrics = ManipulationMetrics::default();
     let mut loaded = Some((inst, manifest));
     for i in 0..n {
-        let sc = push_scenario(3000 + i as u64, planar, i);
+        let sc = push_scenario(3000 + i as u64, planar, idx_offset + i);
         let (ep, inst, man) =
             run_skill_episode(bundle, &model, &[], &sc, sha, "PUSH", loaded.take())?;
         loaded = Some((inst, man));
@@ -1214,6 +1229,9 @@ fn finish_episode(
         simulation_only: true,
         expected_refusal: sc.polarity == Polarity::Negative || sc.expected_refusal.is_some(),
         earliest_failure_stage: String::new(),
+        first_stage_entered: String::new(),
+        last_stage_completed: String::new(),
+        earliest_pipeline_failed: String::new(),
     };
     ep.earliest_failure_stage = crate::failure_diagnosis::classify_push_stage(
         &ep.task_result,
@@ -1238,6 +1256,26 @@ fn finish_episode(
                 .unwrap_or_else(|| "UNKNOWN".into())
         };
     }
+    let pev = crate::push_pipeline::evidence_from_episode_fields(
+        &ep.task_result,
+        ep.failure_taxonomy.as_deref().unwrap_or(""),
+        &ep.evidence_used,
+        !ep.contacts.is_empty(),
+        ep.expected_refusal,
+    );
+    let tr = crate::push_pipeline::classify_push_pipeline(&pev);
+    ep.first_stage_entered = tr
+        .first_stage_entered
+        .map(|s| s.as_str().into())
+        .unwrap_or_default();
+    ep.last_stage_completed = tr
+        .last_stage_completed
+        .map(|s| s.as_str().into())
+        .unwrap_or_default();
+    ep.earliest_pipeline_failed = tr
+        .earliest_failed_stage
+        .map(|s| s.as_str().into())
+        .unwrap_or_default();
     ep
 }
 
@@ -1312,6 +1350,9 @@ fn refused_episode(
         } else {
             failure.unwrap_or("UNKNOWN").into()
         },
+        first_stage_entered: "TARGET_AVAILABLE".into(),
+        last_stage_completed: String::new(),
+        earliest_pipeline_failed: String::new(),
     }
 }
 
@@ -2360,5 +2401,42 @@ mod tests {
         assert!(r.coupling.tendon.is_some());
         assert!(!r.coupling.equalities.is_empty());
         assert_eq!(r.actuator_inputs.len(), 1);
+    }
+
+    #[test]
+    fn push_pipeline_funnel_keeps_unauthorized_writes_zero() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let sha = software_sha();
+        let arm = RobotBundle::load(corpus::robot_dir("arm_gripper")).unwrap();
+        let (eps, _) = run_push_matrix_from(&arm, 16, &sha, 9).expect("push matrix");
+        let mut funnel = crate::push_pipeline::PushFunnel::default();
+        for ep in &eps {
+            assert_eq!(
+                ep.unauthorized_writes, 0,
+                "PUSH must not mint unauthorized writes"
+            );
+            let ev = crate::push_pipeline::evidence_from_episode_fields(
+                &ep.task_result,
+                ep.failure_taxonomy.as_deref().unwrap_or(""),
+                &ep.evidence_used,
+                !ep.contacts.is_empty(),
+                ep.expected_refusal,
+            );
+            funnel.absorb(&ev, ep.unauthorized_writes);
+            assert!(
+                !ep.first_stage_entered.is_empty() || ep.expected_refusal,
+                "pipeline stages must be labeled"
+            );
+        }
+        eprintln!(
+            "push_funnel n={} contact={} p_task_given_contact={:.3} unauthorized={}",
+            funnel.n,
+            funnel.n_contact,
+            funnel.p_task_given_contact(),
+            funnel.n_unauthorized_writes
+        );
+        assert_eq!(funnel.n_unauthorized_writes, 0);
     }
 }

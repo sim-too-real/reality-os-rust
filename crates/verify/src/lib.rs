@@ -26,6 +26,7 @@ pub mod mujoco_exec;
 pub mod normalize;
 pub mod observation;
 pub mod policy;
+pub mod push_pipeline;
 pub mod qualify;
 pub mod reach_foundation;
 pub mod reduce;
