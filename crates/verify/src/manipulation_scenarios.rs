@@ -333,6 +333,15 @@ pub fn push_scenario(seed: u64, planar: bool, idx: usize) -> ManipulationScenari
     } else {
         [1.0, rng.gen_range(-0.2..0.2), 0.0]
     };
+    let (x, y, z) = if matches!(neg, Some(NegKind::Unreachable)) {
+        if planar {
+            (1.6, 0.0, 0.05)
+        } else {
+            (1.8, 0.0, 0.2)
+        }
+    } else {
+        (x, y, z)
+    };
     let mut s = scenario_with_object(
         seed,
         polarity,
@@ -473,5 +482,22 @@ mod tests {
             [0.0, -1.0, 0.0],
         ];
         assert!(!is_planar_model(&with_slides));
+    }
+
+    #[test]
+    fn push_unreachable_object_is_parked_outside_workspace() {
+        let s = push_scenario(3000, false, 9);
+        assert!(matches!(s.neg, Some(NegKind::Unreachable)));
+        let pos = s
+            .objects
+            .iter()
+            .find(|o| o["name"] == "obj0")
+            .and_then(|o| o["pos"].as_array())
+            .expect("obj0 pos");
+        let x = pos[0].as_f64().unwrap();
+        assert!(
+            x > 1.0,
+            "Unreachable PUSH must not sit in the reachable cloud, x={x}"
+        );
     }
 }

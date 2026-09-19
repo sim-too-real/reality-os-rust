@@ -1257,15 +1257,12 @@ fn finish_episode(
         requested_push_direction: sc.push_dir,
         requested_push_distance_m: sc.push_dist,
     };
+    let ee_object_contact = episode_ee_object_contact(&ep, &sc.object_id);
     ep.earliest_failure_stage = crate::failure_diagnosis::classify_push_stage(
         &ep.task_result,
         ep.failure_taxonomy.as_deref().unwrap_or(""),
         &ep.evidence_used,
-        ep.contacts.iter().any(|c| {
-            let a = c.get("a").and_then(|v| v.as_str()).unwrap_or("");
-            let b = c.get("b").and_then(|v| v.as_str()).unwrap_or("");
-            a.contains(&sc.object_id) || b.contains(&sc.object_id)
-        }),
+        ee_object_contact,
     )
     .as_str()
     .into();
@@ -1284,7 +1281,7 @@ fn finish_episode(
         &ep.task_result,
         ep.failure_taxonomy.as_deref().unwrap_or(""),
         &ep.evidence_used,
-        !ep.contacts.is_empty(),
+        ee_object_contact,
         ep.expected_refusal,
     );
     let tr = crate::push_pipeline::classify_push_pipeline(&pev);
@@ -1382,6 +1379,17 @@ fn refused_episode(
     }
 }
 
+fn episode_ee_object_contact(ep: &ManipulationEpisode, object_id: &str) -> bool {
+    if ep.expected_refusal || ep.ctrl_writes == 0 {
+        return false;
+    }
+    ep.contacts.iter().any(|c| {
+        let a = c.get("a").and_then(|v| v.as_str()).unwrap_or("");
+        let b = c.get("b").and_then(|v| v.as_str()).unwrap_or("");
+        crate::push_pipeline::names_are_ee_object_contact(a, b, object_id)
+    })
+}
+
 pub fn tagged_push_episode_record(ep: &ManipulationEpisode) -> Value {
     let n_joints = ep.joint_state.as_array().map(|a| a.len()).unwrap_or(0);
     let object_features = ep
@@ -1390,15 +1398,12 @@ pub fn tagged_push_episode_record(ep: &ManipulationEpisode) -> Value {
         .find(|o| o["name"] == "obj0")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let contact_established = ep
-        .evidence_used
-        .iter()
-        .any(|e| e == "controlled_contact_established")
-        || ep.contacts.iter().any(|c| {
-            let a = c.get("a").and_then(|v| v.as_str()).unwrap_or("");
-            let b = c.get("b").and_then(|v| v.as_str()).unwrap_or("");
-            a.contains("obj") || b.contains("obj")
-        });
+    let object_id = ep
+        .object_evidence
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("obj0");
+    let contact_established = episode_ee_object_contact(ep, object_id);
     let displaced = ep
         .evidence_used
         .iter()
@@ -2041,7 +2046,13 @@ fn place_object_in_workspace(
         .and_then(|o| o["size"].as_array())
         .and_then(|a| a.first().and_then(|v| v.as_f64()))
         .unwrap_or(0.025);
-    let pos = if sc.skill == "PUSH" {
+    let pos = if matches!(sc.neg, Some(NegKind::Unreachable)) {
+        if sc.planar {
+            [1.6, 0.0, 0.05]
+        } else {
+            [1.8, 0.0, 0.2]
+        }
+    } else if sc.skill == "PUSH" {
         use rand::{Rng, SeedableRng};
         let mut rng = rand::rngs::StdRng::seed_from_u64(sc.seed ^ 0x00A1_1CE5);
         let n_chain = model.ee_joint_chain(ee_name).map(|c| c.len()).unwrap_or(0);
@@ -2625,11 +2636,16 @@ mod tests {
                 "PUSH must not mint unauthorized writes robot={} seed={} tax={:?} expected={}",
                 ep.robot_id, ep.world_seed, ep.failure_taxonomy, ep.expected_refusal
             );
+            let object_id = ep
+                .object_evidence
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("obj0");
             let ev = crate::push_pipeline::evidence_from_episode_fields(
                 &ep.task_result,
                 ep.failure_taxonomy.as_deref().unwrap_or(""),
                 &ep.evidence_used,
-                !ep.contacts.is_empty(),
+                super::episode_ee_object_contact(ep, object_id),
                 ep.expected_refusal,
             );
             funnel.absorb(&ev, ep.unauthorized_writes);
@@ -2665,33 +2681,40 @@ mod tests {
         }
     }
 
-    #[test]
-    fn push_pipeline_funnel_keeps_unauthorized_writes_zero() {
-        if !ensure_mujoco_or_skip() {
-            return;
-        }
-        let sha = software_sha();
+    fn run_four_robot_funnel(
+        sha: &str,
+        tag: &str,
+    ) -> (
+        crate::push_pipeline::PushFunnel,
+        serde_json::Map<String, Value>,
+        serde_json::Map<String, Value>,
+    ) {
         let mut overall = crate::push_pipeline::PushFunnel::default();
         let mut robots = serde_json::Map::new();
         let mut load_errors = serde_json::Map::new();
         for label in ["arm_gripper", "panda", "ur5e", "iiwa14"] {
             match try_load_development_push(label) {
                 Ok(bundle) => {
-                    let (eps, _) = run_push_matrix_from(&bundle, 16, &sha, 9).expect("push matrix");
+                    let (eps, _) = run_push_matrix_from(&bundle, 16, sha, 9).expect("push matrix");
                     let mut funnel = crate::push_pipeline::PushFunnel::default();
                     let recs = absorb_push_episodes(&mut funnel, &eps);
                     for ep in &eps {
+                        let object_id = ep
+                            .object_evidence
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("obj0");
                         let ev = crate::push_pipeline::evidence_from_episode_fields(
                             &ep.task_result,
                             ep.failure_taxonomy.as_deref().unwrap_or(""),
                             &ep.evidence_used,
-                            !ep.contacts.is_empty(),
+                            super::episode_ee_object_contact(ep, object_id),
                             ep.expected_refusal,
                         );
                         overall.absorb(&ev, ep.unauthorized_writes);
                     }
                     eprintln!(
-                        "push_funnel {label} n={} contact={} p_task_given_contact={:.3} unauthorized={}",
+                        "push_funnel {tag} {label} n={} contact={} p_task_given_contact={:.3} unauthorized={}",
                         funnel.n,
                         funnel.n_contact,
                         funnel.p_task_given_contact(),
@@ -2699,21 +2722,11 @@ mod tests {
                     );
                     assert_eq!(
                         funnel.n_unauthorized_writes, 0,
-                        "{label} PUSH unauthorized_writes must stay 0"
+                        "{tag} {label} PUSH unauthorized_writes must stay 0"
                     );
                     let mut block = funnel_rates(&funnel);
                     block["episodes"] = json!(recs);
                     robots.insert(label.to_string(), block);
-                    if let Ok(path) = std::env::var("REALITYOS_PUSH_FUNNEL_OUT") {
-                        let report = json!({
-                            "condition": "after_contact_maintaining_stroke",
-                            "overall": funnel_rates(&overall),
-                            "robots": robots,
-                            "load_errors": load_errors,
-                        });
-                        let _ =
-                            std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap());
-                    }
                 }
                 Err(e) => {
                     load_errors.insert(label.to_string(), json!(e));
@@ -2725,25 +2738,42 @@ mod tests {
             robots.contains_key("arm_gripper"),
             "arm_gripper development funnel is required"
         );
-        if let Ok(path) = std::env::var("REALITYOS_PUSH_FUNNEL_OUT") {
+        (overall, robots, load_errors)
+    }
+
+    #[test]
+    fn push_pipeline_funnel_keeps_unauthorized_writes_zero() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let sha = software_sha();
+        let write = std::env::var("REALITYOS_PUSH_FUNNEL_OUT").ok();
+        let after = realityos_semantics::push::with_push_compile_mode(
+            realityos_semantics::push::PushCompileMode::ContactMaintaining,
+            || run_four_robot_funnel(&sha, "after"),
+        );
+        if let Some(path) = write {
+            let before = realityos_semantics::push::with_push_compile_mode(
+                realityos_semantics::push::PushCompileMode::DirectStroke,
+                || run_four_robot_funnel(&sha, "before"),
+            );
             let report = json!({
-                "condition": "after_contact_maintaining_stroke",
-                "baseline": {
-                    "pre_sampler_arm_gripper_idx_offset_9_n16": {
-                        "n_contact": 0,
-                        "p_task_success_given_contact": 0.0,
-                        "note": "home-EE place; randomized positives refused UNREACHABLE"
-                    },
-                    "after_workspace_aware_sampling_arm_gripper_idx_offset_9_n16": {
-                        "n_contact": 11,
-                        "p_task_success_given_contact": 0.0,
-                        "p_contact_given_approach": 0.6875,
-                        "note": "FK workspace sampling; SLIP_AROUND_OBJECT after stroke"
-                    }
+                "n": 16,
+                "idx_offset": 9,
+                "before": {
+                    "condition": "direct_stroke",
+                    "overall": funnel_rates(&before.0),
+                    "robots": before.1,
+                    "load_errors": before.2,
                 },
-                "overall": funnel_rates(&overall),
-                "robots": robots,
-                "load_errors": load_errors,
+                "after": {
+                    "condition": "contact_maintaining_stroke",
+                    "overall": funnel_rates(&after.0),
+                    "robots": after.1,
+                    "load_errors": after.2,
+                },
+                "p_task_success_given_contact_before": before.0.p_task_given_contact(),
+                "p_task_success_given_contact_after": after.0.p_task_given_contact(),
             });
             std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap())
                 .unwrap_or_else(|e| panic!("write {path}: {e}"));

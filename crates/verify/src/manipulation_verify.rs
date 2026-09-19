@@ -256,7 +256,7 @@ pub fn verify_push(
     let contact = after
         .contacts
         .iter()
-        .any(|c| c.body1.contains(object_id) || c.body2.contains(object_id));
+        .any(|c| crate::push_pipeline::names_are_ee_object_contact(&c.body1, &c.body2, object_id));
     if contact {
         evidence.push("controlled_contact_established".into());
     }

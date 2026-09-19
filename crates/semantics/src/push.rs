@@ -8,6 +8,32 @@ use crate::provenance::Provenanced;
 use crate::skill::{SkillContract, SkillName, SkillRefuse};
 use crate::transform::{Se3, TransformGraph};
 use crate::world::PoseEvidence;
+use std::cell::Cell;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PushCompileMode {
+    DirectStroke,
+    #[default]
+    ContactMaintaining,
+}
+
+thread_local! {
+    static PUSH_COMPILE_MODE: Cell<PushCompileMode> =
+        const { Cell::new(PushCompileMode::ContactMaintaining) };
+}
+
+pub fn with_push_compile_mode<R>(mode: PushCompileMode, f: impl FnOnce() -> R) -> R {
+    PUSH_COMPILE_MODE.with(|c| {
+        let prev = c.replace(mode);
+        let out = f();
+        c.set(prev);
+        out
+    })
+}
+
+fn current_push_compile_mode() -> PushCompileMode {
+    PUSH_COMPILE_MODE.with(Cell::get)
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PushCandidate {
@@ -144,12 +170,31 @@ pub fn compile_push(
         candidate.direction[1] / n,
         candidate.direction[2] / n,
     ];
-    // Maintain contact by traveling in the support plane (world +Z up).
-    // A lift-off or dive is a different family than table-top PUSH.
-    let dir = support_plane_direction(dir3).unwrap_or(dir3);
-    let press_xyz = contact_press_xyz(contact.xyz, dir, candidate.distance_m);
-    let press = Se3::try_new(press_xyz, contact.quat_wxyz).map_err(|_| SkillRefuse::Unsupported)?;
-    let waypoints = contact_maintaining_stroke_xyz(contact.xyz, dir, candidate.distance_m);
+    let (contact_or_press, waypoints) = match current_push_compile_mode() {
+        PushCompileMode::ContactMaintaining => {
+            let dir = support_plane_direction(dir3).unwrap_or(dir3);
+            let press_xyz = contact_press_xyz(contact.xyz, dir, candidate.distance_m);
+            let press =
+                Se3::try_new(press_xyz, contact.quat_wxyz).map_err(|_| SkillRefuse::Unsupported)?;
+            (
+                press,
+                contact_maintaining_stroke_xyz(contact.xyz, dir, candidate.distance_m),
+            )
+        }
+        PushCompileMode::DirectStroke => {
+            let stroke = effective_push_distance(candidate.distance_m);
+            let end = Se3::try_new(
+                [
+                    contact.xyz[0] + dir3[0] * stroke,
+                    contact.xyz[1] + dir3[1] * stroke,
+                    contact.xyz[2] + dir3[2] * stroke,
+                ],
+                contact.quat_wxyz,
+            )
+            .map_err(|_| SkillRefuse::Unsupported)?;
+            (contact, vec![end.xyz])
+        }
+    };
 
     let expires = now_s + freshness_s;
     let mut plan = SkillPlan::empty(SkillName::Push, "skill.push");
@@ -162,7 +207,7 @@ pub fn compile_push(
     });
     plan.steps.push(SkillStep::Reach {
         end_effector: ee.into(),
-        target: pose_evidence(press, now_s, expires),
+        target: pose_evidence(contact_or_press, now_s, expires),
         success_radius: 0.06,
     });
     for xyz in waypoints {
@@ -436,5 +481,19 @@ mod tests {
         assert!(end[0] > contact_xyz[0]);
         let along = end[0] - 0.18;
         assert!(along + 1e-12 >= effective_push_distance(0.05));
+    }
+
+    #[test]
+    fn direct_stroke_compile_follows_commanded_direction_including_z() {
+        let plan = with_push_compile_mode(PushCompileMode::DirectStroke, || {
+            compile_fresh_push([1.0, 0.0, 0.7], 0.05)
+        });
+        let reaches = reach_targets(&plan);
+        let end = reaches.last().expect("stroke reach").0;
+        assert!(
+            end[2] > 0.1,
+            "direct stroke keeps the commanded vertical component, z={}",
+            end[2]
+        );
     }
 }

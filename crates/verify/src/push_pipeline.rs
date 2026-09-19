@@ -119,35 +119,70 @@ pub fn classify_push_pipeline(ev: &PushEvidence) -> PushPipelineTrace {
     }
 }
 
+fn taxonomy_is_slip(taxonomy: &str) -> bool {
+    taxonomy == "SLIP" || taxonomy == "SLIP_AROUND_OBJECT" || taxonomy.contains("SLIP")
+}
+
+/// Support/table/floor is not PUSH contact. The other body must be the object.
+pub fn is_support_surface(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n == "table" || n == "floor" || n == "world" || n.contains("ground") || n.ends_with("/table")
+}
+
+pub fn names_are_ee_object_contact(a: &str, b: &str, object_id: &str) -> bool {
+    if object_id.is_empty() {
+        return false;
+    }
+    let obj_a = a.contains(object_id);
+    let obj_b = b.contains(object_id);
+    if obj_a == obj_b {
+        return false;
+    }
+    let other = if obj_a { b } else { a };
+    !is_support_surface(other)
+}
+
 pub fn evidence_from_episode_fields(
     task_result: &str,
     taxonomy: &str,
     evidence: &[String],
-    has_contact: bool,
+    has_ee_object_contact: bool,
     expected_refusal: bool,
 ) -> PushEvidence {
-    let contacted = has_contact
-        || evidence
-            .iter()
-            .any(|e| e == "controlled_contact_established");
-    let displaced = evidence
-        .iter()
-        .any(|e| e == "object_displaced_along_direction");
     let miss = taxonomy == "MISS";
     let unreachable = taxonomy == "UNREACHABLE";
     let success = task_result == "success";
+    if expected_refusal {
+        return PushEvidence {
+            target_available: !taxonomy.contains("STALE"),
+            reachable: !unreachable,
+            approach_reached: false,
+            contact_established: false,
+            contact_maintained: false,
+            stroke_executed: false,
+            object_displaced: false,
+            direction_valid: false,
+            magnitude_valid: false,
+            task_verified: false,
+            expected_refusal: true,
+        };
+    }
+    let contacted = has_ee_object_contact;
+    let displaced = evidence
+        .iter()
+        .any(|e| e == "object_displaced_along_direction");
     PushEvidence {
         target_available: !taxonomy.contains("STALE"),
         reachable: !unreachable,
         approach_reached: !miss || contacted,
         contact_established: contacted,
-        contact_maintained: contacted && taxonomy != "SLIP",
+        contact_maintained: contacted && !taxonomy_is_slip(taxonomy),
         stroke_executed: contacted && taxonomy != "CONTROLLER_FAILURE",
         object_displaced: displaced,
         direction_valid: displaced && taxonomy != "UNEXPECTED_CONTACT",
         magnitude_valid: displaced && success,
         task_verified: success,
-        expected_refusal,
+        expected_refusal: false,
     }
 }
 
@@ -417,6 +452,48 @@ mod tests {
         let ev = evidence_from_episode_fields("fail", "MISS", &[], false, false);
         let t = classify_push_pipeline(&ev);
         assert_eq!(t.earliest_failed_stage, Some(PushStage::ApproachReached));
+    }
+
+    #[test]
+    fn slip_around_object_is_not_contact_maintained() {
+        let ev = evidence_from_episode_fields(
+            "fail",
+            "SLIP_AROUND_OBJECT",
+            &["controlled_contact_established".into()],
+            true,
+            false,
+        );
+        assert!(ev.contact_established);
+        assert!(
+            !ev.contact_maintained,
+            "SLIP_AROUND_OBJECT is contact lost, not a string-equal SLIP miss"
+        );
+        let t = classify_push_pipeline(&ev);
+        assert_eq!(t.earliest_failed_stage, Some(PushStage::ContactMaintained));
+    }
+
+    #[test]
+    fn table_or_floor_contact_is_not_ee_object_contact() {
+        assert!(!names_are_ee_object_contact("table", "obj0", "obj0"));
+        assert!(!names_are_ee_object_contact("obj0", "floor", "obj0"));
+        assert!(!names_are_ee_object_contact("world", "obj0", "obj0"));
+        assert!(names_are_ee_object_contact("link7", "obj0", "obj0"));
+        assert!(names_are_ee_object_contact("obj0", "finger", "obj0"));
+    }
+
+    #[test]
+    fn expected_refusal_does_not_establish_push_contact() {
+        let ev = evidence_from_episode_fields(
+            "refuse",
+            "UNREACHABLE",
+            &["controlled_contact_established".into()],
+            true,
+            true,
+        );
+        assert!(!ev.contact_established);
+        assert!(!ev.contact_maintained);
+        assert!(!ev.stroke_executed);
+        assert!(!ev.task_verified);
     }
 
     #[test]
