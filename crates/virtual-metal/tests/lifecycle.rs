@@ -1,7 +1,6 @@
 //! Write-lifecycle loss → UNKNOWN; same ONLINE instance cannot actuate further.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use realityos_plant::ActionParams;
 use realityos_virtual_metal::faults::{FaultSchedule, LifecycleLoss, WriteLifecycleBoundary};
@@ -15,7 +14,7 @@ fn assert_unknown_stops(
     loss: LifecycleLoss,
     expect_applied: bool,
 ) {
-    let d = Rc::new(RefCell::new(VirtualXl330::xl330_m288()));
+    let d = Arc::new(Mutex::new(VirtualXl330::xl330_m288()));
     let mut port = VirtualMetalPort::new(d.clone());
     port.inject_lifecycle(LifecycleInject { boundary, loss });
     let mut g = start_gov(port, tag, 11);
@@ -24,7 +23,7 @@ fn assert_unknown_stops(
     assert!(!t.ok, "{tag} must not succeed: {t:?}");
     assert_eq!(t.event, "driver_write_unknown");
     assert!(g.integrity_aborted(), "{tag} must integrity-abort");
-    let n = d.borrow().physical_action_count();
+    let n = d.lock().expect("virtual xl330").physical_action_count();
     if expect_applied {
         assert!(n >= 1, "{tag} should have applied before loss, n={n}");
     }
@@ -34,7 +33,7 @@ fn assert_unknown_stops(
             "{tag} same ONLINE instance must not actuate further"
         );
     }
-    assert_eq!(d.borrow().physical_action_count(), n);
+    assert_eq!(d.lock().expect("virtual xl330").physical_action_count(), n);
 }
 
 #[test]

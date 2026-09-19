@@ -20,7 +20,11 @@ pub enum EarliestFailureStage {
     Unreachable,
     ApproachFailure,
     ContactNotEstablished,
+    ContactLost,
+    ContactEstablishedNoDisplacement,
     ContactEstablishedTaskFailed,
+    WrongDirection,
+    InsufficientDisplacement,
     GraspEmptyClose,
     GraspAcquiredHoldUnverified,
     Slip,
@@ -39,7 +43,11 @@ impl EarliestFailureStage {
             Self::Unreachable => "UNREACHABLE",
             Self::ApproachFailure => "APPROACH_FAILURE",
             Self::ContactNotEstablished => "CONTACT_NOT_ESTABLISHED",
+            Self::ContactLost => "CONTACT_LOST",
+            Self::ContactEstablishedNoDisplacement => "CONTACT_ESTABLISHED_NO_DISPLACEMENT",
             Self::ContactEstablishedTaskFailed => "CONTACT_ESTABLISHED_TASK_FAILED",
+            Self::WrongDirection => "WRONG_DIRECTION",
+            Self::InsufficientDisplacement => "INSUFFICIENT_DISPLACEMENT",
             Self::GraspEmptyClose => "GRASP_EMPTY_CLOSE",
             Self::GraspAcquiredHoldUnverified => "GRASP_ACQUIRED_HOLD_UNVERIFIED",
             Self::Slip => "SLIP",
@@ -58,7 +66,11 @@ impl EarliestFailureStage {
             Self::Unreachable,
             Self::ApproachFailure,
             Self::ContactNotEstablished,
+            Self::ContactLost,
+            Self::ContactEstablishedNoDisplacement,
             Self::ContactEstablishedTaskFailed,
+            Self::WrongDirection,
+            Self::InsufficientDisplacement,
             Self::GraspEmptyClose,
             Self::GraspAcquiredHoldUnverified,
             Self::Slip,
@@ -470,19 +482,12 @@ pub fn derive_earliest_stage(ep: &DiagnosticEpisode) -> EarliestFailureStage {
     }
 
     if skill == "skill.push" {
-        if ep.task_result == "success" {
-            return EarliestFailureStage::Success;
-        }
-        if tax == "MISS" && !ep.has_object_contact {
-            return EarliestFailureStage::ContactNotEstablished;
-        }
-        if ep.has_object_contact || tax == "SLIP_AROUND_OBJECT" {
-            return EarliestFailureStage::ContactEstablishedTaskFailed;
-        }
-        if tax == "MISS" {
-            return EarliestFailureStage::ApproachFailure;
-        }
-        return EarliestFailureStage::Unknown;
+        return classify_push_stage(
+            ep.task_result.as_str(),
+            tax,
+            &ep.evidence_used,
+            ep.has_object_contact,
+        );
     }
 
     if skill == "skill.release" {
@@ -500,6 +505,47 @@ pub fn derive_earliest_stage(ep: &DiagnosticEpisode) -> EarliestFailureStage {
     } else {
         EarliestFailureStage::Unknown
     }
+}
+
+/// Earliest PUSH pipeline stage. No robot identity.
+pub fn classify_push_stage(
+    task_result: &str,
+    taxonomy: &str,
+    evidence: &[String],
+    has_object_contact: bool,
+) -> EarliestFailureStage {
+    if task_result == "success" {
+        return EarliestFailureStage::Success;
+    }
+    let displaced = evidence
+        .iter()
+        .any(|e| e == "object_displaced_along_direction");
+    let contacted = has_object_contact
+        || evidence
+            .iter()
+            .any(|e| e == "controlled_contact_established");
+    if taxonomy == "UNEXPECTED_CONTACT" {
+        return EarliestFailureStage::WrongDirection;
+    }
+    if taxonomy == "OBJECT_NOT_MOVABLE" || evidence.iter().any(|e| e == "object_not_moved") {
+        return EarliestFailureStage::ContactEstablishedNoDisplacement;
+    }
+    if contacted && !displaced {
+        if taxonomy == "SLIP_AROUND_OBJECT" || taxonomy == "SLIP" {
+            return EarliestFailureStage::Slip;
+        }
+        return EarliestFailureStage::ContactEstablishedNoDisplacement;
+    }
+    if taxonomy == "MISS" && !contacted {
+        return EarliestFailureStage::ContactNotEstablished;
+    }
+    if taxonomy == "MISS" {
+        return EarliestFailureStage::ApproachFailure;
+    }
+    if taxonomy == "SLIP_AROUND_OBJECT" || taxonomy == "SLIP" {
+        return EarliestFailureStage::Slip;
+    }
+    EarliestFailureStage::Unknown
 }
 
 /// Taxonomy-only rules. Intentionally cannot see contact geometry or
@@ -932,7 +978,16 @@ mod tests {
         assert!(push.len() >= 20);
         let established_fail = push
             .iter()
-            .filter(|e| e.target == EarliestFailureStage::ContactEstablishedTaskFailed)
+            .filter(|e| {
+                matches!(
+                    e.target,
+                    EarliestFailureStage::ContactEstablishedNoDisplacement
+                        | EarliestFailureStage::ContactEstablishedTaskFailed
+                        | EarliestFailureStage::Slip
+                        | EarliestFailureStage::WrongDirection
+                        | EarliestFailureStage::InsufficientDisplacement
+                )
+            })
             .count();
         let success = push
             .iter()
@@ -974,6 +1029,41 @@ mod tests {
         );
         assert!(empty > 0);
         assert!(held > 0, "object_follows_ee should mark verified hold");
+    }
+
+    #[test]
+    fn push_stage_contact_without_displacement() {
+        assert_eq!(
+            classify_push_stage(
+                "fail",
+                "SLIP_AROUND_OBJECT",
+                &["controlled_contact_established".into()],
+                true
+            ),
+            EarliestFailureStage::Slip
+        );
+        assert_eq!(
+            classify_push_stage(
+                "fail",
+                "OBJECT_NOT_MOVABLE",
+                &["object_not_moved".into()],
+                true
+            ),
+            EarliestFailureStage::ContactEstablishedNoDisplacement
+        );
+        assert_eq!(
+            classify_push_stage("fail", "MISS", &[], false),
+            EarliestFailureStage::ContactNotEstablished
+        );
+        assert_eq!(
+            classify_push_stage(
+                "success",
+                "",
+                &["object_displaced_along_direction".into()],
+                true
+            ),
+            EarliestFailureStage::Success
+        );
     }
 
     #[test]

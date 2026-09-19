@@ -8,6 +8,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use realityos_metal::protocol::{
     decode_status_scan, encode_ping, encode_read, encode_write, instruction_ok, le_u16,
@@ -53,7 +54,7 @@ pub struct VirtualMetalPort {
 }
 
 impl VirtualMetalPort {
-    pub fn new(device: Rc<RefCell<VirtualXl330>>) -> Self {
+    pub fn new(device: Arc<Mutex<VirtualXl330>>) -> Self {
         Self::from_peer(Rc::new(RefCell::new(VirtualSerialPeer::new(device))))
     }
 
@@ -117,7 +118,7 @@ impl VirtualMetalPort {
         le_u16(&st.params).ok_or_else(|| PlantError::refused("dxl_short_register"))
     }
 
-    pub fn device(&self) -> Rc<RefCell<VirtualXl330>> {
+    pub fn device(&self) -> crate::peer::SharedXl330 {
         self.peer.borrow().device()
     }
 
@@ -126,7 +127,11 @@ impl VirtualMetalPort {
     }
 
     pub fn runtime_identity_fields(&self) -> (String, String, String, String) {
-        let fw = self.device().borrow().firmware_id_string();
+        let fw = self
+            .device()
+            .lock()
+            .expect("virtual xl330")
+            .firmware_id_string();
         (
             self.serial.clone(),
             fw,
@@ -136,7 +141,10 @@ impl VirtualMetalPort {
     }
 
     pub fn physical_actions(&self) -> u64 {
-        self.device().borrow().physical_action_count()
+        self.device()
+            .lock()
+            .expect("virtual xl330")
+            .physical_action_count()
     }
 
     fn late_or_missing(reply: &[u8], delay_ms: u64, timeout_ms: u64) -> bool {
@@ -146,12 +154,16 @@ impl VirtualMetalPort {
 
 impl HardwareDriverPort for VirtualMetalPort {
     fn probe_identity(&self) -> HardwareIdentity {
-        let id = self.device().borrow().id();
+        let id = self.device().lock().expect("virtual xl330").id();
         let reply = self.exchange(&encode_ping(id));
         let _ = decode_status_scan(&reply);
         HardwareIdentity {
             serial: self.serial.clone(),
-            firmware_id: self.device().borrow().firmware_id_string(),
+            firmware_id: self
+                .device()
+                .lock()
+                .expect("virtual xl330")
+                .firmware_id_string(),
             calibration_id: self.calibration_id.clone(),
             design_content_hash: self.design.clone(),
             connected: self.connected && !self.estop,
@@ -168,7 +180,7 @@ impl HardwareDriverPort for VirtualMetalPort {
         if self.vin_fault {
             return Err(PlantError::refused("dxl_vin_unreadable"));
         }
-        let id = self.device().borrow().id();
+        let id = self.device().lock().expect("virtual xl330").id();
         let reply = self.exchange(&encode_read(id, ADDR_PRESENT_POSITION, 4));
         let st = decode_status_scan(&reply).map_err(|e| PlantError::refused(e.to_string()))?;
         if !instruction_ok(st.error) {
@@ -226,12 +238,21 @@ impl HardwareDriverPort for VirtualMetalPort {
             }
         }
         let ticks = self.ticks_from_action(action);
-        let id = self.device().borrow().id();
-        if !self.device().borrow().torque_enabled() {
+        let id = self.device().lock().expect("virtual xl330").id();
+        if !self
+            .device()
+            .lock()
+            .expect("virtual xl330")
+            .torque_enabled()
+        {
             let on = self.exchange(&encode_write(id, ADDR_TORQUE_ENABLE, &[1]));
             let _ = decode_status_scan(&on);
         }
-        let present = self.device().borrow().present_position();
+        let present = self
+            .device()
+            .lock()
+            .expect("virtual xl330")
+            .present_position();
         let goal = if ticks == 0 {
             present
         } else {
@@ -247,7 +268,8 @@ impl HardwareDriverPort for VirtualMetalPort {
             {
                 let _ = self.exchange(&encode_write(id, ADDR_GOAL_POSITION, &goal.to_le_bytes()));
                 self.device()
-                    .borrow_mut()
+                    .lock()
+                    .expect("virtual xl330")
                     .apply_fault_kind(crate::faults::FaultKind::RebootDuringRequest);
                 return Err(PlantError::UnknownOutcome);
             }
@@ -272,7 +294,10 @@ impl HardwareDriverPort for VirtualMetalPort {
         Ok(PlantRealized::sim([
             (
                 "present_position".into(),
-                self.device().borrow().present_position() as f64,
+                self.device()
+                    .lock()
+                    .expect("virtual xl330")
+                    .present_position() as f64,
             ),
             ("goal_position".into(), goal as f64),
         ]))
@@ -280,7 +305,7 @@ impl HardwareDriverPort for VirtualMetalPort {
 
     fn engage_hw_estop(&mut self, _reason: &str) {
         self.estop = true;
-        let id = self.device().borrow().id();
+        let id = self.device().lock().expect("virtual xl330").id();
         let _ = self.exchange(&encode_write(id, ADDR_TORQUE_ENABLE, &[0]));
     }
 

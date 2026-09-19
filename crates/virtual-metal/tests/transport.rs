@@ -1,7 +1,6 @@
 //! Byte/transport faults on the shipped peer + production Protocol 2.0 parser.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use realityos_metal::protocol::{
     decode_status, decode_status_scan, encode_ping, encode_write, ProtocolError, ADDR_TORQUE_ENABLE,
@@ -10,8 +9,8 @@ use realityos_virtual_metal::faults::{corrupt_crc_bytes, FaultEvent, FaultKind, 
 use realityos_virtual_metal::peer::VirtualSerialPeer;
 use realityos_virtual_metal::VirtualXl330;
 
-fn peer() -> (Rc<RefCell<VirtualXl330>>, VirtualSerialPeer) {
-    let d = Rc::new(RefCell::new(VirtualXl330::xl330_m288()));
+fn peer() -> (Arc<Mutex<VirtualXl330>>, VirtualSerialPeer) {
+    let d = Arc::new(Mutex::new(VirtualXl330::xl330_m288()));
     let p = VirtualSerialPeer::new(d.clone());
     (d, p)
 }

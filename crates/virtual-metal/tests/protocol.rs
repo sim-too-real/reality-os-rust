@@ -7,8 +7,7 @@ use realityos_metal::protocol::{
     BROADCAST_ID, ERR_ACCESS, ERR_DATA_LIMIT, HEADER, INST_PING, INST_REBOOT, INST_STATUS,
     INST_WRITE, STATUS_ALERT, XL330_M288_MODEL,
 };
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use realityos_plant::HardwareDriverPort;
 use realityos_virtual_metal::{VirtualMetalPort, VirtualXl330};
@@ -85,7 +84,7 @@ fn torque_on_applies_pending_goal_and_counts_physical_only_then() {
 
 #[test]
 fn read_sensor_reads_present_voltage_not_datasheet_constant() {
-    let d = Rc::new(RefCell::new(VirtualXl330::xl330_m288()));
+    let d = Arc::new(Mutex::new(VirtualXl330::xl330_m288()));
     let mut port = VirtualMetalPort::new(d.clone());
     let pkt = port.read_sensor(0.0).expect("5.0 V is in range");
     let vin = pkt
@@ -95,7 +94,7 @@ fn read_sensor_reads_present_voltage_not_datasheet_constant() {
         .map(|(_, v)| *v)
         .expect("vin_v sample");
     assert!((vin - 5.0).abs() < 1e-9, "got vin_v={vin}");
-    d.borrow_mut().set_voltage_v(4.0);
+    d.lock().expect("virtual xl330").set_voltage_v(4.0);
     let pkt = port.read_sensor(1.0).expect("4.0 V is in range");
     let vin = pkt
         .samples
@@ -107,7 +106,7 @@ fn read_sensor_reads_present_voltage_not_datasheet_constant() {
         (vin - 4.0).abs() < 1e-9,
         "read_sensor must READ present voltage, not datasheet 5.0; got {vin}"
     );
-    d.borrow_mut().set_voltage_v(2.0);
+    d.lock().expect("virtual xl330").set_voltage_v(2.0);
     let err = port.read_sensor(2.0);
     assert!(
         err.is_err(),

@@ -4,11 +4,13 @@ pub mod campaign;
 pub mod device;
 pub mod evidence;
 pub mod faults;
+pub mod oracle;
 pub mod peer;
 pub mod physics;
 pub mod port;
 #[cfg(unix)]
 pub mod pty;
+pub mod tier2;
 pub mod truth_pack;
 
 pub use campaign::{

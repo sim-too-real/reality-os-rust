@@ -348,6 +348,7 @@ pub struct VirtualXl330 {
     pack: Xl330TruthPack,
     packets: u32,
     physical_actions: u64,
+    reset_count: u64,
     faults: FaultSchedule,
     drop_next_status: bool,
     drop_status_after_goal: bool,
@@ -413,6 +414,7 @@ impl VirtualXl330 {
             pack,
             packets: 0,
             physical_actions: 0,
+            reset_count: 0,
             faults: FaultSchedule::empty(),
             drop_next_status: false,
             drop_status_after_goal: false,
@@ -540,6 +542,10 @@ impl VirtualXl330 {
 
     pub fn physical_action_count(&self) -> u64 {
         self.physical_actions
+    }
+
+    pub fn reset_count(&self) -> u64 {
+        self.reset_count
     }
 
     pub fn present_position(&self) -> i32 {
@@ -724,6 +730,7 @@ impl VirtualXl330 {
             INST_WRITE => self.do_write(&pkt.params),
             INST_REBOOT => {
                 let status = self.status_bytes(pkt.id, 0, &[], secondary, INST_REBOOT);
+                self.reset_count = self.reset_count.saturating_add(1);
                 self.reset_ram();
                 return status;
             }

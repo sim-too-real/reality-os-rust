@@ -1,9 +1,7 @@
 //! Seeded Virtual Metal campaign. Deterministic. Not MEASURED.
 
-use std::cell::RefCell;
 use std::path::PathBuf;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use realityos_core::{DecideRequest, Intent, PolicyProposal, RealityOs, WorldView};
 use realityos_governor::{OnlineLocked, RuntimeGovernor, RuntimeIdentity};
@@ -159,6 +157,7 @@ fn row(
         truth_pack_schema: TRUTH_PACK_SCHEMA.into(),
         truth_pack_content_hash: d.truth_pack().content_hash(),
         realization: realization_of(d),
+        tier2: None,
     }
 }
 
@@ -199,7 +198,7 @@ fn scenario_boot(seed: u64, i: u64) -> CampaignRow {
 }
 
 fn scenario_hold_nudge(seed: u64, i: u64) -> CampaignRow {
-    let d = Rc::new(RefCell::new(seeded_device(seed)));
+    let d = Arc::new(Mutex::new(seeded_device(seed)));
     let port = VirtualMetalPort::new(d.clone());
     let mut g = start_gov(port, "hold", seed);
     let w = g.authorize_issued(decide_hold(1, 10.0)).unwrap();
@@ -208,8 +207,8 @@ fn scenario_hold_nudge(seed: u64, i: u64) -> CampaignRow {
     if !t.ok {
         v.push(format!("hold_refused:{:?}", t.violations));
     }
-    d.borrow_mut().advance(0.02);
-    let before_nudge = d.borrow().present_position();
+    d.lock().expect("virtual xl330").advance(0.02);
+    let before_nudge = d.lock().expect("virtual xl330").present_position();
     let nw = g
         .authorize_issued(decide_nudge(2, 10.0, vec![5.0]))
         .unwrap();
@@ -217,23 +216,23 @@ fn scenario_hold_nudge(seed: u64, i: u64) -> CampaignRow {
     if !nt.ok {
         v.push(format!("nudge_refused:{:?}", nt.violations));
     }
-    let present_at_write = d.borrow().present_position();
+    let present_at_write = d.lock().expect("virtual xl330").present_position();
     if present_at_write != before_nudge {
         v.push("nudge_teleported_without_advance".into());
     }
-    d.borrow_mut().advance(0.05);
-    if d.borrow().present_position() == before_nudge {
+    d.lock().expect("virtual xl330").advance(0.05);
+    if d.lock().expect("virtual xl330").present_position() == before_nudge {
         v.push("nudge_did_not_move_present".into());
     }
-    let before = d.borrow().physical_action_count();
+    let before = d.lock().expect("virtual xl330").physical_action_count();
     let replay = g.write_online_now(&w, &ActionParams::empty());
     if replay.ok {
         v.push("replay_executed".into());
     }
-    if d.borrow().physical_action_count() != before {
+    if d.lock().expect("virtual xl330").physical_action_count() != before {
         v.push("replay_second_physical_action".into());
     }
-    let snapshot = d.borrow().clone();
+    let snapshot = d.lock().expect("virtual xl330").clone();
     row(
         i,
         seed,
@@ -247,10 +246,12 @@ fn scenario_hold_nudge(seed: u64, i: u64) -> CampaignRow {
 }
 
 fn scenario_unknown(seed: u64, i: u64) -> CampaignRow {
-    let d = Rc::new(RefCell::new(seeded_device(seed)));
+    let d = Arc::new(Mutex::new(seeded_device(seed)));
     let port = VirtualMetalPort::new(d.clone());
     let mut g = start_gov(port, "unk", seed);
-    d.borrow_mut().drop_status_after_next_goal();
+    d.lock()
+        .expect("virtual xl330")
+        .drop_status_after_next_goal();
     let w = g.authorize_issued(decide_hold(1, 10.0)).unwrap();
     let t = g.write_online_now(&w, &ActionParams::empty());
     let mut v = Vec::new();
@@ -260,7 +261,7 @@ fn scenario_unknown(seed: u64, i: u64) -> CampaignRow {
     if !g.integrity_aborted() {
         v.push("unknown_did_not_integrity_abort".into());
     }
-    let actions = d.borrow().physical_action_count();
+    let actions = d.lock().expect("virtual xl330").physical_action_count();
     let rec = g.clear_estop_requires_recovery_now(true);
     if rec.ok {
         v.push("recover_cleared_integrity".into());
@@ -271,10 +272,10 @@ fn scenario_unknown(seed: u64, i: u64) -> CampaignRow {
             v.push("fresh_command_after_unknown".into());
         }
     }
-    if d.borrow().physical_action_count() != actions {
+    if d.lock().expect("virtual xl330").physical_action_count() != actions {
         v.push("unknown_then_extra_physical".into());
     }
-    let snapshot = d.borrow().clone();
+    let snapshot = d.lock().expect("virtual xl330").clone();
     row(
         i,
         seed,
@@ -288,7 +289,7 @@ fn scenario_unknown(seed: u64, i: u64) -> CampaignRow {
 }
 
 fn scenario_recover(seed: u64, i: u64) -> CampaignRow {
-    let d = Rc::new(RefCell::new(seeded_device(seed)));
+    let d = Arc::new(Mutex::new(seeded_device(seed)));
     let port = VirtualMetalPort::new(d.clone());
     let mut g = start_gov(port, "rec", seed);
     let w = g.authorize_issued(decide_hold(1, 10.0)).unwrap();
@@ -298,7 +299,7 @@ fn scenario_recover(seed: u64, i: u64) -> CampaignRow {
     if !g.integrity_aborted() {
         v.push("replay_no_integrity".into());
     }
-    let actions = d.borrow().physical_action_count();
+    let actions = d.lock().expect("virtual xl330").physical_action_count();
     let rec = g.clear_estop_requires_recovery_now(true);
     if rec.ok {
         v.push("recover_after_integrity".into());
@@ -311,10 +312,10 @@ fn scenario_recover(seed: u64, i: u64) -> CampaignRow {
     if rec2.ok {
         v.push("estop_cleared_integrity".into());
     }
-    if d.borrow().physical_action_count() != actions {
+    if d.lock().expect("virtual xl330").physical_action_count() != actions {
         v.push("recover_extra_physical".into());
     }
-    let snapshot = d.borrow().clone();
+    let snapshot = d.lock().expect("virtual xl330").clone();
     row(
         i,
         seed,
@@ -328,11 +329,11 @@ fn scenario_recover(seed: u64, i: u64) -> CampaignRow {
 }
 
 fn scenario_identity(seed: u64, i: u64) -> CampaignRow {
-    let d = Rc::new(RefCell::new(seeded_device(seed)));
+    let d = Arc::new(Mutex::new(seeded_device(seed)));
     let port = VirtualMetalPort::new(d.clone());
     let mut g = start_gov(port, "id", seed);
     g.acquire_sensor().ok();
-    d.borrow_mut().set_model_firmware(1190, 1);
+    d.lock().expect("virtual xl330").set_model_firmware(1190, 1);
     let mut v = Vec::new();
     if let Ok(w) = g.authorize_issued(decide_hold(1, 10.0)) {
         let t = g.write_online_now(&w, &ActionParams::empty());
@@ -340,10 +341,10 @@ fn scenario_identity(seed: u64, i: u64) -> CampaignRow {
             v.push("identity_swap_actuated".into());
         }
     }
-    if d.borrow().physical_action_count() != 0 {
+    if d.lock().expect("virtual xl330").physical_action_count() != 0 {
         v.push("identity_swap_physical".into());
     }
-    let snapshot = d.borrow().clone();
+    let snapshot = d.lock().expect("virtual xl330").clone();
     row(
         i,
         seed,
@@ -428,7 +429,7 @@ fn scenario_torque_on_pending(seed: u64, i: u64) -> CampaignRow {
 }
 
 fn scenario_transport_crc(seed: u64, i: u64) -> CampaignRow {
-    let d = Rc::new(RefCell::new(seeded_device(seed)));
+    let d = Arc::new(Mutex::new(seeded_device(seed)));
     let mut peer = VirtualSerialPeer::new(d.clone());
     peer.set_transport_schedule(FaultSchedule::once(FaultKind::CorruptOutgoingCrc));
     let status = peer.exchange(&encode_ping(1));
@@ -450,7 +451,7 @@ fn scenario_transport_crc(seed: u64, i: u64) -> CampaignRow {
             v.push("crc_byte_not_mutated".into());
         }
     }
-    let snapshot = d.borrow().clone();
+    let snapshot = d.lock().expect("virtual xl330").clone();
     row(
         i,
         seed,
@@ -566,14 +567,14 @@ fn scenario_reboot(seed: u64, i: u64) -> CampaignRow {
 }
 
 fn scenario_disconnect(seed: u64, i: u64) -> CampaignRow {
-    let d = Rc::new(RefCell::new(seeded_device(seed)));
+    let d = Arc::new(Mutex::new(seeded_device(seed)));
     let mut port = VirtualMetalPort::new(d.clone());
     port.disconnect();
     let mut v = Vec::new();
     if port.read_sensor(0.0).is_ok() {
         v.push("disconnect_sensor_ok".into());
     }
-    let snapshot = d.borrow().clone();
+    let snapshot = d.lock().expect("virtual xl330").clone();
     row(
         i,
         seed,
@@ -587,7 +588,7 @@ fn scenario_disconnect(seed: u64, i: u64) -> CampaignRow {
 }
 
 fn scenario_lifecycle_ack(seed: u64, i: u64) -> CampaignRow {
-    let d = Rc::new(RefCell::new(seeded_device(seed)));
+    let d = Arc::new(Mutex::new(seeded_device(seed)));
     let mut port = VirtualMetalPort::new(d.clone());
     port.inject_lifecycle(LifecycleInject {
         boundary: WriteLifecycleBoundary::AfterDeviceApply,
@@ -603,16 +604,16 @@ fn scenario_lifecycle_ack(seed: u64, i: u64) -> CampaignRow {
     if !g.integrity_aborted() {
         v.push("lifecycle_no_integrity".into());
     }
-    let n = d.borrow().physical_action_count();
+    let n = d.lock().expect("virtual xl330").physical_action_count();
     if let Ok(w2) = g.authorize_issued(decide_hold(2, 10.0)) {
         if g.write_online_now(&w2, &ActionParams::empty()).ok {
             v.push("lifecycle_continued_after_unknown".into());
         }
     }
-    if d.borrow().physical_action_count() != n {
+    if d.lock().expect("virtual xl330").physical_action_count() != n {
         v.push("lifecycle_extra_physical".into());
     }
-    let snapshot = d.borrow().clone();
+    let snapshot = d.lock().expect("virtual xl330").clone();
     row(
         i,
         seed,
@@ -626,7 +627,7 @@ fn scenario_lifecycle_ack(seed: u64, i: u64) -> CampaignRow {
 }
 
 fn scenario_restart(seed: u64, i: u64) -> CampaignRow {
-    let d = Rc::new(RefCell::new(seeded_device(seed)));
+    let d = Arc::new(Mutex::new(seeded_device(seed)));
     let port = VirtualMetalPort::new(d.clone());
     let mut g = start_gov(port, "rst", seed);
     let w = g.authorize_issued(decide_hold(1, 10.0)).unwrap();
@@ -634,7 +635,7 @@ fn scenario_restart(seed: u64, i: u64) -> CampaignRow {
     if !g.write_online_now(&w, &ActionParams::empty()).ok {
         v.push("restart_setup_write_failed".into());
     }
-    let n = d.borrow().physical_action_count();
+    let n = d.lock().expect("virtual xl330").physical_action_count();
     drop(g);
     let port = VirtualMetalPort::new(d.clone());
     let mut g2 = start_gov_opts(port, "rst", seed, false);
@@ -643,10 +644,10 @@ fn scenario_restart(seed: u64, i: u64) -> CampaignRow {
             v.push("restart_reexecuted".into());
         }
     }
-    if d.borrow().physical_action_count() != n {
+    if d.lock().expect("virtual xl330").physical_action_count() != n {
         v.push("restart_duplicated_physical".into());
     }
-    let snapshot = d.borrow().clone();
+    let snapshot = d.lock().expect("virtual xl330").clone();
     row(
         i,
         seed,
@@ -660,7 +661,7 @@ fn scenario_restart(seed: u64, i: u64) -> CampaignRow {
 }
 
 fn scenario_late_ack(seed: u64, i: u64) -> CampaignRow {
-    let d = Rc::new(RefCell::new(seeded_device(seed)));
+    let d = Arc::new(Mutex::new(seeded_device(seed)));
     let mut port = VirtualMetalPort::new(d.clone());
     port.peer()
         .borrow_mut()
@@ -675,7 +676,7 @@ fn scenario_late_ack(seed: u64, i: u64) -> CampaignRow {
         Err(realityos_plant::PlantError::UnknownOutcome) => {}
         other => v.push(format!("late_ack_expected_unknown:{other:?}")),
     }
-    let snapshot = d.borrow().clone();
+    let snapshot = d.lock().expect("virtual xl330").clone();
     row(
         i,
         seed,
@@ -689,7 +690,7 @@ fn scenario_late_ack(seed: u64, i: u64) -> CampaignRow {
 }
 
 fn scenario_reconnect(seed: u64, i: u64) -> CampaignRow {
-    let d = Rc::new(RefCell::new(seeded_device(seed)));
+    let d = Arc::new(Mutex::new(seeded_device(seed)));
     let mut peer = VirtualSerialPeer::new(d.clone());
     peer.set_transport_schedule(FaultSchedule {
         events: vec![
@@ -718,7 +719,7 @@ fn scenario_reconnect(seed: u64, i: u64) -> CampaignRow {
         Ok(st) if st.params.len() >= 3 => {}
         other => v.push(format!("reconnect_no_status:{other:?}")),
     }
-    let snapshot = d.borrow().clone();
+    let snapshot = d.lock().expect("virtual xl330").clone();
     row(
         i,
         seed,
@@ -807,59 +808,108 @@ fn run_tier2_smoke_impl(_seed: u64, _n: usize) -> Result<CampaignRecord, String>
 
 #[cfg(unix)]
 fn run_tier2_smoke_impl(seed: u64, n: usize) -> Result<CampaignRecord, String> {
-    use realityos_metal::config::MetalConfig;
-    use realityos_metal::xl330::Xl330Driver;
+    use crate::oracle::belief_from_trace;
+    use crate::tier2::Tier2Session;
 
+    let n = n.clamp(1, 500);
+    let kinds: &[(&str, &str, Option<FaultKind>)] = &[
+        ("hold", "hold", None),
+        (
+            "ack_lost",
+            "unknown outcome",
+            Some(FaultKind::DropStatusAfterApply),
+        ),
+        (
+            "crc",
+            "transport corruption",
+            Some(FaultKind::CorruptOutgoingCrc),
+        ),
+        ("silent", "lost ACK", Some(FaultKind::DeviceSilent)),
+        ("disconnect", "disconnect", Some(FaultKind::Disconnect)),
+        (
+            "wrong_id",
+            "transport corruption",
+            Some(FaultKind::WrongStatusId),
+        ),
+        (
+            "garbage_prefix",
+            "transport corruption",
+            Some(FaultKind::GarbagePrefix),
+        ),
+        ("reboot", "reboot", Some(FaultKind::RebootDuringRequest)),
+    ];
     let mut rows = Vec::new();
     for i in 0..n as u64 {
         let inst_seed = splitmix(seed ^ i.wrapping_mul(0xA5A5_A5A5_A5A5_A5A5));
+        let (scenario, category, fault) = kinds[(i as usize) % kinds.len()];
         let device = seeded_device(inst_seed);
         let pack_hash = device.truth_pack().content_hash();
         let realization = realization_of(&device);
-        let pty = crate::pty::VirtualXl330Pty::spawn(device).map_err(|e| format!("pty:{e}"))?;
-        let root = std::env::temp_dir().join(format!("realityos-vm-t2-{seed}-{i}"));
-        let _ = std::fs::create_dir_all(&root);
-        let mut cfg = MetalConfig::example(pty.slave_path());
-        cfg.campaign_hooks = false;
+        let faults = fault
+            .clone()
+            .map(FaultSchedule::once)
+            .unwrap_or_else(FaultSchedule::empty);
         let mut violations = Vec::new();
-        match Xl330Driver::open(cfg, &root) {
-            Ok(mut driver) => {
-                if driver.measured().model != 1200 {
-                    violations.push(format!("model:{}", driver.measured().model));
+        let mut tier2 = None;
+        let mut actions = 0u64;
+        match Tier2Session::open_with_faults(device, &format!("t2-{i}"), inst_seed, faults.clone())
+        {
+            Ok(mut s) => {
+                if fault.is_some() {
+                    s.inject(faults.clone());
                 }
-                if driver.read_sensor(0.0).is_err() {
-                    violations.push("tier2_sensor".into());
+                if scenario == "ack_lost" {
+                    s.device
+                        .lock()
+                        .expect("oracle")
+                        .drop_status_after_next_goal();
                 }
-                if driver.write_action(&[0.0], &ActionParams::empty()).is_err() {
-                    violations.push("tier2_hold".into());
+                let (r, before, after) = s.try_hold(1);
+                match r {
+                    Ok(t) => {
+                        if let Err(e) = s.a1(&t, &before, &after) {
+                            violations.push(e);
+                        }
+                        let _ = belief_from_trace(t.ok, &t.event);
+                        actions = after.physical_actions;
+                        tier2 = Some(s.trace_row(&t, &before, &after));
+                    }
+                    Err(e) => {
+                        if scenario == "hold" {
+                            violations.push(format!("authorize:{e:?}"));
+                        }
+                        actions = after.physical_actions;
+                    }
                 }
-                driver.close();
             }
-            Err(e) => violations.push(format!("open:{e}")),
+            Err(e) => {
+                if scenario == "hold" {
+                    violations.push(e);
+                }
+            }
         }
-        pty.stop();
-        let _ = std::fs::remove_dir_all(&root);
         rows.push(CampaignRow {
             instance: i,
             seed: inst_seed,
-            scenario: "tier2_production_driver_pty".into(),
-            category: "boot/setup".into(),
+            scenario: format!("tier2_{scenario}"),
+            category: category.into(),
             verdict: if violations.is_empty() {
                 VERDICT_PASS.into()
             } else {
                 VERDICT_FAIL.into()
             },
-            physical_actions: 0,
+            physical_actions: actions,
             invariant_violations: violations,
-            fault_sequence: serde_json::json!([]),
+            fault_sequence: serde_json::to_value(&faults).unwrap_or_else(|_| serde_json::json!([])),
             truth_pack_schema: TRUTH_PACK_SCHEMA.into(),
             truth_pack_content_hash: pack_hash,
             realization,
+            tier2,
         });
     }
     let mut rec = CampaignRecord::assemble(seed, rows);
     rec.schema = CAMPAIGN_SCHEMA.into();
     rec.hardware_present = false;
-    rec.note = "Tier 2 production Xl330Driver against VirtualXl330 PTY. SIM_VIRTUAL_METAL_NOT_METAL. Not MEASURED.".into();
+    rec.note = "Tier 2 production RuntimeGovernor+Xl330Driver+PTY. SIM_VIRTUAL_METAL_NOT_METAL. Not MEASURED.".into();
     Ok(rec)
 }

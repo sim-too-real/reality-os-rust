@@ -47,6 +47,8 @@ pub struct CampaignRow {
     pub truth_pack_schema: String,
     pub truth_pack_content_hash: String,
     pub realization: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier2: Option<crate::tier2::Tier2Trace>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

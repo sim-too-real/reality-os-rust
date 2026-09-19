@@ -25,7 +25,7 @@ jobs:
       - name: test-virtual-metal
         run: cargo test -p realityos-virtual-metal
       - name: virtual-metal-tier2-smoke
-        run: cargo run -p realityos-virtual-metal --bin virtual-metal-campaign -- --seed 42 --n 8 --tier 2 --out /tmp/vm-tier2.json
+        run: cargo run -p realityos-virtual-metal --bin virtual-metal-campaign -- --seed 42 --n 64 --tier 2 --out /tmp/vm-tier2.json
       - name: virtual-metal-tier2-honesty
         run: |
           python3 - <<'PY'
@@ -35,6 +35,14 @@ jobs:
           assert rec.get("evidence_status") == "SIM_VIRTUAL_METAL_NOT_METAL", rec
           assert rec.get("schema") == "realityos.virtual_metal/1", rec
           assert rec.get("schema") != "realityos.metal_proof/1"
+          assert rec.get("n_fail", 1) == 0, rec
+          holds = [r for r in rec.get("rows", []) if r.get("scenario") == "tier2_hold"]
+          assert holds, rec
+          assert any(
+              (r.get("physical_actions") or 0) > 0
+              or ((r.get("tier2") or {}).get("physical_actions_after") or 0) > 0
+              for r in holds
+          ), "hold rows must record real device action count, not hardcoded 0"
           print("tier2 smoke ok", rec.get("n_instances"), rec.get("verdict"))
           PY
       - name: test

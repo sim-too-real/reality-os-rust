@@ -144,11 +144,12 @@ pub fn compile_push(
         candidate.direction[1] / n,
         candidate.direction[2] / n,
     ];
+    let stroke = effective_push_distance(candidate.distance_m);
     let end = Se3::try_new(
         [
-            contact.xyz[0] + dir[0] * candidate.distance_m,
-            contact.xyz[1] + dir[1] * candidate.distance_m,
-            contact.xyz[2] + dir[2] * candidate.distance_m,
+            contact.xyz[0] + dir[0] * stroke,
+            contact.xyz[1] + dir[1] * stroke,
+            contact.xyz[2] + dir[2] * stroke,
         ],
         contact.quat_wxyz,
     )
@@ -171,10 +172,22 @@ pub fn compile_push(
     plan.steps.push(SkillStep::Reach {
         end_effector: ee.into(),
         target: pose_evidence(end, now_s, expires),
-        success_radius: 0.08,
+        success_radius: push_stroke_success_radius(stroke),
     });
     plan.steps.push(SkillStep::Stop);
     Ok(plan)
+}
+
+/// Floor a commanded push so the stroke is not smaller than contact slack.
+/// Embodiment-agnostic: no robot-identity branch.
+pub fn effective_push_distance(distance_m: f64) -> f64 {
+    distance_m.max(0.02)
+}
+
+/// Final Reach must actually travel. A radius ≥ stroke lets the controller
+/// succeed at the contact pose without displacing the object.
+pub fn push_stroke_success_radius(distance_m: f64) -> f64 {
+    (distance_m * 0.35).clamp(0.008, 0.03)
 }
 
 pub fn push_unexpected_recovery() -> Vec<SkillStep> {
@@ -234,5 +247,19 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, SkillRefuse::StaleObject);
+    }
+
+    #[test]
+    fn stroke_success_radius_is_stricter_than_distance() {
+        for d in [0.012, 0.02, 0.03, 0.05, 0.08] {
+            let r = push_stroke_success_radius(effective_push_distance(d));
+            assert!(
+                r < effective_push_distance(d),
+                "radius {r} must be < stroke {}",
+                effective_push_distance(d)
+            );
+        }
+        assert_eq!(effective_push_distance(0.005), 0.02);
+        assert_eq!(effective_push_distance(0.05), 0.05);
     }
 }

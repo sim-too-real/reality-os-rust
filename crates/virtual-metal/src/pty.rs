@@ -1,16 +1,13 @@
 //! Unix PTY pump: production serial bytes ↔ [`crate::peer::VirtualSerialPeer`].
 //!
-//! The peer lives on the PTY thread. `VirtualSerialPeer` is not `Send`
-//! (`Rc<RefCell<VirtualXl330>>`); the in-process campaign path keeps that type
-//! on the governor thread.
+//! Shared `Arc<Mutex<VirtualXl330>>` is the test-only oracle. Production
+//! decide/governor never see privileged device fields.
 #![cfg(unix)]
 
-use std::cell::RefCell;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -19,7 +16,7 @@ use nix::unistd::{read as nix_read, write as nix_write};
 
 use crate::device::VirtualXl330;
 use crate::faults::FaultSchedule;
-use crate::peer::VirtualSerialPeer;
+use crate::peer::{SharedXl330, VirtualSerialPeer};
 
 pub struct VirtualXl330Pty {
     slave_path: PathBuf,
@@ -30,7 +27,8 @@ pub struct VirtualXl330Pty {
 
 impl VirtualXl330Pty {
     pub fn spawn(device: VirtualXl330) -> std::io::Result<Self> {
-        Self::spawn_configured(device, true, FaultSchedule::empty())
+        let shared = Arc::new(Mutex::new(device));
+        Self::spawn_shared(shared, true, FaultSchedule::empty()).map(|(pty, _)| pty)
     }
 
     pub fn spawn_configured(
@@ -38,6 +36,26 @@ impl VirtualXl330Pty {
         echo: bool,
         transport: FaultSchedule,
     ) -> std::io::Result<Self> {
+        let shared = Arc::new(Mutex::new(device));
+        Self::spawn_shared(shared, echo, transport).map(|(pty, _)| pty)
+    }
+
+    /// Shared device + peer so the test harness can inspect privileged truth
+    /// and inject transport faults without feeding them to decide/governor.
+    pub fn spawn_shared(
+        device: SharedXl330,
+        echo: bool,
+        transport: FaultSchedule,
+    ) -> std::io::Result<(Self, Arc<Mutex<VirtualSerialPeer>>)> {
+        let peer = Arc::new(Mutex::new(VirtualSerialPeer::new(device).with_echo(echo)));
+        peer.lock()
+            .expect("virtual xl330 peer")
+            .set_transport_schedule(transport);
+        let pty = Self::spawn_peer(peer.clone())?;
+        Ok((pty, peer))
+    }
+
+    pub fn spawn_peer(peer: Arc<Mutex<VirtualSerialPeer>>) -> std::io::Result<Self> {
         let pair =
             openpty(None, None).map_err(|e| std::io::Error::other(format!("openpty: {e}")))?;
         let master_fd = pair.master.as_raw_fd();
@@ -49,19 +67,20 @@ impl VirtualXl330Pty {
         let master = pair.master;
         let thread = thread::spawn(move || {
             let _master = master;
-            let mut peer = VirtualSerialPeer::new(Rc::new(RefCell::new(device))).with_echo(echo);
-            peer.set_transport_schedule(transport);
             let mut tmp = [0u8; 256];
             while !stop_t.load(Ordering::Relaxed) {
                 match nix_read(master_fd, &mut tmp) {
                     Ok(0) => break,
                     Ok(n) => {
-                        peer.push(&tmp[..n]);
-                        let delay = peer.last_delay_ms();
+                        let delay = {
+                            let mut p = peer.lock().expect("virtual xl330 peer");
+                            p.push(&tmp[..n]);
+                            p.last_delay_ms()
+                        };
                         if delay > 0 {
                             thread::sleep(Duration::from_millis(delay));
                         }
-                        let out = peer.read(4096);
+                        let out = peer.lock().expect("virtual xl330 peer").read(4096);
                         if !out.is_empty() {
                             let _ = nix_write(master_fd, &out);
                         }

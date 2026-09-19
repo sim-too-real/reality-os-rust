@@ -78,6 +78,8 @@ pub struct ManipulationEpisode {
     pub perception: String,
     pub simulation_only: bool,
     pub expected_refusal: bool,
+    #[serde(default)]
+    pub earliest_failure_stage: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1172,7 +1174,7 @@ fn finish_episode(
             })
         })
         .collect();
-    ManipulationEpisode {
+    let mut ep = ManipulationEpisode {
         software_sha: sha.into(),
         robot_id: bundle.manifest.robot_id.clone(),
         model_hash: model.model_hash.clone(),
@@ -1211,7 +1213,32 @@ fn finish_episode(
         perception: "PERFECT_PERCEPTION".into(),
         simulation_only: true,
         expected_refusal: sc.polarity == Polarity::Negative || sc.expected_refusal.is_some(),
+        earliest_failure_stage: String::new(),
+    };
+    ep.earliest_failure_stage = crate::failure_diagnosis::classify_push_stage(
+        &ep.task_result,
+        ep.failure_taxonomy.as_deref().unwrap_or(""),
+        &ep.evidence_used,
+        ep.contacts.iter().any(|c| {
+            let a = c.get("a").and_then(|v| v.as_str()).unwrap_or("");
+            let b = c.get("b").and_then(|v| v.as_str()).unwrap_or("");
+            a.contains(&sc.object_id) || b.contains(&sc.object_id)
+        }),
+    )
+    .as_str()
+    .into();
+    if ep.skill_contract != "skill.push" {
+        ep.earliest_failure_stage = if ep.task_result == "success" {
+            "SUCCESS".into()
+        } else if ep.task_result == "refuse" {
+            "EXPECTED_REFUSAL".into()
+        } else {
+            ep.failure_taxonomy
+                .clone()
+                .unwrap_or_else(|| "UNKNOWN".into())
+        };
     }
+    ep
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1280,6 +1307,11 @@ fn refused_episode(
         perception: "PERFECT_PERCEPTION".into(),
         simulation_only: true,
         expected_refusal: expected,
+        earliest_failure_stage: if expected {
+            "EXPECTED_REFUSAL".into()
+        } else {
+            failure.unwrap_or("UNKNOWN").into()
+        },
     }
 }
 

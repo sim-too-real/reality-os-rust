@@ -82,10 +82,9 @@ fn campaign_schema_is_virtual_metal_not_metal_proof() {
 fn is_sim_harness_false_still_cannot_mint_measured() {
     use realityos_plant::HardwareDriverPort;
     use realityos_virtual_metal::{VirtualMetalPort, VirtualXl330};
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
-    let d = Rc::new(RefCell::new(VirtualXl330::xl330_m288()));
+    let d = Arc::new(Mutex::new(VirtualXl330::xl330_m288()));
     let port = VirtualMetalPort::new(d);
     assert!(
         !port.is_sim_harness(),

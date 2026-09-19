@@ -3,8 +3,7 @@
 //!
 //! Emulates the XL330, not a second copy of `Xl330Driver`.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use realityos_metal::protocol::{decode_instruction, encode_reboot, encode_status, HEADER};
 
@@ -19,8 +18,10 @@ pub struct SerialTranscript {
     pub rx: Vec<Vec<u8>>,
 }
 
+pub type SharedXl330 = Arc<Mutex<VirtualXl330>>;
+
 pub struct VirtualSerialPeer {
-    device: Rc<RefCell<VirtualXl330>>,
+    device: SharedXl330,
     acc: Vec<u8>,
     pending_out: Vec<u8>,
     transport: FaultSchedule,
@@ -35,7 +36,7 @@ pub struct VirtualSerialPeer {
 }
 
 impl VirtualSerialPeer {
-    pub fn new(device: Rc<RefCell<VirtualXl330>>) -> Self {
+    pub fn new(device: SharedXl330) -> Self {
         Self {
             device,
             acc: Vec::new(),
@@ -57,7 +58,7 @@ impl VirtualSerialPeer {
         self
     }
 
-    pub fn device(&self) -> Rc<RefCell<VirtualXl330>> {
+    pub fn device(&self) -> SharedXl330 {
         self.device.clone()
     }
 
@@ -161,17 +162,25 @@ impl VirtualSerialPeer {
                     self.silent = false;
                 }
                 FaultKind::RebootDuringRequest => reboot = true,
-                other => self.device.borrow_mut().apply_fault_kind(other),
+                other => self
+                    .device
+                    .lock()
+                    .expect("virtual xl330")
+                    .apply_fault_kind(other),
             }
         }
         if !self.connected || self.silent {
             return Vec::new();
         }
         if reboot {
-            let id = self.device.borrow().id();
-            let _ = self.device.borrow_mut().process(&encode_reboot(id));
+            let id = self.device.lock().expect("virtual xl330").id();
+            let _ = self
+                .device
+                .lock()
+                .expect("virtual xl330")
+                .process(&encode_reboot(id));
         }
-        let mut status = self.device.borrow_mut().process(inst);
+        let mut status = self.device.lock().expect("virtual xl330").process(inst);
         if drop_status {
             status.clear();
         }
