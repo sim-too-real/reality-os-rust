@@ -351,12 +351,12 @@ impl PushFunnel {
         }
         if ev.stroke_executed {
             self.n_stroke += 1;
-        }
-        if ev.object_displaced {
-            self.n_displaced += 1;
-        }
-        if ev.direction_valid {
-            self.n_direction_ok += 1;
+            if ev.object_displaced {
+                self.n_displaced += 1;
+                if ev.direction_valid {
+                    self.n_direction_ok += 1;
+                }
+            }
         }
         if ev.task_verified {
             self.n_task_success += 1;
@@ -618,5 +618,49 @@ mod tests {
         assert_eq!(f.n_contact, 2);
         assert!((f.p_task_given_contact() - 0.5).abs() < 1e-12);
         assert_eq!(f.n_unauthorized_writes, 0);
+    }
+
+    #[test]
+    fn p_displaced_given_stroke_stays_in_unit_interval() {
+        let mut f = PushFunnel::default();
+        let displaced_without_stroke = PushEvidence {
+            target_available: true,
+            reachable: true,
+            approach_reached: true,
+            contact_established: false,
+            contact_maintained: false,
+            stroke_executed: false,
+            object_displaced: true,
+            direction_valid: true,
+            magnitude_valid: true,
+            task_verified: true,
+            expected_refusal: false,
+        };
+        let stroke_without_displace = PushEvidence {
+            object_displaced: false,
+            direction_valid: false,
+            magnitude_valid: false,
+            task_verified: false,
+            stroke_executed: true,
+            contact_established: true,
+            contact_maintained: true,
+            ..displaced_without_stroke.clone()
+        };
+        for _ in 0..3 {
+            f.absorb(&displaced_without_stroke, 0);
+        }
+        f.absorb(&stroke_without_displace, 0);
+        let p = f.p_displaced_given_stroke();
+        assert!(
+            (0.0..=1.0).contains(&p),
+            "P(object displaced | stroke) must be in [0,1], got {p} (n_displaced={} n_stroke={})",
+            f.n_displaced,
+            f.n_stroke
+        );
+        let pd = f.p_direction_given_displacement();
+        assert!(
+            (0.0..=1.0).contains(&pd),
+            "P(correct direction | displacement) must be in [0,1], got {pd}"
+        );
     }
 }
