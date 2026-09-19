@@ -1,0 +1,33 @@
+[package]
+name = "realityos-virtual-metal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Virtual Metal V1: XL330 hardware-contract surrogate. SIMULATION_ONLY. Cannot mint measured metal."
+readme = false
+
+[[bin]]
+name = "virtual-metal-campaign"
+path = "src/bin/campaign.rs"
+
+[dependencies]
+realityos-kernel.workspace = true
+realityos-physics.workspace = true
+realityos-plant.workspace = true
+realityos-governor.workspace = true
+realityos-core.workspace = true
+realityos-metal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+
+[target.'cfg(unix)'.dev-dependencies]
+nix = { workspace = true }
+
+[lints]
+workspace = true

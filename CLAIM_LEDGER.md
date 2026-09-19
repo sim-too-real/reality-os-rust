@@ -70,5 +70,6 @@ Never promote one level into another.
 | Untrusted HIL process cannot submit authority objects | Process-isolation (HIL IPC) | ACTIVE | `crates/hil` protocol refuse; campaign |
 | Exclusive virtual endpoint: second process cannot `flock`/`open` log without chmod | Process-isolation (same-UID, no chmod) | ACTIVE | `try_hostile_open`; `docs/HIL.md` |
 | Fieldbus / metal robot | Physical safety | **NAMED_HOLE** | `FieldbusLink::named_hole`; first target is XL330 via `crates/metal` |
+| Virtual Metal V1 XL330 surrogate (`realityos.virtual_metal/1`) | Same-process | ACTIVE | `crates/virtual-metal`; Protocol 2.0 virtual device reuses `crates/metal` CRC/encode; truth pack provenance; seeded campaign ≥1000. **NOT** MEASURED / `hardware_present=true` / `docs/metal_proof.json`. Python PTY echo is not V1. Unknowns: `docs/virtual_metal/unknowns.json`. |
 | XL330 metal experiment (`realityos.metal_proof/1`) | Physical safety | **NOT_EVIDENCE** until `docs/metal_proof.json` is written from a real device with `hardware_present=true` | `docs/METAL_EXPERIMENT.md`; reporter refuses without hardware |
 | ONLINE metal / MEASURED / ISO PL/SIL | Physical safety | **NOT_EVIDENCE** | type system + this ledger |

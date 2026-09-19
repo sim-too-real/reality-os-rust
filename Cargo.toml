@@ -17,6 +17,7 @@ members = [
     "crates/vport",
     "crates/hil",
     "crates/metal",
+    "crates/virtual-metal",
     "crates/verify",
     "crates/semantics",
     "apps/ros-governor",
@@ -38,6 +39,7 @@ default-members = [
     "crates/vport",
     "crates/hil",
     "crates/metal",
+    "crates/virtual-metal",
     "crates/verify",
     "crates/semantics",
     "apps/ros-governor",
@@ -69,6 +71,7 @@ realityos-gauntlet = { path = "crates/gauntlet" }
 realityos-vport = { path = "crates/vport" }
 realityos-hil = { path = "crates/hil" }
 realityos-metal = { path = "crates/metal" }
+realityos-virtual-metal = { path = "crates/virtual-metal" }
 realityos-verify = { path = "crates/verify" }
 realityos-semantics = { path = "crates/semantics" }
 serialport = { version = "4.7", default-features = false }

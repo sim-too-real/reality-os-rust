@@ -24,9 +24,11 @@ realityos-session.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
-fs2.workspace = true
 sha2.workspace = true
 hex.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+fs2.workspace = true
 serialport.workspace = true
 nix.workspace = true
 

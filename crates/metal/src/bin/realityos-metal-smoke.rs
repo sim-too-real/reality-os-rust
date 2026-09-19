@@ -1,13 +1,26 @@
+#[cfg(not(unix))]
+fn main() {
+    eprintln!("realityos-metal-smoke requires Unix serial/PTY; not Virtual Metal V1");
+    std::process::exit(2);
+}
+
+#[cfg(unix)]
 use std::env;
+#[cfg(unix)]
 use std::path::PathBuf;
 
+#[cfg(unix)]
 use realityos_metal::config::{MetalConfig, CONFIG_FILE, MEASURED_FILE};
+#[cfg(unix)]
 use realityos_metal::identity::{
     adapter_identity_aliases, rematch_discover_device, usb_identity_for_tty,
 };
+#[cfg(unix)]
 use realityos_metal::proof::{default_unresolved, CaseRecord, MetalProof, ProofMeta, PROOF_SCHEMA};
+#[cfg(unix)]
 use realityos_metal::{serve_forever, Xl330Driver};
 
+#[cfg(unix)]
 fn main() -> anyhow::Result<()> {
     let mut root = PathBuf::from("/tmp/realityos-metal");
     let mut device: Option<PathBuf> = None;

@@ -1,10 +1,22 @@
+#[cfg(not(unix))]
+fn main() {
+    eprintln!("realityos-metal-propose requires Unix; not Virtual Metal V1");
+    std::process::exit(2);
+}
+
+#[cfg(unix)]
 use std::env;
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+#[cfg(unix)]
 use std::path::PathBuf;
 
+#[cfg(unix)]
 use realityos_metal::config::{resolve_probe_device, JOURNAL, SIGNING_KEY_FILE};
+#[cfg(unix)]
 use realityos_metal::ipc::{call, call_raw, MetalRequest};
 
+#[cfg(unix)]
 fn main() -> anyhow::Result<()> {
     let mut root = PathBuf::from("/tmp/realityos-metal");
     let mut cmd = String::new();
@@ -125,6 +137,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn os_probe(
     root: &std::path::Path,
     authority_pid: Option<i32>,
@@ -235,6 +248,7 @@ fn os_probe(
     }))
 }
 
+#[cfg(unix)]
 fn rust_uid() -> u32 {
     std::fs::read_to_string("/proc/self/status")
         .ok()
@@ -247,6 +261,7 @@ fn rust_uid() -> u32 {
         .unwrap_or(0)
 }
 
+#[cfg(unix)]
 fn rust_euid() -> u32 {
     std::fs::read_to_string("/proc/self/status")
         .ok()

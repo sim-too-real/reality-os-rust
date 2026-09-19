@@ -1,4 +1,5 @@
 //! Init must not persist probe baud/id hints into metal.json.
+#![cfg(unix)]
 
 use realityos_metal::config::{MetalConfig, CONFIG_FILE};
 

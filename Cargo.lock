@@ -1055,6 +1055,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "realityos-virtual-metal"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hex",
+ "nix",
+ "realityos-core",
+ "realityos-governor",
+ "realityos-kernel",
+ "realityos-metal",
+ "realityos-physics",
+ "realityos-plant",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "realityos-vision"
 version = "0.1.0"
 dependencies = [

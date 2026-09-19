@@ -458,16 +458,32 @@ fn hardware_model_matches_eeprom(meta: &ProofMeta) -> Result<(), String> {
     }
 }
 
-fn identity_looks_like_pty_stand_in(id: &serde_json::Value) -> bool {
-    let status = id
-        .pointer("/hardware_identity/evidence_status")
+fn identity_evidence_status(id: &serde_json::Value) -> Option<&str> {
+    id.pointer("/hardware_identity/evidence_status")
         .and_then(|v| v.as_str())
-        .or_else(|| id.get("evidence_status").and_then(|v| v.as_str()));
+        .or_else(|| id.get("evidence_status").and_then(|v| v.as_str()))
+}
+
+fn identity_looks_like_pty_stand_in(id: &serde_json::Value) -> bool {
+    let status = identity_evidence_status(id);
     let metal = id
         .pointer("/hardware_identity/metal")
         .and_then(|v| v.as_bool())
         .or_else(|| id.get("metal").and_then(|v| v.as_bool()));
     status == Some("PTY_STAND_IN_NOT_METAL") || metal == Some(false)
+}
+
+/// Virtual Metal / simulation tokens cannot mint measured hardware, even if a
+/// reporter forges `metal: true` and `hardware_present: true`.
+fn identity_looks_like_virtual_metal(id: &serde_json::Value) -> bool {
+    match identity_evidence_status(id) {
+        Some(s) => {
+            s.contains("VIRTUAL_METAL")
+                || s.contains("SIMULATION_ONLY")
+                || s.contains("SIM_VIRTUAL_METAL")
+        }
+        None => false,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -541,6 +557,7 @@ impl MetalProof {
         let freshness_measured =
             meta.device_capture_s.is_some() && meta.authority_receive_s.is_some();
         let not_pty_stand_in = !identity_looks_like_pty_stand_in(&meta.real_device_identity);
+        let not_virtual_metal = !identity_looks_like_virtual_metal(&meta.real_device_identity);
         let cutoff_attested = meta.cutoff_operator_attested || meta.cutoff_tested;
         let cutoff_live = meta.cutoff_live_observed;
         let unplug_live = meta.unplug_live_observed;
@@ -577,6 +594,7 @@ impl MetalProof {
             && a.disconnect_refusals > 0
             && freshness_measured
             && not_pty_stand_in
+            && not_virtual_metal
             && meta.used_os_monotonic_clock
             && meta.used_hardware_driver_port;
         Ok(Self {
@@ -1301,6 +1319,34 @@ mod tests {
             }
         });
         let incomplete = MetalProof::from_measured(pty, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+    }
+
+    #[test]
+    fn measured_success_refuses_virtual_metal_identity_even_if_metal_flag_forged() {
+        let mut vm = ok_meta(true);
+        vm.hardware_present = true;
+        vm.real_device_identity = serde_json::json!({
+            "hardware_identity": {
+                "metal": true,
+                "evidence_status": "SIM_VIRTUAL_METAL_NOT_METAL",
+                "serial": "VM-XL330-M288-1"
+            }
+        });
+        let incomplete = MetalProof::from_measured(vm, ok_cases(), default_unresolved()).unwrap();
+        assert_eq!(
+            incomplete.experiment_status,
+            "measured_incomplete_or_failed"
+        );
+        assert_ne!(incomplete.schema, "realityos.virtual_metal/1");
+        let mut raw = ok_meta(true);
+        raw.real_device_identity = serde_json::json!({
+            "evidence_status": "VIRTUAL_METAL_PASS"
+        });
+        let incomplete = MetalProof::from_measured(raw, ok_cases(), default_unresolved()).unwrap();
         assert_eq!(
             incomplete.experiment_status,
             "measured_incomplete_or_failed"

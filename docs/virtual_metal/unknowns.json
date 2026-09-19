@@ -1,0 +1,62 @@
+{
+  "schema": "realityos.virtual_metal.unknowns/1",
+  "note": "Public data does not establish these. Virtual Metal V1 is not physical verification.",
+  "items": [
+    {
+      "property": "undocumented XL330 firmware scheduling and exact RAM restore after REBOOT",
+      "smallest_physical_experiment": "Scope one REBOOT on a real XL330-M288; capture RAM registers before/after with Protocol 2.0 READ."
+    },
+    {
+      "property": "true boot-timing distribution after VIN apply and INST_REBOOT",
+      "smallest_physical_experiment": "N>=30 reboot-to-first-PING samples on the intended USB-UART adapter."
+    },
+    {
+      "property": "USB adapter quirks (DTR-RESET, echo, latency, CH340 vs FTDI vs U2D2)",
+      "smallest_physical_experiment": "Identify adapter; measure DTR pulse vs servo reset; latency histogram on live bus."
+    },
+    {
+      "property": "real voltage sag under stall at 5.0 V",
+      "smallest_physical_experiment": "Current-limited 5 V supply; log VIN register and shunt current during a stall pulse."
+    },
+    {
+      "property": "EMI / packet corruption rate on the real half-duplex bus",
+      "smallest_physical_experiment": "Long capture of CRC errors during hold and nudge on the bench harness."
+    },
+    {
+      "property": "actual mechanical backlash and gearbox efficiency",
+      "smallest_physical_experiment": "Optical or encoder-external measurement of horn hysteresis; compare stall torque vs input current."
+    },
+    {
+      "property": "manufacturing variation of stall torque and no-load speed",
+      "smallest_physical_experiment": "Measure stall and no-load on the specific serial unit, store as CALIBRATED_FROM_REAL_HARDWARE beside manufacturer values."
+    },
+    {
+      "property": "real holding torque at conservative PWM Limit 200",
+      "smallest_physical_experiment": "Apply known load at hold; observe present-position drift."
+    },
+    {
+      "property": "real thermal response and shutdown timing",
+      "smallest_physical_experiment": "Loaded run until Present Temperature approaches Temperature Limit; record Hardware Error Status and torque-off time."
+    },
+    {
+      "property": "actual power-cut behavior (USB unplug vs VIN cutoff)",
+      "smallest_physical_experiment": "Operator-attested live unplug and VIN cutoff with lost holding torque, as required by the metal experiment."
+    },
+    {
+      "property": "kernel/driver timing vs 40 ms live I/O and 100 ms watchdog",
+      "smallest_physical_experiment": "Run scripts/metal-campaign.sh on native Linux with the real UART; do not substitute PTY or Virtual Metal."
+    },
+    {
+      "property": "physical hot-swap identity (USB iSerial vs dest-only CH340)",
+      "smallest_physical_experiment": "Unplug/replug the same and a different adapter; confirm serve refuses the mismatch."
+    },
+    {
+      "property": "e-Manual Input Voltage error bit 0x01 vs 0x10 wording conflict",
+      "smallest_physical_experiment": "Induce under-voltage on a real XL330; READ Hardware Error Status(70)."
+    },
+    {
+      "property": "Velocity P Gain factory 180 (e-Manual) vs in-repo FACTORY_VELOCITY_P_GAIN=100",
+      "smallest_physical_experiment": "READ register 78 on a factory XL330-M288 after reboot."
+    }
+  ]
+}

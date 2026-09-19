@@ -1,5 +1,7 @@
 //! PTY Protocol 2.0 stand-in. Proves driver identity latch + echo scan.
 //! Not a metal proof. Does not write docs/metal_proof.json.
+//! Not Virtual Metal V1.
+#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

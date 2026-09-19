@@ -12,6 +12,36 @@ pub const INST_STATUS: u8 = 0x55;
 pub const BROADCAST_ID: u8 = 254;
 /// Protocol 2.0 bit 7: Hardware Error Status is latched. The instruction still completed.
 pub const STATUS_ALERT: u8 = 0x80;
+/// Protocol 2.0 status Error Number (bits 0–6). Alert is bit 7 (`STATUS_ALERT`).
+/// e-Manual: https://docs.robotis.com/docs/dxl/protocol/protocol2/#error
+pub const ERR_RESULT_FAIL: u8 = 0x01;
+pub const ERR_INSTRUCTION: u8 = 0x02;
+pub const ERR_CRC: u8 = 0x03;
+pub const ERR_DATA_RANGE: u8 = 0x04;
+pub const ERR_DATA_LENGTH: u8 = 0x05;
+pub const ERR_DATA_LIMIT: u8 = 0x06;
+pub const ERR_ACCESS: u8 = 0x07;
+
+/// EEPROM. Unit 2 µs. Factory 250.
+pub const ADDR_RETURN_DELAY_TIME: u16 = 9;
+/// EEPROM. Bitfield of shutdown conditions. Factory XL330 53.
+pub const ADDR_SHUTDOWN: u16 = 63;
+pub const FACTORY_SHUTDOWN: u8 = 53;
+/// RAM.
+pub const ADDR_LED: u16 = 65;
+pub const ADDR_REGISTERED_INSTRUCTION: u16 = 69;
+pub const ADDR_GOAL_CURRENT: u16 = 102;
+pub const ADDR_GOAL_VELOCITY: u16 = 104;
+pub const ADDR_MOVING_STATUS: u16 = 123;
+pub const ADDR_PRESENT_PWM: u16 = 124;
+/// Hardware Error Status bits (XL330 Shutdown table). Voltage text in the
+/// same e-Manual also writes 0x10 for input-voltage; that conflict is recorded
+/// in `docs/virtual_metal/protocol_vectors.md`.
+pub const HWERR_INPUT_VOLTAGE: u8 = 1 << 0;
+pub const HWERR_OVERHEATING: u8 = 1 << 2;
+pub const HWERR_MOTOR_ENCODER: u8 = 1 << 3;
+pub const HWERR_ELECTRICAL_SHOCK: u8 = 1 << 4;
+pub const HWERR_OVERLOAD: u8 = 1 << 5;
 
 /// Robotis e-Manual / Dynamixel2Arduino `actuator.h`.
 pub const XL330_M077_MODEL: u16 = 1190;
@@ -169,6 +199,14 @@ pub struct StatusPacket {
     pub params: Vec<u8>,
 }
 
+/// Host instruction after destuff + CRC. Same codec as [`decode_status`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstructionPacket {
+    pub id: u8,
+    pub instruction: u8,
+    pub params: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolError {
     TooShort,
@@ -262,6 +300,40 @@ pub fn encode_write(id: u8, addr: u16, data: &[u8]) -> Vec<u8> {
     p.extend_from_slice(&addr.to_le_bytes());
     p.extend_from_slice(data);
     encode_packet(id, INST_WRITE, &p)
+}
+
+/// Status packet using the same encode path as host instructions.
+pub fn encode_status(id: u8, error: u8, params: &[u8]) -> Vec<u8> {
+    let mut p = Vec::with_capacity(1 + params.len());
+    p.push(error);
+    p.extend_from_slice(params);
+    encode_packet(id, INST_STATUS, &p)
+}
+
+/// Decode a Protocol 2.0 instruction (PING/READ/WRITE/REBOOT/…).
+pub fn decode_instruction(buf: &[u8]) -> Result<InstructionPacket, ProtocolError> {
+    let destuffed = destuff(buf)?;
+    if destuffed.len() < 10 {
+        return Err(ProtocolError::TooShort);
+    }
+    if destuffed[0..4] != HEADER {
+        return Err(ProtocolError::BadHeader);
+    }
+    let length = u16::from_le_bytes([destuffed[5], destuffed[6]]) as usize;
+    let need = 7 + length;
+    if destuffed.len() < need {
+        return Err(ProtocolError::Truncated);
+    }
+    let body = &destuffed[..need - 2];
+    let got = u16::from_le_bytes([destuffed[need - 2], destuffed[need - 1]]);
+    if crc16(body) != got {
+        return Err(ProtocolError::BadCrc);
+    }
+    Ok(InstructionPacket {
+        id: destuffed[4],
+        instruction: destuffed[7],
+        params: destuffed[8..need - 2].to_vec(),
+    })
 }
 
 pub fn decode_status(buf: &[u8]) -> Result<StatusPacket, ProtocolError> {
@@ -426,6 +498,75 @@ pub fn le_i32(b: &[u8]) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn emanual_ping_and_broadcast_crc_vectors() {
+        // https://docs.robotis.com/docs/dxl/protocol/protocol2/#ping-0x01
+        assert_eq!(
+            encode_ping(1),
+            vec![0xFF, 0xFF, 0xFD, 0x00, 0x01, 0x03, 0x00, 0x01, 0x19, 0x4E]
+        );
+        assert_eq!(
+            encode_ping(BROADCAST_ID),
+            vec![0xFF, 0xFF, 0xFD, 0x00, 0xFE, 0x03, 0x00, 0x01, 0x31, 0x42]
+        );
+        let ping_status = encode_status(1, 0, &[0x06, 0x04, 0x26]);
+        assert_eq!(
+            ping_status,
+            vec![
+                0xFF, 0xFF, 0xFD, 0x00, 0x01, 0x07, 0x00, 0x55, 0x00, 0x06, 0x04, 0x26, 0x65, 0x5D
+            ]
+        );
+        let write = encode_write(1, ADDR_GOAL_POSITION, &0x0000_0200i32.to_le_bytes());
+        assert_eq!(
+            write,
+            vec![
+                0xFF, 0xFF, 0xFD, 0x00, 0x01, 0x09, 0x00, 0x03, 0x74, 0x00, 0x00, 0x02, 0x00, 0x00,
+                0xCA, 0x89
+            ]
+        );
+        let read = encode_read(1, ADDR_PRESENT_POSITION, 4);
+        assert_eq!(
+            read,
+            vec![
+                0xFF, 0xFF, 0xFD, 0x00, 0x01, 0x07, 0x00, 0x02, 0x84, 0x00, 0x04, 0x00, 0x1D, 0x15
+            ]
+        );
+        let reboot = encode_reboot(1);
+        assert_eq!(
+            reboot,
+            vec![0xFF, 0xFF, 0xFD, 0x00, 0x01, 0x03, 0x00, 0x08, 0x2F, 0x4E]
+        );
+        let status_ok = encode_status(1, 0, &[]);
+        assert_eq!(
+            status_ok,
+            vec![0xFF, 0xFF, 0xFD, 0x00, 0x01, 0x04, 0x00, 0x55, 0x00, 0xA1, 0x0C]
+        );
+    }
+
+    #[test]
+    fn ping_decode_instruction_roundtrip() {
+        let pkt = encode_ping(1);
+        let inst = decode_instruction(&pkt).unwrap();
+        assert_eq!(inst.id, 1);
+        assert_eq!(inst.instruction, INST_PING);
+        assert!(inst.params.is_empty());
+        let stuffed_write = encode_write(1, ADDR_GOAL_POSITION, &[0xFF, 0xFF, 0xFD, 0x00]);
+        let w = decode_instruction(&stuffed_write).unwrap();
+        assert_eq!(w.instruction, INST_WRITE);
+        assert_eq!(&w.params[2..], &[0xFF, 0xFF, 0xFD, 0x00]);
+        let mut bad = pkt.clone();
+        let n = bad.len();
+        bad[n - 1] ^= 0xFF;
+        assert_eq!(decode_instruction(&bad), Err(ProtocolError::BadCrc));
+        assert_eq!(decode_instruction(&pkt[..8]), Err(ProtocolError::TooShort));
+        let status = encode_status(1, 0, &[0xB0, 0x04, 0x2E]);
+        let st = decode_status(&status).unwrap();
+        assert_eq!(st.id, 1);
+        assert_eq!(st.error, 0);
+        assert_eq!(st.params, vec![0xB0, 0x04, 0x2E]);
+        assert_eq!(&status[0..4], &HEADER);
+    }
 
     #[test]
     fn ping_roundtrip_crc() {

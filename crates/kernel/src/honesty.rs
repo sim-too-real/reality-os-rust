@@ -89,4 +89,17 @@ mod tests {
     fn measured_token_is_refused() {
         assert!(HonestyStamp::sim("MEASURED_DYNO").is_err());
     }
+
+    #[test]
+    fn virtual_metal_token_cannot_claim_measured() {
+        assert!(HonestyStamp::sim("VIRTUAL_METAL").is_err());
+        assert!(HonestyStamp::sim("VIRTUAL_METAL_PASS").is_err());
+        assert!(HonestyStamp::sim("MEASURED_VIRTUAL_METAL").is_err());
+        let h = HonestyStamp::sim("SIM_VIRTUAL_METAL_NOT_METAL").unwrap();
+        assert!(!h.metal());
+        assert!(!h.measured());
+        assert!(!h.invent_authority());
+        assert!(!h.measured_owned());
+        assert_eq!(h.evidence_status(), "SIM_VIRTUAL_METAL_NOT_METAL");
+    }
 }
