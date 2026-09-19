@@ -210,7 +210,7 @@ def init_regs() -> bytearray:
     if os.environ.get("REALITYOS_METAL_PTY_FEEDFORWARD") == "1":
         regs[88:90] = struct.pack("<H", 8000)
         regs[90:92] = struct.pack("<H", 8000)
-    vel_p = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_VEL_P") == "1" else 100
+    vel_p = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_VEL_P") == "1" else 180
     regs[78:80] = struct.pack("<H", vel_p)
     vel_i = 0 if os.environ.get("REALITYOS_METAL_PTY_ZERO_VEL_I") == "1" else 1600
     regs[76:78] = struct.pack("<H", vel_i)

@@ -791,7 +791,6 @@ fn run_tier2_smoke_impl(_seed: u64, _n: usize) -> Result<CampaignRecord, String>
 fn run_tier2_smoke_impl(seed: u64, n: usize) -> Result<CampaignRecord, String> {
     use realityos_metal::config::MetalConfig;
     use realityos_metal::xl330::Xl330Driver;
-    use realityos_plant::HardwareDriverPort;
 
     let mut rows = Vec::new();
     for i in 0..n as u64 {

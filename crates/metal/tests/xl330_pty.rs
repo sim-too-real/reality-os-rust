@@ -984,8 +984,12 @@ fn xl330_pty_raises_wizard_zero_velocity_p_so_nudge_can_track() {
     let (_guard, tty) = spawn_responder_env(&[("REALITYOS_METAL_PTY_ZERO_VEL_P", "1")]);
     let root = metal_test_root("pty-zero-vel-p");
     let cfg = MetalConfig::example(&tty);
-    let mut driver = Xl330Driver::open(cfg, &root).expect("raise Velocity P Gain 0 to factory 100");
-    assert_eq!(driver.applied_velocity_p_gain(), 100);
+    let mut driver =
+        Xl330Driver::open(cfg, &root).expect("raise Velocity P Gain 0 to XL330-M288 factory 180");
+    assert_eq!(
+        driver.applied_velocity_p_gain(),
+        realityos_metal::protocol::FACTORY_VELOCITY_P_GAIN
+    );
     driver.read_sensor(0.0).expect("sensor");
     let before = driver.last_present_position();
     driver
@@ -1012,7 +1016,7 @@ fn xl330_pty_refuses_when_velocity_p_write_does_not_stick() {
     let root = metal_test_root("pty-drop-velocity-p");
     let cfg = MetalConfig::example(&tty);
     let err = match Xl330Driver::open(cfg, &root) {
-        Ok(_) => panic!("ACK'd-but-dropped Velocity P write must not look like factory 100"),
+        Ok(_) => panic!("ACK'd-but-dropped Velocity P write must not look like factory restore"),
         Err(e) => e,
     };
     assert!(
