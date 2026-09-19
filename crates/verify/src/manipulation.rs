@@ -31,7 +31,7 @@ use realityos_semantics::contact::{
 };
 use realityos_semantics::contact_maneuver::{
     classify_pre_contact, current_contact_establishment_mode, current_world_construction_mode,
-    select_fixed_world_push, select_push_maneuver, tool_offset_in_ee, BoxObject,
+    select_fixed_world_push_seeded, select_push_maneuver, tool_offset_in_ee, BoxObject,
     ContactEstablishmentMode, ContactInfeasible, ContactManeuver, ContactManeuverSpec,
     PreContactEvidence, SampledEePose, SupportPlane, WorldConstructionMode,
 };
@@ -632,14 +632,28 @@ fn run_skill_episode(
         finger_contact_point(&initial, &inst.inspect, &r.finger_bodies, ee_now)
             .or_else(|| finger_midpoint(&initial, &r.finger_bodies))
     });
-    let (approach, grasp_or_contact) = candidate_poses(
+    let Some((approach, grasp_or_contact)) = candidate_poses(
         sc,
         obj_pose,
         ee_now,
         finger_mid,
         skill,
         placement.maneuver.as_ref(),
-    );
+    ) else {
+        let mut ep = refused_episode(
+            bundle,
+            model,
+            sc,
+            sha,
+            "skill.push",
+            Some(ContactInfeasible::NoFeasibleContactPose.as_str()),
+            sc.polarity != Polarity::Positive || sc.expected_refusal.is_some(),
+        );
+        ep.selected_rank_why = placement.rank_why.clone();
+        ep.had_feasible_contact_maneuver = false;
+        ep.world_adapted_to_robot = placement.adapted_world;
+        return Ok((ep, inst, manifest));
+    };
     let _ = insert_interaction_frame(
         &mut transforms,
         "world",
@@ -2260,10 +2274,15 @@ fn candidate_poses(
     finger_mid: Option<[f64; 3]>,
     skill: &str,
     maneuver: Option<&ContactManeuver>,
-) -> (Se3, Se3) {
+) -> Option<(Se3, Se3)> {
     if skill == "PUSH" {
         if let Some(m) = maneuver {
-            return (m.approach_pose, m.contact_pose);
+            return Some((m.approach_pose, m.contact_pose));
+        }
+        if current_contact_establishment_mode() == ContactEstablishmentMode::ManeuverV2
+            && !is_push_synthesis(sc)
+        {
+            return None;
         }
         let n = (sc.push_dir[0] * sc.push_dir[0]
             + sc.push_dir[1] * sc.push_dir[1]
@@ -2297,7 +2316,7 @@ fn candidate_poses(
             obj.quat_wxyz,
         )
         .unwrap_or(contact);
-        return (approach, contact);
+        return Some((approach, contact));
     }
     let offset = match (ee, finger_mid) {
         (Some(e), Some(f)) => clamp_offset([e[0] - f[0], e[1] - f[1], e[2] - f[2]], 0.08),
@@ -2327,7 +2346,7 @@ fn candidate_poses(
         obj.quat_wxyz,
     )
     .unwrap_or(grasp);
-    (approach, grasp)
+    Some((approach, grasp))
 }
 
 fn body_se3(truth: &VerifierTruth, name: &str) -> Option<Se3> {
@@ -2681,7 +2700,8 @@ fn place_object_in_workspace(
                 half_extents: half_xyz,
             };
             if use_v2 {
-                match select_fixed_world_push(&cloud, object, support, &spec, &model.joints) {
+                match select_fixed_world_push_seeded(model, ee_name, &cloud, object, support, &spec)
+                {
                     Ok((maneuver, why)) => {
                         outcome.rank_why = format!(
                             "score={} approach={:.4} stroke={:.4} orient={:.4} clear={:.4}",
@@ -3593,6 +3613,25 @@ mod tests {
     }
 
     #[test]
+    fn mode_b_v2_without_maneuver_does_not_invent_xyz_targets() {
+        let sc = push_scenario(11, true, 20);
+        let obj = Se3::try_new([0.25, 0.0, 0.12], [1.0, 0.0, 0.0, 0.0]).unwrap();
+        let none = super::candidate_poses(&sc, obj, None, None, "PUSH", None);
+        assert!(
+            none.is_none(),
+            "Mode B V2 must not compile object-face XYZ when select_fixed_world_push failed"
+        );
+        let xyz =
+            with_contact_establishment_mode(ContactEstablishmentMode::XyzSampleBaseline, || {
+                super::candidate_poses(&sc, obj, None, None, "PUSH", None)
+            });
+        assert!(
+            xyz.is_some(),
+            "XYZ baseline may still form object-face poses"
+        );
+    }
+
+    #[test]
     fn default_push_scenario_is_fixed_world_not_synthesis() {
         let sc = push_scenario(11, false, 20);
         assert_eq!(sc.world_construction, WorldConstructionMode::FixedWorld);
@@ -3663,6 +3702,27 @@ mod tests {
         let mut ep2 = ep.clone();
         ep2.contacts = vec![finger];
         assert!(super::episode_ee_object_contact(&ep2, "obj0", &intended));
+    }
+
+    #[test]
+    fn mode_b_v2_refuses_without_compiling_xyz_when_select_fails() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(corpus::robot_dir("arm_gripper")).unwrap();
+        let (eps, _) = run_push_matrix_from(&b, 1, "sha", 0).expect("episode");
+        let ep = &eps[0];
+        assert_eq!(ep.ctrl_writes, 0, "must not drive XYZ object-face reaches");
+        assert!(
+            ep.commands.is_empty(),
+            "no compiled reach commands when no feasible maneuver"
+        );
+        assert_eq!(
+            ep.failure_taxonomy.as_deref(),
+            Some("NO_FEASIBLE_CONTACT_POSE")
+        );
+        assert!(!ep.had_feasible_contact_maneuver);
+        assert_eq!(ep.unauthorized_writes, 0);
     }
 
     #[test]

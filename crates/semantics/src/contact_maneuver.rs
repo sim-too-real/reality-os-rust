@@ -2,7 +2,8 @@
 //!
 //! No robot name, vendor, URDF filename, bundle ID, or dataset origin.
 
-use crate::embodiment::Joint;
+use crate::embodiment::{EmbodimentModel, Joint};
+use crate::kinematics::{forward_kinematics, solve_ik, with_ik_q_seed};
 use crate::push::{
     effective_push_distance, push_approach_standoff_m, push_contact_success_radius,
     support_plane_direction,
@@ -313,6 +314,11 @@ pub fn evaluate_sampled_push(
     if dot3(face_offset, push) > 1e-4 {
         return Err(ContactInfeasible::WrongContactGeometry);
     }
+    let along = -dot3(face_offset, push);
+    let nominal = half_along_push(object.half_extents, push) + spec.face_gap.max(0.0);
+    if (along - nominal).abs() > spec.max_approach_match {
+        return Err(ContactInfeasible::WrongContactGeometry);
+    }
 
     let clearance = support_clearance_of(sample.xyz, support, spec.ee_radius);
     if clearance < spec.min_support_clearance {
@@ -346,7 +352,7 @@ pub fn evaluate_sampled_push(
 
     let available = available_stroke_along(cloud, sample.xyz, push);
     let mid = spec.min_stroke * 0.5;
-    if available + 1e-9 < mid || available + 1e-9 < spec.min_stroke {
+    if available + 1e-6 < mid || available + 1e-6 < spec.min_stroke {
         return Err(ContactInfeasible::InsufficientRemainingStroke);
     }
 
@@ -470,14 +476,6 @@ pub fn select_push_maneuver(
     Ok((feasible[idx].clone(), why))
 }
 
-fn nearest_sample(cloud: &[SampledEePose], xyz: [f64; 3]) -> Option<&SampledEePose> {
-    cloud.iter().min_by(|a, b| {
-        dist3(a.xyz, xyz)
-            .partial_cmp(&dist3(b.xyz, xyz))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    })
-}
-
 struct GeometricContact {
     ee: [f64; 3],
     push: [f64; 3],
@@ -522,98 +520,119 @@ pub fn select_fixed_world_push(
             Err(e) => last_err = e,
         }
     }
-    if let Some((idx, why)) = select_contact_maneuver(&feasible, spec) {
-        return Ok((feasible[idx].clone(), why));
-    }
-
-    let mut geometric = Vec::new();
-    for seed in cloud {
-        match maneuver_from_fixed_object(seed, cloud, object, support, spec, joints) {
-            Ok(m) => geometric.push(m),
-            Err(e) => last_err = e,
-        }
-    }
-    let (idx, why) = select_contact_maneuver(&geometric, spec).ok_or(last_err)?;
-    Ok((geometric[idx].clone(), why))
+    let (idx, why) = select_contact_maneuver(&feasible, spec).ok_or(last_err)?;
+    Ok((feasible[idx].clone(), why))
 }
 
-fn maneuver_from_fixed_object(
+fn ik_sample_to_target(
+    model: &EmbodimentModel,
+    ee: &str,
     seed: &SampledEePose,
+    target: [f64; 3],
+    max_residual: f64,
+) -> Result<SampledEePose, ContactInfeasible> {
+    let chain = model
+        .ee_joint_chain(ee)
+        .ok_or(ContactInfeasible::NoFeasibleContactPose)?;
+    if seed.q.len() != chain.len() || !seed.q.iter().all(|v| v.is_finite()) {
+        return Err(ContactInfeasible::NoFeasibleContactPose);
+    }
+    let (q, trace) = with_ik_q_seed(Some(seed.q.as_slice()), || {
+        solve_ik(model, &chain, ee, target, &seed.q)
+    })
+    .map_err(|_| ContactInfeasible::NoFeasibleContactPose)?;
+    if trace.residual > max_residual {
+        return Err(ContactInfeasible::NoFeasibleContactPose);
+    }
+    let fk = forward_kinematics(model, &chain, ee, &q)
+        .map_err(|_| ContactInfeasible::NoFeasibleContactPose)?;
+    if dist3(fk.ee.xyz, target) > max_residual {
+        return Err(ContactInfeasible::NoFeasibleContactPose);
+    }
+    Ok(SampledEePose {
+        xyz: fk.ee.xyz,
+        quat_wxyz: fk.ee.quat_wxyz,
+        q,
+        joint_names: chain,
+    })
+}
+
+/// Mode B with seeded IK: refine a nearby `sampled_q` onto the object face.
+pub fn select_fixed_world_push_seeded(
+    model: &EmbodimentModel,
+    ee: &str,
     cloud: &[SampledEePose],
     object: BoxObject,
     support: SupportPlane,
     spec: &ContactManeuverSpec,
-    joints: &[Joint],
-) -> Result<ContactManeuver, ContactInfeasible> {
-    let geo = geometric_contact_ee(object, spec, seed, support, cloud)?;
-    let push = geo.push;
-    // Contact pose is the reachable sample. Accept a seed near the geometric
-    // EE *or* near the object face (tool offset can shift the EE target).
-    let face = half_along_push(object.half_extents, geo.push) + spec.face_gap.max(0.0);
-    let tool_at_face = sub3(object.center, scale3(geo.push, face));
-    if dist3(seed.xyz, geo.ee).min(dist3(seed.xyz, tool_at_face)) > IK_SEED_RADIUS_M {
+) -> Result<(ContactManeuver, RankWhy), ContactInfeasible> {
+    if let Ok(v) = select_fixed_world_push(cloud, object, support, spec, &model.joints) {
+        return Ok(v);
+    }
+    if cloud.is_empty() {
         return Err(ContactInfeasible::NoFeasibleContactPose);
     }
-    let tool_off = tool_world_offset(seed, spec.tool_offset_ee);
-    let tool_len = norm3(tool_off);
-    if tool_len >= TOOL_LEN_MIN {
-        let axis = normalize3(tool_off).ok_or(ContactInfeasible::OrientationInfeasible)?;
-        if dot3(axis, push) < spec.min_align {
-            return Err(ContactInfeasible::OrientationInfeasible);
-        }
-    }
-    let ee_contact = seed.xyz;
-    let tool_at = add3(ee_contact, tool_off);
-    let clearance = support_clearance_of(ee_contact, support, spec.ee_radius);
-    if clearance < spec.min_support_clearance {
-        return Err(ContactInfeasible::SupportPlaneBlocksEe);
-    }
+    let max_residual = spec.max_approach_match.max(0.08);
     let standoff = spec
         .approach_standoff
         .max(push_contact_success_radius() + 1e-4);
-    let approach_xyz = [
-        ee_contact[0] - push[0] * standoff,
-        ee_contact[1] - push[1] * standoff,
-        ee_contact[2],
-    ];
-    let approach_clear = support_clearance_of(approach_xyz, support, spec.ee_radius);
-    if approach_clear < spec.min_support_clearance {
-        return Err(ContactInfeasible::ApproachCollidesBeforeContact);
+    let mut feasible = Vec::new();
+    let mut last_err = ContactInfeasible::NoFeasibleContactPose;
+    for seed in cloud {
+        let Ok(geo) = geometric_contact_ee(object, spec, seed, support, cloud) else {
+            last_err = ContactInfeasible::WrongContactGeometry;
+            continue;
+        };
+        if dist3(seed.xyz, geo.ee) > IK_SEED_RADIUS_M {
+            continue;
+        }
+        let refined = match ik_sample_to_target(model, ee, seed, geo.ee, max_residual) {
+            Ok(s) => s,
+            Err(e) => {
+                last_err = e;
+                continue;
+            }
+        };
+        let mut local = cloud.to_vec();
+        local.push(refined.clone());
+        let phase_targets = [
+            [
+                geo.ee[0] - geo.push[0] * standoff,
+                geo.ee[1] - geo.push[1] * standoff,
+                geo.ee[2],
+            ],
+            [
+                geo.ee[0] + geo.push[0] * spec.min_stroke * 0.5,
+                geo.ee[1] + geo.push[1] * spec.min_stroke * 0.5,
+                geo.ee[2],
+            ],
+            [
+                geo.ee[0] + geo.push[0] * spec.min_stroke,
+                geo.ee[1] + geo.push[1] * spec.min_stroke,
+                geo.ee[2],
+            ],
+        ];
+        let mut phase_ok = true;
+        for target in phase_targets {
+            match ik_sample_to_target(model, ee, seed, target, max_residual) {
+                Ok(s) => local.push(s),
+                Err(e) => {
+                    last_err = e;
+                    phase_ok = false;
+                    break;
+                }
+            }
+        }
+        if !phase_ok {
+            continue;
+        }
+        match evaluate_sampled_push(&refined, &local, object, support, spec, &model.joints) {
+            Ok(m) => feasible.push(m),
+            Err(e) => last_err = e,
+        }
     }
-    let approach_seed = nearest_sample(cloud, approach_xyz);
-    let near_approach = approach_seed
-        .is_some_and(|s| dist3(s.xyz, approach_xyz) <= IK_SEED_RADIUS_M)
-        || dist3(spec.current_ee_xyz, approach_xyz) <= spec.max_approach_match
-        || dist3(spec.current_ee_xyz, approach_xyz) <= IK_SEED_RADIUS_M;
-    if !near_approach {
-        return Err(ContactInfeasible::ContactPoseUnreachableFromApproach);
-    }
-    let available = available_stroke_along(cloud, ee_contact, push);
-    if available + 1e-9 < spec.min_stroke {
-        return Err(ContactInfeasible::InsufficientRemainingStroke);
-    }
-    let contact_pose = pose(ee_contact, seed.quat_wxyz)?;
-    let approach_pose = pose(approach_xyz, seed.quat_wxyz)?;
-    let tool_axis = if tool_len >= TOOL_LEN_MIN {
-        normalize3(tool_off)
-    } else {
-        None
-    };
-    Ok(ContactManeuver {
-        contact_pose,
-        approach_pose,
-        contact_point: tool_at,
-        contact_normal: scale3(push, -1.0),
-        push_direction: push,
-        requested_stroke: spec.requested_stroke,
-        available_stroke: available,
-        support_clearance: clearance,
-        joint_margin: joint_margin_of(seed, joints),
-        orientation_error: orientation_error_of(tool_axis, push),
-        object_center: object.center,
-        support_top_z: support.origin[2],
-        sampled_q: seed.q.clone(),
-    })
+    let (idx, why) = select_contact_maneuver(&feasible, spec).ok_or(last_err)?;
+    Ok((feasible[idx].clone(), why))
 }
 
 /// Evidence-backed pre-contact label. Privileged collision flags are
@@ -1055,37 +1074,88 @@ mod tests {
     }
 
     #[test]
-    fn fixed_world_object_first_does_not_require_sample_on_the_face() {
+    fn fixed_world_tool_not_on_face_is_rejected_without_ik() {
         let near = sample([0.34, 0.0, 0.16], identity_quat());
         let ahead = sample([0.46, 0.0, 0.16], identity_quat());
-        let near_x = near.xyz[0];
-        let ahead_x = ahead.xyz[0];
         let spec = spec_at([0.22, 0.0, 0.16], [0.04, 0.0, 0.0]);
         let object = BoxObject {
-            center: [0.42, 0.0, 0.16],
+            center: [0.52, 0.0, 0.16],
             half_extents: [0.03, 0.03, 0.03],
         };
         let support = support_under(object.center, 0.03);
-        let (m, _) = select_fixed_world_push(&[near, ahead], object, support, &spec, &[])
-            .expect("object-first Mode B should seed from nearest sample");
+        let err = select_fixed_world_push(&[near, ahead], object, support, &spec, &[]).unwrap_err();
         assert!(
-            (m.object_center[0] - 0.42).abs() < 1e-12,
-            "object must stay put, got {:?}",
-            m.object_center
+            matches!(
+                err,
+                ContactInfeasible::WrongContactGeometry
+                    | ContactInfeasible::NoFeasibleContactPose
+                    | ContactInfeasible::ContactPoseUnreachableFromApproach
+            ),
+            "a sample 0.14 m off the face is not a feasible contact, got {err:?}"
         );
-        let face = half_along_push(object.half_extents, m.push_direction) + spec.face_gap;
-        let expected_tool_x = object.center[0] - m.push_direction[0] * face;
+    }
+
+    #[test]
+    fn seeded_ik_moves_tool_onto_the_object_face() {
+        use crate::adapter::synth_planar_two_link;
+        use crate::kinematics::forward_kinematics;
+
+        let model = synth_planar_two_link();
+        let chain = model.ee_joint_chain("ee").unwrap();
+        let q_contact = vec![0.9, 1.0];
+        let fk_c = forward_kinematics(&model, &chain, "ee", &q_contact).unwrap();
+        let q0 = vec![1.05, 1.15];
+        let fk0 = forward_kinematics(&model, &chain, "ee", &q0).unwrap();
+        let seed = SampledEePose {
+            xyz: fk0.ee.xyz,
+            quat_wxyz: fk0.ee.quat_wxyz,
+            q: q0,
+            joint_names: chain.clone(),
+        };
+        let ahead_q = vec![0.0, 0.0];
+        let fka = forward_kinematics(&model, &chain, "ee", &ahead_q).unwrap();
+        let ahead = SampledEePose {
+            xyz: fka.ee.xyz,
+            quat_wxyz: fka.ee.quat_wxyz,
+            q: ahead_q,
+            joint_names: chain,
+        };
+        let push = [1.0, 0.0, 0.0];
+        let half = [0.03, 0.03, 0.03];
+        let face = half_along_push(half, push) + 0.015;
+        let object = BoxObject {
+            center: [fk_c.ee.xyz[0] + face, fk_c.ee.xyz[1], fk_c.ee.xyz[2]],
+            half_extents: half,
+        };
+        let mut spec = spec_at(seed.xyz, [0.0, 0.0, 0.0]);
+        spec.min_stroke = 0.005;
+        spec.requested_stroke = 0.01;
+        let support = support_under(object.center, 0.03);
+        let cloud = [seed.clone(), ahead];
+        let no_ik = select_fixed_world_push(&cloud, object, support, &spec, &model.joints);
         assert!(
-            (m.contact_point[0] - expected_tool_x).abs() < 0.04,
-            "contact should be on the object face, tool={} expected={}",
+            no_ik.is_err(),
+            "without IK the off-face seed must not count as contact, got {no_ik:?}"
+        );
+        let (m, _) = select_fixed_world_push_seeded(&model, "ee", &cloud, object, support, &spec)
+            .expect("seeded IK must put the tool on the fixed object face");
+        assert!(
+            (m.object_center[0] - object.center[0]).abs() < 1e-12,
+            "object must stay put"
+        );
+        let expected_tool_x = object.center[0] - face;
+        assert!(
+            (m.contact_point[0] - expected_tool_x).abs() < 0.02,
+            "tool must land on the face, tool={} expected={} seed_ee={}",
             m.contact_point[0],
-            expected_tool_x
+            expected_tool_x,
+            seed.xyz[0],
         );
         assert!(
-            (m.contact_pose.xyz[0] - near_x).abs() < 1e-12
-                || (m.contact_pose.xyz[0] - ahead_x).abs() < 1e-12,
-            "contact pose must be a reachable sample, got {:?}",
-            m.contact_pose.xyz
+            (m.contact_pose.xyz[0] - seed.xyz[0]).abs() > 0.02,
+            "IK must move off the seed, seed={} contact={}",
+            seed.xyz[0],
+            m.contact_pose.xyz[0]
         );
     }
 
