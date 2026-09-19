@@ -250,6 +250,14 @@ impl PushFunnel {
         }
     }
 
+    pub fn p_contact_given_approach(&self) -> f64 {
+        if self.n_approach == 0 {
+            0.0
+        } else {
+            self.n_contact as f64 / self.n_approach as f64
+        }
+    }
+
     pub fn p_task_given_contact(&self) -> f64 {
         if self.n_contact == 0 {
             0.0

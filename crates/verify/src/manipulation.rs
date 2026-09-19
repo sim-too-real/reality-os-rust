@@ -526,7 +526,7 @@ fn run_skill_episode(
             let tips = resource.as_ref().and_then(|r| {
                 finger_contact_point(&initial, &inst.inspect, &r.finger_bodies, Some(ee))
             });
-            place_object_in_workspace(&mut inst, sc, ee, tips)?;
+            place_object_in_workspace(&mut inst, sc, model, &semantic_ee(bundle), ee, tips)?;
             initial = truth0(&mut inst)?;
         }
     }
@@ -1749,20 +1749,28 @@ fn candidate_poses(
             .sqrt()
             .max(1e-9);
         let dir = [sc.push_dir[0] / n, sc.push_dir[1] / n, sc.push_dir[2] / n];
+        let half = sc
+            .objects
+            .iter()
+            .find(|o| o["name"] == sc.object_id)
+            .and_then(|o| o["size"].as_array())
+            .and_then(|a| a.first().and_then(|v| v.as_f64()))
+            .unwrap_or(0.025);
+        let face = half + 0.015;
         let contact = Se3::try_new(
             [
-                obj.xyz[0] - dir[0] * 0.03,
-                obj.xyz[1] - dir[1] * 0.03,
-                obj.xyz[2] - dir[2] * 0.03,
+                obj.xyz[0] - dir[0] * face,
+                obj.xyz[1] - dir[1] * face,
+                obj.xyz[2] - dir[2] * face,
             ],
             obj.quat_wxyz,
         )
         .unwrap_or(obj);
         let approach = Se3::try_new(
             [
-                contact.xyz[0] - dir[0] * 0.06,
-                contact.xyz[1] - dir[1] * 0.06,
-                contact.xyz[2] - dir[2] * 0.06,
+                contact.xyz[0] - dir[0] * 0.04,
+                contact.xyz[1] - dir[1] * 0.04,
+                contact.xyz[2] - dir[2] * 0.04,
             ],
             obj.quat_wxyz,
         )
@@ -1864,6 +1872,8 @@ fn ee_workspace(truth: &VerifierTruth, bundle: &RobotBundle) -> Option<[f64; 3]>
 fn place_object_in_workspace(
     inst: &mut crate::mujoco_exec::MujocoInstance,
     sc: &ManipulationScenario,
+    model: &EmbodimentModel,
+    ee_name: &str,
     ee: [f64; 3],
     finger_tip: Option<[f64; 3]>,
 ) -> Result<(), String> {
@@ -1875,7 +1885,29 @@ fn place_object_in_workspace(
         .and_then(|o| o["size"].as_array())
         .and_then(|a| a.first().and_then(|v| v.as_f64()))
         .unwrap_or(0.025);
-    let pos = if sc.planar {
+    let pos = if sc.skill == "PUSH" {
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(sc.seed ^ 0x00A1_1CE5);
+        let n_chain = model.ee_joint_chain(ee_name).map(|c| c.len()).unwrap_or(0);
+        let mut units = Vec::new();
+        for _ in 0..64 {
+            for _ in 0..n_chain {
+                units.push(rng.gen::<f64>());
+            }
+        }
+        let cloud = realityos_semantics::workspace::reachable_ee_xyz(model, ee_name, &units);
+        if cloud.is_empty() {
+            if sc.planar {
+                [ee[0] - 0.01, ee[1], ee[2]]
+            } else {
+                let z = (anchor[2] - 0.002).max(half + 0.02);
+                [anchor[0], anchor[1], z]
+            }
+        } else {
+            let contact = cloud[rng.gen_range(0..cloud.len())];
+            realityos_semantics::workspace::push_object_xyz(contact, sc.push_dir, half, 0.015)
+        }
+    } else if sc.planar {
         [ee[0] - 0.01, ee[1], ee[2]]
     } else {
         let z = (anchor[2] - 0.002).max(half + 0.02);
@@ -2431,12 +2463,114 @@ mod tests {
             );
         }
         eprintln!(
-            "push_funnel n={} contact={} p_task_given_contact={:.3} unauthorized={}",
+            "push_funnel n={} contact={} p_task_given_contact={:.3} p_contact_given_approach={:.3} unauthorized={}",
             funnel.n,
             funnel.n_contact,
             funnel.p_task_given_contact(),
+            funnel.p_contact_given_approach(),
             funnel.n_unauthorized_writes
         );
+        assert_eq!(funnel.n_unauthorized_writes, 0);
+        if let Ok(path) = std::env::var("REALITYOS_PUSH_FUNNEL_OUT") {
+            let recs: Vec<serde_json::Value> = eps
+                .iter()
+                .map(|ep| {
+                    serde_json::json!({
+                        "episode_id": format!("{}:{}:{}", ep.robot_id, ep.world_seed, ep.skill_contract),
+                        "skill": ep.skill_contract,
+                        "task_result": ep.task_result,
+                        "failure_taxonomy": ep.failure_taxonomy,
+                        "first_stage_entered": ep.first_stage_entered,
+                        "last_stage_completed": ep.last_stage_completed,
+                        "earliest_pipeline_failed": ep.earliest_pipeline_failed,
+                        "unauthorized_writes": ep.unauthorized_writes,
+                        "evidence_used": ep.evidence_used,
+                    })
+                })
+                .collect();
+            let report = serde_json::json!({
+                "condition": "after_workspace_aware_sampling",
+                "baseline_arm_gripper_idx_offset_9_n16": {
+                    "n_contact": 0,
+                    "p_task_success_given_contact": 0.0,
+                    "note": "pre-sampler: randomized positives refused UNREACHABLE before contact"
+                },
+                "n": funnel.n,
+                "n_contact": funnel.n_contact,
+                "n_approach": funnel.n_approach,
+                "p_task_success_given_contact": funnel.p_task_given_contact(),
+                "p_contact_given_approach": funnel.p_contact_given_approach(),
+                "unauthorized_writes": funnel.n_unauthorized_writes,
+                "episodes": recs,
+            });
+            std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap())
+                .unwrap_or_else(|e| panic!("write {path}: {e}"));
+        }
+    }
+
+    #[test]
+    fn push_holdout_funnel_frozen_no_retune() {
+        if std::env::var("REALITYOS_PUSH_HOLDOUT_OUT").is_err() {
+            return;
+        }
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let dir = crate::menagerie::manipulation_holdout_bundle_dir();
+        if !dir.join("robot.yaml").exists() {
+            let path = std::env::var("REALITYOS_PUSH_HOLDOUT_OUT").unwrap();
+            std::fs::write(
+                &path,
+                serde_json::json!({
+                    "holdout_bundle_present": false,
+                    "episodes": [],
+                    "tuned_on_holdout": false,
+                })
+                .to_string(),
+            )
+            .unwrap();
+            return;
+        }
+        if crate::menagerie::ensure_manipulation_holdout_model().is_err() {
+            return;
+        }
+        let sha = software_sha();
+        let b = RobotBundle::load(&dir).unwrap();
+        let (eps, _) = run_push_matrix_from(&b, 12, &sha, 9).expect("holdout push");
+        let mut funnel = crate::push_pipeline::PushFunnel::default();
+        let recs: Vec<serde_json::Value> = eps
+            .iter()
+            .map(|ep| {
+                let ev = crate::push_pipeline::evidence_from_episode_fields(
+                    &ep.task_result,
+                    ep.failure_taxonomy.as_deref().unwrap_or(""),
+                    &ep.evidence_used,
+                    !ep.contacts.is_empty(),
+                    ep.expected_refusal,
+                );
+                funnel.absorb(&ev, ep.unauthorized_writes);
+                serde_json::json!({
+                    "episode_id": format!("{}:{}:{}", ep.robot_id, ep.world_seed, ep.skill_contract),
+                    "skill": ep.skill_contract,
+                    "task_result": ep.task_result,
+                    "failure_taxonomy": ep.failure_taxonomy,
+                    "first_stage_entered": ep.first_stage_entered,
+                    "last_stage_completed": ep.last_stage_completed,
+                    "earliest_pipeline_failed": ep.earliest_pipeline_failed,
+                    "unauthorized_writes": ep.unauthorized_writes,
+                })
+            })
+            .collect();
+        let path = std::env::var("REALITYOS_PUSH_HOLDOUT_OUT").unwrap();
+        let report = serde_json::json!({
+            "tuned_on_holdout": false,
+            "n": funnel.n,
+            "n_contact": funnel.n_contact,
+            "p_task_success_given_contact": funnel.p_task_given_contact(),
+            "unauthorized_writes": funnel.n_unauthorized_writes,
+            "episodes": recs,
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap()).unwrap();
         assert_eq!(funnel.n_unauthorized_writes, 0);
     }
 }

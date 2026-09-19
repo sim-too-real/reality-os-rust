@@ -21,6 +21,7 @@ pub mod resource;
 pub mod sensor;
 pub mod skill;
 pub mod transform;
+pub mod workspace;
 pub mod world;
 
 pub const SCHEMA_FAMILY: &str = "realityos.semantics/1";
