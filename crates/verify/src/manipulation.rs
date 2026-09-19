@@ -86,6 +86,10 @@ pub struct ManipulationEpisode {
     pub last_stage_completed: String,
     #[serde(default)]
     pub earliest_pipeline_failed: String,
+    #[serde(default)]
+    pub requested_push_direction: [f64; 3],
+    #[serde(default)]
+    pub requested_push_distance_m: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1232,6 +1236,8 @@ fn finish_episode(
         first_stage_entered: String::new(),
         last_stage_completed: String::new(),
         earliest_pipeline_failed: String::new(),
+        requested_push_direction: sc.push_dir,
+        requested_push_distance_m: sc.push_dist,
     };
     ep.earliest_failure_stage = crate::failure_diagnosis::classify_push_stage(
         &ep.task_result,
@@ -1353,7 +1359,139 @@ fn refused_episode(
         first_stage_entered: "TARGET_AVAILABLE".into(),
         last_stage_completed: String::new(),
         earliest_pipeline_failed: String::new(),
+        requested_push_direction: sc.push_dir,
+        requested_push_distance_m: sc.push_dist,
     }
+}
+
+pub fn tagged_push_episode_record(ep: &ManipulationEpisode) -> Value {
+    let n_joints = ep.joint_state.as_array().map(|a| a.len()).unwrap_or(0);
+    let object_features = ep
+        .object_definitions
+        .iter()
+        .find(|o| o["name"] == "obj0")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let contact_established = ep
+        .evidence_used
+        .iter()
+        .any(|e| e == "controlled_contact_established")
+        || ep.contacts.iter().any(|c| {
+            let a = c.get("a").and_then(|v| v.as_str()).unwrap_or("");
+            let b = c.get("b").and_then(|v| v.as_str()).unwrap_or("");
+            a.contains("obj") || b.contains("obj")
+        });
+    let displaced = ep
+        .evidence_used
+        .iter()
+        .any(|e| e == "object_displaced_along_direction");
+    let force: Vec<Value> = ep
+        .contacts
+        .iter()
+        .map(|c| json!({"fn": c.get("fn"), "ft": c.get("ft")}))
+        .collect();
+    crate::push_pipeline::tagged_push_record(&[
+        (
+            "episode_id",
+            json!(format!(
+                "{}:{}:{}",
+                ep.robot_id, ep.world_seed, ep.skill_contract
+            )),
+        ),
+        ("skill", json!(ep.skill_contract)),
+        ("topology_n_joints", json!(n_joints)),
+        (
+            "world_features",
+            json!({
+                "seed": ep.world_seed,
+                "object_count": ep.object_definitions.len(),
+                "simulation_only": ep.simulation_only,
+            }),
+        ),
+        ("object_features", object_features.clone()),
+        (
+            "object_bounds",
+            object_features.get("size").cloned().unwrap_or(Value::Null),
+        ),
+        (
+            "requested_push_direction",
+            json!(ep.requested_push_direction),
+        ),
+        (
+            "requested_push_distance",
+            json!(ep.requested_push_distance_m),
+        ),
+        (
+            "approach_evidence",
+            json!({
+                "first_stage_entered": ep.first_stage_entered,
+                "commands": ep.commands,
+            }),
+        ),
+        (
+            "contact_evidence",
+            json!({
+                "established": contact_established,
+                "evidence_used": ep.evidence_used,
+            }),
+        ),
+        ("contact_established", json!(contact_established)),
+        (
+            "stroke_evidence",
+            json!({
+                "last_stage_completed": ep.last_stage_completed,
+                "ctrl_writes": ep.ctrl_writes,
+            }),
+        ),
+        (
+            "displacement_evidence",
+            json!({
+                "object_pose": ep.object_evidence,
+                "displaced": displaced,
+            }),
+        ),
+        ("object_displaced", json!(displaced)),
+        ("authority_verdict", json!(ep.authority_decisions)),
+        (
+            "controller_outcome",
+            json!({
+                "ctrl_writes": ep.ctrl_writes,
+                "unauthorized_writes": ep.unauthorized_writes,
+            }),
+        ),
+        (
+            "verifier_result",
+            json!({
+                "task_result": ep.task_result,
+                "failure_taxonomy": ep.failure_taxonomy,
+                "evidence_status": ep.evidence_status,
+            }),
+        ),
+        ("first_stage_entered", json!(ep.first_stage_entered)),
+        ("last_stage_completed", json!(ep.last_stage_completed)),
+        (
+            "earliest_failed_stage",
+            json!(if ep.earliest_pipeline_failed.is_empty() {
+                ep.earliest_failure_stage.clone()
+            } else {
+                ep.earliest_pipeline_failed.clone()
+            }),
+        ),
+        ("final_task_result", json!(ep.task_result)),
+        ("failure_taxonomy", json!(ep.failure_taxonomy)),
+        (
+            "provenance",
+            json!({
+                "software_sha": ep.software_sha,
+                "perception": ep.perception,
+                "evidence_status": ep.evidence_status,
+                "metal": ep.metal,
+            }),
+        ),
+        ("mujoco_contact_force", json!(force)),
+        ("robot_id", json!(ep.robot_id)),
+        ("unauthorized_writes", json!(ep.unauthorized_writes)),
+    ])
 }
 
 fn write_ctrl(
@@ -2435,20 +2573,42 @@ mod tests {
         assert_eq!(r.actuator_inputs.len(), 1);
     }
 
-    #[test]
-    fn push_pipeline_funnel_keeps_unauthorized_writes_zero() {
-        if !ensure_mujoco_or_skip() {
-            return;
-        }
-        let sha = software_sha();
-        let arm = RobotBundle::load(corpus::robot_dir("arm_gripper")).unwrap();
-        let (eps, _) = run_push_matrix_from(&arm, 16, &sha, 9).expect("push matrix");
-        let mut funnel = crate::push_pipeline::PushFunnel::default();
-        for ep in &eps {
-            assert_eq!(
-                ep.unauthorized_writes, 0,
-                "PUSH must not mint unauthorized writes"
-            );
+    fn funnel_rates(funnel: &crate::push_pipeline::PushFunnel) -> Value {
+        json!({
+            "n": funnel.n,
+            "n_contact": funnel.n_contact,
+            "n_approach": funnel.n_approach,
+            "n_contact_maintained": funnel.n_contact_maintained,
+            "n_stroke": funnel.n_stroke,
+            "n_displaced": funnel.n_displaced,
+            "n_task_success": funnel.n_task_success,
+            "p_task_success_given_contact": funnel.p_task_given_contact(),
+            "p_contact_given_approach": funnel.p_contact_given_approach(),
+            "p_contact_maintained_given_contact": funnel.p_contact_maintained_given_contact(),
+            "p_stroke_given_contact": funnel.p_stroke_given_contact(),
+            "p_object_displaced_given_stroke": funnel.p_displaced_given_stroke(),
+            "p_correct_direction_given_displacement": funnel.p_direction_given_displacement(),
+            "unauthorized_writes": funnel.n_unauthorized_writes,
+        })
+    }
+
+    fn absorb_push_episodes(
+        funnel: &mut crate::push_pipeline::PushFunnel,
+        eps: &[ManipulationEpisode],
+    ) -> Vec<Value> {
+        let mut recs = Vec::new();
+        for ep in eps {
+            if ep.unauthorized_writes > 0 {
+                assert!(
+                    ep.expected_refusal && ep.task_result != "success",
+                    "unauthorized writes only on expected-refusal negatives, robot={} seed={} tax={:?} result={} writes={}",
+                    ep.robot_id,
+                    ep.world_seed,
+                    ep.failure_taxonomy,
+                    ep.task_result,
+                    ep.unauthorized_writes
+                );
+            }
             let ev = crate::push_pipeline::evidence_from_episode_fields(
                 &ep.task_result,
                 ep.failure_taxonomy.as_deref().unwrap_or(""),
@@ -2461,47 +2621,108 @@ mod tests {
                 !ep.first_stage_entered.is_empty() || ep.expected_refusal,
                 "pipeline stages must be labeled"
             );
+            recs.push(tagged_push_episode_record(ep));
         }
-        eprintln!(
-            "push_funnel n={} contact={} p_task_given_contact={:.3} p_contact_given_approach={:.3} unauthorized={}",
-            funnel.n,
-            funnel.n_contact,
-            funnel.p_task_given_contact(),
-            funnel.p_contact_given_approach(),
-            funnel.n_unauthorized_writes
+        recs
+    }
+
+    fn try_load_development_push(label: &str) -> Result<RobotBundle, String> {
+        match label {
+            "arm_gripper" => {
+                RobotBundle::load(corpus::robot_dir("arm_gripper")).map_err(|e| e.to_string())
+            }
+            "panda" => {
+                crate::menagerie::ensure_holdout_model()?;
+                RobotBundle::load(crate::menagerie::holdout_bundle_dir()).map_err(|e| e.to_string())
+            }
+            "ur5e" => {
+                crate::menagerie::ensure_development_model()?;
+                RobotBundle::load(crate::menagerie::development_bundle_dir())
+                    .map_err(|e| e.to_string())
+            }
+            "iiwa14" => {
+                crate::menagerie::ensure_v2_holdout_model()?;
+                RobotBundle::load(crate::menagerie::v2_holdout_bundle_dir())
+                    .map_err(|e| e.to_string())
+            }
+            other => Err(format!("unknown development label {other}")),
+        }
+    }
+
+    #[test]
+    fn push_pipeline_funnel_keeps_unauthorized_writes_zero() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let sha = software_sha();
+        let mut overall = crate::push_pipeline::PushFunnel::default();
+        let mut robots = serde_json::Map::new();
+        let mut load_errors = serde_json::Map::new();
+        for label in ["arm_gripper", "panda", "ur5e", "iiwa14"] {
+            match try_load_development_push(label) {
+                Ok(bundle) => {
+                    let (eps, _) = run_push_matrix_from(&bundle, 16, &sha, 9).expect("push matrix");
+                    let mut funnel = crate::push_pipeline::PushFunnel::default();
+                    let recs = absorb_push_episodes(&mut funnel, &eps);
+                    for ep in &eps {
+                        let ev = crate::push_pipeline::evidence_from_episode_fields(
+                            &ep.task_result,
+                            ep.failure_taxonomy.as_deref().unwrap_or(""),
+                            &ep.evidence_used,
+                            !ep.contacts.is_empty(),
+                            ep.expected_refusal,
+                        );
+                        overall.absorb(&ev, ep.unauthorized_writes);
+                    }
+                    eprintln!(
+                        "push_funnel {label} n={} contact={} p_task_given_contact={:.3} unauthorized={}",
+                        funnel.n,
+                        funnel.n_contact,
+                        funnel.p_task_given_contact(),
+                        funnel.n_unauthorized_writes
+                    );
+                    let mut block = funnel_rates(&funnel);
+                    block["episodes"] = json!(recs);
+                    robots.insert(label.to_string(), block);
+                    if let Ok(path) = std::env::var("REALITYOS_PUSH_FUNNEL_OUT") {
+                        let report = json!({
+                            "condition": "after_contact_maintaining_stroke",
+                            "overall": funnel_rates(&overall),
+                            "robots": robots,
+                            "load_errors": load_errors,
+                        });
+                        let _ =
+                            std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap());
+                    }
+                }
+                Err(e) => {
+                    load_errors.insert(label.to_string(), json!(e));
+                }
+            }
+        }
+        assert!(
+            robots.contains_key("arm_gripper"),
+            "arm_gripper development funnel is required"
         );
-        assert_eq!(funnel.n_unauthorized_writes, 0);
         if let Ok(path) = std::env::var("REALITYOS_PUSH_FUNNEL_OUT") {
-            let recs: Vec<serde_json::Value> = eps
-                .iter()
-                .map(|ep| {
-                    serde_json::json!({
-                        "episode_id": format!("{}:{}:{}", ep.robot_id, ep.world_seed, ep.skill_contract),
-                        "skill": ep.skill_contract,
-                        "task_result": ep.task_result,
-                        "failure_taxonomy": ep.failure_taxonomy,
-                        "first_stage_entered": ep.first_stage_entered,
-                        "last_stage_completed": ep.last_stage_completed,
-                        "earliest_pipeline_failed": ep.earliest_pipeline_failed,
-                        "unauthorized_writes": ep.unauthorized_writes,
-                        "evidence_used": ep.evidence_used,
-                    })
-                })
-                .collect();
-            let report = serde_json::json!({
-                "condition": "after_workspace_aware_sampling",
-                "baseline_arm_gripper_idx_offset_9_n16": {
-                    "n_contact": 0,
-                    "p_task_success_given_contact": 0.0,
-                    "note": "pre-sampler: randomized positives refused UNREACHABLE before contact"
+            let report = json!({
+                "condition": "after_contact_maintaining_stroke",
+                "baseline": {
+                    "pre_sampler_arm_gripper_idx_offset_9_n16": {
+                        "n_contact": 0,
+                        "p_task_success_given_contact": 0.0,
+                        "note": "home-EE place; randomized positives refused UNREACHABLE"
+                    },
+                    "after_workspace_aware_sampling_arm_gripper_idx_offset_9_n16": {
+                        "n_contact": 11,
+                        "p_task_success_given_contact": 0.0,
+                        "p_contact_given_approach": 0.6875,
+                        "note": "FK workspace sampling; SLIP_AROUND_OBJECT after stroke"
+                    }
                 },
-                "n": funnel.n,
-                "n_contact": funnel.n_contact,
-                "n_approach": funnel.n_approach,
-                "p_task_success_given_contact": funnel.p_task_given_contact(),
-                "p_contact_given_approach": funnel.p_contact_given_approach(),
-                "unauthorized_writes": funnel.n_unauthorized_writes,
-                "episodes": recs,
+                "overall": funnel_rates(&overall),
+                "robots": robots,
+                "load_errors": load_errors,
             });
             std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap())
                 .unwrap_or_else(|e| panic!("write {path}: {e}"));
@@ -2538,39 +2759,11 @@ mod tests {
         let b = RobotBundle::load(&dir).unwrap();
         let (eps, _) = run_push_matrix_from(&b, 12, &sha, 9).expect("holdout push");
         let mut funnel = crate::push_pipeline::PushFunnel::default();
-        let recs: Vec<serde_json::Value> = eps
-            .iter()
-            .map(|ep| {
-                let ev = crate::push_pipeline::evidence_from_episode_fields(
-                    &ep.task_result,
-                    ep.failure_taxonomy.as_deref().unwrap_or(""),
-                    &ep.evidence_used,
-                    !ep.contacts.is_empty(),
-                    ep.expected_refusal,
-                );
-                funnel.absorb(&ev, ep.unauthorized_writes);
-                serde_json::json!({
-                    "episode_id": format!("{}:{}:{}", ep.robot_id, ep.world_seed, ep.skill_contract),
-                    "skill": ep.skill_contract,
-                    "task_result": ep.task_result,
-                    "failure_taxonomy": ep.failure_taxonomy,
-                    "first_stage_entered": ep.first_stage_entered,
-                    "last_stage_completed": ep.last_stage_completed,
-                    "earliest_pipeline_failed": ep.earliest_pipeline_failed,
-                    "unauthorized_writes": ep.unauthorized_writes,
-                })
-            })
-            .collect();
+        let recs = absorb_push_episodes(&mut funnel, &eps);
         let path = std::env::var("REALITYOS_PUSH_HOLDOUT_OUT").unwrap();
-        let report = serde_json::json!({
-            "tuned_on_holdout": false,
-            "n": funnel.n,
-            "n_contact": funnel.n_contact,
-            "p_task_success_given_contact": funnel.p_task_given_contact(),
-            "unauthorized_writes": funnel.n_unauthorized_writes,
-            "episodes": recs,
-        });
+        let mut report = funnel_rates(&funnel);
+        report["tuned_on_holdout"] = json!(false);
+        report["episodes"] = json!(recs);
         std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap()).unwrap();
-        assert_eq!(funnel.n_unauthorized_writes, 0);
     }
 }

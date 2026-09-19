@@ -139,21 +139,17 @@ pub fn compile_push(
     if n < 1e-8 {
         return Err(SkillRefuse::Unsupported);
     }
-    let dir = [
+    let dir3 = [
         candidate.direction[0] / n,
         candidate.direction[1] / n,
         candidate.direction[2] / n,
     ];
-    let stroke = effective_push_distance(candidate.distance_m);
-    let end = Se3::try_new(
-        [
-            contact.xyz[0] + dir[0] * stroke,
-            contact.xyz[1] + dir[1] * stroke,
-            contact.xyz[2] + dir[2] * stroke,
-        ],
-        contact.quat_wxyz,
-    )
-    .map_err(|_| SkillRefuse::Unsupported)?;
+    // Maintain contact by traveling in the support plane (world +Z up).
+    // A lift-off or dive is a different family than table-top PUSH.
+    let dir = support_plane_direction(dir3).unwrap_or(dir3);
+    let press_xyz = contact_press_xyz(contact.xyz, dir, candidate.distance_m);
+    let press = Se3::try_new(press_xyz, contact.quat_wxyz).map_err(|_| SkillRefuse::Unsupported)?;
+    let waypoints = contact_maintaining_stroke_xyz(contact.xyz, dir, candidate.distance_m);
 
     let expires = now_s + freshness_s;
     let mut plan = SkillPlan::empty(SkillName::Push, "skill.push");
@@ -166,14 +162,21 @@ pub fn compile_push(
     });
     plan.steps.push(SkillStep::Reach {
         end_effector: ee.into(),
-        target: pose_evidence(contact, now_s, expires),
+        target: pose_evidence(press, now_s, expires),
         success_radius: 0.06,
     });
-    plan.steps.push(SkillStep::Reach {
-        end_effector: ee.into(),
-        target: pose_evidence(end, now_s, expires),
-        success_radius: push_stroke_success_radius(stroke),
-    });
+    for xyz in waypoints {
+        let pose = Se3::try_new(xyz, contact.quat_wxyz).map_err(|_| SkillRefuse::Unsupported)?;
+        let travel = ((xyz[0] - contact.xyz[0]).powi(2)
+            + (xyz[1] - contact.xyz[1]).powi(2)
+            + (xyz[2] - contact.xyz[2]).powi(2))
+        .sqrt();
+        plan.steps.push(SkillStep::Reach {
+            end_effector: ee.into(),
+            target: pose_evidence(pose, now_s, expires),
+            success_radius: push_stroke_success_radius(travel),
+        });
+    }
     plan.steps.push(SkillStep::Stop);
     Ok(plan)
 }
@@ -188,6 +191,43 @@ pub fn effective_push_distance(distance_m: f64) -> f64 {
 /// succeed at the contact pose without displacing the object.
 pub fn push_stroke_success_radius(distance_m: f64) -> f64 {
     (distance_m * 0.35).clamp(0.008, 0.03)
+}
+
+/// Project a push direction onto the support plane (world +Z up).
+/// Vertical remainder-only directions cannot maintain table contact.
+pub fn support_plane_direction(direction: [f64; 3]) -> Option<[f64; 3]> {
+    let n = (direction[0] * direction[0] + direction[1] * direction[1]).sqrt();
+    if n < 1e-8 {
+        return None;
+    }
+    Some([direction[0] / n, direction[1] / n, 0.0])
+}
+
+fn along_support_plane(contact_xyz: [f64; 3], plane_dir: [f64; 3], s: f64) -> [f64; 3] {
+    [
+        contact_xyz[0] + plane_dir[0] * s,
+        contact_xyz[1] + plane_dir[1] * s,
+        contact_xyz[2],
+    ]
+}
+
+/// Press the contact target into the object along the support plane so the
+/// following stroke starts from established face contact, not a gap.
+pub fn contact_press_xyz(contact_xyz: [f64; 3], plane_dir: [f64; 3], distance_m: f64) -> [f64; 3] {
+    let stroke = effective_push_distance(distance_m);
+    let press = (stroke * 0.35).clamp(0.012, 0.025);
+    along_support_plane(contact_xyz, plane_dir, press)
+}
+
+/// Terminal stroke at contact height with follow-through. z is locked so the
+/// controller cannot arc off the support plane.
+pub fn contact_maintaining_stroke_xyz(
+    contact_xyz: [f64; 3],
+    plane_dir: [f64; 3],
+    distance_m: f64,
+) -> Vec<[f64; 3]> {
+    let stroke = effective_push_distance(distance_m);
+    vec![along_support_plane(contact_xyz, plane_dir, stroke * 1.1)]
 }
 
 pub fn push_unexpected_recovery() -> Vec<SkillStep> {
@@ -261,5 +301,140 @@ mod tests {
         }
         assert_eq!(effective_push_distance(0.005), 0.02);
         assert_eq!(effective_push_distance(0.05), 0.05);
+    }
+
+    fn fresh_object() -> ObjectState {
+        let mut object = ObjectState::unknown("obj", 1.0);
+        object.pose = Provenanced {
+            value: Se3::try_new([0.2, 0.0, 0.1], [1.0, 0.0, 0.0, 0.0]).ok(),
+            provenance: Provenance::UserDeclared,
+            source: "perfect_perception".into(),
+            as_of_s: 1.0,
+            uncertainty: None,
+        };
+        object.reference_frame = "world".into();
+        object.expires_at_s = 10.0;
+        object.timestamp_s = 1.0;
+        object.geometry = ObjectGeometry {
+            class: GeometryClass::Box,
+            bounds: Provenanced::declared([0.03, 0.03, 0.03], "t", 1.0),
+        };
+        object.grasp_state = GraspOccupancy::Free;
+        object
+    }
+
+    fn compile_fresh_push(direction: [f64; 3], distance_m: f64) -> SkillPlan {
+        let m = crate::adapter::synth_planar_two_link();
+        let caps = derive_capabilities(&m, None);
+        let object = fresh_object();
+        let contact = Se3::try_new([0.18, 0.0, 0.1], [1.0, 0.0, 0.0, 0.0]).unwrap();
+        let cand = PushCandidate {
+            object_id: "obj".into(),
+            contact,
+            approach: Se3::try_new([0.14, 0.0, 0.1], [1.0, 0.0, 0.0, 0.0]).unwrap(),
+            direction,
+            distance_m,
+            target_region: None,
+            reference_frame: "world".into(),
+        };
+        let obs = zero_joint_obs(&m, "epoch0", 1.0);
+        let g = identity_base_graph("epoch0");
+        compile_push(
+            &m,
+            &caps,
+            &object,
+            &cand,
+            &obs,
+            &g,
+            "ee",
+            &m.model_hash,
+            1.0,
+            0.25,
+        )
+        .expect("fresh push must compile")
+    }
+
+    fn reach_targets(plan: &SkillPlan) -> Vec<([f64; 3], f64)> {
+        plan.steps
+            .iter()
+            .filter_map(|s| match s {
+                SkillStep::Reach {
+                    target,
+                    success_radius,
+                    ..
+                } => Some((target.xyz()?, *success_radius)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn support_plane_direction_zeros_world_up() {
+        let d = support_plane_direction([1.0, 0.2, 0.8]).expect("horizontal remainder");
+        assert!((d[2]).abs() < 1e-12);
+        let n = (d[0] * d[0] + d[1] * d[1]).sqrt();
+        assert!((n - 1.0).abs() < 1e-12);
+        assert!(d[0] > 0.0);
+        assert!(support_plane_direction([0.0, 0.0, 1.0]).is_none());
+    }
+
+    #[test]
+    fn contact_maintaining_stroke_locks_height_and_travels() {
+        let contact = [0.18, 0.04, 0.22];
+        let dir = support_plane_direction([0.4, 0.1, 0.9]).unwrap();
+        let press = contact_press_xyz(contact, dir, 0.05);
+        let pts = contact_maintaining_stroke_xyz(contact, dir, 0.05);
+        assert!(!pts.is_empty(), "need a terminal stroke waypoint");
+        let stroke = effective_push_distance(0.05);
+        assert!((press[2] - contact[2]).abs() < 1e-12);
+        let press_along = (press[0] - contact[0]) * dir[0] + (press[1] - contact[1]) * dir[1];
+        assert!(press_along > 0.0);
+        for p in &pts {
+            assert!(
+                (p[2] - contact[2]).abs() < 1e-12,
+                "stroke must stay on the contact support plane, z={} vs {}",
+                p[2],
+                contact[2]
+            );
+        }
+        let end = *pts.last().unwrap();
+        let along = (end[0] - contact[0]) * dir[0] + (end[1] - contact[1]) * dir[1];
+        assert!(
+            along + 1e-12 >= stroke,
+            "terminal waypoint must cover the stroke, along={along} stroke={stroke}"
+        );
+        assert!(press_along < along);
+    }
+
+    #[test]
+    fn compile_push_stroke_stays_on_support_plane() {
+        let contact_z = 0.1;
+        let plan = compile_fresh_push([1.0, 0.0, 0.7], 0.05);
+        let reaches = reach_targets(&plan);
+        assert!(
+            reaches.len() >= 3,
+            "approach, pressed contact, terminal stroke; got {}",
+            reaches.len()
+        );
+        let contact_xyz = reaches[1].0;
+        assert!((contact_xyz[2] - contact_z).abs() < 1e-12);
+        assert!(contact_xyz[0] > 0.18);
+        let stroke_pts = &reaches[2..];
+        for (xyz, radius) in stroke_pts {
+            assert!(
+                (xyz[2] - contact_z).abs() < 1e-12,
+                "stroke z {} must equal contact z {contact_z}",
+                xyz[2]
+            );
+            let travel = ((xyz[0] - 0.18).powi(2) + (xyz[1] - 0.0).powi(2)).sqrt();
+            assert!(
+                *radius < travel,
+                "stroke radius {radius} must be < travel {travel}"
+            );
+        }
+        let end = stroke_pts.last().unwrap().0;
+        assert!(end[0] > contact_xyz[0]);
+        let along = end[0] - 0.18;
+        assert!(along + 1e-12 >= effective_push_distance(0.05));
     }
 }

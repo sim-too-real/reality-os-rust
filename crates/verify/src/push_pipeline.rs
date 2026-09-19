@@ -172,6 +172,14 @@ pub fn push_diagnostic_field_catalog() -> &'static [TaggedField] {
             tag: FieldTag::PolicyVisibleRuntime,
         },
         TaggedField {
+            name: "world_features",
+            tag: FieldTag::PolicyVisibleRuntime,
+        },
+        TaggedField {
+            name: "object_features",
+            tag: FieldTag::PolicyVisibleRuntime,
+        },
+        TaggedField {
             name: "object_bounds",
             tag: FieldTag::PolicyVisibleRuntime,
         },
@@ -184,11 +192,63 @@ pub fn push_diagnostic_field_catalog() -> &'static [TaggedField] {
             tag: FieldTag::PolicyVisibleRuntime,
         },
         TaggedField {
+            name: "approach_evidence",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "contact_evidence",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
             name: "contact_established",
             tag: FieldTag::PostHocObserved,
         },
         TaggedField {
+            name: "stroke_evidence",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "displacement_evidence",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
             name: "object_displaced",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "authority_verdict",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "controller_outcome",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "verifier_result",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "first_stage_entered",
+            tag: FieldTag::TargetLabel,
+        },
+        TaggedField {
+            name: "last_stage_completed",
+            tag: FieldTag::TargetLabel,
+        },
+        TaggedField {
+            name: "earliest_failed_stage",
+            tag: FieldTag::TargetLabel,
+        },
+        TaggedField {
+            name: "final_task_result",
+            tag: FieldTag::TargetLabel,
+        },
+        TaggedField {
+            name: "failure_taxonomy",
+            tag: FieldTag::TargetLabel,
+        },
+        TaggedField {
+            name: "provenance",
             tag: FieldTag::PostHocObserved,
         },
         TaggedField {
@@ -200,14 +260,28 @@ pub fn push_diagnostic_field_catalog() -> &'static [TaggedField] {
             tag: FieldTag::IdentitySplitOnly,
         },
         TaggedField {
-            name: "earliest_failed_stage",
-            tag: FieldTag::TargetLabel,
-        },
-        TaggedField {
             name: "unauthorized_writes",
             tag: FieldTag::PostHocObserved,
         },
     ]
+}
+
+/// Attach catalog provenance tags. Privileged sim fields stay labeled;
+/// they are never a runtime policy input.
+pub fn tagged_push_record(values: &[(&'static str, serde_json::Value)]) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    for (name, value) in values {
+        let tag = push_diagnostic_field_catalog()
+            .iter()
+            .find(|f| f.name == *name)
+            .map(|f| f.tag)
+            .unwrap_or(FieldTag::PostHocObserved);
+        out.insert(
+            (*name).to_string(),
+            serde_json::json!({ "value": value, "tag": tag }),
+        );
+    }
+    serde_json::Value::Object(out)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -215,6 +289,7 @@ pub struct PushFunnel {
     pub n: u64,
     pub n_contact: u64,
     pub n_approach: u64,
+    pub n_contact_maintained: u64,
     pub n_stroke: u64,
     pub n_displaced: u64,
     pub n_direction_ok: u64,
@@ -234,6 +309,9 @@ impl PushFunnel {
             self.n_contact += 1;
             if ev.task_verified {
                 self.n_task_success_given_contact += 1;
+            }
+            if ev.contact_maintained {
+                self.n_contact_maintained += 1;
             }
         }
         if ev.stroke_executed {
@@ -263,6 +341,38 @@ impl PushFunnel {
             0.0
         } else {
             self.n_task_success_given_contact as f64 / self.n_contact as f64
+        }
+    }
+
+    pub fn p_contact_maintained_given_contact(&self) -> f64 {
+        if self.n_contact == 0 {
+            0.0
+        } else {
+            self.n_contact_maintained as f64 / self.n_contact as f64
+        }
+    }
+
+    pub fn p_stroke_given_contact(&self) -> f64 {
+        if self.n_contact == 0 {
+            0.0
+        } else {
+            self.n_stroke as f64 / self.n_contact as f64
+        }
+    }
+
+    pub fn p_displaced_given_stroke(&self) -> f64 {
+        if self.n_stroke == 0 {
+            0.0
+        } else {
+            self.n_displaced as f64 / self.n_stroke as f64
+        }
+    }
+
+    pub fn p_direction_given_displacement(&self) -> f64 {
+        if self.n_displaced == 0 {
+            0.0
+        } else {
+            self.n_direction_ok as f64 / self.n_displaced as f64
         }
     }
 }
@@ -341,6 +451,66 @@ mod tests {
         assert!(!cat.iter().any(|f| {
             f.tag == FieldTag::PolicyVisibleRuntime && f.name == "mujoco_contact_force"
         }));
+    }
+
+    #[test]
+    fn catalog_covers_required_diagnostic_fields() {
+        let names: Vec<&str> = push_diagnostic_field_catalog()
+            .iter()
+            .map(|f| f.name)
+            .collect();
+        for required in [
+            "episode_id",
+            "skill",
+            "topology_n_joints",
+            "world_features",
+            "object_features",
+            "requested_push_direction",
+            "requested_push_distance",
+            "approach_evidence",
+            "contact_evidence",
+            "stroke_evidence",
+            "displacement_evidence",
+            "authority_verdict",
+            "controller_outcome",
+            "verifier_result",
+            "earliest_failed_stage",
+            "final_task_result",
+            "provenance",
+            "mujoco_contact_force",
+            "robot_id",
+            "unauthorized_writes",
+        ] {
+            assert!(
+                names.contains(&required),
+                "missing catalog field {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn tagged_record_keeps_privileged_sim_off_runtime() {
+        let rec = tagged_push_record(&[
+            (
+                "requested_push_direction",
+                serde_json::json!([1.0, 0.0, 0.0]),
+            ),
+            ("mujoco_contact_force", serde_json::json!(0.0)),
+            ("robot_id", serde_json::json!("split-only")),
+        ]);
+        assert_eq!(
+            rec["mujoco_contact_force"]["tag"],
+            "PRIVILEGED_SIM_LABEL_ONLY"
+        );
+        assert_eq!(
+            rec["requested_push_direction"]["tag"],
+            "POLICY_VISIBLE_RUNTIME"
+        );
+        assert_eq!(rec["robot_id"]["tag"], "IDENTITY_SPLIT_ONLY");
+        assert_ne!(
+            rec["mujoco_contact_force"]["tag"],
+            rec["requested_push_direction"]["tag"]
+        );
     }
 
     #[test]
