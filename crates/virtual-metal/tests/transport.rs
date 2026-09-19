@@ -6,7 +6,7 @@ use std::rc::Rc;
 use realityos_metal::protocol::{
     decode_status, decode_status_scan, encode_ping, encode_write, ProtocolError, ADDR_TORQUE_ENABLE,
 };
-use realityos_virtual_metal::faults::{corrupt_crc_bytes, FaultKind, FaultSchedule};
+use realityos_virtual_metal::faults::{corrupt_crc_bytes, FaultEvent, FaultKind, FaultSchedule};
 use realityos_virtual_metal::peer::VirtualSerialPeer;
 use realityos_virtual_metal::VirtualXl330;
 
@@ -78,6 +78,34 @@ fn wrong_status_id_decodes_with_different_id() {
     let status = p.exchange(&encode_ping(1));
     let st = decode_status(&status).expect("crc valid, wrong id");
     assert_ne!(st.id, 1);
+}
+
+#[test]
+fn disconnect_then_reconnect_restores_status_on_ping() {
+    let (_d, mut p) = peer();
+    p.set_transport_schedule(FaultSchedule {
+        events: vec![
+            FaultEvent {
+                after_packet: 1,
+                kind: FaultKind::Disconnect,
+            },
+            FaultEvent {
+                after_packet: 2,
+                kind: FaultKind::Reconnect,
+            },
+        ],
+    });
+    let dropped = p.exchange(&encode_ping(1));
+    assert!(dropped.is_empty(), "disconnect must drop the status bytes");
+    assert!(!p.is_connected());
+    let restored = p.exchange(&encode_ping(1));
+    assert!(
+        p.is_connected(),
+        "Reconnect must restore the byte path after Disconnect"
+    );
+    let st = decode_status(&restored).expect("ping after reconnect must return a status");
+    assert_eq!(st.id, 1);
+    assert_eq!(st.params.len(), 3);
 }
 
 #[test]

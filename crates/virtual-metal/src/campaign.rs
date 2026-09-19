@@ -690,15 +690,33 @@ fn scenario_late_ack(seed: u64, i: u64) -> CampaignRow {
 
 fn scenario_reconnect(seed: u64, i: u64) -> CampaignRow {
     let d = Rc::new(RefCell::new(seeded_device(seed)));
-    let mut port = VirtualMetalPort::new(d.clone());
-    port.disconnect();
+    let mut peer = VirtualSerialPeer::new(d.clone());
+    peer.set_transport_schedule(FaultSchedule {
+        events: vec![
+            crate::faults::FaultEvent {
+                after_packet: 1,
+                kind: FaultKind::Disconnect,
+            },
+            crate::faults::FaultEvent {
+                after_packet: 2,
+                kind: FaultKind::Reconnect,
+            },
+        ],
+    });
     let mut v = Vec::new();
-    if port.read_sensor(0.0).is_ok() {
-        v.push("disconnected_sensor_ok".into());
+    if !peer.exchange(&encode_ping(1)).is_empty() {
+        v.push("disconnect_still_replied".into());
     }
-    port.reconnect();
-    if port.read_sensor(0.0).is_err() {
-        v.push("reconnect_sensor_failed".into());
+    if peer.is_connected() {
+        v.push("disconnect_left_connected".into());
+    }
+    let restored = peer.exchange(&encode_ping(1));
+    if !peer.is_connected() {
+        v.push("reconnect_left_disconnected".into());
+    }
+    match decode_status(&restored) {
+        Ok(st) if st.params.len() >= 3 => {}
+        other => v.push(format!("reconnect_no_status:{other:?}")),
     }
     let snapshot = d.borrow().clone();
     row(

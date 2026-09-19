@@ -80,11 +80,9 @@ impl VirtualSerialPeer {
         }
     }
 
-    /// Push host bytes. Complete instructions are processed; status is queued.
+    /// Push host bytes. Complete instructions are processed even while
+    /// disconnected so `FaultKind::Reconnect` can restore the byte path.
     pub fn push(&mut self, bytes: &[u8]) {
-        if !self.connected {
-            return;
-        }
         self.tx.push(bytes.to_vec());
         self.acc.extend_from_slice(bytes);
         while let Some(inst) = take_complete_instruction(&mut self.acc) {

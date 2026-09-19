@@ -362,6 +362,11 @@ pub struct VirtualXl330 {
     sim_time_s: f64,
 }
 
+/// Uniform in [0, 1] from the high 32 bits. (`>> 33` / `u32::MAX` only reached ~0.5.)
+fn unit01(x: u64) -> f64 {
+    (x >> 32) as f64 / f64::from(u32::MAX)
+}
+
 impl VirtualXl330 {
     pub fn xl330_m288() -> Self {
         Self::from_pack(Xl330TruthPack::xl330_m288(), 5.0, 2048)
@@ -370,20 +375,22 @@ impl VirtualXl330 {
     pub fn from_seed(seed: u64, pack: Xl330TruthPack) -> Self {
         let mut rng = seed ^ 0x9E37_79B9_7F4A_7C15;
         rng = rng.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        let u = (rng >> 33) as f64 / (u32::MAX as f64);
-        let v = 3.7 + u * (6.0 - 3.7);
+        let u = unit01(rng);
+        let v_lo = pack.input_voltage_min_v.value.unwrap_or(3.7);
+        let v_hi = pack.input_voltage_max_v.value.unwrap_or(6.0);
+        let v = v_lo + u * (v_hi - v_lo);
         rng = rng.wrapping_mul(0x94D0_49BB_1331_11EB);
         let pos = 100 + ((rng >> 32) % 3900) as i32;
         rng = rng.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        let u_eff = (rng >> 33) as f64 / (u32::MAX as f64);
+        let u_eff = unit01(rng);
         let (eff_lo, eff_hi) = pack.gearbox_efficiency.range.unwrap_or((1.0, 1.0));
         let eff = eff_lo + u_eff * (eff_hi - eff_lo);
         rng = rng.wrapping_mul(0x94D0_49BB_1331_11EB);
-        let u_boot = (rng >> 33) as f64 / (u32::MAX as f64);
+        let u_boot = unit01(rng);
         let (b_lo, b_hi) = pack.boot_delay_s.range.unwrap_or((0.0, 0.0));
         let boot = b_lo + u_boot * (b_hi - b_lo);
         rng = rng.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        let u_lat = (rng >> 33) as f64 / (u32::MAX as f64);
+        let u_lat = unit01(rng);
         let transport = u_lat * 0.020;
         rng = rng.wrapping_mul(0x94D0_49BB_1331_11EB);
         let bit = if (rng >> 63) == 0 {

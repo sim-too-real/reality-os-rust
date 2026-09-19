@@ -7,6 +7,57 @@ use realityos_virtual_metal::physics::{no_load_speed_rpm_at, rpm_to_rad_s, ticks
 use realityos_virtual_metal::{VirtualXl330, Xl330TruthPack};
 
 #[test]
+fn from_seed_hits_both_ends_of_truth_pack_ranges() {
+    let pack = Xl330TruthPack::xl330_m288();
+    let v_lo = pack.input_voltage_min_v.value.expect("min V");
+    let v_hi = pack.input_voltage_max_v.value.expect("max V");
+    let (eff_lo, eff_hi) = pack.gearbox_efficiency.range.expect("gearbox range");
+    let (boot_lo, boot_hi) = pack.boot_delay_s.range.expect("boot range");
+    let mut v_min = f64::INFINITY;
+    let mut v_max = f64::NEG_INFINITY;
+    let mut e_min = f64::INFINITY;
+    let mut e_max = f64::NEG_INFINITY;
+    let mut b_min = f64::INFINITY;
+    let mut b_max = f64::NEG_INFINITY;
+    for seed in 0..4096u64 {
+        let d = VirtualXl330::from_seed(seed, pack.clone());
+        v_min = v_min.min(d.voltage_v());
+        v_max = v_max.max(d.voltage_v());
+        e_min = e_min.min(d.gearbox_efficiency());
+        e_max = e_max.max(d.gearbox_efficiency());
+        b_min = b_min.min(d.boot_latency_s());
+        b_max = b_max.max(d.boot_latency_s());
+    }
+    let span_v = v_hi - v_lo;
+    let span_e = eff_hi - eff_lo;
+    let span_b = boot_hi - boot_lo;
+    assert!(
+        v_min <= v_lo + 0.1 * span_v,
+        "from_seed never approached min voltage {v_lo}: min={v_min} max={v_max}"
+    );
+    assert!(
+        v_max >= v_hi - 0.1 * span_v,
+        "from_seed never approached max voltage {v_hi}: min={v_min} max={v_max}"
+    );
+    assert!(
+        e_min <= eff_lo + 0.1 * span_e,
+        "from_seed never approached min gearbox_efficiency {eff_lo}: min={e_min} max={e_max}"
+    );
+    assert!(
+        e_max >= eff_hi - 0.1 * span_e,
+        "from_seed never approached max gearbox_efficiency {eff_hi}: min={e_min} max={e_max}"
+    );
+    assert!(
+        b_min <= boot_lo + 0.1 * span_b,
+        "from_seed never approached min boot_delay {boot_lo}: min={b_min} max={b_max}"
+    );
+    assert!(
+        b_max >= boot_hi - 0.1 * span_b,
+        "from_seed never approached max boot_delay {boot_hi}: min={b_min} max={b_max}"
+    );
+}
+
+#[test]
 fn goal_write_stores_target_without_teleport() {
     let mut d = VirtualXl330::xl330_m288();
     let start = d.present_position();
