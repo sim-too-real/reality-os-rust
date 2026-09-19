@@ -38,9 +38,8 @@ fn a2_ack_loss_unknown_poisons_same_online_instance() {
     let n = after.physical_actions;
     let rec = s.gov.clear_estop_requires_recovery_now(true);
     assert!(!rec.ok, "recover must not clear integrity: {rec:?}");
-    match s.gov.authorize_issued(decide_hold(2, 10.0)) {
-        Ok(w) => assert!(!s.gov.write_online_now(&w, &ActionParams::empty()).ok),
-        Err(_) => {}
+    if let Ok(w) = s.gov.authorize_issued(decide_hold(2, 10.0)) {
+        assert!(!s.gov.write_online_now(&w, &ActionParams::empty()).ok);
     }
     assert_eq!(s.truth().physical_actions, n);
 }
@@ -59,9 +58,8 @@ fn a3_replay_and_restart_do_not_duplicate_physical_action() {
     assert!(!replay.ok);
     assert_eq!(s.truth().physical_actions, n);
     s.restart().expect("restart");
-    match s.gov.authorize_issued(decide_hold(1, 10.0)) {
-        Ok(w2) => assert!(!s.gov.write_online_now(&w2, &ActionParams::empty()).ok),
-        Err(_) => {}
+    if let Ok(w2) = s.gov.authorize_issued(decide_hold(1, 10.0)) {
+        assert!(!s.gov.write_online_now(&w2, &ActionParams::empty()).ok);
     }
     assert_eq!(s.truth().physical_actions, n);
 }
@@ -76,9 +74,8 @@ fn a4_recover_attack_refuses_and_estop_does_not_clear_integrity() {
     let n = s.truth().physical_actions;
     let rec = s.gov.clear_estop_requires_recovery_now(true);
     assert!(!rec.ok);
-    match s.gov.authorize_issued(decide_hold(2, 10.0)) {
-        Ok(w2) => assert!(!s.gov.write_online_now(&w2, &ActionParams::empty()).ok),
-        Err(_) => {}
+    if let Ok(w2) = s.gov.authorize_issued(decide_hold(2, 10.0)) {
+        assert!(!s.gov.write_online_now(&w2, &ActionParams::empty()).ok);
     }
     assert_eq!(s.truth().physical_actions, n);
     let _ = s.gov.engage_estop_now("later_estop");
@@ -94,9 +91,8 @@ fn a5_identity_change_refuses_with_zero_physical_action() {
     let n = s.truth().physical_actions;
     s.device.lock().expect("oracle").set_model_firmware(1190, 1);
     let (r, before, after) = s.try_hold(1);
-    match r {
-        Ok(t) => assert!(!t.ok, "identity change must not succeed: {t:?}"),
-        Err(_) => {}
+    if let Ok(t) = r {
+        assert!(!t.ok, "identity change must not succeed: {t:?}");
     }
     assert_eq!(after.physical_actions, before.physical_actions);
     assert_eq!(after.physical_actions, n);
@@ -116,9 +112,8 @@ fn a6_voltage_out_of_range_refuses_writes_for_both_error_bits() {
             "{tag} sensor should see VIN fault: {sense:?}"
         );
         let (r, before, after) = s.try_hold(1);
-        match r {
-            Ok(t) => assert!(!t.ok, "{tag} write after VIN fault: {t:?}"),
-            Err(_) => {}
+        if let Ok(t) = r {
+            assert!(!t.ok, "{tag} write after VIN fault: {t:?}");
         }
         assert_eq!(after.physical_actions, before.physical_actions.max(n));
         assert_eq!(s.truth().voltage_error_bit, bit);
