@@ -841,7 +841,8 @@ fn run_tier2_smoke_impl(seed: u64, n: usize) -> Result<CampaignRecord, String> {
     let mut rows = Vec::new();
     for i in 0..n as u64 {
         let inst_seed = splitmix(seed ^ i.wrapping_mul(0xA5A5_A5A5_A5A5_A5A5));
-        let (scenario, category, fault) = kinds[(i as usize) % kinds.len()];
+        let k = &kinds[(i as usize) % kinds.len()];
+        let (scenario, category, fault) = (k.0, k.1, k.2.clone());
         let device = seeded_device(inst_seed);
         let pack_hash = device.truth_pack().content_hash();
         let realization = realization_of(&device);
