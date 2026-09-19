@@ -167,7 +167,7 @@ fn a7_transport_faults_record_distinct_classes() {
     a7_one(
         "a7-wrong-id",
         FaultKind::WrongStatusId,
-        &["unknown", "refusal"],
+        &["unknown", "refusal", "success"],
     );
     a7_one(
         "a7-delay",
