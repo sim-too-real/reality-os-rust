@@ -179,6 +179,21 @@ mod unix {
                 .set_transport_schedule(faults);
         }
 
+        pub fn inject_next(&self, kind: crate::faults::FaultKind) {
+            let n = self
+                .peer
+                .lock()
+                .expect("peer")
+                .packet_count()
+                .saturating_add(1);
+            self.inject(crate::faults::FaultSchedule {
+                events: vec![crate::faults::FaultEvent {
+                    after_packet: n,
+                    kind,
+                }],
+            });
+        }
+
         pub fn hold(&mut self) -> (RuntimeTrace, DeviceTruth, DeviceTruth) {
             let (r, before, after) = self.try_hold(1);
             (r.expect("authorize hold"), before, after)
@@ -204,11 +219,14 @@ mod unix {
                 VirtualXl330Pty::spawn_shared(self.device.clone(), true, FaultSchedule::empty())
                     .map_err(|e| format!("pty2:{e}"))?;
             let new_root = metal_root(&format!("{}-rst", self.tag));
-            let src = self.root.join("driver.jsonl");
-            let dst = new_root.join("driver.jsonl");
-            if src.exists() {
-                std::fs::copy(&src, &dst).map_err(|e| format!("journal_copy:{e}"))?;
+            if let Ok(entries) = std::fs::read_dir(&self.root) {
+                for e in entries.flatten() {
+                    let from = e.path();
+                    let to = new_root.join(e.file_name());
+                    let _ = std::fs::copy(&from, &to);
+                }
             }
+            let dst = new_root.join("driver.jsonl");
             let mut cfg = MetalConfig::example(pty.slave_path());
             cfg.campaign_hooks = false;
             let driver = Xl330Driver::open(cfg, &new_root).map_err(|e| format!("reopen:{e}"))?;

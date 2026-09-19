@@ -90,6 +90,7 @@ fn a5_identity_change_refuses_with_zero_physical_action() {
     let mut s = session("a5-id");
     let n = s.truth().physical_actions;
     s.device.lock().expect("oracle").set_model_firmware(1190, 1);
+    let _ = s.gov.acquire_sensor();
     let (r, before, after) = s.try_hold(1);
     if let Ok(t) = r {
         assert!(!t.ok, "identity change must not succeed: {t:?}");
@@ -127,33 +128,8 @@ fn a6_voltage_out_of_range_refuses_writes_for_both_error_bits() {
 }
 
 fn a7_one(tag: &str, kind: FaultKind, allowed: &[&str]) {
-    let opened = Tier2Session::open_with_faults(
-        VirtualXl330::xl330_m288(),
-        tag,
-        1,
-        FaultSchedule {
-            events: vec![FaultEvent {
-                after_packet: 1,
-                kind: kind.clone(),
-            }],
-        },
-    );
-    let mut s = match opened {
-        Ok(s) => s,
-        Err(e) => {
-            assert!(
-                allowed.contains(&"startup_failure") || allowed.contains(&"disconnect"),
-                "{tag} open failed unexpectedly: {e}"
-            );
-            return;
-        }
-    };
-    s.inject(FaultSchedule {
-        events: vec![FaultEvent {
-            after_packet: 1,
-            kind,
-        }],
-    });
+    let mut s = session(tag);
+    s.inject_next(kind);
     let (r, before, after) = s.try_hold(1);
     let (ok, event) = match &r {
         Ok(t) => (t.ok, t.event.as_str()),

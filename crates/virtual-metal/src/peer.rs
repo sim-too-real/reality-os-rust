@@ -70,6 +70,10 @@ impl VirtualSerialPeer {
         self.last_delay_ms
     }
 
+    pub fn packet_count(&self) -> u32 {
+        self.packets
+    }
+
     pub fn is_connected(&self) -> bool {
         self.connected
     }
