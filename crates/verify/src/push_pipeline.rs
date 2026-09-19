@@ -64,6 +64,10 @@ pub struct PushEvidence {
     pub magnitude_valid: bool,
     pub task_verified: bool,
     pub expected_refusal: bool,
+    #[serde(default)]
+    pub feasible_maneuver: bool,
+    #[serde(default)]
+    pub contact_pose_reached: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,6 +169,8 @@ pub fn evidence_from_episode_fields(
             magnitude_valid: false,
             task_verified: false,
             expected_refusal: true,
+            feasible_maneuver: false,
+            contact_pose_reached: false,
         };
     }
     let contacted = has_ee_object_contact;
@@ -183,6 +189,8 @@ pub fn evidence_from_episode_fields(
         magnitude_valid: displaced && success,
         task_verified: success,
         expected_refusal: false,
+        feasible_maneuver: false,
+        contact_pose_reached: false,
     }
 }
 
@@ -283,6 +291,22 @@ pub fn push_diagnostic_field_catalog() -> &'static [TaggedField] {
             tag: FieldTag::TargetLabel,
         },
         TaggedField {
+            name: "pre_contact_taxonomy",
+            tag: FieldTag::TargetLabel,
+        },
+        TaggedField {
+            name: "feasible_contact_maneuver",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "contact_pose_reached",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "mujoco_ee_object_contact",
+            tag: FieldTag::PrivilegedSimLabelOnly,
+        },
+        TaggedField {
             name: "provenance",
             tag: FieldTag::PostHocObserved,
         },
@@ -331,12 +355,27 @@ pub struct PushFunnel {
     pub n_task_success: u64,
     pub n_task_success_given_contact: u64,
     pub n_unauthorized_writes: u64,
+    #[serde(default)]
+    pub n_positive_reachable: u64,
+    #[serde(default)]
+    pub n_feasible_maneuver: u64,
+    #[serde(default)]
+    pub n_contact_pose_reached: u64,
 }
 
 impl PushFunnel {
     pub fn absorb(&mut self, ev: &PushEvidence, unauthorized: u64) {
         self.n += 1;
         self.n_unauthorized_writes += unauthorized;
+        if !ev.expected_refusal && ev.reachable {
+            self.n_positive_reachable += 1;
+        }
+        if ev.feasible_maneuver {
+            self.n_feasible_maneuver += 1;
+        }
+        if ev.contact_pose_reached {
+            self.n_contact_pose_reached += 1;
+        }
         if ev.approach_reached {
             self.n_approach += 1;
         }
@@ -410,6 +449,14 @@ impl PushFunnel {
             self.n_direction_ok as f64 / self.n_displaced as f64
         }
     }
+
+    pub fn p_contact_given_positive_reachable(&self) -> f64 {
+        if self.n_positive_reachable == 0 {
+            0.0
+        } else {
+            self.n_contact as f64 / self.n_positive_reachable as f64
+        }
+    }
 }
 
 #[cfg(test)]
@@ -440,6 +487,8 @@ mod tests {
             magnitude_valid: false,
             task_verified: false,
             expected_refusal: false,
+            feasible_maneuver: false,
+            contact_pose_reached: false,
         };
         let t = classify_push_pipeline(&ev);
         assert_eq!(t.first_stage_entered, Some(PushStage::TargetAvailable));
@@ -553,8 +602,12 @@ mod tests {
             "verifier_result",
             "earliest_failed_stage",
             "final_task_result",
+            "failure_taxonomy",
+            "pre_contact_taxonomy",
+            "feasible_contact_maneuver",
             "provenance",
             "mujoco_contact_force",
+            "mujoco_ee_object_contact",
             "robot_id",
             "unauthorized_writes",
         ] {
@@ -591,6 +644,20 @@ mod tests {
     }
 
     #[test]
+    fn catalog_keeps_privileged_ee_object_contact_off_runtime() {
+        let cat = push_diagnostic_field_catalog();
+        assert!(cat.iter().any(|f| {
+            f.name == "mujoco_ee_object_contact" && f.tag == FieldTag::PrivilegedSimLabelOnly
+        }));
+        assert!(cat
+            .iter()
+            .any(|f| { f.name == "pre_contact_taxonomy" && f.tag == FieldTag::TargetLabel }));
+        assert!(!cat.iter().any(|f| {
+            f.tag == FieldTag::PolicyVisibleRuntime && f.name == "mujoco_ee_object_contact"
+        }));
+    }
+
+    #[test]
     fn funnel_p_task_given_contact() {
         let mut f = PushFunnel::default();
         let contact_fail = PushEvidence {
@@ -605,6 +672,8 @@ mod tests {
             magnitude_valid: false,
             task_verified: false,
             expected_refusal: false,
+            feasible_maneuver: true,
+            contact_pose_reached: true,
         };
         let contact_ok = PushEvidence {
             object_displaced: true,
@@ -618,6 +687,8 @@ mod tests {
         assert_eq!(f.n_contact, 2);
         assert!((f.p_task_given_contact() - 0.5).abs() < 1e-12);
         assert_eq!(f.n_unauthorized_writes, 0);
+        assert_eq!(f.n_positive_reachable, 2);
+        assert!((f.p_contact_given_positive_reachable() - 1.0).abs() < 1e-12);
     }
 
     #[test]
@@ -635,6 +706,8 @@ mod tests {
             magnitude_valid: true,
             task_verified: true,
             expected_refusal: false,
+            feasible_maneuver: false,
+            contact_pose_reached: false,
         };
         let stroke_without_displace = PushEvidence {
             object_displaced: false,

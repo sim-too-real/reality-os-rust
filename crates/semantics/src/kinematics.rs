@@ -2,12 +2,27 @@ use crate::command::IkTrace;
 use crate::embodiment::{EmbodimentModel, Joint, JointKind};
 use crate::skill::SkillRefuse;
 use crate::transform::{cross3, norm3, normalize3, quat_to_mat, sub3, Se3, TransformError};
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 const IK_MAX_ITERS: usize = 80;
 const IK_DAMP: f64 = 2e-2;
 const IK_ACCEPT: f64 = 1e-3;
 const IK_MAX_STEP: f64 = 0.45;
+
+thread_local! {
+    static IK_Q_SEED: RefCell<Option<Vec<f64>>> = const { RefCell::new(None) };
+}
+
+/// Prefer this joint seed in `solve_ik` (sampled contact configuration).
+pub fn with_ik_q_seed<R>(q: Option<&[f64]>, f: impl FnOnce() -> R) -> R {
+    IK_Q_SEED.with(|c| {
+        let prev = c.replace(q.map(|v| v.to_vec()));
+        let out = f();
+        *c.borrow_mut() = prev;
+        out
+    })
+}
 
 #[derive(Debug, Clone)]
 pub struct FkState {
@@ -477,7 +492,15 @@ pub fn solve_ik(
     if current_q.len() != joints.len() {
         return Err(SkillRefuse::MissingJointState);
     }
-    let mut seeds = vec![current_q.to_vec()];
+    let mut seeds = Vec::new();
+    IK_Q_SEED.with(|c| {
+        if let Some(seed) = c.borrow().as_ref() {
+            if seed.len() == joints.len() && seed.iter().all(|v| v.is_finite()) {
+                seeds.push(seed.clone());
+            }
+        }
+    });
+    seeds.push(current_q.to_vec());
     seeds.extend(extra_seeds(joints.len()));
     seeds.extend(limit_space_seeds(&joints, 16));
 

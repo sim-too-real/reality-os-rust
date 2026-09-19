@@ -1,5 +1,6 @@
 //! Reachable workspace sampling from joint limits and FK. No robot identity.
 
+use crate::contact_maneuver::SampledEePose;
 use crate::embodiment::{EmbodimentModel, Joint, JointKind};
 use crate::kinematics::forward_kinematics;
 
@@ -18,8 +19,9 @@ pub fn joint_q_from_unit(joint: &Joint, u: f64) -> f64 {
     lo + u * (hi - lo)
 }
 
-/// FK cloud of EE xyz from unit draws. `units` is row-major: `n_draw * chain.len()`.
-pub fn reachable_ee_xyz(model: &EmbodimentModel, ee: &str, units: &[f64]) -> Vec<[f64; 3]> {
+/// FK cloud of EE poses (xyz + orientation + q). `units` is row-major:
+/// `n_draw * chain.len()`.
+pub fn reachable_ee_poses(model: &EmbodimentModel, ee: &str, units: &[f64]) -> Vec<SampledEePose> {
     let Some(chain) = model.ee_joint_chain(ee) else {
         return Vec::new();
     };
@@ -47,12 +49,26 @@ pub fn reachable_ee_xyz(model: &EmbodimentModel, ee: &str, units: &[f64]) -> Vec
             continue;
         }
         if let Ok(fk) = forward_kinematics(model, &chain, ee, &q) {
-            if fk.ee.xyz.iter().all(|v| v.is_finite()) {
-                out.push(fk.ee.xyz);
+            if fk.ee.xyz.iter().all(|v| v.is_finite())
+                && fk.ee.quat_wxyz.iter().all(|v| v.is_finite())
+            {
+                out.push(SampledEePose {
+                    xyz: fk.ee.xyz,
+                    quat_wxyz: fk.ee.quat_wxyz,
+                    q,
+                });
             }
         }
     }
     out
+}
+
+/// FK cloud of EE xyz from unit draws. `units` is row-major: `n_draw * chain.len()`.
+pub fn reachable_ee_xyz(model: &EmbodimentModel, ee: &str, units: &[f64]) -> Vec<[f64; 3]> {
+    reachable_ee_poses(model, ee, units)
+        .into_iter()
+        .map(|p| p.xyz)
+        .collect()
 }
 
 /// Object center so the near face sits at `contact_ee` along `push_dir`.
@@ -132,5 +148,22 @@ mod tests {
         let near = nearest_reachable_ee(&cloud, [0.2, 0.0, 0.1]).unwrap();
         assert!((near[0] - 0.21).abs() < 1e-12);
         assert!(nearest_reachable_ee(&[], [0.0, 0.0, 0.0]).is_none());
+    }
+
+    #[test]
+    fn reachable_poses_include_orientation() {
+        let m = synth_planar_two_link();
+        let mut units = Vec::new();
+        for i in 0..8u32 {
+            units.push(f64::from(i) / 7.0);
+            units.push(f64::from((i * 3) % 8) / 7.0);
+        }
+        let poses = reachable_ee_poses(&m, "ee", &units);
+        assert!(poses.len() >= 6, "got {} poses", poses.len());
+        for p in &poses {
+            let nn = p.quat_wxyz.iter().map(|v| v * v).sum::<f64>().sqrt();
+            assert!((nn - 1.0).abs() < 1e-6, "quat norm {nn}");
+            assert_eq!(p.q.len(), 2);
+        }
     }
 }

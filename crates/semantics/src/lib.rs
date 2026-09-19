@@ -4,6 +4,7 @@ pub mod adapter;
 pub mod capability;
 pub mod command;
 pub mod contact;
+pub mod contact_maneuver;
 pub mod embodiment;
 pub mod failure;
 pub mod grasp;

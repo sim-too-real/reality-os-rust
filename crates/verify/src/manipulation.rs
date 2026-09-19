@@ -25,11 +25,17 @@ use realityos_semantics::adapter::{
     lower_actuator_commands, lower_named_targets, ChainIkPositionPdAdapter, CompiledCtrl,
 };
 use realityos_semantics::capability::{apply_resource_qualification, derive_capabilities};
+use realityos_semantics::contact_maneuver::{
+    classify_pre_contact, current_contact_establishment_mode, select_push_maneuver,
+    tool_offset_in_ee, ContactEstablishmentMode, ContactInfeasible, ContactManeuver,
+    ContactManeuverSpec, PreContactEvidence, SampledEePose,
+};
 use realityos_semantics::embodiment::EmbodimentModel;
 use realityos_semantics::failure::ManipulationFailure;
 use realityos_semantics::grasp::{compile_grasp, GraspCandidate};
 use realityos_semantics::gripper_state::{derive_gripper_state, GripperStateEvidence};
 use realityos_semantics::interaction::{insert_interaction_frame, InteractionFrameKind};
+use realityos_semantics::kinematics::{forward_kinematics, with_ik_q_seed};
 use realityos_semantics::object::{GeometryClass, GraspOccupancy, ObjectGeometry, ObjectState};
 use realityos_semantics::observation::{JointStateSample, ObservationFrame};
 use realityos_semantics::plan::{SkillPlan, SkillStep};
@@ -90,6 +96,22 @@ pub struct ManipulationEpisode {
     pub requested_push_direction: [f64; 3],
     #[serde(default)]
     pub requested_push_distance_m: f64,
+    #[serde(default)]
+    pub contact_establishment: String,
+    #[serde(default)]
+    pub had_feasible_contact_maneuver: bool,
+    #[serde(default)]
+    pub pre_contact_taxonomy: String,
+    #[serde(default)]
+    pub approach_pose_error_m: f64,
+    #[serde(default)]
+    pub contact_pose_error_m: f64,
+    #[serde(default)]
+    pub approach_pose_reached: bool,
+    #[serde(default)]
+    pub contact_pose_reached: bool,
+    #[serde(default)]
+    pub selected_rank_why: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -465,7 +487,17 @@ fn run_release_episode(
         }
         Ok(plan) => {
             let (ep, inst) = execute_plan(
-                bundle, inst, manifest, model, sc, sha, plan, &resource, &initial, now,
+                bundle,
+                inst,
+                manifest,
+                model,
+                sc,
+                sha,
+                plan,
+                &resource,
+                &initial,
+                now,
+                &PlacementOutcome::default(),
             )?;
             checkin_worker(inst);
             Ok(ep)
@@ -490,8 +522,9 @@ fn run_skill_episode(
     String,
 > {
     let (mut inst, manifest) = if let Some((mut inst, manifest)) = loaded {
-        if let Err(e) =
-            reset_episode_pose(&mut inst).and_then(|_| apply_scenario_objects(&mut inst, sc))
+        if let Err(e) = reset_episode_pose(&mut inst)
+            .and_then(|_| clamp_qpos_to_joint_limits(&mut inst, &manifest))
+            .and_then(|_| apply_scenario_objects(&mut inst, sc))
         {
             checkin_worker(inst);
             return Err(e);
@@ -499,7 +532,9 @@ fn run_skill_episode(
         (inst, manifest)
     } else {
         let (mut inst, manifest) = load_and_normalize(bundle, &sc.objects, sc.seed)?;
-        if let Err(e) = reset_episode_pose(&mut inst) {
+        if let Err(e) = reset_episode_pose(&mut inst)
+            .and_then(|_| clamp_qpos_to_joint_limits(&mut inst, &manifest))
+        {
             checkin_worker(inst);
             return Err(e);
         }
@@ -522,15 +557,31 @@ fn run_skill_episode(
         }
     }
     let mut initial = truth0(&mut inst)?;
+    let mut placement = PlacementOutcome::default();
     if !matches!(
         sc.neg,
         Some(NegKind::Unreachable) | Some(NegKind::EmptyClose)
     ) {
         if let Some(ee) = ee_workspace(&initial, bundle) {
-            let tips = resource.as_ref().and_then(|r| {
-                finger_contact_point(&initial, &inst.inspect, &r.finger_bodies, Some(ee))
-            });
-            place_object_in_workspace(&mut inst, sc, model, &semantic_ee(bundle), ee, tips)?;
+            let tool_bodies = resource
+                .as_ref()
+                .map(|r| r.finger_bodies.clone())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| tool_bodies_from_model(model, &semantic_ee(bundle)));
+            let tips = finger_contact_point(&initial, &inst.inspect, &tool_bodies, Some(ee));
+            let ee_quat = ee_pose_from_truth(&initial, bundle)
+                .map(|p| p.quat_wxyz)
+                .unwrap_or([1.0, 0.0, 0.0, 0.0]);
+            placement = place_object_in_workspace(
+                &mut inst,
+                sc,
+                model,
+                &semantic_ee(bundle),
+                ee,
+                ee_quat,
+                tips,
+                &initial.qpos,
+            )?;
             initial = truth0(&mut inst)?;
         }
     }
@@ -560,7 +611,14 @@ fn run_skill_episode(
         finger_contact_point(&initial, &inst.inspect, &r.finger_bodies, ee_now)
             .or_else(|| finger_midpoint(&initial, &r.finger_bodies))
     });
-    let (approach, grasp_or_contact) = candidate_poses(sc, obj_pose, ee_now, finger_mid, skill);
+    let (approach, grasp_or_contact) = candidate_poses(
+        sc,
+        obj_pose,
+        ee_now,
+        finger_mid,
+        skill,
+        placement.maneuver.as_ref(),
+    );
     let _ = insert_interaction_frame(
         &mut transforms,
         "world",
@@ -712,6 +770,7 @@ fn run_skill_episode(
                 &res,
                 &initial,
                 now,
+                &placement,
             )?;
             Ok((ep, inst, manifest))
         }
@@ -730,6 +789,7 @@ fn execute_plan(
     resource: &ControlledResource,
     initial: &VerifierTruth,
     now0: f64,
+    placement: &PlacementOutcome,
 ) -> Result<(ManipulationEpisode, crate::mujoco_exec::MujocoInstance), String> {
     if sc.crash_controller {
         return Ok((
@@ -773,6 +833,11 @@ fn execute_plan(
     let mut unauthorized = 0u64;
     let mut last_spent_command_id: Option<String> = None;
     let episode_id = format!("manip-{}-{}", plan.contract_id, sc.seed);
+    let mut reach_idx = 0usize;
+    let mut approach_err = None;
+    let mut contact_err = None;
+    let mut approach_radius = 0.08_f64;
+    let mut contact_radius = realityos_semantics::push::push_contact_success_radius();
 
     for (si, step) in plan.steps.iter().enumerate() {
         match step {
@@ -797,17 +862,20 @@ fn execute_plan(
                 let obs = obs_frame(model, &truth.qpos, &model.calibration_epoch, now, 0.5);
                 let g = graph_from_truth(model, &truth, &model.calibration_epoch, now);
                 let caps = derive_capabilities(model, None);
-                match compile_reach(
-                    model,
-                    &caps,
-                    &world,
-                    &obs,
-                    &g,
-                    &model.model_hash,
-                    now,
-                    0.5,
-                    &ChainIkPositionPdAdapter,
-                ) {
+                let ik_seed = placement.maneuver.as_ref().map(|m| m.sampled_q.as_slice());
+                match with_ik_q_seed(ik_seed, || {
+                    compile_reach(
+                        model,
+                        &caps,
+                        &world,
+                        &obs,
+                        &g,
+                        &model.model_hash,
+                        now,
+                        0.5,
+                        &ChainIkPositionPdAdapter,
+                    )
+                }) {
                     Err(e) => {
                         let writes = shared.probe.snapshot().policy_ctrl_writes;
                         drop(auth);
@@ -898,17 +966,21 @@ fn execute_plan(
                             let obs =
                                 obs_frame(model, &truth.qpos, &model.calibration_epoch, now, 0.5);
                             let g = graph_from_truth(model, &truth, &model.calibration_epoch, now);
-                            if let Ok(ctrl) = compile_reach(
-                                model,
-                                &caps,
-                                &world,
-                                &obs,
-                                &g,
-                                &model.model_hash,
-                                now,
-                                0.5,
-                                &ChainIkPositionPdAdapter,
-                            ) {
+                            let ik_seed =
+                                placement.maneuver.as_ref().map(|m| m.sampled_q.as_slice());
+                            if let Ok(ctrl) = with_ik_q_seed(ik_seed, || {
+                                compile_reach(
+                                    model,
+                                    &caps,
+                                    &world,
+                                    &obs,
+                                    &g,
+                                    &model.model_hash,
+                                    now,
+                                    0.5,
+                                    &ChainIkPositionPdAdapter,
+                                )
+                            }) {
                                 let rec = match write_ctrl(
                                     &mut auth,
                                     &manifest,
@@ -949,6 +1021,27 @@ fn execute_plan(
                                 truth = t;
                                 now = n;
                             }
+                        }
+                        reach_idx += 1;
+                        let ee_name = privileged_ee(bundle);
+                        let reach_d = truth
+                            .named_pos
+                            .get(&ee_name)
+                            .or_else(|| truth.xpos.get(&ee_name))
+                            .filter(|p| p.len() >= 3)
+                            .map(|p| {
+                                ((p[0] - xyz[0]).powi(2)
+                                    + (p[1] - xyz[1]).powi(2)
+                                    + (p[2] - xyz[2]).powi(2))
+                                .sqrt()
+                            })
+                            .unwrap_or(f64::INFINITY);
+                        if reach_idx == 1 {
+                            approach_err = Some(reach_d);
+                            approach_radius = *success_radius;
+                        } else if reach_idx == 2 {
+                            contact_err = Some(reach_d);
+                            contact_radius = *success_radius;
                         }
                     }
                 }
@@ -1181,6 +1274,11 @@ fn execute_plan(
             ctrl_writes,
             unauthorized,
             None,
+            &placement,
+            approach_err,
+            contact_err,
+            approach_radius,
+            contact_radius,
         ),
         inst,
     ))
@@ -1200,6 +1298,11 @@ fn finish_episode(
     ctrl_writes: u64,
     unauthorized: u64,
     replay_delta: Option<i64>,
+    placement: &PlacementOutcome,
+    approach_err: Option<f64>,
+    contact_err: Option<f64>,
+    approach_radius: f64,
+    contact_radius: f64,
 ) -> ManipulationEpisode {
     let contacts = truth
         .contacts
@@ -1256,8 +1359,33 @@ fn finish_episode(
         earliest_pipeline_failed: String::new(),
         requested_push_direction: sc.push_dir,
         requested_push_distance_m: sc.push_dist,
+        contact_establishment: match current_contact_establishment_mode() {
+            ContactEstablishmentMode::ManeuverV2 => "maneuver_v2".into(),
+            ContactEstablishmentMode::XyzSampleBaseline => "xyz_sample".into(),
+        },
+        had_feasible_contact_maneuver: placement.maneuver.is_some(),
+        pre_contact_taxonomy: String::new(),
+        approach_pose_error_m: approach_err.unwrap_or(f64::NAN),
+        contact_pose_error_m: contact_err.unwrap_or(f64::NAN),
+        approach_pose_reached: approach_err.map(|d| d <= approach_radius).unwrap_or(false),
+        contact_pose_reached: contact_err.map(|d| d <= contact_radius).unwrap_or(false),
+        selected_rank_why: placement.rank_why.clone(),
     };
     let ee_object_contact = episode_ee_object_contact(&ep, &sc.object_id);
+    if ep.skill_contract == "skill.push" && !ep.expected_refusal {
+        let pre = PreContactEvidence {
+            positive_reachable: ep.failure_taxonomy.as_deref() != Some("UNREACHABLE"),
+            had_feasible_candidate: ep.had_feasible_contact_maneuver,
+            reject: placement.reject,
+            approach_reached: ep.approach_pose_reached,
+            contact_pose_reached: ep.contact_pose_reached,
+            ee_object_contact,
+            support_contact_with_ee: episode_ee_support_contact(&ep, &sc.object_id),
+        };
+        ep.pre_contact_taxonomy = classify_pre_contact(&pre).as_str().into();
+    } else if ep.expected_refusal {
+        ep.pre_contact_taxonomy = "UNKNOWN".into();
+    }
     ep.earliest_failure_stage = crate::failure_diagnosis::classify_push_stage(
         &ep.task_result,
         ep.failure_taxonomy.as_deref().unwrap_or(""),
@@ -1277,13 +1405,18 @@ fn finish_episode(
                 .unwrap_or_else(|| "UNKNOWN".into())
         };
     }
-    let pev = crate::push_pipeline::evidence_from_episode_fields(
+    let mut pev = crate::push_pipeline::evidence_from_episode_fields(
         &ep.task_result,
         ep.failure_taxonomy.as_deref().unwrap_or(""),
         &ep.evidence_used,
         ee_object_contact,
         ep.expected_refusal,
     );
+    pev.feasible_maneuver = ep.had_feasible_contact_maneuver;
+    pev.contact_pose_reached = ep.contact_pose_reached;
+    if ep.approach_pose_reached {
+        pev.approach_reached = true;
+    }
     let tr = crate::push_pipeline::classify_push_pipeline(&pev);
     ep.first_stage_entered = tr
         .first_stage_entered
@@ -1376,6 +1509,17 @@ fn refused_episode(
         earliest_pipeline_failed: String::new(),
         requested_push_direction: sc.push_dir,
         requested_push_distance_m: sc.push_dist,
+        contact_establishment: match current_contact_establishment_mode() {
+            ContactEstablishmentMode::ManeuverV2 => "maneuver_v2".into(),
+            ContactEstablishmentMode::XyzSampleBaseline => "xyz_sample".into(),
+        },
+        had_feasible_contact_maneuver: false,
+        pre_contact_taxonomy: "UNKNOWN".into(),
+        approach_pose_error_m: f64::NAN,
+        contact_pose_error_m: f64::NAN,
+        approach_pose_reached: false,
+        contact_pose_reached: false,
+        selected_rank_why: String::new(),
     }
 }
 
@@ -1387,6 +1531,20 @@ fn episode_ee_object_contact(ep: &ManipulationEpisode, object_id: &str) -> bool 
         let a = c.get("a").and_then(|v| v.as_str()).unwrap_or("");
         let b = c.get("b").and_then(|v| v.as_str()).unwrap_or("");
         crate::push_pipeline::names_are_ee_object_contact(a, b, object_id)
+    })
+}
+
+fn episode_ee_support_contact(ep: &ManipulationEpisode, object_id: &str) -> bool {
+    ep.contacts.iter().any(|c| {
+        let a = c.get("a").and_then(|v| v.as_str()).unwrap_or("");
+        let b = c.get("b").and_then(|v| v.as_str()).unwrap_or("");
+        let a_sup = crate::push_pipeline::is_support_surface(a);
+        let b_sup = crate::push_pipeline::is_support_surface(b);
+        if a_sup == b_sup {
+            return false;
+        }
+        let other = if a_sup { b } else { a };
+        !other.contains(object_id)
     })
 }
 
@@ -1502,6 +1660,13 @@ pub fn tagged_push_episode_record(ep: &ManipulationEpisode) -> Value {
         ),
         ("final_task_result", json!(ep.task_result)),
         ("failure_taxonomy", json!(ep.failure_taxonomy)),
+        ("pre_contact_taxonomy", json!(ep.pre_contact_taxonomy)),
+        (
+            "feasible_contact_maneuver",
+            json!(ep.had_feasible_contact_maneuver),
+        ),
+        ("contact_pose_reached", json!(ep.contact_pose_reached)),
+        ("mujoco_ee_object_contact", json!(contact_established)),
         (
             "provenance",
             json!({
@@ -1752,6 +1917,17 @@ fn pol_obs(
         false,
     );
     obs.timestamp_s = now;
+    let lo = manifest.q_min();
+    let hi = manifest.q_max();
+    for (i, q) in obs.qpos.iter_mut().enumerate() {
+        let l = *lo.get(i).unwrap_or(&-1e6);
+        let h = *hi.get(i).unwrap_or(&1e6);
+        if q.is_finite() {
+            *q = q.clamp(l.min(h), l.max(h));
+        } else {
+            *q = 0.0;
+        }
+    }
     obs
 }
 
@@ -1786,6 +1962,39 @@ fn reset_episode_pose(inst: &mut crate::mujoco_exec::MujocoInstance) -> Result<(
     inst.reset_keyframe(0)
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+fn clamp_qpos_to_joint_limits(
+    inst: &mut crate::mujoco_exec::MujocoInstance,
+    manifest: &RobotManifest,
+) -> Result<(), String> {
+    let st = inst.state().map_err(|e| e.to_string())?;
+    let state = st.get("state").unwrap_or(&st);
+    let mut q = crate::mujoco_exec::json_f64_vec(state.get("qpos").unwrap_or(&Value::Null));
+    if q.is_empty() {
+        return Ok(());
+    }
+    let lo = manifest.q_min();
+    let hi = manifest.q_max();
+    let mut changed = false;
+    for i in 0..q.len() {
+        if !q[i].is_finite() {
+            q[i] = 0.0;
+            changed = true;
+            continue;
+        }
+        let l = *lo.get(i).unwrap_or(&-1e6);
+        let h = *hi.get(i).unwrap_or(&1e6);
+        let c = q[i].clamp(l.min(h), l.max(h));
+        if (c - q[i]).abs() > 1e-9 {
+            q[i] = c;
+            changed = true;
+        }
+    }
+    if changed {
+        inst.reset(Some(&q), None).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn json_xyz(v: &Value) -> Option<[f64; 3]> {
@@ -1902,8 +2111,12 @@ fn candidate_poses(
     ee: Option<[f64; 3]>,
     finger_mid: Option<[f64; 3]>,
     skill: &str,
+    maneuver: Option<&ContactManeuver>,
 ) -> (Se3, Se3) {
     if skill == "PUSH" {
+        if let Some(m) = maneuver {
+            return (m.approach_pose, m.contact_pose);
+        }
         let n = (sc.push_dir[0] * sc.push_dir[0]
             + sc.push_dir[1] * sc.push_dir[1]
             + sc.push_dir[2] * sc.push_dir[2])
@@ -2030,69 +2243,197 @@ fn ee_workspace(truth: &VerifierTruth, bundle: &RobotBundle) -> Option<[f64; 3]>
     None
 }
 
-fn place_object_in_workspace(
-    inst: &mut crate::mujoco_exec::MujocoInstance,
+#[derive(Clone, Default)]
+struct PlacementOutcome {
+    maneuver: Option<ContactManeuver>,
+    reject: Option<ContactInfeasible>,
+    rank_why: String,
+}
+
+fn ee_pose_from_truth(truth: &VerifierTruth, bundle: &RobotBundle) -> Option<Se3> {
+    let ee = privileged_ee(bundle);
+    let sem = semantic_ee(bundle);
+    body_se3(truth, &ee)
+        .or_else(|| body_se3(truth, &sem))
+        .or_else(|| {
+            ee_workspace(truth, bundle).and_then(|xyz| Se3::try_new(xyz, [1.0, 0.0, 0.0, 0.0]).ok())
+        })
+}
+
+fn object_half_extents(sc: &ManipulationScenario) -> [f64; 3] {
+    let size = sc
+        .objects
+        .iter()
+        .find(|o| o["name"] == sc.object_id)
+        .and_then(|o| o["size"].as_array());
+    match size {
+        Some(a) if a.len() >= 3 => [
+            a[0].as_f64().unwrap_or(0.025),
+            a[1].as_f64().unwrap_or(0.025),
+            a[2].as_f64().unwrap_or(0.025),
+        ],
+        Some(a) => {
+            let h = a.first().and_then(|v| v.as_f64()).unwrap_or(0.025);
+            [h, h, h]
+        }
+        None => [0.025, 0.025, 0.025],
+    }
+}
+
+fn table_half_z(sc: &ManipulationScenario) -> f64 {
+    sc.objects
+        .iter()
+        .find(|o| o["name"] == "table")
+        .and_then(|o| o["size"].as_array())
+        .and_then(|a| a.get(2).and_then(|v| v.as_f64()))
+        .unwrap_or(if sc.planar { 0.01 } else { 0.02 })
+}
+
+fn tool_bodies_from_model(model: &EmbodimentModel, ee_name: &str) -> Vec<String> {
+    let Some(ee) = model.end_effectors.iter().find(|e| e.name == ee_name) else {
+        return Vec::new();
+    };
+    let Some(frame) = model.frames.iter().find(|f| f.name == ee.frame) else {
+        return Vec::new();
+    };
+    let root = frame.parent_body.as_str();
+    if root.is_empty() {
+        return Vec::new();
+    }
+    let mut names = Vec::new();
+    let mut stack = vec![root.to_string()];
+    let mut i = 0;
+    while i < stack.len() {
+        let cur = stack[i].clone();
+        i += 1;
+        for b in &model.bodies {
+            if b.parent.as_deref() == Some(cur.as_str()) {
+                stack.push(b.name.clone());
+                if b.name != root {
+                    names.push(b.name.clone());
+                }
+            }
+        }
+    }
+    names
+}
+
+fn local_ee_poses(
+    model: &EmbodimentModel,
+    ee_name: &str,
+    chain: &[String],
+    q0: &[f64],
+    seed: u64,
+    n: usize,
+) -> Vec<SampledEePose> {
+    use rand::{Rng, SeedableRng};
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed ^ 0x0C0A_17E5);
+    let mut out = Vec::new();
+    for _ in 0..n {
+        let mut q = q0.to_vec();
+        for (i, name) in chain.iter().enumerate() {
+            let Some(qi) = q.get_mut(i) else {
+                continue;
+            };
+            let Some(j) = model.joints.iter().find(|j| j.name == *name) else {
+                continue;
+            };
+            let delta = (rng.gen::<f64>() - 0.5) * 0.8;
+            *qi += delta;
+            if let (Some(lo), Some(hi)) = (j.q_min.value, j.q_max.value) {
+                *qi = qi.clamp(lo.min(hi), lo.max(hi));
+            }
+        }
+        if let Ok(fk) = forward_kinematics(model, chain, ee_name, &q) {
+            if fk.ee.xyz.iter().all(|v| v.is_finite()) {
+                out.push(SampledEePose {
+                    xyz: fk.ee.xyz,
+                    quat_wxyz: fk.ee.quat_wxyz,
+                    q,
+                });
+            }
+        }
+    }
+    out
+}
+
+fn chain_q_from_qpos(model: &EmbodimentModel, ee: &str, qpos: &[f64]) -> Option<Vec<f64>> {
+    let chain = model.ee_joint_chain(ee)?;
+    let mut q = Vec::with_capacity(chain.len());
+    for name in &chain {
+        let j = model.joints.iter().find(|j| j.name == *name)?;
+        let adr = j.qpos_adr? as usize;
+        q.push(*qpos.get(adr)?);
+    }
+    Some(q)
+}
+
+fn sample_push_units(model: &EmbodimentModel, ee_name: &str, seed: u64, n_draw: usize) -> Vec<f64> {
+    use rand::{Rng, SeedableRng};
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed ^ 0x00A1_1CE5);
+    let n_chain = model.ee_joint_chain(ee_name).map(|c| c.len()).unwrap_or(0);
+    let mut units = Vec::with_capacity(n_draw * n_chain);
+    for _ in 0..n_draw {
+        for _ in 0..n_chain {
+            units.push(rng.gen::<f64>());
+        }
+    }
+    units
+}
+
+fn xyz_push_object_pos(
     sc: &ManipulationScenario,
     model: &EmbodimentModel,
     ee_name: &str,
     ee: [f64; 3],
-    finger_tip: Option<[f64; 3]>,
-) -> Result<(), String> {
-    let anchor = finger_tip.unwrap_or(ee);
-    let half = sc
-        .objects
-        .iter()
-        .find(|o| o["name"] == sc.object_id)
-        .and_then(|o| o["size"].as_array())
-        .and_then(|a| a.first().and_then(|v| v.as_f64()))
-        .unwrap_or(0.025);
-    let pos = if matches!(sc.neg, Some(NegKind::Unreachable)) {
+    anchor: [f64; 3],
+    half: f64,
+) -> [f64; 3] {
+    use rand::{Rng, SeedableRng};
+    let mut rng = rand::rngs::StdRng::seed_from_u64(sc.seed ^ 0x00A1_1CE5);
+    let n_chain = model.ee_joint_chain(ee_name).map(|c| c.len()).unwrap_or(0);
+    let mut units = Vec::new();
+    for _ in 0..64 {
+        for _ in 0..n_chain {
+            units.push(rng.gen::<f64>());
+        }
+    }
+    let cloud = realityos_semantics::workspace::reachable_ee_xyz(model, ee_name, &units);
+    if cloud.is_empty() {
         if sc.planar {
-            [1.6, 0.0, 0.05]
+            [ee[0] - 0.01, ee[1], ee[2]]
         } else {
-            [1.8, 0.0, 0.2]
+            let z = (anchor[2] - 0.002).max(half + 0.02);
+            [anchor[0], anchor[1], z]
         }
-    } else if sc.skill == "PUSH" {
-        use rand::{Rng, SeedableRng};
-        let mut rng = rand::rngs::StdRng::seed_from_u64(sc.seed ^ 0x00A1_1CE5);
-        let n_chain = model.ee_joint_chain(ee_name).map(|c| c.len()).unwrap_or(0);
-        let mut units = Vec::new();
-        for _ in 0..64 {
-            for _ in 0..n_chain {
-                units.push(rng.gen::<f64>());
-            }
-        }
-        let cloud = realityos_semantics::workspace::reachable_ee_xyz(model, ee_name, &units);
-        if cloud.is_empty() {
-            if sc.planar {
-                [ee[0] - 0.01, ee[1], ee[2]]
-            } else {
-                let z = (anchor[2] - 0.002).max(half + 0.02);
-                [anchor[0], anchor[1], z]
-            }
-        } else {
-            let contact = match realityos_semantics::push::current_push_compile_mode() {
-                realityos_semantics::push::PushCompileMode::ContactMaintaining => {
-                    realityos_semantics::workspace::nearest_reachable_ee(&cloud, ee)
-                        .unwrap_or(cloud[rng.gen_range(0..cloud.len())])
-                }
-                realityos_semantics::push::PushCompileMode::DirectStroke => {
-                    cloud[rng.gen_range(0..cloud.len())]
-                }
-            };
-            realityos_semantics::workspace::push_object_xyz(contact, sc.push_dir, half, 0.015)
-        }
-    } else if sc.planar {
-        [ee[0] - 0.01, ee[1], ee[2]]
     } else {
-        let z = (anchor[2] - 0.002).max(half + 0.02);
-        [anchor[0], anchor[1], z]
-    };
-    if !sc.planar {
-        let table_z = (pos[2] - half - 0.02).max(0.05);
+        let contact = match realityos_semantics::push::current_push_compile_mode() {
+            realityos_semantics::push::PushCompileMode::ContactMaintaining => {
+                realityos_semantics::workspace::nearest_reachable_ee(&cloud, ee)
+                    .unwrap_or(cloud[rng.gen_range(0..cloud.len())])
+            }
+            realityos_semantics::push::PushCompileMode::DirectStroke => {
+                cloud[rng.gen_range(0..cloud.len())]
+            }
+        };
+        realityos_semantics::workspace::push_object_xyz(contact, sc.push_dir, half, 0.015)
+    }
+}
+
+fn apply_object_and_support(
+    inst: &mut crate::mujoco_exec::MujocoInstance,
+    sc: &ManipulationScenario,
+    pos: [f64; 3],
+    table_xy: [f64; 3],
+    move_table: bool,
+) {
+    let half = object_half_extents(sc)[2];
+    if move_table {
+        let tz = table_half_z(sc);
+        let table_z = (pos[2] - half - tz).max(0.02);
         let _ = inst.configure_body(
             "table",
-            Some([anchor[0], anchor[1], table_z]),
+            Some([table_xy[0], table_xy[1], table_z]),
             None,
             None,
             None,
@@ -2101,7 +2442,98 @@ fn place_object_in_workspace(
     }
     let _ = inst.set_body_pos(&sc.object_id, pos);
     let _ = inst.step(15);
-    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn place_object_in_workspace(
+    inst: &mut crate::mujoco_exec::MujocoInstance,
+    sc: &ManipulationScenario,
+    model: &EmbodimentModel,
+    ee_name: &str,
+    ee: [f64; 3],
+    ee_quat: [f64; 4],
+    finger_tip: Option<[f64; 3]>,
+    qpos: &[f64],
+) -> Result<PlacementOutcome, String> {
+    let anchor = finger_tip.unwrap_or(ee);
+    let half_xyz = object_half_extents(sc);
+    let half = half_xyz[0];
+    if matches!(sc.neg, Some(NegKind::Unreachable)) {
+        let pos = if sc.planar {
+            [1.6, 0.0, 0.05]
+        } else {
+            [1.8, 0.0, 0.2]
+        };
+        apply_object_and_support(inst, sc, pos, anchor, !sc.planar);
+        return Ok(PlacementOutcome::default());
+    }
+    if sc.skill != "PUSH" {
+        let pos = if sc.planar {
+            [ee[0] - 0.01, ee[1], ee[2]]
+        } else {
+            let z = (anchor[2] - 0.002).max(half + 0.02);
+            [anchor[0], anchor[1], z]
+        };
+        apply_object_and_support(inst, sc, pos, anchor, !sc.planar);
+        return Ok(PlacementOutcome::default());
+    }
+
+    let mut outcome = PlacementOutcome::default();
+    let use_v2 = current_contact_establishment_mode() == ContactEstablishmentMode::ManeuverV2;
+    if use_v2 {
+        let units = sample_push_units(model, ee_name, sc.seed, 96);
+        let mut cloud = realityos_semantics::workspace::reachable_ee_poses(model, ee_name, &units);
+        if let Some(q) = chain_q_from_qpos(model, ee_name, qpos) {
+            if let Some(chain) = model.ee_joint_chain(ee_name) {
+                if let Ok(fk) = forward_kinematics(model, &chain, ee_name, &q) {
+                    cloud.insert(
+                        0,
+                        SampledEePose {
+                            xyz: fk.ee.xyz,
+                            quat_wxyz: fk.ee.quat_wxyz,
+                            q: q.clone(),
+                        },
+                    );
+                }
+                cloud.extend(local_ee_poses(model, ee_name, &chain, &q, sc.seed, 32));
+            }
+        }
+        let mut tool_ee = [0.0, 0.0, 0.0];
+        if let Some(tip) = finger_tip {
+            tool_ee = tool_offset_in_ee(ee_quat, tip, ee);
+            let n = (tool_ee[0] * tool_ee[0] + tool_ee[1] * tool_ee[1] + tool_ee[2] * tool_ee[2])
+                .sqrt();
+            if n > 0.15 {
+                let s = 0.15 / n;
+                tool_ee = [tool_ee[0] * s, tool_ee[1] * s, tool_ee[2] * s];
+            }
+        }
+        let spec = ContactManeuverSpec::table_push(sc.push_dir, sc.push_dist, ee, tool_ee);
+        match select_push_maneuver(&cloud, &spec, half_xyz, [0.0, 0.0, 1.0], &model.joints) {
+            Ok((maneuver, why)) => {
+                outcome.rank_why = format!(
+                    "score={} approach={:.4} stroke={:.4} orient={:.4} clear={:.4}",
+                    why.score,
+                    why.inputs.approach_distance,
+                    why.inputs.remaining_stroke,
+                    why.inputs.orientation_error,
+                    why.inputs.support_clearance
+                );
+                let pos = maneuver.object_center;
+                apply_object_and_support(inst, sc, pos, pos, true);
+                outcome.maneuver = Some(maneuver);
+                return Ok(outcome);
+            }
+            Err(e) => {
+                outcome.reject = Some(e);
+                outcome.rank_why = format!("reject={}", e.as_str());
+            }
+        }
+    }
+
+    let pos = xyz_push_object_pos(sc, model, ee_name, ee, anchor, half);
+    apply_object_and_support(inst, sc, pos, anchor, !sc.planar);
+    Ok(outcome)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2379,6 +2811,7 @@ mod tests {
     use crate::mujoco_exec::ensure_mujoco_or_skip;
     use crate::resource_discover::discover_resources;
     use crate::runner::load_and_normalize;
+    use realityos_semantics::contact_maneuver::with_contact_establishment_mode;
     use std::path::Path;
 
     #[test]
@@ -2629,6 +3062,10 @@ mod tests {
             "p_stroke_given_contact": funnel.p_stroke_given_contact(),
             "p_object_displaced_given_stroke": funnel.p_displaced_given_stroke(),
             "p_correct_direction_given_displacement": funnel.p_direction_given_displacement(),
+            "p_contact_given_positive_reachable": funnel.p_contact_given_positive_reachable(),
+            "n_positive_reachable": funnel.n_positive_reachable,
+            "n_feasible_maneuver": funnel.n_feasible_maneuver,
+            "n_contact_pose_reached": funnel.n_contact_pose_reached,
             "unauthorized_writes": funnel.n_unauthorized_writes,
         })
     }
@@ -2649,13 +3086,18 @@ mod tests {
                 .get("id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("obj0");
-            let ev = crate::push_pipeline::evidence_from_episode_fields(
+            let mut ev = crate::push_pipeline::evidence_from_episode_fields(
                 &ep.task_result,
                 ep.failure_taxonomy.as_deref().unwrap_or(""),
                 &ep.evidence_used,
                 super::episode_ee_object_contact(ep, object_id),
                 ep.expected_refusal,
             );
+            ev.feasible_maneuver = ep.had_feasible_contact_maneuver;
+            ev.contact_pose_reached = ep.contact_pose_reached;
+            if ep.approach_pose_reached {
+                ev.approach_reached = true;
+            }
             funnel.absorb(&ev, ep.unauthorized_writes);
             assert!(
                 !ep.first_stage_entered.is_empty() || ep.expected_refusal,
@@ -2692,6 +3134,7 @@ mod tests {
     fn run_four_robot_funnel(
         sha: &str,
         tag: &str,
+        n: usize,
     ) -> (
         crate::push_pipeline::PushFunnel,
         serde_json::Map<String, Value>,
@@ -2703,7 +3146,7 @@ mod tests {
         for label in ["arm_gripper", "panda", "ur5e", "iiwa14"] {
             match try_load_development_push(label) {
                 Ok(bundle) => {
-                    let (eps, _) = run_push_matrix_from(&bundle, 16, sha, 9).expect("push matrix");
+                    let (eps, _) = run_push_matrix_from(&bundle, n, sha, 9).expect("push matrix");
                     let mut funnel = crate::push_pipeline::PushFunnel::default();
                     let recs = absorb_push_episodes(&mut funnel, &eps);
                     for ep in &eps {
@@ -2712,21 +3155,28 @@ mod tests {
                             .get("id")
                             .and_then(|v| v.as_str())
                             .unwrap_or("obj0");
-                        let ev = crate::push_pipeline::evidence_from_episode_fields(
+                        let mut ev = crate::push_pipeline::evidence_from_episode_fields(
                             &ep.task_result,
                             ep.failure_taxonomy.as_deref().unwrap_or(""),
                             &ep.evidence_used,
                             super::episode_ee_object_contact(ep, object_id),
                             ep.expected_refusal,
                         );
+                        ev.feasible_maneuver = ep.had_feasible_contact_maneuver;
+                        ev.contact_pose_reached = ep.contact_pose_reached;
+                        if ep.approach_pose_reached {
+                            ev.approach_reached = true;
+                        }
                         overall.absorb(&ev, ep.unauthorized_writes);
                     }
                     eprintln!(
-                        "push_funnel {tag} {label} n={} contact={} p_task_given_contact={:.3} unauthorized={}",
+                        "push_funnel {tag} {label} n={} contact={} p_contact_given_positive={:.3} p_task_given_contact={:.3} unauthorized={} tax_unknown={}",
                         funnel.n,
                         funnel.n_contact,
+                        funnel.p_contact_given_positive_reachable(),
                         funnel.p_task_given_contact(),
-                        funnel.n_unauthorized_writes
+                        funnel.n_unauthorized_writes,
+                        recs.iter().filter(|r| r["pre_contact_taxonomy"]["value"] == "UNKNOWN").count()
                     );
                     assert_eq!(
                         funnel.n_unauthorized_writes, 0,
@@ -2758,12 +3208,12 @@ mod tests {
         let write = std::env::var("REALITYOS_PUSH_FUNNEL_OUT").ok();
         let after = realityos_semantics::push::with_push_compile_mode(
             realityos_semantics::push::PushCompileMode::ContactMaintaining,
-            || run_four_robot_funnel(&sha, "after"),
+            || run_four_robot_funnel(&sha, "after", 16),
         );
         if let Some(path) = write {
             let before = realityos_semantics::push::with_push_compile_mode(
                 realityos_semantics::push::PushCompileMode::DirectStroke,
-                || run_four_robot_funnel(&sha, "before"),
+                || run_four_robot_funnel(&sha, "before", 16),
             );
             let report = json!({
                 "n": 16,
@@ -2782,6 +3232,114 @@ mod tests {
                 },
                 "p_task_success_given_contact_before": before.0.p_task_given_contact(),
                 "p_task_success_given_contact_after": after.0.p_task_given_contact(),
+            });
+            std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap())
+                .unwrap_or_else(|e| panic!("write {path}: {e}"));
+        }
+    }
+
+    #[test]
+    fn push_contact_v2_same_seed_ablation() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let n = std::env::var("REALITYOS_CONTACT_V2_N")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(16usize)
+            .max(1);
+        let sha = software_sha();
+        let baseline =
+            with_contact_establishment_mode(ContactEstablishmentMode::XyzSampleBaseline, || {
+                realityos_semantics::push::with_push_compile_mode(
+                    realityos_semantics::push::PushCompileMode::ContactMaintaining,
+                    || run_four_robot_funnel(&sha, "baseline_xyz", n),
+                )
+            });
+        let v2 = with_contact_establishment_mode(ContactEstablishmentMode::ManeuverV2, || {
+            realityos_semantics::push::with_push_compile_mode(
+                realityos_semantics::push::PushCompileMode::ContactMaintaining,
+                || run_four_robot_funnel(&sha, "contact_v2", n),
+            )
+        });
+        assert_eq!(baseline.0.n_unauthorized_writes, 0);
+        assert_eq!(v2.0.n_unauthorized_writes, 0);
+        let mut improved = 0u32;
+        let mut compared = 0u32;
+        for label in ["arm_gripper", "panda", "ur5e", "iiwa14"] {
+            let Some(b) = baseline.1.get(label) else {
+                continue;
+            };
+            let Some(a) = v2.1.get(label) else {
+                continue;
+            };
+            compared += 1;
+            let bc = b["n_contact"].as_u64().unwrap_or(0);
+            let ac = a["n_contact"].as_u64().unwrap_or(0);
+            if ac > bc {
+                improved += 1;
+            }
+            if bc > 0 {
+                assert!(
+                    ac > 0,
+                    "{label} had baseline contact={bc} but Contact V2 lost all contact"
+                );
+            }
+            for recs in [b["episodes"].as_array(), a["episodes"].as_array()]
+                .into_iter()
+                .flatten()
+            {
+                for rec in recs {
+                    assert_eq!(rec["unauthorized_writes"]["value"], 0);
+                    assert_ne!(rec["final_task_result"]["value"], "authority_violation");
+                    assert_eq!(
+                        rec["mujoco_ee_object_contact"]["tag"],
+                        "PRIVILEGED_SIM_LABEL_ONLY"
+                    );
+                    assert_eq!(rec["pre_contact_taxonomy"]["tag"], "TARGET_LABEL");
+                    assert!(rec.get("pre_contact_taxonomy").is_some());
+                }
+            }
+        }
+        assert!(compared >= 1, "need at least arm_gripper in the matrix");
+        for k in v2.1.keys() {
+            assert!(
+                ["arm_gripper", "panda", "ur5e", "iiwa14"].contains(&k.as_str()),
+                "development matrix must not include extra robot {k}"
+            );
+        }
+        if n > 16 {
+            assert!(
+                improved >= 3,
+                "Contact V2 must raise same-seed contact on >=3 development robots, improved={improved} n={n}"
+            );
+            if v2.0.n_contact > 0 {
+                let p = v2.0.p_task_given_contact();
+                assert!(p >= 0.5, "P(task|contact) collapsed under Contact V2: {p}");
+            }
+        }
+        if let Some(path) = std::env::var("REALITYOS_CONTACT_V2_OUT").ok() {
+            let report = json!({
+                "n": n,
+                "idx_offset": 9,
+                "sha": sha,
+                "improved_robots": improved,
+                "baseline": {
+                    "condition": "xyz_sample",
+                    "overall": funnel_rates(&baseline.0),
+                    "robots": baseline.1,
+                    "load_errors": baseline.2,
+                },
+                "contact_v2": {
+                    "condition": "maneuver_v2",
+                    "overall": funnel_rates(&v2.0),
+                    "robots": v2.1,
+                    "load_errors": v2.2,
+                },
+                "p_task_success_given_contact_baseline": baseline.0.p_task_given_contact(),
+                "p_task_success_given_contact_v2": v2.0.p_task_given_contact(),
+                "p_contact_given_positive_reachable_baseline": baseline.0.p_contact_given_positive_reachable(),
+                "p_contact_given_positive_reachable_v2": v2.0.p_contact_given_positive_reachable(),
             });
             std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap())
                 .unwrap_or_else(|e| panic!("write {path}: {e}"));
