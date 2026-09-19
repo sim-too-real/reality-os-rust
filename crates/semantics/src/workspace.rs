@@ -74,6 +74,18 @@ pub fn push_object_xyz(
     ]
 }
 
+/// Pick the reachable EE sample nearest the current EE. Contact establishment
+/// from rest needs a short approach, not a random far cloud point.
+pub fn nearest_reachable_ee(cloud: &[[f64; 3]], current: [f64; 3]) -> Option<[f64; 3]> {
+    cloud.iter().copied().min_by(|a, b| {
+        let da =
+            (a[0] - current[0]).powi(2) + (a[1] - current[1]).powi(2) + (a[2] - current[2]).powi(2);
+        let db =
+            (b[0] - current[0]).powi(2) + (b[1] - current[1]).powi(2) + (b[2] - current[2]).powi(2);
+        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,5 +124,13 @@ mod tests {
         assert!((obj[0] - 0.235).abs() < 1e-12);
         assert!((obj[1] - 0.0).abs() < 1e-12);
         assert!((obj[2] - 0.1).abs() < 1e-12);
+    }
+
+    #[test]
+    fn nearest_reachable_ee_picks_the_closest_sample() {
+        let cloud = vec![[1.0, 0.0, 0.0], [0.21, 0.01, 0.1], [0.9, 0.4, 0.2]];
+        let near = nearest_reachable_ee(&cloud, [0.2, 0.0, 0.1]).unwrap();
+        assert!((near[0] - 0.21).abs() < 1e-12);
+        assert!(nearest_reachable_ee(&[], [0.0, 0.0, 0.0]).is_none());
     }
 }

@@ -2071,7 +2071,15 @@ fn place_object_in_workspace(
                 [anchor[0], anchor[1], z]
             }
         } else {
-            let contact = cloud[rng.gen_range(0..cloud.len())];
+            let contact = match realityos_semantics::push::current_push_compile_mode() {
+                realityos_semantics::push::PushCompileMode::ContactMaintaining => {
+                    realityos_semantics::workspace::nearest_reachable_ee(&cloud, ee)
+                        .unwrap_or(cloud[rng.gen_range(0..cloud.len())])
+                }
+                realityos_semantics::push::PushCompileMode::DirectStroke => {
+                    cloud[rng.gen_range(0..cloud.len())]
+                }
+            };
             realityos_semantics::workspace::push_object_xyz(contact, sc.push_dir, half, 0.015)
         }
     } else if sc.planar {

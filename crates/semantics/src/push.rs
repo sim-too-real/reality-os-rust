@@ -31,8 +31,19 @@ pub fn with_push_compile_mode<R>(mode: PushCompileMode, f: impl FnOnce() -> R) -
     })
 }
 
-fn current_push_compile_mode() -> PushCompileMode {
+pub fn current_push_compile_mode() -> PushCompileMode {
     PUSH_COMPILE_MODE.with(Cell::get)
+}
+
+/// Approach standoff along the support-plane push direction.
+pub fn push_approach_standoff_m() -> f64 {
+    0.05
+}
+
+/// Contact Reach must travel from the approach pose. A radius ≥ standoff
+/// lets the controller succeed contact without leaving the approach pose.
+pub fn push_contact_success_radius() -> f64 {
+    (push_approach_standoff_m() * 0.35).clamp(0.012, 0.02)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -170,31 +181,44 @@ pub fn compile_push(
         candidate.direction[1] / n,
         candidate.direction[2] / n,
     ];
-    let (contact_or_press, waypoints) = match current_push_compile_mode() {
-        PushCompileMode::ContactMaintaining => {
-            let dir = support_plane_direction(dir3).unwrap_or(dir3);
-            let press_xyz = contact_press_xyz(contact.xyz, dir, candidate.distance_m);
-            let press =
-                Se3::try_new(press_xyz, contact.quat_wxyz).map_err(|_| SkillRefuse::Unsupported)?;
-            (
-                press,
-                contact_maintaining_stroke_xyz(contact.xyz, dir, candidate.distance_m),
-            )
-        }
-        PushCompileMode::DirectStroke => {
-            let stroke = effective_push_distance(candidate.distance_m);
-            let end = Se3::try_new(
-                [
-                    contact.xyz[0] + dir3[0] * stroke,
-                    contact.xyz[1] + dir3[1] * stroke,
-                    contact.xyz[2] + dir3[2] * stroke,
-                ],
-                contact.quat_wxyz,
-            )
-            .map_err(|_| SkillRefuse::Unsupported)?;
-            (contact, vec![end.xyz])
-        }
-    };
+    let (approach_pose, contact_or_press, waypoints, contact_radius) =
+        match current_push_compile_mode() {
+            PushCompileMode::ContactMaintaining => {
+                let dir = support_plane_direction(dir3).unwrap_or(dir3);
+                let standoff = push_approach_standoff_m();
+                let approach_pose = Se3::try_new(
+                    [
+                        contact.xyz[0] - dir[0] * standoff,
+                        contact.xyz[1] - dir[1] * standoff,
+                        contact.xyz[2],
+                    ],
+                    contact.quat_wxyz,
+                )
+                .map_err(|_| SkillRefuse::Unsupported)?;
+                let press_xyz = contact_press_xyz(contact.xyz, dir, candidate.distance_m);
+                let press = Se3::try_new(press_xyz, contact.quat_wxyz)
+                    .map_err(|_| SkillRefuse::Unsupported)?;
+                (
+                    approach_pose,
+                    press,
+                    contact_maintaining_stroke_xyz(contact.xyz, dir, candidate.distance_m),
+                    push_contact_success_radius(),
+                )
+            }
+            PushCompileMode::DirectStroke => {
+                let stroke = effective_push_distance(candidate.distance_m);
+                let end = Se3::try_new(
+                    [
+                        contact.xyz[0] + dir3[0] * stroke,
+                        contact.xyz[1] + dir3[1] * stroke,
+                        contact.xyz[2] + dir3[2] * stroke,
+                    ],
+                    contact.quat_wxyz,
+                )
+                .map_err(|_| SkillRefuse::Unsupported)?;
+                (approach, contact, vec![end.xyz], 0.06)
+            }
+        };
 
     let expires = now_s + freshness_s;
     let mut plan = SkillPlan::empty(SkillName::Push, "skill.push");
@@ -202,13 +226,13 @@ pub fn compile_push(
     plan.failure_evidence = SkillContract::push().failure_evidence;
     plan.steps.push(SkillStep::Reach {
         end_effector: ee.into(),
-        target: pose_evidence(approach, now_s, expires),
+        target: pose_evidence(approach_pose, now_s, expires),
         success_radius: 0.08,
     });
     plan.steps.push(SkillStep::Reach {
         end_effector: ee.into(),
         target: pose_evidence(contact_or_press, now_s, expires),
-        success_radius: 0.06,
+        success_radius: contact_radius,
     });
     for xyz in waypoints {
         let pose = Se3::try_new(xyz, contact.quat_wxyz).map_err(|_| SkillRefuse::Unsupported)?;
@@ -481,6 +505,23 @@ mod tests {
         assert!(end[0] > contact_xyz[0]);
         let along = end[0] - 0.18;
         assert!(along + 1e-12 >= effective_push_distance(0.05));
+    }
+
+    #[test]
+    fn contact_reach_must_travel_from_approach() {
+        assert!(push_contact_success_radius() < push_approach_standoff_m());
+        let plan = compile_fresh_push([1.0, 0.0, 0.0], 0.05);
+        let reaches = reach_targets(&plan);
+        let approach = reaches[0].0;
+        let (contact_xyz, contact_r) = reaches[1];
+        let d = ((contact_xyz[0] - approach[0]).powi(2)
+            + (contact_xyz[1] - approach[1]).powi(2)
+            + (contact_xyz[2] - approach[2]).powi(2))
+        .sqrt();
+        assert!(
+            contact_r < d,
+            "contact radius {contact_r} must be < approach travel {d} or the contact Reach succeeds without moving"
+        );
     }
 
     #[test]
