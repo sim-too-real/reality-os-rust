@@ -72,8 +72,15 @@ fn torque_on_applies_pending_goal_and_counts_physical_only_then() {
     let on = decode_status(&d.process(&encode_write(1, ADDR_TORQUE_ENABLE, &[1]))).unwrap();
     assert!(instruction_ok(on.error));
     assert!(d.torque_enabled());
-    assert_eq!(d.present_position(), 3000);
+    assert_eq!(d.goal_position(), 3000);
+    assert_eq!(
+        d.present_position(),
+        start,
+        "torque-on stores pending goal; present evolves on advance"
+    );
     assert_eq!(d.physical_action_count(), 1);
+    d.advance(1.0);
+    assert_eq!(d.present_position(), 3000);
 }
 
 #[test]

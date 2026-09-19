@@ -84,12 +84,9 @@ fn identity_mismatch_refuses_actuation() {
     let mut g = start_gov(port, "inv-id", 1);
     d.borrow_mut().set_model_firmware(1190, 1);
     let n = d.borrow().physical_action_count();
-    match g.authorize_issued(decide_hold(1, 10.0)) {
-        Ok(w) => {
-            let t = g.write_online_now(&w, &ActionParams::empty());
-            assert!(!t.ok);
-        }
-        Err(_) => {}
+    if let Ok(w) = g.authorize_issued(decide_hold(1, 10.0)) {
+        let t = g.write_online_now(&w, &ActionParams::empty());
+        assert!(!t.ok);
     }
     assert_eq!(d.borrow().physical_action_count(), n);
 }
@@ -114,8 +111,15 @@ fn nudge_moves_present_by_nonzero_ticks() {
         w.as_command().allowed_action()
     );
     assert!(g.write_online_now(&w, &ActionParams::empty()).ok);
+    assert_eq!(
+        d.borrow().present_position(),
+        before,
+        "nudge must not teleport present without time advance"
+    );
+    assert_eq!(d.borrow().goal_position(), before + 32);
+    d.borrow_mut().advance(0.05);
     let after = d.borrow().present_position();
-    assert_ne!(after, before, "nudge must change present position");
+    assert_ne!(after, before, "nudge must change present after advance");
     assert_eq!(after, before + 32);
 }
 
@@ -131,12 +135,9 @@ fn restart_does_not_duplicate_spent_command() {
     drop(g);
     let port = VirtualMetalPort::new(d.clone());
     let mut g2 = start_gov_opts(port, "inv-restart", 7, false);
-    match g2.authorize_issued(decide_hold(1, 10.0)) {
-        Ok(w2) => {
-            let t = g2.write_online_now(&w2, &ActionParams::empty());
-            assert!(!t.ok, "restart must not re-execute spent command_id: {t:?}");
-        }
-        Err(_) => {}
+    if let Ok(w2) = g2.authorize_issued(decide_hold(1, 10.0)) {
+        let t = g2.write_online_now(&w2, &ActionParams::empty());
+        assert!(!t.ok, "restart must not re-execute spent command_id: {t:?}");
     }
     assert_eq!(
         d.borrow().physical_action_count(),

@@ -1,62 +1,132 @@
 {
   "schema": "realityos.virtual_metal.unknowns/1",
-  "note": "Public data does not establish these. Virtual Metal V1 is not physical verification.",
+  "note": "Public data does not establish these. Virtual Metal is not physical verification.",
   "items": [
     {
       "property": "undocumented XL330 firmware scheduling and exact RAM restore after REBOOT",
-      "smallest_physical_experiment": "Scope one REBOOT on a real XL330-M288; capture RAM registers before/after with Protocol 2.0 READ."
+      "why_it_matters": "REBOOT then WRITE timing and which RAM fields return to e-Manual initials vs retained EEPROM.",
+      "public_data_status": "partial (e-Manual lists RAM initials; restore order unpublished)",
+      "current_virtual_assumption": "reset_ram() writes e-Manual RAM initials; EEPROM retained",
+      "confidence": "low",
+      "dependent_invariant": "reboot then identity/torque-off",
+      "smallest_real_experiment": "Scope one REBOOT on a real XL330-M288; capture RAM registers before/after with Protocol 2.0 READ."
     },
     {
       "property": "true boot-timing distribution after VIN apply and INST_REBOOT",
-      "smallest_physical_experiment": "N>=30 reboot-to-first-PING samples on the intended USB-UART adapter."
+      "why_it_matters": "First PING deadline; production REBOOT_IDENTIFY_DEADLINE_MS=1500",
+      "public_data_status": "estimated range only",
+      "current_virtual_assumption": "Truth-pack boot_delay_s sampled in [0.3, 1.5] s; not slept in Tier 1",
+      "confidence": "low",
+      "dependent_invariant": "boot/setup identify",
+      "smallest_real_experiment": "N>=30 reboot-to-first-PING samples on the intended USB-UART adapter."
     },
     {
       "property": "USB adapter quirks (DTR-RESET, echo, latency, CH340 vs FTDI vs U2D2)",
-      "smallest_physical_experiment": "Identify adapter; measure DTR pulse vs servo reset; latency histogram on live bus."
+      "why_it_matters": "Echo vs status scan; DTR can reboot the servo on open",
+      "public_data_status": "adapter-specific; not an XL330 property",
+      "current_virtual_assumption": "PTY echo optional; no DTR pulse model",
+      "confidence": "low",
+      "dependent_invariant": "production open/identify",
+      "smallest_real_experiment": "Identify adapter; measure DTR pulse vs servo reset; latency histogram on live bus."
     },
     {
       "property": "real voltage sag under stall at 5.0 V",
-      "smallest_physical_experiment": "Current-limited 5 V supply; log VIN register and shunt current during a stall pulse."
+      "why_it_matters": "VIN register vs wizard limits; false brownout",
+      "public_data_status": "unpublished",
+      "current_virtual_assumption": "Present voltage is the commanded surrogate voltage; no sag model",
+      "confidence": "low",
+      "dependent_invariant": "voltage fault / hold",
+      "smallest_real_experiment": "Current-limited 5 V supply; log VIN register and shunt current during a stall pulse."
     },
     {
       "property": "EMI / packet corruption rate on the real half-duplex bus",
-      "smallest_physical_experiment": "Long capture of CRC errors during hold and nudge on the bench harness."
+      "why_it_matters": "CRC error frequency vs injected CorruptOutgoingCrc",
+      "public_data_status": "unpublished",
+      "current_virtual_assumption": "Corruption only when a fault is scheduled",
+      "confidence": "low",
+      "dependent_invariant": "transport corruption / UNKNOWN",
+      "smallest_real_experiment": "Long capture of CRC errors during hold and nudge on the bench harness."
     },
     {
       "property": "actual mechanical backlash and gearbox efficiency",
-      "smallest_physical_experiment": "Optical or encoder-external measurement of horn hysteresis; compare stall torque vs input current."
+      "why_it_matters": "Settling error and envelope derate",
+      "public_data_status": "efficiency estimated [0.4, 0.85]; backlash unknown",
+      "current_virtual_assumption": "Campaign samples gearbox_efficiency and scales vmax/stall; backlash excluded",
+      "confidence": "low",
+      "dependent_invariant": "nudge distance / stall envelope",
+      "smallest_real_experiment": "Optical or encoder-external measurement of horn hysteresis; compare stall torque vs input current."
     },
     {
       "property": "manufacturing variation of stall torque and no-load speed",
-      "smallest_physical_experiment": "Measure stall and no-load on the specific serial unit, store as CALIBRATED_FROM_REAL_HARDWARE beside manufacturer values."
+      "why_it_matters": "Envelope used as a hard clamp may be optimistic or pessimistic per unit",
+      "public_data_status": "manufacturer point values only",
+      "current_virtual_assumption": "ManufacturerSpecified stall/no-load; stall_torque_measured_nm remains Unknown",
+      "confidence": "medium",
+      "dependent_invariant": "never exceed published envelope",
+      "smallest_real_experiment": "Measure stall and no-load on the specific serial unit, store as CALIBRATED_FROM_REAL_HARDWARE beside manufacturer values."
     },
     {
       "property": "real holding torque at conservative PWM Limit 200",
-      "smallest_physical_experiment": "Apply known load at hold; observe present-position drift."
+      "why_it_matters": "Hold-still campaign assumes the PWM cap can hold",
+      "public_data_status": "unpublished",
+      "current_virtual_assumption": "PWM frac scales vmax; no separate holding-torque model",
+      "confidence": "low",
+      "dependent_invariant": "hold",
+      "smallest_real_experiment": "Apply known load at hold; observe present-position drift."
     },
     {
       "property": "real thermal response and shutdown timing",
-      "smallest_physical_experiment": "Loaded run until Present Temperature approaches Temperature Limit; record Hardware Error Status and torque-off time."
+      "why_it_matters": "Over-temperature bit and torque-off latency",
+      "public_data_status": "Temperature Limit 70 C published; time constant unknown",
+      "current_virtual_assumption": "Temperature is a set-point; OverTemperature fault writes 90 C immediately",
+      "confidence": "low",
+      "dependent_invariant": "temperature fault",
+      "smallest_real_experiment": "Loaded run until Present Temperature approaches Temperature Limit; record Hardware Error Status and torque-off time."
     },
     {
       "property": "actual power-cut behavior (USB unplug vs VIN cutoff)",
-      "smallest_physical_experiment": "Operator-attested live unplug and VIN cutoff with lost holding torque, as required by the metal experiment."
+      "why_it_matters": "Metal experiment cutoff attestation",
+      "public_data_status": "not substitutable",
+      "current_virtual_assumption": "Disconnect fault drops the byte path; not a VIN cutoff",
+      "confidence": "none",
+      "dependent_invariant": "PHYSICAL_MEASURED_EVIDENCE only",
+      "smallest_real_experiment": "Operator-attested live unplug and VIN cutoff with lost holding torque, as required by the metal experiment."
     },
     {
       "property": "kernel/driver timing vs 40 ms live I/O and 100 ms watchdog",
-      "smallest_physical_experiment": "Run scripts/metal-campaign.sh on native Linux with the real UART; do not substitute PTY or Virtual Metal."
+      "why_it_matters": "Late ACK vs software watchdog miss",
+      "public_data_status": "deadlines in-repo; host jitter unpublished",
+      "current_virtual_assumption": "VirtualMetalPort timeout 40 ms; DelayStatus records delay",
+      "confidence": "low",
+      "dependent_invariant": "late ACK / UNKNOWN",
+      "smallest_real_experiment": "Run scripts/metal-campaign.sh on native Linux with the real UART; do not substitute PTY or Virtual Metal."
     },
     {
       "property": "physical hot-swap identity (USB iSerial vs dest-only CH340)",
-      "smallest_physical_experiment": "Unplug/replug the same and a different adapter; confirm serve refuses the mismatch."
+      "why_it_matters": "Serve must refuse adapter mismatch",
+      "public_data_status": "adapter-specific",
+      "current_virtual_assumption": "Virtual serial VM-XL330-M288-1; no USB iSerial",
+      "confidence": "none",
+      "dependent_invariant": "identity",
+      "smallest_real_experiment": "Unplug/replug the same and a different adapter; confirm serve refuses the mismatch."
     },
     {
       "property": "e-Manual Input Voltage error bit 0x01 vs 0x10 wording conflict",
-      "smallest_physical_experiment": "Induce under-voltage on a real XL330; READ Hardware Error Status(70)."
+      "why_it_matters": "Hardware Error Status and Shutdown mask interpretation",
+      "public_data_status": "DOCUMENTATION_CONFLICT; field reports latch 0x01",
+      "current_virtual_assumption": "Default bit 0x01; campaign samples 0x01 and 0x10; both bits sit in factory Shutdown=53",
+      "confidence": "medium",
+      "dependent_invariant": "voltage fault",
+      "smallest_real_experiment": "Induce under-voltage on a real XL330; READ Hardware Error Status(70)."
     },
     {
-      "property": "Velocity P Gain factory 180 (e-Manual) vs in-repo FACTORY_VELOCITY_P_GAIN=100",
-      "smallest_physical_experiment": "READ register 78 on a factory XL330-M288 after reboot."
+      "property": "motor resistance, Kt, inductance, encoder noise, USB latency as motor constants",
+      "why_it_matters": "A full DC-motor model would need them; envelope surrogate does not",
+      "public_data_status": "unknown / not published for XL330-M288",
+      "current_virtual_assumption": "Excluded from the envelope model (Provenance::Unknown). Not assigned fake canonical values.",
+      "confidence": "none",
+      "dependent_invariant": "none in V2 envelope",
+      "smallest_real_experiment": "Only if a future model requires them: motor-side identification on the specific unit."
     }
   ]
 }

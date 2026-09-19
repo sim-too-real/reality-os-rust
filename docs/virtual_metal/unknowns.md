@@ -18,5 +18,5 @@ Properties that still require a physical XL330 measurement (smallest experiment 
 - Power-cut behavior (USB unplug vs VIN cutoff)
 - Kernel/driver timing versus live I/O deadlines
 - Physical hot-swap identity
-- Hardware Error Status bit for under-voltage (e-Manual 0x01 vs 0x10)
-- Velocity P Gain factory value (e-Manual 180 vs in-repo 100)
+- Hardware Error Status bit for under-voltage (e-Manual Shutdown table 0x01 vs voltage-limit prose 0x10). Campaign samples both; field reports latch 0x01.
+- Velocity P Gain factory value is settled at 180 (`CONFIRMED_STALE_CODE` was 100). Remaining physical question is a factory READ of register 78 on a specific unit.

@@ -77,3 +77,23 @@ fn campaign_schema_is_virtual_metal_not_metal_proof() {
     assert!(rec.try_set_hardware_present(true).is_err());
     assert!(!rec.hardware_present);
 }
+
+#[test]
+fn is_sim_harness_false_still_cannot_mint_measured() {
+    use realityos_plant::HardwareDriverPort;
+    use realityos_virtual_metal::{VirtualMetalPort, VirtualXl330};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let d = Rc::new(RefCell::new(VirtualXl330::xl330_m288()));
+    let port = VirtualMetalPort::new(d);
+    assert!(
+        !port.is_sim_harness(),
+        "Virtual Metal is a device surrogate, not the plant HardwareDriver harness"
+    );
+    let id = port.probe_identity();
+    assert!(!id.metal);
+    assert_eq!(id.evidence_status, EVIDENCE_STATUS);
+    assert!(id.evidence_status.starts_with("SIM_"));
+    assert!(HonestyStamp::sim("MEASURED").is_err());
+}

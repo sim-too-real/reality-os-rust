@@ -22,7 +22,7 @@ Length = parameters + 3 (instruction packets). CRC is over header through parame
 
 2. **Input Voltage Hardware Error bit.** Shutdown table: bit 0 (`0x01`). Min/Max Voltage text: `0x10`. Virtual Metal uses bit 0; physical READ of register 70 under brownout is required.
 
-3. **Velocity P Gain initial value.** XL330-M288 e-Manual RAM table: 180. In-repo `FACTORY_VELOCITY_P_GAIN = 100` (metal driver restore). Virtual Metal RAM reset uses 180 from the e-Manual.
+3. **Velocity P Gain initial value.** XL330-M288 e-Manual RAM table: 180. Previously in-repo `FACTORY_VELOCITY_P_GAIN = 100` (XL430-class). Classification `CONFIRMED_STALE_CODE`; production and Virtual Metal now use 180. See `docs/virtual_metal/constants_audit.json`.
 
 4. **Official Dynamixel SDK** is an independent implementation reference, not firmware. Not executed in this Windows environment.
 

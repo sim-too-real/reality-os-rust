@@ -22,6 +22,21 @@ jobs:
       # I/O (push `authority` flake on 491462d). Isolated, single-threaded.
       - name: test-metal
         run: cargo test -p realityos-metal --all-targets -- --test-threads=1
+      - name: test-virtual-metal
+        run: cargo test -p realityos-virtual-metal
+      - name: virtual-metal-tier2-smoke
+        run: cargo run -p realityos-virtual-metal --bin virtual-metal-campaign -- --seed 42 --n 8 --tier 2 --out /tmp/vm-tier2.json
+      - name: virtual-metal-tier2-honesty
+        run: |
+          python3 - <<'PY'
+          import json
+          rec = json.load(open("/tmp/vm-tier2.json"))
+          assert rec.get("hardware_present") is False, rec
+          assert rec.get("evidence_status") == "SIM_VIRTUAL_METAL_NOT_METAL", rec
+          assert rec.get("schema") == "realityos.virtual_metal/1", rec
+          assert rec.get("schema") != "realityos.metal_proof/1"
+          print("tier2 smoke ok", rec.get("n_instances"), rec.get("verdict"))
+          PY
       - name: test
         run: cargo test --workspace --all-targets --exclude realityos-metal
 

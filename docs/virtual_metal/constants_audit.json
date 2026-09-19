@@ -1,0 +1,139 @@
+{
+  "schema": "realityos.virtual_metal.constants_audit/1",
+  "sources": {
+    "e_manual_xl330_m288": "https://docs.robotis.com/docs/dxl/model_reference/x_series/xl_series/xl330-m288",
+    "e_manual_protocol2": "https://docs.robotis.com/docs/dxl/protocol/protocol2/",
+    "field_report_hwerr_0x01": "https://github.com/pollen-robotics/reachy_mini/issues/1402"
+  },
+  "items": [
+    {
+      "constant": "Velocity P Gain (78)",
+      "e_manual": 180,
+      "sdk_or_third_party": 180,
+      "production_code": 180,
+      "virtual_metal": 180,
+      "classification": "CONFIRMED_STALE_CODE",
+      "note": "Was FACTORY_VELOCITY_P_GAIN=100 (XL430-class). XL330-M288 e-Manual RAM table and third-party model tables list 180. Settled; production restore now writes 180."
+    },
+    {
+      "constant": "Velocity I Gain (76)",
+      "e_manual": 1600,
+      "sdk_or_third_party": 1600,
+      "production_code": 1600,
+      "virtual_metal": 1600,
+      "classification": "CONFIRMED",
+      "note": "XL330-M288 e-Manual RAM initial 1600."
+    },
+    {
+      "constant": "Position P Gain (84)",
+      "e_manual": 400,
+      "production_code": 400,
+      "virtual_metal": 400,
+      "classification": "CONFIRMED"
+    },
+    {
+      "constant": "Position I Gain (82)",
+      "e_manual": 0,
+      "production_code": 0,
+      "virtual_metal": 0,
+      "classification": "CONFIRMED"
+    },
+    {
+      "constant": "Position D Gain (80)",
+      "e_manual": 0,
+      "production_code": 0,
+      "virtual_metal": 0,
+      "classification": "CONFIRMED"
+    },
+    {
+      "constant": "PWM Limit (36)",
+      "e_manual": 885,
+      "production_code": 885,
+      "virtual_metal": 885,
+      "classification": "CONFIRMED"
+    },
+    {
+      "constant": "Current Limit (38)",
+      "e_manual": 1750,
+      "production_code": 1750,
+      "virtual_metal": 1750,
+      "classification": "CONFIRMED"
+    },
+    {
+      "constant": "Velocity Limit (44)",
+      "e_manual": 445,
+      "production_code": 445,
+      "virtual_metal": 445,
+      "classification": "CONFIRMED",
+      "note": "445 * 0.229 rpm ≈ 102 rpm, matching 5 V no-load 103 rpm."
+    },
+    {
+      "constant": "Status Return Level (68)",
+      "e_manual": 2,
+      "production_code": 2,
+      "virtual_metal": 2,
+      "classification": "CONFIRMED"
+    },
+    {
+      "constant": "Bus Watchdog (98)",
+      "e_manual": 0,
+      "production_code": 0,
+      "virtual_metal": 0,
+      "classification": "CONFIRMED"
+    },
+    {
+      "constant": "Min Voltage Limit (34)",
+      "e_manual": 35,
+      "production_code": 35,
+      "virtual_metal": 35,
+      "classification": "CONFIRMED",
+      "note": "0.1 V units. 3.5 V. Datasheet operating 3.7–6.0 V; EEPROM factory window is 3.5–7.0 V."
+    },
+    {
+      "constant": "Max Voltage Limit (32)",
+      "e_manual": 70,
+      "production_code": 70,
+      "virtual_metal": 70,
+      "classification": "CONFIRMED"
+    },
+    {
+      "constant": "Shutdown (63)",
+      "e_manual": 53,
+      "production_code": 53,
+      "virtual_metal": 53,
+      "classification": "CONFIRMED",
+      "note": "53 = bits 0,2,4,5 (input voltage, overheating, electrical shock, overload)."
+    },
+    {
+      "constant": "Startup Configuration (60)",
+      "e_manual": 0,
+      "production_code": 0,
+      "virtual_metal": 0,
+      "classification": "CONFIRMED"
+    },
+    {
+      "constant": "Model Number (0)",
+      "e_manual": 1200,
+      "production_code": 1200,
+      "virtual_metal": 1200,
+      "classification": "CONFIRMED"
+    },
+    {
+      "constant": "Firmware Version (6)",
+      "e_manual": null,
+      "production_code": "read from device",
+      "virtual_metal": 46,
+      "classification": "FIRMWARE_DEPENDENT",
+      "note": "e-Manual does not publish a factory firmware number. Virtual Metal uses 46 as a non-zero placeholder, not a calibrated unit."
+    },
+    {
+      "constant": "Hardware Error Status Input Voltage bit",
+      "e_manual_shutdown_table": "0x01 (bit 0)",
+      "e_manual_voltage_limit_prose": "0x10 (bit 4)",
+      "production_code": "0x01",
+      "virtual_metal": "sampled 0x01 or 0x10 per campaign realization; default 0x01",
+      "classification": "DOCUMENTATION_CONFLICT",
+      "note": "Shutdown table and Reachy Mini field reports latch 0x01. Voltage-limit prose says 0x10 (Electrical Shock in the same table). Both bits are in factory Shutdown=53. Campaign samples both interpretations. Physical READ of register 70 under brownout remains the settling experiment."
+    }
+  ]
+}

@@ -26,7 +26,7 @@ thiserror.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 
-[target.'cfg(unix)'.dev-dependencies]
+[target.'cfg(unix)'.dependencies]
 nix = { workspace = true }
 
 [lints]

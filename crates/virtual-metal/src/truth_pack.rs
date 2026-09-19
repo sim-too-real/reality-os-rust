@@ -1,6 +1,7 @@
 //! XL330-M288 truth pack. Every field carries provenance, units, and schema.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 pub const TRUTH_PACK_SCHEMA: &str = "realityos.virtual_metal.truth_pack/1";
 pub const TRUTH_PACK_VERSION: &str = "1";
@@ -168,5 +169,10 @@ impl Xl330TruthPack {
             encoder_noise_ticks: Provenanced::unknown("pulse", "AS5601 noise not characterized here"),
             usb_adapter_latency_s: Provenanced::unknown("s", "adapter-specific; not an XL330 property"),
         }
+    }
+
+    pub fn content_hash(&self) -> String {
+        let json = serde_json::to_vec(self).expect("truth pack json");
+        hex::encode(Sha256::digest(json))
     }
 }

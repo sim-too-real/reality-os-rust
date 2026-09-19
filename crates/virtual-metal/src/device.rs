@@ -8,20 +8,24 @@ use realityos_metal::protocol::{
     ADDR_MAX_VOLTAGE_LIMIT, ADDR_MIN_POSITION_LIMIT, ADDR_MIN_VOLTAGE_LIMIT, ADDR_MODEL_NUMBER,
     ADDR_MOVING, ADDR_MOVING_THRESHOLD, ADDR_OPERATING_MODE, ADDR_POSITION_D_GAIN,
     ADDR_POSITION_I_GAIN, ADDR_POSITION_P_GAIN, ADDR_PRESENT_POSITION, ADDR_PRESENT_TEMPERATURE,
-    ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY, ADDR_PROTOCOL_TYPE,
-    ADDR_PWM_LIMIT, ADDR_PWM_SLOPE, ADDR_REALTIME_TICK, ADDR_REGISTERED_INSTRUCTION,
-    ADDR_RETURN_DELAY_TIME, ADDR_SECONDARY_ID, ADDR_SHUTDOWN, ADDR_STARTUP_CONFIGURATION,
-    ADDR_STATUS_RETURN_LEVEL, ADDR_TEMPERATURE_LIMIT, ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN,
-    ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN, BROADCAST_ID, ERR_ACCESS, ERR_DATA_LENGTH,
-    ERR_DATA_LIMIT, ERR_DATA_RANGE, ERR_INSTRUCTION, FACTORY_MOVING_THRESHOLD, FACTORY_PWM_LIMIT,
-    FACTORY_PWM_SLOPE, FACTORY_SHUTDOWN, FACTORY_STARTUP_CONFIGURATION, FACTORY_VELOCITY_I_GAIN,
-    HWERR_INPUT_VOLTAGE, HWERR_OVERHEATING, INST_PING, INST_READ, INST_REBOOT, INST_WRITE,
-    OPERATING_MODE_POSITION, PROTOCOL_TYPE_2, SECONDARY_ID_DISABLED, STATUS_ALERT,
-    STATUS_RETURN_ALL, XL330_M288_MODEL, XL330_POSITION_MODE_MAX, XL330_POSITION_MODE_MIN,
+    ADDR_PRESENT_VELOCITY, ADDR_PRESENT_VOLTAGE, ADDR_PROFILE_ACCEL, ADDR_PROFILE_VELOCITY,
+    ADDR_PROTOCOL_TYPE, ADDR_PWM_LIMIT, ADDR_PWM_SLOPE, ADDR_REALTIME_TICK,
+    ADDR_REGISTERED_INSTRUCTION, ADDR_RETURN_DELAY_TIME, ADDR_SECONDARY_ID, ADDR_SHUTDOWN,
+    ADDR_STARTUP_CONFIGURATION, ADDR_STATUS_RETURN_LEVEL, ADDR_TEMPERATURE_LIMIT,
+    ADDR_TORQUE_ENABLE, ADDR_VELOCITY_I_GAIN, ADDR_VELOCITY_LIMIT, ADDR_VELOCITY_P_GAIN,
+    BROADCAST_ID, ERR_ACCESS, ERR_DATA_LENGTH, ERR_DATA_LIMIT, ERR_DATA_RANGE, ERR_INSTRUCTION,
+    FACTORY_MOVING_THRESHOLD, FACTORY_PWM_LIMIT, FACTORY_PWM_SLOPE, FACTORY_SHUTDOWN,
+    FACTORY_STARTUP_CONFIGURATION, FACTORY_VELOCITY_I_GAIN, HWERR_INPUT_VOLTAGE, HWERR_OVERHEATING,
+    INST_PING, INST_READ, INST_REBOOT, INST_WRITE, OPERATING_MODE_POSITION, PROTOCOL_TYPE_2,
+    SECONDARY_ID_DISABLED, STATUS_ALERT, STATUS_RETURN_ALL, XL330_M288_MODEL,
+    XL330_POSITION_MODE_MAX, XL330_POSITION_MODE_MIN,
 };
 
-use crate::faults::{FaultKind, FaultSchedule};
-use crate::physics::{no_load_speed_rpm_at, stall_torque_nm_at, PhysicsState};
+use crate::faults::{corrupt_crc_bytes, FaultKind, FaultSchedule};
+use crate::physics::{
+    no_load_speed_rpm_at, rpm_to_rad_s, stall_torque_nm_at, ticks_to_rad, MotionLimits,
+    PhysicsState,
+};
 use crate::truth_pack::Xl330TruthPack;
 
 const TABLE: usize = 252;
@@ -348,8 +352,14 @@ pub struct VirtualXl330 {
     drop_next_status: bool,
     drop_status_after_goal: bool,
     wrong_status_id: bool,
+    corrupt_next_crc: bool,
     moving_latched: bool,
     tick_ms: u16,
+    /// Shutdown-table bit 0 (0x01) or voltage-prose bit 4 (0x10).
+    voltage_error_bit: u8,
+    boot_latency_s: f64,
+    transport_latency_s: f64,
+    sim_time_s: f64,
 }
 
 impl VirtualXl330 {
@@ -364,7 +374,29 @@ impl VirtualXl330 {
         let v = 3.7 + u * (6.0 - 3.7);
         rng = rng.wrapping_mul(0x94D0_49BB_1331_11EB);
         let pos = 100 + ((rng >> 32) % 3900) as i32;
-        Self::from_pack(pack, v, pos)
+        rng = rng.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        let u_eff = (rng >> 33) as f64 / (u32::MAX as f64);
+        let (eff_lo, eff_hi) = pack.gearbox_efficiency.range.unwrap_or((1.0, 1.0));
+        let eff = eff_lo + u_eff * (eff_hi - eff_lo);
+        rng = rng.wrapping_mul(0x94D0_49BB_1331_11EB);
+        let u_boot = (rng >> 33) as f64 / (u32::MAX as f64);
+        let (b_lo, b_hi) = pack.boot_delay_s.range.unwrap_or((0.0, 0.0));
+        let boot = b_lo + u_boot * (b_hi - b_lo);
+        rng = rng.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        let u_lat = (rng >> 33) as f64 / (u32::MAX as f64);
+        let transport = u_lat * 0.020;
+        rng = rng.wrapping_mul(0x94D0_49BB_1331_11EB);
+        let bit = if (rng >> 63) == 0 {
+            HWERR_INPUT_VOLTAGE
+        } else {
+            1 << 4
+        };
+        let mut d = Self::from_pack(pack, v, pos);
+        d.physics.gearbox_efficiency = eff;
+        d.boot_latency_s = boot;
+        d.transport_latency_s = transport;
+        d.voltage_error_bit = bit;
+        d
     }
 
     pub fn from_pack(pack: Xl330TruthPack, voltage_v: f64, present: i32) -> Self {
@@ -378,8 +410,13 @@ impl VirtualXl330 {
             drop_next_status: false,
             drop_status_after_goal: false,
             wrong_status_id: false,
+            corrupt_next_crc: false,
             moving_latched: false,
             tick_ms: 0,
+            voltage_error_bit: HWERR_INPUT_VOLTAGE,
+            boot_latency_s: 0.0,
+            transport_latency_s: 0.0,
+            sim_time_s: 0.0,
         };
         d.load_factory();
         d.sync_present();
@@ -446,6 +483,12 @@ impl VirtualXl330 {
         self.table[ADDR_PRESENT_TEMPERATURE as usize] =
             self.physics.temperature_c.round().clamp(0.0, 100.0) as u8;
         self.put_u16(ADDR_REALTIME_TICK, self.tick_ms);
+        let rpm = self.physics.omega_rad_s * 60.0 / std::f64::consts::TAU;
+        let vel_raw = (rpm / 0.229).round() as i32;
+        self.put_i32(ADDR_PRESENT_VELOCITY, vel_raw);
+        let moving_th = self.u32_at(ADDR_MOVING_THRESHOLD);
+        self.table[ADDR_MOVING as usize] =
+            u8::from(vel_raw.unsigned_abs() > moving_th || self.moving_latched);
         self.refresh_faults();
     }
 
@@ -453,7 +496,7 @@ impl VirtualXl330 {
         let mut hw = 0u8;
         let vin = self.u16_at(ADDR_PRESENT_VOLTAGE);
         if vin < self.u16_at(ADDR_MIN_VOLTAGE_LIMIT) || vin > self.u16_at(ADDR_MAX_VOLTAGE_LIMIT) {
-            hw |= HWERR_INPUT_VOLTAGE;
+            hw |= self.voltage_error_bit;
         }
         if self.table[ADDR_PRESENT_TEMPERATURE as usize]
             > self.table[ADDR_TEMPERATURE_LIMIT as usize]
@@ -543,21 +586,117 @@ impl VirtualXl330 {
         self.drop_status_after_goal = true;
     }
 
+    pub fn boot_latency_s(&self) -> f64 {
+        self.boot_latency_s
+    }
+
+    pub fn transport_latency_s(&self) -> f64 {
+        self.transport_latency_s
+    }
+
+    pub fn voltage_error_bit(&self) -> u8 {
+        self.voltage_error_bit
+    }
+
+    pub fn gearbox_efficiency(&self) -> f64 {
+        self.physics.gearbox_efficiency
+    }
+
+    pub fn voltage_v(&self) -> f64 {
+        self.physics.voltage_v
+    }
+
+    pub fn sim_time_s(&self) -> f64 {
+        self.sim_time_s
+    }
+
+    pub fn set_voltage_error_bit(&mut self, bit: u8) {
+        self.voltage_error_bit = bit;
+        self.refresh_faults();
+    }
+
+    pub fn set_gearbox_efficiency(&mut self, eff: f64) {
+        self.physics.gearbox_efficiency = eff.clamp(0.0, 1.0);
+    }
+
+    pub fn set_load_torque_nm(&mut self, tau: f64) {
+        self.physics.load_torque_nm = tau;
+    }
+
+    pub fn apply_fault_kind(&mut self, kind: FaultKind) {
+        match kind {
+            FaultKind::DropStatusAfterApply | FaultKind::DropStatus => {
+                self.drop_next_status = true;
+            }
+            FaultKind::WrongStatusId => self.wrong_status_id = true,
+            FaultKind::CorruptOutgoingCrc => self.corrupt_next_crc = true,
+            FaultKind::VoltageOutOfRange => self.set_voltage_v(9.0),
+            FaultKind::OverTemperature => self.set_temperature_c(90.0),
+            FaultKind::WatchdogTrip => self.trip_watchdog(),
+            FaultKind::IdentitySwap { model, firmware } => {
+                self.set_model_firmware(model, firmware);
+            }
+            FaultKind::VoltageErrorBit { bit } => self.set_voltage_error_bit(bit),
+            FaultKind::RebootDuringRequest => {
+                self.reset_ram();
+            }
+            _ => {}
+        }
+    }
+
+    /// Advance the envelope surrogate. Goal writes only store a target.
+    pub fn advance(&mut self, dt: f64) {
+        let limits = self.motion_limits();
+        self.physics.advance(dt, &self.pack, &limits);
+        self.sim_time_s += dt.max(0.0);
+        self.tick_ms = self
+            .tick_ms
+            .wrapping_add((dt.max(0.0) * 1000.0).round() as u16);
+        if (self.physics.present_ticks(4096) - self.i32_at(ADDR_GOAL_POSITION)).abs() <= 1 {
+            self.moving_latched = false;
+        }
+        self.sync_present();
+    }
+
+    fn motion_limits(&self) -> MotionLimits {
+        let pwm_lim = self.u16_at(ADDR_PWM_LIMIT).max(1);
+        let goal_pwm = i16::from_le_bytes([
+            self.table[ADDR_GOAL_PWM as usize],
+            self.table[ADDR_GOAL_PWM as usize + 1],
+        ]);
+        let cur_lim = self.u16_at(ADDR_CURRENT_LIMIT).max(1);
+        let goal_cur = i16::from_le_bytes([
+            self.table[ADDR_GOAL_CURRENT as usize],
+            self.table[ADDR_GOAL_CURRENT as usize + 1],
+        ]);
+        let pulses = 4096u16;
+        let profile_vel = self.u32_at(ADDR_PROFILE_VELOCITY);
+        let profile_accel = self.u32_at(ADDR_PROFILE_ACCEL);
+        let noload = no_load_speed_rpm_at(&self.pack, self.physics.voltage_v).unwrap_or(0.0);
+        MotionLimits {
+            torque_on: self.torque_enabled(),
+            pwm_frac: (goal_pwm.unsigned_abs() as f64) / f64::from(pwm_lim),
+            current_frac: (goal_cur.unsigned_abs() as f64) / f64::from(cur_lim),
+            pos_min_rad: ticks_to_rad(self.i32_at(ADDR_MIN_POSITION_LIMIT), pulses),
+            pos_max_rad: ticks_to_rad(self.i32_at(ADDR_MAX_POSITION_LIMIT), pulses),
+            profile_velocity_rad_s: if profile_vel == 0 {
+                0.0
+            } else {
+                rpm_to_rad_s(f64::from(profile_vel) * 0.229).min(rpm_to_rad_s(noload))
+            },
+            profile_accel_rad_s2: if profile_accel == 0 {
+                0.0
+            } else {
+                f64::from(profile_accel)
+            },
+        }
+    }
+
     pub fn process(&mut self, bytes: &[u8]) -> Vec<u8> {
         self.packets = self.packets.saturating_add(1);
         self.tick_ms = self.tick_ms.wrapping_add(1);
         for kind in self.faults.take_at(self.packets) {
-            match kind {
-                FaultKind::DropStatusAfterApply => self.drop_next_status = true,
-                FaultKind::WrongStatusId => self.wrong_status_id = true,
-                FaultKind::VoltageOutOfRange => self.set_voltage_v(9.0),
-                FaultKind::OverTemperature => self.set_temperature_c(90.0),
-                FaultKind::WatchdogTrip => self.trip_watchdog(),
-                FaultKind::IdentitySwap { model, firmware } => {
-                    self.set_model_firmware(model, firmware);
-                }
-                FaultKind::CorruptOutgoingCrc => {}
-            }
+            self.apply_fault_kind(kind);
         }
         let pkt = match decode_instruction(bytes) {
             Ok(p) => p,
@@ -619,9 +758,9 @@ impl VirtualXl330 {
 
     fn apply_goal_to_physics(&mut self) {
         let goal = self.i32_at(ADDR_GOAL_POSITION);
-        self.physics.theta_rad = crate::physics::ticks_to_rad(goal, 4096);
-        self.moving_latched = true;
-        self.table[ADDR_MOVING as usize] = 1;
+        self.physics.set_target_ticks(goal, 4096);
+        self.moving_latched = goal != self.physics.present_ticks(4096);
+        self.table[ADDR_MOVING as usize] = u8::from(self.moving_latched);
     }
 
     fn do_write(&mut self, params: &[u8]) -> (u8, Vec<u8>, bool) {
@@ -636,11 +775,9 @@ impl VirtualXl330 {
         let start = addr as usize;
         self.table[start..start + data.len()].copy_from_slice(data);
         let mut applied_goal = false;
-        if addr == ADDR_GOAL_POSITION && data.len() == 4 {
-            if self.torque_enabled() {
-                self.apply_goal_to_physics();
-                applied_goal = true;
-            }
+        if addr == ADDR_GOAL_POSITION && data.len() == 4 && self.torque_enabled() {
+            self.apply_goal_to_physics();
+            applied_goal = true;
         }
         if addr == ADDR_TORQUE_ENABLE && data.first() == Some(&1) {
             let before = self.physics.present_ticks(4096);
@@ -701,10 +838,10 @@ impl VirtualXl330 {
             {
                 return Some(ERR_DATA_LIMIT);
             }
-            if goal < XL330_POSITION_MODE_MIN || goal > XL330_POSITION_MODE_MAX {
-                if self.table[ADDR_OPERATING_MODE as usize] == OPERATING_MODE_POSITION {
-                    return Some(ERR_DATA_RANGE);
-                }
+            if (goal < XL330_POSITION_MODE_MIN || goal > XL330_POSITION_MODE_MAX)
+                && self.table[ADDR_OPERATING_MODE as usize] == OPERATING_MODE_POSITION
+            {
+                return Some(ERR_DATA_RANGE);
             }
         }
         if addr == ADDR_GOAL_PWM {
@@ -759,7 +896,12 @@ impl VirtualXl330 {
             id = id.wrapping_add(1);
             self.wrong_status_id = false;
         }
-        encode_status(id, error, params)
+        let mut bytes = encode_status(id, error, params);
+        if self.corrupt_next_crc {
+            self.corrupt_next_crc = false;
+            bytes = corrupt_crc_bytes(bytes);
+        }
+        bytes
     }
 
     fn put_u16(&mut self, addr: u16, v: u16) {
@@ -782,6 +924,14 @@ impl VirtualXl330 {
     }
     fn i32_at(&self, addr: u16) -> i32 {
         i32::from_le_bytes([
+            self.table[addr as usize],
+            self.table[addr as usize + 1],
+            self.table[addr as usize + 2],
+            self.table[addr as usize + 3],
+        ])
+    }
+    fn u32_at(&self, addr: u16) -> u32 {
+        u32::from_le_bytes([
             self.table[addr as usize],
             self.table[addr as usize + 1],
             self.table[addr as usize + 2],

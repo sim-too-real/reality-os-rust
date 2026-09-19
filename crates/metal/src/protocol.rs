@@ -132,9 +132,10 @@ pub const ADDR_HARDWARE_ERROR: u16 = 70;
 pub const ADDR_VELOCITY_I_GAIN: u16 = 76;
 pub const FACTORY_VELOCITY_I_GAIN: u16 = 1600;
 pub const MIN_VELOCITY_I_GAIN: u16 = 200;
-/// RAM. Factory 100. Wizard 0 means the profile velocity loop does not track.
+/// RAM. XL330-M288 e-Manual initial value 180 (not 100; 100 is XL430-class).
+/// Classification: `CONFIRMED_STALE_CODE` was 100; settled from e-Manual RAM table.
 pub const ADDR_VELOCITY_P_GAIN: u16 = 78;
-pub const FACTORY_VELOCITY_P_GAIN: u16 = 100;
+pub const FACTORY_VELOCITY_P_GAIN: u16 = 180;
 pub const MIN_VELOCITY_P_GAIN: u16 = 20;
 /// RAM. Factory 0. Wizard PID I/D makes a 32-tick goal overshoot the cage.
 pub const ADDR_POSITION_D_GAIN: u16 = 80;
