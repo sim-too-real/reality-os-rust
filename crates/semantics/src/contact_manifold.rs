@@ -221,7 +221,7 @@ pub fn evaluate_box_face_contact(
     tool_point: [f64; 3],
     tool_axis_world: Option<[f64; 3]>,
     contacting: ContactingBodyKind,
-    object_center: [f64; 3],
+    object_pose: crate::transform::Se3,
     half_extents: [f64; 3],
     push: [f64; 3],
     support_origin: [f64; 3],
@@ -233,16 +233,9 @@ pub fn evaluate_box_face_contact(
     if contacting != ContactingBodyKind::DeclaredTool {
         return Err(ManifoldReject::WrongContactingBody);
     }
-    let Some(manifold) = box_push_face_manifold_posed(
-        crate::transform::Se3 {
-            xyz: object_center,
-            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
-        },
-        half_extents,
-        push,
-        support_normal,
-        face_gap,
-    ) else {
+    let Some(manifold) =
+        box_push_face_manifold_posed(object_pose, half_extents, push, support_normal, face_gap)
+    else {
         return Err(ManifoldReject::NormalSeparation);
     };
     let Some(axis) = tool_axis_world.and_then(normalize3) else {
@@ -269,7 +262,7 @@ pub fn evaluate_box_face_contact(
         }
         return Err(ManifoldReject::NormalSeparation);
     }
-    if dot3(sub3(tool_point, object_center), manifold.push) > geom_tol.normal_m {
+    if dot3(sub3(tool_point, object_pose.xyz), manifold.push) > geom_tol.normal_m {
         return Err(ManifoldReject::OppositeFace);
     }
     Ok(c)
@@ -330,7 +323,10 @@ mod tests {
             tool,
             axis,
             body,
-            c.center,
+            crate::transform::Se3 {
+                xyz: c.center,
+                quat_wxyz: [1.0, 0.0, 0.0, 0.0],
+            },
             c.half,
             c.push,
             c.support_origin,

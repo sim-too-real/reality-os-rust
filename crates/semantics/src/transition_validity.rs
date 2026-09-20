@@ -257,6 +257,29 @@ fn classify_hit(
     }
 }
 
+fn is_blocking_verdict(v: GeometryVerdict) -> bool {
+    matches!(
+        v,
+        GeometryVerdict::ForbiddenContact
+            | GeometryVerdict::UnsupportedGeometry
+            | GeometryVerdict::UnknownCoverage
+    )
+}
+
+fn absorb_hit(
+    acc: &mut Option<TransitionReport>,
+    hit: Option<TransitionReport>,
+) -> Option<TransitionReport> {
+    let h = hit?;
+    if is_blocking_verdict(h.verdict) {
+        return Some(h);
+    }
+    if h.verdict == GeometryVerdict::AllowedPhaseContact {
+        *acc = Some(h);
+    }
+    None
+}
+
 fn need_subdivide(a0: Se3, a1: Se3, shape: &PrimitiveShape) -> bool {
     let linear = norm3(sub3(a0.xyz, a1.xyz));
     let ang = rotation_delta(a0, a1);
@@ -285,48 +308,45 @@ fn check_interval(
     let sample_of = |t: f64| {
         ((t * (phase_n.saturating_sub(1) as f64)).round() as usize).min(phase_n.saturating_sub(1))
     };
+    let mut allowed: Option<TransitionReport> = None;
     // Endpoint discrete queries.
     for (ga, wa, gb, wb, moving_b) in pairs_to_check(&posed0, scene) {
         let _ = moving_b;
-        if let Some(hit) = classify_hit(
-            policy,
-            ga,
-            gb,
-            phase,
-            sample_of(t0),
-            phase_n,
-            &query_geoms(wa, ga, wb, gb),
-            t0,
-            t1,
-            coverage.clone(),
+        if let Some(block) = absorb_hit(
+            &mut allowed,
+            classify_hit(
+                policy,
+                ga,
+                gb,
+                phase,
+                sample_of(t0),
+                phase_n,
+                &query_geoms(wa, ga, wb, gb),
+                t0,
+                t1,
+                coverage.clone(),
+            ),
         ) {
-            if hit.verdict == GeometryVerdict::ForbiddenContact
-                || hit.verdict == GeometryVerdict::UnsupportedGeometry
-                || hit.verdict == GeometryVerdict::UnknownCoverage
-            {
-                return Some(hit);
-            }
+            return Some(block);
         }
     }
     for (ga, wa, gb, wb, _) in pairs_to_check(&posed1, scene) {
-        if let Some(hit) = classify_hit(
-            policy,
-            ga,
-            gb,
-            phase,
-            sample_of(t1),
-            phase_n,
-            &query_geoms(wa, ga, wb, gb),
-            t0,
-            t1,
-            coverage.clone(),
+        if let Some(block) = absorb_hit(
+            &mut allowed,
+            classify_hit(
+                policy,
+                ga,
+                gb,
+                phase,
+                sample_of(t1),
+                phase_n,
+                &query_geoms(wa, ga, wb, gb),
+                t0,
+                t1,
+                coverage.clone(),
+            ),
         ) {
-            if hit.verdict == GeometryVerdict::ForbiddenContact
-                || hit.verdict == GeometryVerdict::UnsupportedGeometry
-                || hit.verdict == GeometryVerdict::UnknownCoverage
-            {
-                return Some(hit);
-            }
+            return Some(block);
         }
     }
     let mut must_split = false;
@@ -342,39 +362,43 @@ fn check_interval(
     }
     if must_split && depth < MAX_SUBDIVIDE {
         let tm = 0.5 * (t0 + t1);
-        if let Some(h) = check_interval(
-            model,
-            names,
-            qa,
-            qb,
-            t0,
-            tm,
-            scene,
-            policy,
-            phase,
-            depth + 1,
-            coverage,
+        if let Some(block) = absorb_hit(
+            &mut allowed,
+            check_interval(
+                model,
+                names,
+                qa,
+                qb,
+                t0,
+                tm,
+                scene,
+                policy,
+                phase,
+                depth + 1,
+                coverage,
+            ),
         ) {
-            if h.verdict == GeometryVerdict::ForbiddenContact
-                || h.verdict == GeometryVerdict::UnsupportedGeometry
-                || h.verdict == GeometryVerdict::UnknownCoverage
-            {
-                return Some(h);
-            }
+            return Some(block);
         }
-        return check_interval(
-            model,
-            names,
-            qa,
-            qb,
-            tm,
-            t1,
-            scene,
-            policy,
-            phase,
-            depth + 1,
-            coverage,
-        );
+        if let Some(block) = absorb_hit(
+            &mut allowed,
+            check_interval(
+                model,
+                names,
+                qa,
+                qb,
+                tm,
+                t1,
+                scene,
+                policy,
+                phase,
+                depth + 1,
+                coverage,
+            ),
+        ) {
+            return Some(block);
+        }
+        return allowed;
     }
     // Linear shape-cast of each robot geom against environment.
     let env: Vec<&RigidGeometry> = scene
@@ -427,23 +451,22 @@ fn check_interval(
                     let sample_i = ((hit.time_of_impact * (n.saturating_sub(1) as f64)).round()
                         as usize)
                         .min(n.saturating_sub(1));
-                    if let Some(rep) = classify_hit(
-                        policy,
-                        p0.geom,
-                        e,
-                        phase,
-                        sample_i,
-                        n,
-                        &q,
-                        t0,
-                        t_hit.max(t0),
-                        coverage.clone(),
+                    if let Some(block) = absorb_hit(
+                        &mut allowed,
+                        classify_hit(
+                            policy,
+                            p0.geom,
+                            e,
+                            phase,
+                            sample_i,
+                            n,
+                            &q,
+                            t0,
+                            t_hit.max(t0),
+                            coverage.clone(),
+                        ),
                     ) {
-                        if rep.verdict == GeometryVerdict::ForbiddenContact
-                            || rep.verdict == GeometryVerdict::UnsupportedGeometry
-                        {
-                            return Some(rep);
-                        }
+                        return Some(block);
                     }
                 }
                 _ => {}
@@ -451,13 +474,11 @@ fn check_interval(
         }
         // Robot-robot: discrete at both ends already; subdivide covers mid.
     }
-    None
+    allowed
 }
 
-fn finish_clear(coverage: CoverageReport, allowed: bool) -> TransitionReport {
-    let verdict = if allowed {
-        GeometryVerdict::AllowedPhaseContact
-    } else if coverage.qualification == CoverageQualification::CompleteDeclared
+fn finish_clear(coverage: CoverageReport) -> TransitionReport {
+    let verdict = if coverage.qualification == CoverageQualification::CompleteDeclared
         && coverage.is_unqualified_collision_free_allowed()
     {
         GeometryVerdict::ClearUnderCompleteDeclared
@@ -507,17 +528,12 @@ pub fn validate_transition(
             class: None,
         };
     }
-    let mut allowed_seen = false;
     if let Some(hit) = check_interval(
         model, names, qa, qb, 0.0, 1.0, scene, policy, phase, 0, &coverage,
     ) {
-        if hit.verdict == GeometryVerdict::AllowedPhaseContact {
-            allowed_seen = true;
-        } else {
-            return hit;
-        }
+        return hit;
     }
-    finish_clear(coverage, allowed_seen)
+    finish_clear(coverage)
 }
 
 /// Discrete-only interpolation used to document the thin-obstacle false negative.
@@ -798,6 +814,67 @@ mod tests {
         );
         assert!(!r.verdict.is_unqualified_collision_free());
         assert_eq!(r.verdict, GeometryVerdict::UnsupportedGeometry);
+    }
+
+    #[test]
+    fn contact_stroke_intended_intersection_is_allowed_phase_contact() {
+        let model = slider();
+        let link_box = RigidGeometry::declared(
+            "link_box",
+            "link",
+            Se3::identity(),
+            PrimitiveShape::Box {
+                half_extents: [0.02, 0.02, 0.02],
+            },
+            CollisionRole::Collision,
+            SemanticRole::Tool,
+            "test",
+        );
+        let object = RigidGeometry::declared(
+            "obj",
+            "object",
+            Se3::identity(),
+            PrimitiveShape::Box {
+                half_extents: [0.02, 0.02, 0.02],
+            },
+            CollisionRole::Collision,
+            SemanticRole::Object,
+            "test",
+        );
+        let scene = CollisionScene {
+            robot: vec![link_box],
+            object: vec![object],
+            support: vec![],
+            obstacles: vec![],
+            intended_tool_bodies: vec!["link".into()],
+            object_id: "object".into(),
+            support_id: "table".into(),
+            adjacent_body_pairs: adjacent_body_pairs(&model),
+        };
+        let policy = AllowedContactPolicy::from_names(
+            "object",
+            vec!["link".into()],
+            vec!["link".into(), "base".into()],
+            vec!["table".into()],
+            vec![],
+            scene.adjacent_body_pairs.clone(),
+        );
+        let report = validate_transition(
+            &model,
+            &["slide".into()],
+            &[0.0],
+            &[0.0],
+            &scene,
+            &policy,
+            ContactPhase::ContactStroke,
+        );
+        assert_eq!(
+            report.verdict,
+            GeometryVerdict::AllowedPhaseContact,
+            "intended tool-object overlap in ContactStroke must be CONTACT_AT_ALLOWED_PHASE, got {:?}",
+            report.verdict
+        );
+        assert!(!report.verdict.is_unqualified_collision_free());
     }
 
     #[test]

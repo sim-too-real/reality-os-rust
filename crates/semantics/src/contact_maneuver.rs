@@ -385,7 +385,7 @@ pub fn evaluate_contact_candidate(
         tool_point_world,
         tool_axis_world,
         contacting,
-        object.center,
+        object.pose(),
         object.half_extents,
         push,
         support.origin,
@@ -707,10 +707,18 @@ fn geometric_contact_ee(
     support: SupportPlane,
     cloud: &[SampledEePose],
 ) -> Result<GeometricContact, ContactInfeasible> {
-    let _ = (support, cloud);
+    let _ = cloud;
     let push = plane_push(spec.push_direction).ok_or(ContactInfeasible::WrongContactGeometry)?;
-    let face = half_along_push(object.half_extents, push) + spec.face_gap.max(0.0);
-    let tool_at_face = sub3(object.center, scale3(push, face));
+    let Some(manifold) = crate::contact_manifold::box_push_face_manifold_posed(
+        object.pose(),
+        object.half_extents,
+        push,
+        support.normal,
+        spec.face_gap,
+    ) else {
+        return Err(ContactInfeasible::WrongContactGeometry);
+    };
+    let tool_at_face = add3(manifold.origin, scale3(manifold.normal, manifold.face_gap));
     let tool_off = tool_world_offset(seed, spec.tool_offset_ee);
     let ee = sub3(tool_at_face, tool_off);
     Ok(GeometricContact {
@@ -848,7 +856,7 @@ fn prove_contact_manifold(
         tool,
         axis,
         ContactingBodyKind::DeclaredTool,
-        object.center,
+        object.pose(),
         object.half_extents,
         push,
         support.origin,
@@ -1599,6 +1607,81 @@ mod tests {
         assert_eq!(
             prove_contact_manifold(&s, &spec, object, support).unwrap_err(),
             ContactInfeasible::OrientationInfeasible
+        );
+    }
+
+    #[test]
+    fn prove_contact_manifold_accepts_posed_face_and_rejects_aabb_support() {
+        let yaw = Se3::from_axis_angle([0.0, 0.0, 1.0], std::f64::consts::FRAC_PI_4).unwrap();
+        let object = BoxObject {
+            center: [0.30, 0.0, 0.16],
+            half_extents: [0.03, 0.03, 0.03],
+            quat_wxyz: yaw.quat_wxyz,
+        };
+        let support = SupportPlane {
+            origin: [0.30, 0.0, 0.13],
+            normal: [0.0, 0.0, 1.0],
+        };
+        let spec = spec_at([0.20, 0.0, 0.16], [0.0, 0.0, 0.0]);
+        let posed = crate::contact_manifold::box_push_face_manifold_posed(
+            object.pose(),
+            object.half_extents,
+            [1.0, 0.0, 0.0],
+            support.normal,
+            spec.face_gap,
+        )
+        .unwrap();
+        let posed_tool = add3(posed.origin, scale3(posed.normal, spec.face_gap));
+        let aabb_tool = sub3(object.center, scale3([1.0, 0.0, 0.0], 0.03 + spec.face_gap));
+        assert!(
+            norm3(sub3(posed_tool, aabb_tool)) > 1e-3,
+            "precondition: posed face and AABB support must differ"
+        );
+        let posed_sample = sample(posed_tool, identity_quat());
+        prove_contact_manifold(&posed_sample, &spec, object, support)
+            .expect("tool on the object-local face must be accepted");
+        let aabb_sample = sample(aabb_tool, identity_quat());
+        assert!(
+            prove_contact_manifold(&aabb_sample, &spec, object, support).is_err(),
+            "world-AABB support point must not prove contact on a rotated box"
+        );
+    }
+
+    #[test]
+    fn geometric_contact_ee_aims_at_posed_face_not_world_aabb() {
+        let yaw = Se3::from_axis_angle([0.0, 0.0, 1.0], std::f64::consts::FRAC_PI_4).unwrap();
+        let object = BoxObject {
+            center: [0.30, 0.0, 0.16],
+            half_extents: [0.03, 0.03, 0.03],
+            quat_wxyz: yaw.quat_wxyz,
+        };
+        let support = SupportPlane {
+            origin: [0.30, 0.0, 0.13],
+            normal: [0.0, 0.0, 1.0],
+        };
+        let spec = spec_at([0.20, 0.0, 0.16], [0.0, 0.0, 0.0]);
+        let seed = sample([0.20, 0.0, 0.16], identity_quat());
+        let geo = geometric_contact_ee(object, &spec, &seed, support, &[]).unwrap();
+        let posed = crate::contact_manifold::box_push_face_manifold_posed(
+            object.pose(),
+            object.half_extents,
+            geo.push,
+            support.normal,
+            spec.face_gap,
+        )
+        .unwrap();
+        let designed = add3(posed.origin, scale3(posed.normal, spec.face_gap));
+        let d = norm3(sub3(geo.tool, designed));
+        assert!(
+            d < 1e-9,
+            "Mode B target must be posed face+gap, tool={:?} designed={:?} d={d}",
+            geo.tool,
+            designed
+        );
+        let aabb = sub3(object.center, scale3(geo.push, 0.03 + spec.face_gap));
+        assert!(
+            norm3(sub3(geo.tool, aabb)) > 1e-3,
+            "Mode B must not aim at the world-AABB support"
         );
     }
 
