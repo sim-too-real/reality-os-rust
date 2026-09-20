@@ -307,6 +307,52 @@ pub fn lower_named_targets(
     )
 }
 
+/// Compile stored named joint q. Does not re-solve Cartesian IK.
+pub fn compile_named_joint_q(
+    model: &EmbodimentModel,
+    names: &[String],
+    q: &[f64],
+    skill_id: &str,
+) -> Result<CompiledCtrl, SkillRefuse> {
+    if names.len() != q.len() || names.is_empty() {
+        return Err(SkillRefuse::InvalidCommand);
+    }
+    let mut targets = Vec::new();
+    for (name, qi) in names.iter().zip(q.iter()) {
+        if !qi.is_finite() {
+            return Err(SkillRefuse::InvalidCommand);
+        }
+        let Some(joint) = model.joints.iter().find(|j| j.name == *name) else {
+            return Err(SkillRefuse::Unsupported);
+        };
+        if joint.kind == JointKind::Fixed {
+            continue;
+        }
+        targets.push(JointTarget {
+            joint_name: name.clone(),
+            actuator_name: model.actuator_for_joint(name).map(|a| a.name.clone()),
+            value: *qi,
+            control_mode: "position".into(),
+            skill_id: skill_id.into(),
+        });
+    }
+    if targets.is_empty() {
+        return Err(SkillRefuse::MissingActuator);
+    }
+    Ok(CompiledCtrl {
+        action: targets.iter().map(|t| t.value).collect(),
+        targets: JointTargetSet {
+            targets,
+            hold_outside: HoldSemantics::KeepCurrent,
+            explicit_safe: BTreeMap::new(),
+        },
+        ik: None,
+        control_mode: "position".into(),
+        adapter_id: "witness_named_q".into(),
+        adapter_version: "1".into(),
+    })
+}
+
 #[cfg(test)]
 use crate::embodiment::{unknown_se3, Body, EndEffector, FrameKind, Joint, ModelFrame};
 #[cfg(test)]
@@ -1050,5 +1096,27 @@ mod tests {
             lower_actuator_commands(&model, &over, &current).unwrap_err(),
             SkillRefuse::InvalidCommand
         );
+    }
+
+    #[test]
+    fn compile_named_joint_q_does_not_solve_cartesian() {
+        let m = synth_planar_two_link();
+        let ctrl =
+            compile_named_joint_q(&m, &["j0".into(), "j1".into()], &[0.2, 0.3], "skill.push")
+                .unwrap();
+        assert_eq!(ctrl.adapter_id, "witness_named_q");
+        assert!(ctrl.ik.is_none());
+        assert_eq!(ctrl.targets.named_value("j0"), Some(0.2));
+        assert_eq!(ctrl.targets.named_value("j1"), Some(0.3));
+        let mut other = m.clone();
+        other.robot_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into();
+        let ctrl2 = compile_named_joint_q(
+            &other,
+            &["j0".into(), "j1".into()],
+            &[0.2, 0.3],
+            "skill.push",
+        )
+        .unwrap();
+        assert_eq!(ctrl.targets, ctrl2.targets);
     }
 }

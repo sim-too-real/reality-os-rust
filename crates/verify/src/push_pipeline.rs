@@ -74,6 +74,18 @@ pub struct PushEvidence {
     pub unintended_robot_contact: bool,
     #[serde(default)]
     pub apparent_robot_object_contact: bool,
+    #[serde(default)]
+    pub current_to_approach_feasible: bool,
+    #[serde(default)]
+    pub approach_q_reached: bool,
+    #[serde(default)]
+    pub contact_q_reached: bool,
+    #[serde(default)]
+    pub mid_q_reached: bool,
+    #[serde(default)]
+    pub end_q_reached: bool,
+    #[serde(default)]
+    pub executed_witness_q: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,6 +197,12 @@ pub fn evidence_from_episode_fields(
             intended_tool_contact: false,
             unintended_robot_contact: false,
             apparent_robot_object_contact: false,
+            current_to_approach_feasible: false,
+            approach_q_reached: false,
+            contact_q_reached: false,
+            mid_q_reached: false,
+            end_q_reached: false,
+            executed_witness_q: false,
         };
     }
     let contacted = has_ee_object_contact;
@@ -208,6 +226,12 @@ pub fn evidence_from_episode_fields(
         intended_tool_contact: contacted,
         unintended_robot_contact: false,
         apparent_robot_object_contact: false,
+        current_to_approach_feasible: false,
+        approach_q_reached: false,
+        contact_q_reached: false,
+        mid_q_reached: false,
+        end_q_reached: false,
+        executed_witness_q: false,
     }
 }
 
@@ -371,6 +395,22 @@ pub fn push_diagnostic_field_catalog() -> &'static [TaggedField] {
             name: "unauthorized_writes",
             tag: FieldTag::PostHocObserved,
         },
+        TaggedField {
+            name: "current_to_approach_feasible",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "approach_q_reached",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "contact_q_reached",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "executed_witness_q",
+            tag: FieldTag::PostHocObserved,
+        },
     ]
 }
 
@@ -416,6 +456,20 @@ pub struct PushFunnel {
     pub n_unintended_robot_contact: u64,
     #[serde(default)]
     pub n_apparent_robot_object_contact: u64,
+    #[serde(default)]
+    pub n_current_to_approach_feasible: u64,
+    #[serde(default)]
+    pub n_approach_q_reached: u64,
+    #[serde(default)]
+    pub n_contact_q_reached: u64,
+    #[serde(default)]
+    pub n_mid_q_reached: u64,
+    #[serde(default)]
+    pub n_end_q_reached: u64,
+    #[serde(default)]
+    pub n_executed_witness_q: u64,
+    #[serde(default)]
+    pub n_approach_given_feasible: u64,
 }
 
 impl PushFunnel {
@@ -427,6 +481,9 @@ impl PushFunnel {
         }
         if ev.feasible_maneuver {
             self.n_feasible_maneuver += 1;
+            if ev.approach_reached {
+                self.n_approach_given_feasible += 1;
+            }
         }
         if ev.contact_pose_reached {
             self.n_contact_pose_reached += 1;
@@ -442,6 +499,24 @@ impl PushFunnel {
         }
         if ev.apparent_robot_object_contact {
             self.n_apparent_robot_object_contact += 1;
+        }
+        if ev.current_to_approach_feasible {
+            self.n_current_to_approach_feasible += 1;
+        }
+        if ev.approach_q_reached {
+            self.n_approach_q_reached += 1;
+        }
+        if ev.contact_q_reached {
+            self.n_contact_q_reached += 1;
+        }
+        if ev.mid_q_reached {
+            self.n_mid_q_reached += 1;
+        }
+        if ev.end_q_reached {
+            self.n_end_q_reached += 1;
+        }
+        if ev.executed_witness_q {
+            self.n_executed_witness_q += 1;
         }
         if ev.contact_established {
             self.n_contact += 1;
@@ -511,6 +586,30 @@ impl PushFunnel {
             0.0
         } else {
             self.n_direction_ok as f64 / self.n_displaced as f64
+        }
+    }
+
+    pub fn p_approach_given_feasible_maneuver(&self) -> f64 {
+        if self.n_feasible_maneuver == 0 {
+            0.0
+        } else {
+            self.n_approach_given_feasible as f64 / self.n_feasible_maneuver as f64
+        }
+    }
+
+    pub fn p_approach_q_given_feasible_maneuver(&self) -> f64 {
+        if self.n_feasible_maneuver == 0 {
+            0.0
+        } else {
+            self.n_approach_q_reached as f64 / self.n_feasible_maneuver as f64
+        }
+    }
+
+    pub fn p_current_to_approach_given_feasible(&self) -> f64 {
+        if self.n_feasible_maneuver == 0 {
+            0.0
+        } else {
+            self.n_current_to_approach_feasible as f64 / self.n_feasible_maneuver as f64
         }
     }
 
@@ -791,6 +890,8 @@ mod tests {
         assert_eq!(f.n_unauthorized_writes, 0);
         assert_eq!(f.n_positive_reachable, 2);
         assert!((f.p_contact_given_positive_reachable() - 1.0).abs() < 1e-12);
+        assert_eq!(f.n_feasible_maneuver, 2);
+        assert!((f.p_approach_given_feasible_maneuver() - 1.0).abs() < 1e-12);
     }
 
     #[test]

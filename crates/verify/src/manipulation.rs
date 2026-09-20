@@ -22,7 +22,8 @@ use crate::semantics_map::embodiment_from_manifest;
 use crate::task::TaskSpec;
 use realityos_plant::HardwareBackedPlant;
 use realityos_semantics::adapter::{
-    lower_actuator_commands, lower_named_targets, ChainIkPositionPdAdapter, CompiledCtrl,
+    compile_named_joint_q, lower_actuator_commands, lower_named_targets, ChainIkPositionPdAdapter,
+    CompiledCtrl,
 };
 use realityos_semantics::capability::{apply_resource_qualification, derive_capabilities};
 use realityos_semantics::contact::{
@@ -41,6 +42,10 @@ use realityos_semantics::grasp::{compile_grasp, GraspCandidate};
 use realityos_semantics::gripper_state::{derive_gripper_state, GripperStateEvidence};
 use realityos_semantics::interaction::{insert_interaction_frame, InteractionFrameKind};
 use realityos_semantics::kinematics::{forward_kinematics, with_ik_q_seed};
+use realityos_semantics::maneuver_witness::{
+    execution_block_reason, named_q_reached, step_toward_named_q, ExecutableContactManeuver,
+    ManeuverPhase, TransitionVerdict,
+};
 use realityos_semantics::object::{GeometryClass, GraspOccupancy, ObjectGeometry, ObjectState};
 use realityos_semantics::observation::{JointStateSample, ObservationFrame};
 use realityos_semantics::plan::{SkillPlan, SkillStep};
@@ -60,6 +65,25 @@ use std::sync::{Arc, Mutex};
 const HORIZON_S: f64 = 1.0;
 const CONTROL_HZ: f64 = 40.0;
 const REACH_ATTEMPTS: u32 = 5;
+const NAMED_Q_REACH_TOL: f64 = 0.20;
+
+thread_local! {
+    static EXECUTE_STORED_WITNESS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+fn execute_stored_witness() -> bool {
+    EXECUTE_STORED_WITNESS.with(|c| c.get())
+}
+
+#[cfg(test)]
+fn with_execute_stored_witness<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    EXECUTE_STORED_WITNESS.with(|c| {
+        let prev = c.replace(on);
+        let out = f();
+        c.set(prev);
+        out
+    })
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManipulationEpisode {
@@ -133,6 +157,20 @@ pub struct ManipulationEpisode {
     pub apparent_robot_object_contact: bool,
     #[serde(default)]
     pub world_adapted_to_robot: bool,
+    #[serde(default)]
+    pub current_to_approach_feasible: bool,
+    #[serde(default)]
+    pub current_to_approach_reason: String,
+    #[serde(default)]
+    pub approach_q_reached: bool,
+    #[serde(default)]
+    pub contact_q_reached: bool,
+    #[serde(default)]
+    pub mid_q_reached: bool,
+    #[serde(default)]
+    pub end_q_reached: bool,
+    #[serde(default)]
+    pub executed_witness_q: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -873,9 +911,116 @@ fn execute_plan(
     let mut contact_err = None;
     let mut approach_radius = 0.08_f64;
     let mut contact_radius = realityos_semantics::push::push_contact_success_radius();
+    let mut skip_cartesian = false;
+    let mut witness_exec = WitnessExec::default();
+
+    if plan.contract_id == "skill.push" && execute_stored_witness() {
+        if let Some(stored) = placement
+            .maneuver
+            .as_ref()
+            .and_then(|m| m.executable.clone())
+        {
+            let mut w = stored;
+            if let Some(live) = named_q_from_qpos_names(model, &w.joint_names, &truth.qpos) {
+                w = w.reassess_current_to_approach(&live, &model.joints);
+            }
+            if let Some(reason) = execution_block_reason(&w) {
+                drop(auth);
+                let inst = unwrap_shared(shared)?;
+                let mut ep = refused_episode(
+                    bundle,
+                    model,
+                    sc,
+                    sha,
+                    &plan.contract_id,
+                    Some(&reason),
+                    sc.polarity != Polarity::Positive,
+                );
+                ep.had_feasible_contact_maneuver = true;
+                ep.selected_rank_why = placement.rank_why.clone();
+                ep.world_adapted_to_robot = placement.adapted_world;
+                ep.current_to_approach_feasible =
+                    w.current_to_approach.verdict == TransitionVerdict::Feasible;
+                ep.current_to_approach_reason = w.current_to_approach.reason.clone();
+                ep.ctrl_writes = 0;
+                return Ok((ep, inst));
+            }
+            skip_cartesian = true;
+            witness_exec.executed = true;
+            let phases: [(&str, &ManeuverPhase); 4] = [
+                ("approach", &w.approach),
+                ("contact", &w.contact),
+                ("mid", &w.mid_stroke),
+                ("end", &w.end_stroke),
+            ];
+            for (pi, (label, phase)) in phases.iter().enumerate() {
+                let radius = match *label {
+                    "contact" => realityos_semantics::push::push_contact_success_radius(),
+                    _ => 0.08,
+                };
+                let interpolate = true;
+                let reached = match drive_named_phase(
+                    &mut auth,
+                    &shared,
+                    &manifest,
+                    model,
+                    bundle,
+                    sc,
+                    &episode_id,
+                    2000 + pi * 50,
+                    &mut now,
+                    &mut truth,
+                    &mut decisions,
+                    &mut commands,
+                    &mut last_spent_command_id,
+                    &w,
+                    phase,
+                    label,
+                    interpolate,
+                ) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return refuse_in_flight(
+                            bundle,
+                            model,
+                            sc,
+                            sha,
+                            &plan.contract_id,
+                            e,
+                            shared,
+                            auth,
+                            decisions,
+                            sc.polarity != Polarity::Positive,
+                            placement,
+                        );
+                    }
+                };
+                match *label {
+                    "approach" => {
+                        witness_exec.approach_q = reached.q_reached;
+                        approach_err = Some(reached.pose_err);
+                        approach_radius = radius;
+                    }
+                    "contact" => {
+                        witness_exec.contact_q = reached.q_reached;
+                        contact_err = Some(reached.pose_err);
+                        contact_radius = radius;
+                    }
+                    "mid" => witness_exec.mid_q = reached.q_reached,
+                    "end" => witness_exec.end_q = reached.q_reached,
+                    _ => {}
+                }
+                if !reached.q_reached && reached.pose_err > radius {
+                    break;
+                }
+            }
+        }
+    }
 
     for (si, step) in plan.steps.iter().enumerate() {
         match step {
+            SkillStep::Reach { .. } if skip_cartesian => {}
+            SkillStep::VerifyMotion(_) if skip_cartesian => {}
             SkillStep::Reach {
                 end_effector,
                 target,
@@ -929,6 +1074,15 @@ fn execute_plan(
                         ep.had_feasible_contact_maneuver = placement.maneuver.is_some();
                         ep.selected_rank_why = placement.rank_why.clone();
                         ep.world_adapted_to_robot = placement.adapted_world;
+                        if let Some(w) = placement
+                            .maneuver
+                            .as_ref()
+                            .and_then(|m| m.executable.as_ref())
+                        {
+                            ep.current_to_approach_feasible =
+                                w.current_to_approach.verdict == TransitionVerdict::Feasible;
+                            ep.current_to_approach_reason = w.current_to_approach.reason.clone();
+                        }
                         return Ok((ep, inst));
                     }
                     Ok(ctrl) => {
@@ -1323,6 +1477,7 @@ fn execute_plan(
             contact_err,
             approach_radius,
             contact_radius,
+            &witness_exec,
         ),
         inst,
     ))
@@ -1347,6 +1502,7 @@ fn finish_episode(
     contact_err: Option<f64>,
     approach_radius: f64,
     contact_radius: f64,
+    witness_exec: &WitnessExec,
 ) -> ManipulationEpisode {
     let contacts = truth
         .contacts
@@ -1422,6 +1578,25 @@ fn finish_episode(
         obstacle_contact: false,
         apparent_robot_object_contact: false,
         world_adapted_to_robot: placement.adapted_world,
+        current_to_approach_feasible: placement
+            .maneuver
+            .as_ref()
+            .and_then(|m| m.executable.as_ref())
+            .is_some_and(|w| {
+                w.current_to_approach.verdict
+                    == realityos_semantics::maneuver_witness::TransitionVerdict::Feasible
+            }),
+        current_to_approach_reason: placement
+            .maneuver
+            .as_ref()
+            .and_then(|m| m.executable.as_ref())
+            .map(|w| w.current_to_approach.reason.clone())
+            .unwrap_or_default(),
+        approach_q_reached: witness_exec.approach_q,
+        contact_q_reached: witness_exec.contact_q,
+        mid_q_reached: witness_exec.mid_q,
+        end_q_reached: witness_exec.end_q,
+        executed_witness_q: witness_exec.executed,
     };
     let ee_name = semantic_ee(bundle);
     let intended = declared_manipulation_contact_bodies(model, Some(resource), &ee_name);
@@ -1487,9 +1662,15 @@ fn finish_episode(
     pev.intended_tool_contact = ep.intended_tool_contact;
     pev.unintended_robot_contact = ep.unintended_robot_contact;
     pev.apparent_robot_object_contact = ep.apparent_robot_object_contact;
-    if ep.approach_pose_reached {
+    if ep.approach_pose_reached || ep.approach_q_reached {
         pev.approach_reached = true;
     }
+    pev.current_to_approach_feasible = ep.current_to_approach_feasible;
+    pev.approach_q_reached = ep.approach_q_reached;
+    pev.contact_q_reached = ep.contact_q_reached;
+    pev.mid_q_reached = ep.mid_q_reached;
+    pev.end_q_reached = ep.end_q_reached;
+    pev.executed_witness_q = ep.executed_witness_q;
     let tr = crate::push_pipeline::classify_push_pipeline(&pev);
     ep.first_stage_entered = tr
         .first_stage_entered
@@ -1537,6 +1718,15 @@ fn refuse_in_flight(
     ep.had_feasible_contact_maneuver = placement.maneuver.is_some();
     ep.selected_rank_why = placement.rank_why.clone();
     ep.world_adapted_to_robot = placement.adapted_world;
+    if let Some(w) = placement
+        .maneuver
+        .as_ref()
+        .and_then(|m| m.executable.as_ref())
+    {
+        ep.current_to_approach_feasible =
+            w.current_to_approach.verdict == TransitionVerdict::Feasible;
+        ep.current_to_approach_reason = w.current_to_approach.reason.clone();
+    }
     Ok((ep, inst))
 }
 
@@ -1605,6 +1795,13 @@ fn refused_episode(
         obstacle_contact: false,
         apparent_robot_object_contact: false,
         world_adapted_to_robot: false,
+        current_to_approach_feasible: false,
+        current_to_approach_reason: String::new(),
+        approach_q_reached: false,
+        contact_q_reached: false,
+        mid_q_reached: false,
+        end_q_reached: false,
+        executed_witness_q: false,
     }
 }
 
@@ -1841,7 +2038,145 @@ pub fn tagged_push_episode_record(ep: &ManipulationEpisode) -> Value {
         ("mujoco_contact_force", json!(force)),
         ("robot_id", json!(ep.robot_id)),
         ("unauthorized_writes", json!(ep.unauthorized_writes)),
+        (
+            "current_to_approach_feasible",
+            json!(ep.current_to_approach_feasible),
+        ),
+        ("approach_q_reached", json!(ep.approach_q_reached)),
+        ("contact_q_reached", json!(ep.contact_q_reached)),
+        ("executed_witness_q", json!(ep.executed_witness_q)),
     ])
+}
+
+#[derive(Clone, Default)]
+struct WitnessExec {
+    executed: bool,
+    approach_q: bool,
+    contact_q: bool,
+    mid_q: bool,
+    end_q: bool,
+}
+
+struct NamedPhaseResult {
+    q_reached: bool,
+    pose_err: f64,
+}
+
+fn named_q_from_qpos_names(
+    model: &EmbodimentModel,
+    names: &[String],
+    qpos: &[f64],
+) -> Option<Vec<f64>> {
+    let mut q = Vec::with_capacity(names.len());
+    for name in names {
+        let j = model.joints.iter().find(|j| j.name == *name)?;
+        let adr = j.qpos_adr? as usize;
+        q.push(*qpos.get(adr)?);
+    }
+    Some(q)
+}
+
+fn ee_distance_to(truth: &VerifierTruth, bundle: &RobotBundle, xyz: [f64; 3]) -> f64 {
+    let ee = privileged_ee(bundle);
+    truth
+        .named_pos
+        .get(&ee)
+        .or_else(|| truth.xpos.get(&ee))
+        .filter(|p| p.len() >= 3)
+        .map(|p| {
+            ((p[0] - xyz[0]).powi(2) + (p[1] - xyz[1]).powi(2) + (p[2] - xyz[2]).powi(2)).sqrt()
+        })
+        .unwrap_or(f64::INFINITY)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drive_named_phase(
+    auth: &mut SimAuthority<crate::driver::SharedSimPort>,
+    shared: &Arc<SharedMujoco>,
+    manifest: &RobotManifest,
+    model: &EmbodimentModel,
+    bundle: &RobotBundle,
+    _sc: &ManipulationScenario,
+    episode_id: &str,
+    si_base: usize,
+    now: &mut f64,
+    truth: &mut VerifierTruth,
+    decisions: &mut Vec<String>,
+    commands: &mut Vec<Value>,
+    last_spent_command_id: &mut Option<String>,
+    w: &ExecutableContactManeuver,
+    phase: &ManeuverPhase,
+    label: &str,
+    interpolate_from_live: bool,
+) -> Result<NamedPhaseResult, SkillRefuse> {
+    let steps: usize = if interpolate_from_live {
+        if label == "approach" {
+            16
+        } else {
+            8
+        }
+    } else {
+        REACH_ATTEMPTS as usize
+    };
+    let mut q_reached = false;
+    let mut pose_err = f64::INFINITY;
+    let mut logged = false;
+    for wi in 0..steps {
+        let live = named_q_from_qpos_names(model, &w.joint_names, &truth.qpos);
+        let cmd = if interpolate_from_live {
+            match live.as_ref() {
+                Some(q0) => {
+                    step_toward_named_q(q0, &phase.q, 0.35).unwrap_or_else(|_| phase.q.clone())
+                }
+                None => phase.q.clone(),
+            }
+        } else {
+            phase.q.clone()
+        };
+        let ctrl = compile_named_joint_q(model, &w.joint_names, &cmd, "skill.push")?;
+        let rec = write_ctrl(
+            auth,
+            manifest,
+            model,
+            truth,
+            &ctrl,
+            episode_id,
+            si_base + wi,
+            *now,
+            "drive",
+            phase.pose.xyz,
+        )?;
+        decisions.push(format!("witness-{label}:{:?}:{}", rec.outcome, rec.status));
+        if !logged {
+            logged = true;
+            commands.push(json!({
+                "step": si_base,
+                "kind": "witness_q",
+                "phase": label,
+                "adapter_id": ctrl.adapter_id,
+                "ik": ctrl.ik.is_some(),
+            }));
+        }
+        if let Some(spent) =
+            crate::authority::spent_command_for_replay(rec.executed, rec.command_id.as_deref())
+        {
+            *last_spent_command_id = Some(spent);
+        }
+        let (t, n) = step_sim(shared, manifest, auth, *now).map_err(|_| SkillRefuse::Refuse)?;
+        *truth = t;
+        *now = n;
+        pose_err = ee_distance_to(truth, bundle, phase.pose.xyz);
+        if let Some(got) = named_q_from_qpos_names(model, &w.joint_names, &truth.qpos) {
+            if named_q_reached(&got, &phase.q, NAMED_Q_REACH_TOL) {
+                q_reached = true;
+                break;
+            }
+        }
+    }
+    Ok(NamedPhaseResult {
+        q_reached,
+        pose_err,
+    })
 }
 
 fn write_ctrl(
@@ -1895,9 +2230,19 @@ fn step_sim(
     auth: &mut SimAuthority<crate::driver::SharedSimPort>,
     now: f64,
 ) -> Result<(VerifierTruth, f64), String> {
+    step_sim_cycles(shared, manifest, auth, now, None)
+}
+
+fn step_sim_cycles(
+    shared: &Arc<SharedMujoco>,
+    manifest: &RobotManifest,
+    auth: &mut SimAuthority<crate::driver::SharedSimPort>,
+    now: f64,
+    cycles_override: Option<u32>,
+) -> Result<(VerifierTruth, f64), String> {
     let dt = manifest.timestep.max(1e-4);
     let sub = ((1.0 / CONTROL_HZ) / dt).round().max(1.0) as u32;
-    let cycles = ((HORIZON_S * CONTROL_HZ).round() as u32).clamp(12, 24);
+    let cycles = cycles_override.unwrap_or(((HORIZON_S * CONTROL_HZ).round() as u32).clamp(12, 24));
     let mut truth = VerifierTruth::default();
     for i in 0..cycles {
         let t = now + f64::from(i) * (1.0 / CONTROL_HZ);
@@ -3295,6 +3640,16 @@ mod tests {
             "n_intended_tool_contact": funnel.n_intended_tool_contact,
             "n_unintended_robot_contact": funnel.n_unintended_robot_contact,
             "n_apparent_robot_object_contact": funnel.n_apparent_robot_object_contact,
+            "n_current_to_approach_feasible": funnel.n_current_to_approach_feasible,
+            "n_approach_q_reached": funnel.n_approach_q_reached,
+            "n_contact_q_reached": funnel.n_contact_q_reached,
+            "n_mid_q_reached": funnel.n_mid_q_reached,
+            "n_end_q_reached": funnel.n_end_q_reached,
+            "n_executed_witness_q": funnel.n_executed_witness_q,
+            "n_approach_given_feasible": funnel.n_approach_given_feasible,
+            "p_approach_given_feasible_maneuver": funnel.p_approach_given_feasible_maneuver(),
+            "p_approach_q_given_feasible_maneuver": funnel.p_approach_q_given_feasible_maneuver(),
+            "p_current_to_approach_given_feasible": funnel.p_current_to_approach_given_feasible(),
             "unauthorized_writes": funnel.n_unauthorized_writes,
         })
     }
@@ -3322,9 +3677,15 @@ mod tests {
             ev.intended_tool_contact = ep.intended_tool_contact;
             ev.unintended_robot_contact = ep.unintended_robot_contact;
             ev.apparent_robot_object_contact = ep.apparent_robot_object_contact;
-            if ep.approach_pose_reached {
+            if ep.approach_pose_reached || ep.approach_q_reached {
                 ev.approach_reached = true;
             }
+            ev.current_to_approach_feasible = ep.current_to_approach_feasible;
+            ev.approach_q_reached = ep.approach_q_reached;
+            ev.contact_q_reached = ep.contact_q_reached;
+            ev.mid_q_reached = ep.mid_q_reached;
+            ev.end_q_reached = ep.end_q_reached;
+            ev.executed_witness_q = ep.executed_witness_q;
             funnel.absorb(&ev, ep.unauthorized_writes);
             assert!(
                 !ep.first_stage_entered.is_empty() || ep.expected_refusal,
@@ -3389,19 +3750,28 @@ mod tests {
                         ev.intended_tool_contact = ep.intended_tool_contact;
                         ev.unintended_robot_contact = ep.unintended_robot_contact;
                         ev.apparent_robot_object_contact = ep.apparent_robot_object_contact;
-                        if ep.approach_pose_reached {
+                        if ep.approach_pose_reached || ep.approach_q_reached {
                             ev.approach_reached = true;
                         }
+                        ev.current_to_approach_feasible = ep.current_to_approach_feasible;
+                        ev.approach_q_reached = ep.approach_q_reached;
+                        ev.contact_q_reached = ep.contact_q_reached;
+                        ev.mid_q_reached = ep.mid_q_reached;
+                        ev.end_q_reached = ep.end_q_reached;
+                        ev.executed_witness_q = ep.executed_witness_q;
                         overall.absorb(&ev, ep.unauthorized_writes);
                     }
                     eprintln!(
-                        "push_funnel {tag} {label} n={} contact={} p_contact_given_positive={:.3} p_task_given_contact={:.3} unauthorized={} tax_unknown={}",
+                        "push_funnel {tag} {label} n={} feasible={} approach_q={} approach_pose={} contact={} p_approach_given_feasible={:.3} p_contact_given_positive={:.3} unauthorized={} executed_witness={}",
                         funnel.n,
+                        funnel.n_feasible_maneuver,
+                        funnel.n_approach_q_reached,
+                        funnel.n_approach,
                         funnel.n_contact,
+                        funnel.p_approach_given_feasible_maneuver(),
                         funnel.p_contact_given_positive_reachable(),
-                        funnel.p_task_given_contact(),
                         funnel.n_unauthorized_writes,
-                        recs.iter().filter(|r| r["pre_contact_taxonomy"]["value"] == "UNKNOWN").count()
+                        funnel.n_executed_witness_q,
                     );
                     assert_eq!(
                         funnel.n_unauthorized_writes, 0,
@@ -3457,6 +3827,67 @@ mod tests {
                 },
                 "p_task_success_given_contact_before": before.0.p_task_given_contact(),
                 "p_task_success_given_contact_after": after.0.p_task_given_contact(),
+            });
+            std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap())
+                .unwrap_or_else(|e| panic!("write {path}: {e}"));
+        }
+    }
+
+    #[test]
+    fn plan11_witness_vs_cartesian_same_seed() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let n = std::env::var("REALITYOS_PLAN11_N")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(8usize)
+            .max(1);
+        let sha = software_sha();
+        let cartesian =
+            with_execute_stored_witness(false, || run_four_robot_funnel(&sha, "cartesian_reik", n));
+        let witness = with_execute_stored_witness(true, || {
+            run_four_robot_funnel(&sha, "stored_witness_q", n)
+        });
+        assert_eq!(cartesian.0.n_unauthorized_writes, 0);
+        assert_eq!(witness.0.n_unauthorized_writes, 0);
+        for label in ["arm_gripper", "panda", "ur5e", "iiwa14"] {
+            let Some(w) = witness.1.get(label) else {
+                continue;
+            };
+            assert_eq!(w["unauthorized_writes"], 0);
+            for rec in w["episodes"].as_array().into_iter().flatten() {
+                assert_eq!(rec["unauthorized_writes"]["value"], 0);
+                assert_eq!(
+                    rec["mujoco_ee_object_contact"]["tag"],
+                    "PRIVILEGED_SIM_LABEL_ONLY"
+                );
+                if rec["feasible_contact_maneuver"]["value"] == true
+                    && rec["current_to_approach_feasible"]["value"] == true
+                {
+                    assert_eq!(rec["executed_witness_q"]["value"], true);
+                }
+            }
+        }
+        if let Ok(path) = std::env::var("REALITYOS_PLAN11_OUT") {
+            let report = json!({
+                "n": n,
+                "idx_offset": 9,
+                "sha": sha,
+                "evidence_status": SIMULATION_ONLY,
+                "cartesian_reik": {
+                    "overall": funnel_rates(&cartesian.0),
+                    "robots": cartesian.1,
+                    "load_errors": cartesian.2,
+                },
+                "stored_witness_q": {
+                    "overall": funnel_rates(&witness.0),
+                    "robots": witness.1,
+                    "load_errors": witness.2,
+                },
+                "p_approach_given_feasible_cartesian": cartesian.0.p_approach_given_feasible_maneuver(),
+                "p_approach_given_feasible_witness": witness.0.p_approach_given_feasible_maneuver(),
+                "p_approach_q_given_feasible_witness": witness.0.p_approach_q_given_feasible_maneuver(),
             });
             std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap())
                 .unwrap_or_else(|e| panic!("write {path}: {e}"));
@@ -3691,6 +4122,13 @@ mod tests {
             obstacle_contact: false,
             apparent_robot_object_contact: false,
             world_adapted_to_robot: false,
+            current_to_approach_feasible: false,
+            current_to_approach_reason: String::new(),
+            approach_q_reached: false,
+            contact_q_reached: false,
+            mid_q_reached: false,
+            end_q_reached: false,
+            executed_witness_q: false,
         };
         let (tool, unintended, _, _, _, apparent) =
             super::episode_contact_flags(&ep, "obj0", &intended, &robot, &[]);
@@ -3723,6 +4161,72 @@ mod tests {
         );
         assert!(!ep.had_feasible_contact_maneuver);
         assert_eq!(ep.unauthorized_writes, 0);
+    }
+
+    #[test]
+    fn mode_b_witness_execution_commands_stored_q_not_cartesian() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let mut saw_feasible = false;
+        for label in ["ur5e", "panda", "iiwa14"] {
+            let Ok(bundle) = try_load_development_push(label) else {
+                continue;
+            };
+            let (eps, _) = run_push_matrix_from(&bundle, 8, "sha", 9).expect("episode");
+            for ep in &eps {
+                assert_eq!(ep.unauthorized_writes, 0);
+                if !ep.had_feasible_contact_maneuver {
+                    assert!(
+                        ep.commands.iter().all(|c| c["kind"] != "reach"),
+                        "Mode B without a maneuver must not compile Cartesian reach"
+                    );
+                    continue;
+                }
+                saw_feasible = true;
+                if ep.current_to_approach_feasible {
+                    assert!(
+                        ep.executed_witness_q,
+                        "executable witness must run stored q robot={} seed={}",
+                        ep.robot_id, ep.world_seed
+                    );
+                    assert!(
+                        ep.commands.iter().any(|c| {
+                            c["kind"] == "witness_q" && c["adapter_id"] == "witness_named_q"
+                        }),
+                        "commands must be named-q witness, not Cartesian re-IK robot={} seed={}",
+                        ep.robot_id,
+                        ep.world_seed
+                    );
+                    assert!(
+                        ep.commands.iter().all(|c| c["kind"] != "reach"),
+                        "must not re-solve Cartesian Reach when a witness exists robot={} seed={}",
+                        ep.robot_id,
+                        ep.world_seed
+                    );
+                    assert!(
+                        ep.commands.iter().all(|c| c["ik"] != true),
+                        "witness compile must not attach IK robot={} seed={}",
+                        ep.robot_id,
+                        ep.world_seed
+                    );
+                } else {
+                    assert_eq!(
+                        ep.ctrl_writes, 0,
+                        "infeasible current→approach must not write robot={} seed={}",
+                        ep.robot_id, ep.world_seed
+                    );
+                    assert!(ep.commands.is_empty());
+                    assert!(!ep.executed_witness_q);
+                    assert!(!ep.approach_q_reached);
+                    assert!(!ep.contact_q_reached);
+                }
+            }
+        }
+        assert!(
+            saw_feasible,
+            "development robots must still produce some feasible maneuvers to exercise the witness"
+        );
     }
 
     #[test]

@@ -12,6 +12,7 @@ pub mod grasp;
 pub mod gripper_state;
 pub mod interaction;
 pub mod kinematics;
+pub mod maneuver_witness;
 pub mod object;
 pub mod observation;
 pub mod plan;

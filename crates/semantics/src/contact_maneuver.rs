@@ -4,6 +4,9 @@
 
 use crate::embodiment::{EmbodimentModel, Joint};
 use crate::kinematics::{forward_kinematics, solve_ik, with_ik_q_seed};
+use crate::maneuver_witness::{
+    witness_from_continuing_phases, ExecutableContactManeuver, ManeuverPhase,
+};
 use crate::push::{
     effective_push_distance, push_approach_standoff_m, push_contact_success_radius,
     support_plane_direction,
@@ -203,6 +206,7 @@ pub struct ContactManeuver {
     pub object_center: [f64; 3],
     pub support_top_z: f64,
     pub sampled_q: Vec<f64>,
+    pub executable: Option<ExecutableContactManeuver>,
 }
 
 const TOOL_LEN_MIN: f64 = 0.008;
@@ -374,6 +378,7 @@ pub fn evaluate_sampled_push(
         object_center: object.center,
         support_top_z,
         sampled_q: sample.q.clone(),
+        executable: None,
     })
 }
 
@@ -566,9 +571,6 @@ pub fn select_fixed_world_push_seeded(
     support: SupportPlane,
     spec: &ContactManeuverSpec,
 ) -> Result<(ContactManeuver, RankWhy), ContactInfeasible> {
-    if let Ok(v) = select_fixed_world_push(cloud, object, support, spec, &model.joints) {
-        return Ok(v);
-    }
     if cloud.is_empty() {
         return Err(ContactInfeasible::NoFeasibleContactPose);
     }
@@ -586,49 +588,119 @@ pub fn select_fixed_world_push_seeded(
         if dist3(seed.xyz, geo.ee) > IK_SEED_RADIUS_M {
             continue;
         }
-        let refined = match ik_sample_to_target(model, ee, seed, geo.ee, max_residual) {
-            Ok(s) => s,
-            Err(e) => {
-                last_err = e;
-                continue;
-            }
-        };
-        let mut local = cloud.to_vec();
-        local.push(refined.clone());
-        let phase_targets = [
-            [
-                geo.ee[0] - geo.push[0] * standoff,
-                geo.ee[1] - geo.push[1] * standoff,
-                geo.ee[2],
-            ],
-            [
-                geo.ee[0] + geo.push[0] * spec.min_stroke * 0.5,
-                geo.ee[1] + geo.push[1] * spec.min_stroke * 0.5,
-                geo.ee[2],
-            ],
-            [
-                geo.ee[0] + geo.push[0] * spec.min_stroke,
-                geo.ee[1] + geo.push[1] * spec.min_stroke,
-                geo.ee[2],
-            ],
+        let approach_xyz = [
+            geo.ee[0] - geo.push[0] * standoff,
+            geo.ee[1] - geo.push[1] * standoff,
+            geo.ee[2],
         ];
-        let mut phase_ok = true;
-        for target in phase_targets {
-            match ik_sample_to_target(model, ee, seed, target, max_residual) {
-                Ok(s) => local.push(s),
-                Err(e) => {
-                    last_err = e;
-                    phase_ok = false;
-                    break;
-                }
+        let mid_xyz = [
+            geo.ee[0] + geo.push[0] * spec.min_stroke * 0.5,
+            geo.ee[1] + geo.push[1] * spec.min_stroke * 0.5,
+            geo.ee[2],
+        ];
+        let end_xyz = [
+            geo.ee[0] + geo.push[0] * spec.min_stroke,
+            geo.ee[1] + geo.push[1] * spec.min_stroke,
+            geo.ee[2],
+        ];
+        let mut approach_tries: Vec<(SampledEePose, Vec<f64>)> = Vec::new();
+        if let Some(cur) = cloud
+            .first()
+            .filter(|s| s.joint_names == seed.joint_names && s.q.len() == seed.q.len())
+        {
+            if let Ok(s) = ik_sample_to_target(model, ee, cur, approach_xyz, max_residual) {
+                approach_tries.push((s, cur.q.clone()));
             }
         }
-        if !phase_ok {
+        if let Ok(s) = ik_sample_to_target(model, ee, seed, approach_xyz, max_residual) {
+            let dup = approach_tries.first().is_some_and(|(a, _)| a.q == s.q);
+            if !dup {
+                approach_tries.push((s, seed.q.clone()));
+            }
+        }
+        if approach_tries.is_empty() {
+            last_err = ContactInfeasible::NoFeasibleContactPose;
             continue;
         }
-        match evaluate_sampled_push(&refined, &local, object, support, spec, &model.joints) {
-            Ok(m) => feasible.push(m),
-            Err(e) => last_err = e,
+        let mut accepted = None;
+        for (approach, approach_seed_q) in approach_tries {
+            let contact_s = match ik_sample_to_target(model, ee, &approach, geo.ee, max_residual) {
+                Ok(s) => s,
+                Err(e) => {
+                    last_err = e;
+                    continue;
+                }
+            };
+            let mid = match ik_sample_to_target(model, ee, &contact_s, mid_xyz, max_residual) {
+                Ok(s) => s,
+                Err(e) => {
+                    last_err = e;
+                    continue;
+                }
+            };
+            let end = match ik_sample_to_target(model, ee, &mid, end_xyz, max_residual) {
+                Ok(s) => s,
+                Err(e) => {
+                    last_err = e;
+                    continue;
+                }
+            };
+            let mut local = cloud.to_vec();
+            local.push(approach.clone());
+            local.push(contact_s.clone());
+            local.push(mid.clone());
+            local.push(end.clone());
+            match evaluate_sampled_push(&contact_s, &local, object, support, spec, &model.joints) {
+                Ok(mut m) => {
+                    let start = cloud
+                        .first()
+                        .filter(|s| {
+                            s.joint_names == contact_s.joint_names && s.q.len() == contact_s.q.len()
+                        })
+                        .cloned()
+                        .unwrap_or_else(|| seed.clone());
+                    m.executable = Some(witness_from_continuing_phases(
+                        contact_s.joint_names.clone(),
+                        start.q.clone(),
+                        ManeuverPhase::positional(
+                            pose(approach.xyz, approach.quat_wxyz).unwrap_or(m.approach_pose),
+                            approach.q.clone(),
+                            approach_seed_q,
+                            0.0,
+                            m.orientation_error,
+                        ),
+                        ManeuverPhase::positional(
+                            pose(contact_s.xyz, contact_s.quat_wxyz).unwrap_or(m.contact_pose),
+                            contact_s.q.clone(),
+                            approach.q.clone(),
+                            0.0,
+                            m.orientation_error,
+                        ),
+                        ManeuverPhase::positional(
+                            pose(mid.xyz, mid.quat_wxyz).unwrap_or(m.contact_pose),
+                            mid.q.clone(),
+                            contact_s.q.clone(),
+                            0.0,
+                            m.orientation_error,
+                        ),
+                        ManeuverPhase::positional(
+                            pose(end.xyz, end.quat_wxyz).unwrap_or(m.contact_pose),
+                            end.q.clone(),
+                            mid.q.clone(),
+                            0.0,
+                            m.orientation_error,
+                        ),
+                        &model.joints,
+                    ));
+                    m.sampled_q = contact_s.q.clone();
+                    accepted = Some(m);
+                    break;
+                }
+                Err(e) => last_err = e,
+            }
+        }
+        if let Some(m) = accepted {
+            feasible.push(m);
         }
     }
     let (idx, why) = select_contact_maneuver(&feasible, spec).ok_or(last_err)?;
@@ -1157,6 +1229,18 @@ mod tests {
             seed.xyz[0],
             m.contact_pose.xyz[0]
         );
+        let w = m.executable.expect("phase q must be stored on the witness");
+        assert_eq!(w.start_q, seed.q, "current q is the interpolation start");
+        assert_eq!(w.approach.seed_q, seed.q, "approach IK prefers current q");
+        assert_eq!(
+            w.contact.seed_q, w.approach.q,
+            "contact IK must continue from approach q"
+        );
+        assert_eq!(w.mid_stroke.seed_q, w.contact.q);
+        assert_eq!(w.end_stroke.seed_q, w.mid_stroke.q);
+        assert!(!w.approach.q.is_empty());
+        assert!(!w.approach.full_pose_feasible);
+        assert!(w.approach.position_feasible);
     }
 
     #[test]
