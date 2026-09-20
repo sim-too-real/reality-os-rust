@@ -7,8 +7,15 @@ use std::collections::HashMap;
 
 const IK_MAX_ITERS: usize = 80;
 const IK_DAMP: f64 = 2e-2;
-const IK_ACCEPT: f64 = 1e-3;
+/// Translational IK precise-accept (meters). This is the meaning of an IK solve.
+pub const IK_ACCEPT_M: f64 = 1e-3;
+const IK_ACCEPT: f64 = IK_ACCEPT_M;
 const IK_MAX_STEP: f64 = 0.45;
+
+/// Precise translational IK, independent of contact or execution tolerances.
+pub fn ik_residual_is_precise(residual_m: f64) -> bool {
+    residual_m.is_finite() && residual_m <= IK_ACCEPT_M
+}
 
 thread_local! {
     static IK_Q_SEED: RefCell<Option<Vec<f64>>> = const { RefCell::new(None) };

@@ -563,6 +563,12 @@ pub struct PushFunnel {
     #[serde(default)]
     pub n_ik_solutions: u64,
     #[serde(default)]
+    pub n_phase_ik_attempts: u64,
+    #[serde(default)]
+    pub n_phase_ik_successes: u64,
+    #[serde(default)]
+    pub n_complete_ik_chains: u64,
+    #[serde(default)]
     pub n_complete_witnesses: u64,
     #[serde(default)]
     pub n_joint_margin_valid: u64,

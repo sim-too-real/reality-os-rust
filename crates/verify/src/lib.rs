@@ -17,6 +17,7 @@ pub mod format;
 pub mod foundation_report;
 pub mod held_out;
 pub mod honesty;
+pub mod ik_residual_ablation;
 pub mod manipulation;
 pub mod manipulation_holdout;
 pub mod manipulation_scenarios;

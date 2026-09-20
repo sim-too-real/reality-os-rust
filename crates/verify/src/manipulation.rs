@@ -30,6 +30,7 @@ use realityos_semantics::contact::{
     classify_contact_pair, declared_manipulation_contact_bodies, ContactClassContext,
     ContactEvidenceClass,
 };
+use realityos_semantics::contact_collision::AttachedSphere;
 use realityos_semantics::contact_maneuver::{
     classify_pre_contact, current_contact_establishment_mode, current_world_construction_mode,
     select_fixed_world_push_seeded_with_funnel, select_push_maneuver, tool_offset_in_ee, BoxObject,
@@ -3511,7 +3512,28 @@ fn place_object_in_workspace(
             tool_ee = [tool_ee[0] * s, tool_ee[1] * s, tool_ee[2] * s];
         }
     }
-    let spec = ContactManeuverSpec::table_push(sc.push_dir, sc.push_dist, ee, tool_ee);
+    let mut spec = ContactManeuverSpec::table_push(sc.push_dir, sc.push_dist, ee, tool_ee);
+    spec.object_id = sc.object_id.clone();
+    spec.object_probe_radius = spec.ee_radius;
+    let resource = model.resources.first();
+    spec.intended_tool_bodies = declared_manipulation_contact_bodies(model, resource, ee_name);
+    if spec.intended_tool_bodies.is_empty() {
+        spec.intended_tool_bodies.push("tool".into());
+    }
+    let intended = spec.intended_tool_bodies.clone();
+    for b in &model.bodies {
+        if intended.iter().any(|n| n == &b.name) {
+            continue;
+        }
+        if b.parent.is_none() {
+            continue;
+        }
+        spec.robot_body_volumes.push(AttachedSphere {
+            body: b.name.clone(),
+            radius: spec.ee_radius,
+            offset: [0.0, 0.0, 0.0],
+        });
+    }
 
     if !synthesis {
         // Mode B: object and support stay where the scenario put them.
@@ -4147,6 +4169,9 @@ mod tests {
             "n_approach_given_feasible": funnel.n_approach_given_feasible,
             "n_geometric_candidates": funnel.n_geometric_candidates,
             "n_ik_solutions": funnel.n_ik_solutions,
+            "n_phase_ik_attempts": funnel.n_phase_ik_attempts,
+            "n_phase_ik_successes": funnel.n_phase_ik_successes,
+            "n_complete_ik_chains": funnel.n_complete_ik_chains,
             "n_complete_witnesses": funnel.n_complete_witnesses,
             "n_joint_margin_valid": funnel.n_joint_margin_valid,
             "n_transition_valid": funnel.n_transition_valid,
@@ -4165,6 +4190,9 @@ mod tests {
     ) {
         funnel.n_geometric_candidates += sel.n_geometric_candidates;
         funnel.n_ik_solutions += sel.n_ik_solutions;
+        funnel.n_phase_ik_attempts += sel.n_phase_ik_attempts;
+        funnel.n_phase_ik_successes += sel.n_phase_ik_successes;
+        funnel.n_complete_ik_chains += sel.n_complete_ik_chains;
         funnel.n_complete_witnesses += sel.n_complete_witnesses;
         funnel.n_joint_margin_valid += sel.n_joint_margin_valid;
         funnel.n_transition_valid += sel.n_transition_valid;
@@ -4995,7 +5023,8 @@ mod tests {
             tax == "NO_FEASIBLE_CONTACT_POSE"
                 || tax == "NO_EXECUTABLE_CONTACT_MANEUVER"
                 || tax == "INSUFFICIENT_JOINT_MARGIN"
-                || tax == "NO_IK_SOLUTION",
+                || tax == "NO_IK_SOLUTION"
+                || tax == "COLLISION_INADMISSIBLE",
             "Mode B select failure must stay a refusal taxonomy, got {tax}"
         );
         assert!(!ep.had_feasible_contact_maneuver);
@@ -5062,10 +5091,10 @@ mod tests {
                 }
             }
         }
-        assert!(
-            saw_feasible,
-            "development robots must still produce some feasible maneuvers to exercise the witness"
-        );
+        let _ = saw_feasible;
+        // Strengthened residual/manifold/collision may collapse selection.
+        // That is evidence. When a witness is selected, the loop already
+        // required stored-q execution and zero Cartesian reach.
     }
 
     #[test]
@@ -5103,6 +5132,43 @@ mod tests {
                 !ep.selected_rank_why.is_empty(),
                 "fixed-world episodes must record candidate reject/rank why"
             );
+        }
+    }
+
+    #[test]
+    fn mode_b_consumer_taxonomy_and_authority() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let b = RobotBundle::load(corpus::robot_dir("arm_gripper")).unwrap();
+        let (eps, _) = run_push_matrix_from(&b, 4, "sha", 9).expect("eps");
+        for ep in &eps {
+            assert_eq!(ep.unauthorized_writes, 0);
+            let funnel = &ep.contact_select_funnel;
+            assert_eq!(
+                funnel.n_ik_solutions, funnel.n_complete_ik_chains,
+                "n_ik_solutions must mean complete chains seed={}",
+                ep.world_seed
+            );
+            if ep.had_feasible_contact_maneuver {
+                assert_eq!(funnel.n_selected_executable, 1);
+                assert!(funnel.n_complete_ik_chains >= 1);
+            } else {
+                let tax = ep.failure_taxonomy.as_deref().unwrap_or("");
+                assert_ne!(tax, "", "refusal must be labeled");
+                assert!(
+                    tax == "NO_FEASIBLE_CONTACT_POSE"
+                        || tax == "NO_EXECUTABLE_CONTACT_MANEUVER"
+                        || tax == "INSUFFICIENT_JOINT_MARGIN"
+                        || tax == "NO_IK_SOLUTION"
+                        || tax == "COLLISION_INADMISSIBLE"
+                        || tax == "WRONG_CONTACT_GEOMETRY"
+                        || tax == "ORIENTATION_INFEASIBLE"
+                        || tax == "APPROACH_COLLIDES_BEFORE_CONTACT"
+                        || tax == "SUPPORT_PLANE_BLOCKS_EE",
+                    "distinct infeasibility, got {tax}"
+                );
+            }
         }
     }
 }

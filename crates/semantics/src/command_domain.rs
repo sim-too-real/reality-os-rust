@@ -208,7 +208,7 @@ mod tests {
         let span = 2.0944 * 2.0;
         assert!((lo - (-2.0944 + span * MIN_NAMED_JOINT_MARGIN_FRAC)).abs() < 1e-12);
         assert!(
-            named_joint_limit_margin(&[lo], &["arm0".into()], &[j.clone()]) + 1e-12
+            named_joint_limit_margin(&[lo], &["arm0".into()], std::slice::from_ref(&j)) + 1e-12
                 >= MIN_NAMED_JOINT_MARGIN_FRAC
         );
     }

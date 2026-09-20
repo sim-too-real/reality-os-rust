@@ -1190,15 +1190,19 @@ mod tests {
             "max |Δq| > 0.20 must not count as reached at the current tolerance"
         );
         assert!(named_q_reached(&[0.0], &[0.20], NAMED_Q_REACH_TOL_MAX));
-        assert!(NAMED_Q_REACH_TOL_MAX <= 0.20);
+        const {
+            assert!(NAMED_Q_REACH_TOL_MAX <= 0.20);
+        }
     }
 
     #[test]
     fn named_q_progress_is_not_stall_or_diverge() {
-        let p = classify_named_q_progress(1.0, 0.4, NAMED_Q_REACH_TOL_MAX);
+        let before = 1.0;
+        let after = 0.4;
+        let p = classify_named_q_progress(before, after, NAMED_Q_REACH_TOL_MAX);
         assert_eq!(p, TrackingProgress::Progress);
         assert!(
-            0.4 < 1.0,
+            after < before,
             "progress claims require error_after < error_before"
         );
         assert_eq!(
