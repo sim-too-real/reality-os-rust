@@ -415,6 +415,58 @@ pub fn push_diagnostic_field_catalog() -> &'static [TaggedField] {
             name: "executed_witness_q",
             tag: FieldTag::PostHocObserved,
         },
+        TaggedField {
+            name: "first_divergence_layer",
+            tag: FieldTag::TargetLabel,
+        },
+        TaggedField {
+            name: "first_divergence_reason",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "first_divergence_phase",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "joint_error_before",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "joint_error_after",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "cartesian_residual_before",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "cartesian_residual_after",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "expected_fk_ee_from_got",
+            tag: FieldTag::PolicyVisibleRuntime,
+        },
+        TaggedField {
+            name: "expected_fk_ee_from_target",
+            tag: FieldTag::PolicyVisibleRuntime,
+        },
+        TaggedField {
+            name: "post_hoc_mujoco_ee",
+            tag: FieldTag::PrivilegedSimLabelOnly,
+        },
+        TaggedField {
+            name: "fk_mujoco_residual",
+            tag: FieldTag::PrivilegedSimLabelOnly,
+        },
+        TaggedField {
+            name: "witness_execution_steps",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "witness_execution_trace",
+            tag: FieldTag::PostHocObserved,
+        },
     ]
 }
 
@@ -862,6 +914,21 @@ mod tests {
         assert!(cat
             .iter()
             .any(|f| { f.name == "approach_pose_reached" && f.tag == FieldTag::PostHocObserved }));
+        assert!(cat.iter().any(|f| {
+            f.name == "post_hoc_mujoco_ee" && f.tag == FieldTag::PrivilegedSimLabelOnly
+        }));
+        assert!(cat.iter().any(|f| {
+            f.name == "fk_mujoco_residual" && f.tag == FieldTag::PrivilegedSimLabelOnly
+        }));
+        assert!(cat.iter().any(|f| {
+            f.name == "expected_fk_ee_from_got" && f.tag == FieldTag::PolicyVisibleRuntime
+        }));
+        assert!(cat
+            .iter()
+            .any(|f| { f.name == "first_divergence_layer" && f.tag == FieldTag::TargetLabel }));
+        assert!(cat
+            .iter()
+            .any(|f| { f.name == "approach_q_reached" && f.tag == FieldTag::PostHocObserved }));
     }
 
     #[test]

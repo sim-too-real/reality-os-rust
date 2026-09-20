@@ -89,6 +89,39 @@ pub fn predicted_joint_position(act: &Actuator, joint: &Joint, command: f64) -> 
     Some(command)
 }
 
+/// Interior fraction of [q_min, q_max] required for an executable named-q.
+pub const MIN_NAMED_JOINT_MARGIN_FRAC: f64 = 0.01;
+
+/// Clamp named joint state into the interior band, not onto the bound.
+pub fn clamp_named_joint_interior(joint: &Joint, q: f64) -> f64 {
+    let q = match joint.q_min.value {
+        Some(min) => {
+            let hi = joint.q_max.value.unwrap_or(min);
+            let span = (hi - min).abs();
+            let m = if span > 1e-6 {
+                span * MIN_NAMED_JOINT_MARGIN_FRAC
+            } else {
+                0.0
+            };
+            q.max(min + m)
+        }
+        None => q,
+    };
+    match joint.q_max.value {
+        Some(max) => {
+            let lo = joint.q_min.value.unwrap_or(max);
+            let span = (max - lo).abs();
+            let m = if span > 1e-6 {
+                span * MIN_NAMED_JOINT_MARGIN_FRAC
+            } else {
+                0.0
+            };
+            q.min(max - m)
+        }
+        None => q,
+    }
+}
+
 /// Named-joint margin in [0, 1]. Samples are matched by joint *name*,
 /// never by index coincidence with a different joint list.
 pub fn named_joint_limit_margin(q: &[f64], names: &[String], joints: &[Joint]) -> f64 {
@@ -163,6 +196,21 @@ mod tests {
         assert!(constrain_joint_state(&j, 2.0).is_err());
         let q = predicted_joint_position(&a, &j, 0.8).unwrap();
         assert!((q - 0.8).abs() < 1e-12);
+    }
+
+    #[test]
+    fn named_joint_clamp_stays_off_the_declared_bound() {
+        let j = joint("arm0", -2.0944, 2.0944);
+        let lo = clamp_named_joint_interior(&j, -2.0944);
+        let hi = clamp_named_joint_interior(&j, 2.0944);
+        assert!(lo > -2.0944);
+        assert!(hi < 2.0944);
+        let span = 2.0944 * 2.0;
+        assert!((lo - (-2.0944 + span * MIN_NAMED_JOINT_MARGIN_FRAC)).abs() < 1e-12);
+        assert!(
+            named_joint_limit_margin(&[lo], &["arm0".into()], &[j.clone()]) + 1e-12
+                >= MIN_NAMED_JOINT_MARGIN_FRAC
+        );
     }
 
     #[test]

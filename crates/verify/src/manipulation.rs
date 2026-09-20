@@ -43,8 +43,10 @@ use realityos_semantics::gripper_state::{derive_gripper_state, GripperStateEvide
 use realityos_semantics::interaction::{insert_interaction_frame, InteractionFrameKind};
 use realityos_semantics::kinematics::{forward_kinematics, with_ik_q_seed};
 use realityos_semantics::maneuver_witness::{
-    execution_block_reason, named_q_reached, step_toward_named_q, ExecutableContactManeuver,
-    ManeuverPhase, TransitionVerdict,
+    classify_blocked_interpolation, classify_first_divergence, classify_named_q_progress,
+    error_reduction_ratio, execution_block_reason, named_q_max_abs_error, named_q_reached,
+    step_toward_named_q, xyz_residual, ExecutableContactManeuver, FirstDivergence, ManeuverPhase,
+    NamedQStepTrace, TrackingProgress, TransitionVerdict, NAMED_Q_REACH_TOL_MAX,
 };
 use realityos_semantics::object::{GeometryClass, GraspOccupancy, ObjectGeometry, ObjectState};
 use realityos_semantics::observation::{JointStateSample, ObservationFrame};
@@ -65,7 +67,8 @@ use std::sync::{Arc, Mutex};
 const HORIZON_S: f64 = 1.0;
 const CONTROL_HZ: f64 = 40.0;
 const REACH_ATTEMPTS: u32 = 5;
-const NAMED_Q_REACH_TOL: f64 = 0.20;
+const NAMED_Q_REACH_TOL: f64 = NAMED_Q_REACH_TOL_MAX;
+const NAMED_Q_STEP_MAX: f64 = 0.35;
 
 thread_local! {
     static EXECUTE_STORED_WITNESS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
@@ -171,6 +174,25 @@ pub struct ManipulationEpisode {
     pub end_q_reached: bool,
     #[serde(default)]
     pub executed_witness_q: bool,
+    #[serde(default)]
+    pub witness_causal: WitnessCausalRecord,
+}
+
+/// Per-episode named-q causal chain. Privileged MuJoCo EE is post-hoc only.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WitnessCausalRecord {
+    pub first_divergence_layer: String,
+    pub first_divergence_reason: String,
+    pub first_divergence_phase: String,
+    pub joint_error_before: f64,
+    pub joint_error_after: f64,
+    pub cartesian_residual_before: f64,
+    pub cartesian_residual_after: f64,
+    pub expected_fk_ee_from_got: [f64; 3],
+    pub expected_fk_ee_from_target: [f64; 3],
+    pub post_hoc_mujoco_ee: [f64; 3],
+    pub fk_mujoco_residual: f64,
+    pub steps: Vec<NamedQStepTrace>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -925,6 +947,27 @@ fn execute_plan(
                 w = w.reassess_current_to_approach(&live, &model.joints);
             }
             if let Some(reason) = execution_block_reason(&w) {
+                let live =
+                    named_q_from_qpos_names(model, &w.joint_names, &truth.qpos).unwrap_or_default();
+                let ee = semantic_ee(bundle);
+                let fk_live = fk_ee_xyz(model, &w.joint_names, &ee, &live);
+                let fk_tgt = fk_ee_xyz(model, &w.joint_names, &ee, &w.approach.q);
+                let cart = fk_live
+                    .map(|p| xyz_residual(p, w.approach.pose.xyz))
+                    .unwrap_or(f64::NAN);
+                let mujoco = privileged_ee_xyz(&truth, bundle);
+                let fk_mujoco = match (fk_live, mujoco) {
+                    (Some(a), Some(b)) => xyz_residual(a, b),
+                    _ => f64::NAN,
+                };
+                let div = classify_blocked_interpolation(
+                    &live,
+                    &w.approach.q,
+                    &w.joint_names,
+                    &model.joints,
+                    &reason,
+                    cart,
+                );
                 drop(auth);
                 let inst = unwrap_shared(shared)?;
                 let mut ep = refused_episode(
@@ -943,6 +986,13 @@ fn execute_plan(
                     w.current_to_approach.verdict == TransitionVerdict::Feasible;
                 ep.current_to_approach_reason = w.current_to_approach.reason.clone();
                 ep.ctrl_writes = 0;
+                ep.witness_causal = causal_from_blocked(
+                    div,
+                    fk_live.unwrap_or([0.0; 3]),
+                    fk_tgt.unwrap_or([0.0; 3]),
+                    mujoco.unwrap_or([0.0; 3]),
+                    fk_mujoco,
+                );
                 return Ok((ep, inst));
             }
             skip_cartesian = true;
@@ -995,6 +1045,7 @@ fn execute_plan(
                         );
                     }
                 };
+                witness_exec.traces.extend(reached.traces);
                 match *label {
                     "approach" => {
                         witness_exec.approach_q = reached.q_reached;
@@ -1597,7 +1648,15 @@ fn finish_episode(
         mid_q_reached: witness_exec.mid_q,
         end_q_reached: witness_exec.end_q,
         executed_witness_q: witness_exec.executed,
+        witness_causal: WitnessCausalRecord::default(),
     };
+    ep.witness_causal = summarize_witness_causal(
+        witness_exec,
+        ep.approach_pose_reached,
+        ep.contact_pose_reached,
+        approach_radius,
+        contact_radius,
+    );
     let ee_name = semantic_ee(bundle);
     let intended = declared_manipulation_contact_bodies(model, Some(resource), &ee_name);
     let robot_bodies: Vec<String> = model.bodies.iter().map(|b| b.name.clone()).collect();
@@ -1808,6 +1867,7 @@ fn refused_episode(
         mid_q_reached: false,
         end_q_reached: false,
         executed_witness_q: false,
+        witness_causal: WitnessCausalRecord::default(),
     }
 }
 
@@ -2052,6 +2112,55 @@ pub fn tagged_push_episode_record(ep: &ManipulationEpisode) -> Value {
         ("approach_q_reached", json!(ep.approach_q_reached)),
         ("contact_q_reached", json!(ep.contact_q_reached)),
         ("executed_witness_q", json!(ep.executed_witness_q)),
+        (
+            "first_divergence_layer",
+            json!(ep.witness_causal.first_divergence_layer),
+        ),
+        (
+            "first_divergence_reason",
+            json!(ep.witness_causal.first_divergence_reason),
+        ),
+        (
+            "first_divergence_phase",
+            json!(ep.witness_causal.first_divergence_phase),
+        ),
+        (
+            "joint_error_before",
+            json!(ep.witness_causal.joint_error_before),
+        ),
+        (
+            "joint_error_after",
+            json!(ep.witness_causal.joint_error_after),
+        ),
+        (
+            "cartesian_residual_before",
+            json!(ep.witness_causal.cartesian_residual_before),
+        ),
+        (
+            "cartesian_residual_after",
+            json!(ep.witness_causal.cartesian_residual_after),
+        ),
+        (
+            "expected_fk_ee_from_got",
+            json!(ep.witness_causal.expected_fk_ee_from_got),
+        ),
+        (
+            "expected_fk_ee_from_target",
+            json!(ep.witness_causal.expected_fk_ee_from_target),
+        ),
+        (
+            "post_hoc_mujoco_ee",
+            json!(ep.witness_causal.post_hoc_mujoco_ee),
+        ),
+        (
+            "fk_mujoco_residual",
+            json!(ep.witness_causal.fk_mujoco_residual),
+        ),
+        (
+            "witness_execution_steps",
+            json!(ep.witness_causal.steps.len()),
+        ),
+        ("witness_execution_trace", json!(ep.witness_causal.steps)),
     ])
 }
 
@@ -2062,11 +2171,130 @@ struct WitnessExec {
     contact_q: bool,
     mid_q: bool,
     end_q: bool,
+    traces: Vec<NamedQStepTrace>,
 }
 
 struct NamedPhaseResult {
     q_reached: bool,
     pose_err: f64,
+    traces: Vec<NamedQStepTrace>,
+}
+
+fn summarize_witness_causal(
+    exec: &WitnessExec,
+    approach_pose: bool,
+    contact_pose: bool,
+    approach_radius: f64,
+    contact_radius: f64,
+) -> WitnessCausalRecord {
+    if !exec.executed {
+        return WitnessCausalRecord::default();
+    }
+    let approach: Vec<NamedQStepTrace> = exec
+        .traces
+        .iter()
+        .filter(|t| t.phase == "approach")
+        .cloned()
+        .collect();
+    let contact: Vec<NamedQStepTrace> = exec
+        .traces
+        .iter()
+        .filter(|t| t.phase == "contact")
+        .cloned()
+        .collect();
+    let later: Vec<NamedQStepTrace> = exec
+        .traces
+        .iter()
+        .filter(|t| t.phase == "mid" || t.phase == "end")
+        .cloned()
+        .collect();
+    let div = if !exec.approach_q || !approach_pose {
+        classify_first_divergence(&approach, exec.approach_q, approach_pose, approach_radius)
+    } else if !exec.contact_q || !contact_pose {
+        classify_first_divergence(&contact, exec.contact_q, contact_pose, contact_radius)
+    } else if !later.is_empty() {
+        classify_first_divergence(&later, exec.end_q, contact_pose, contact_radius)
+    } else {
+        classify_first_divergence(&approach, true, true, approach_radius)
+    };
+    record_from_divergence(div, &exec.traces)
+}
+
+fn causal_from_blocked(
+    div: FirstDivergence,
+    fk_got: [f64; 3],
+    fk_tgt: [f64; 3],
+    mujoco: [f64; 3],
+    fk_mujoco: f64,
+) -> WitnessCausalRecord {
+    WitnessCausalRecord {
+        first_divergence_layer: div.layer.as_str().into(),
+        first_divergence_reason: div.reason,
+        first_divergence_phase: div.phase,
+        joint_error_before: div.joint_error_before,
+        joint_error_after: div.joint_error_after,
+        cartesian_residual_before: div.cartesian_residual_after,
+        cartesian_residual_after: div.cartesian_residual_after,
+        expected_fk_ee_from_got: fk_got,
+        expected_fk_ee_from_target: fk_tgt,
+        post_hoc_mujoco_ee: mujoco,
+        fk_mujoco_residual: fk_mujoco,
+        steps: Vec::new(),
+    }
+}
+
+fn record_from_divergence(div: FirstDivergence, steps: &[NamedQStepTrace]) -> WitnessCausalRecord {
+    let last = steps.last();
+    let first = steps.first();
+    WitnessCausalRecord {
+        first_divergence_layer: div.layer.as_str().into(),
+        first_divergence_reason: div.reason,
+        first_divergence_phase: div.phase,
+        joint_error_before: first
+            .map(|s| s.joint_error_before)
+            .unwrap_or(div.joint_error_before),
+        joint_error_after: last
+            .map(|s| s.joint_error_after)
+            .unwrap_or(div.joint_error_after),
+        cartesian_residual_before: first
+            .map(|s| s.cartesian_residual_before)
+            .unwrap_or(f64::NAN),
+        cartesian_residual_after: div.cartesian_residual_after,
+        expected_fk_ee_from_got: last.map(|s| s.expected_fk_ee_from_got).unwrap_or([0.0; 3]),
+        expected_fk_ee_from_target: last
+            .map(|s| s.expected_fk_ee_from_target)
+            .unwrap_or([0.0; 3]),
+        post_hoc_mujoco_ee: last.and_then(|s| s.post_hoc_mujoco_ee).unwrap_or([0.0; 3]),
+        fk_mujoco_residual: last.and_then(|s| s.fk_mujoco_residual).unwrap_or(f64::NAN),
+        steps: steps.to_vec(),
+    }
+}
+
+fn fk_ee_xyz(model: &EmbodimentModel, names: &[String], ee: &str, q: &[f64]) -> Option<[f64; 3]> {
+    if names.len() != q.len() || q.is_empty() {
+        return None;
+    }
+    forward_kinematics(model, names, ee, q)
+        .ok()
+        .map(|s| s.ee.xyz)
+}
+
+fn named_qd_from_qvel(model: &EmbodimentModel, names: &[String], qvel: &[f64]) -> Option<Vec<f64>> {
+    let mut q = Vec::with_capacity(names.len());
+    for name in names {
+        let j = model.joints.iter().find(|j| j.name == *name)?;
+        let adr = j.dof_adr? as usize;
+        q.push(*qvel.get(adr)?);
+    }
+    Some(q)
+}
+
+fn authority_verdict_label(rec: &crate::authority::AuthorityRecord) -> String {
+    match rec.outcome {
+        crate::authority::AuthorityOutcome::Allowed => "ALLOWED".into(),
+        crate::authority::AuthorityOutcome::Refused => "REFUSED".into(),
+        crate::authority::AuthorityOutcome::Aborted => "ABORTED".into(),
+    }
 }
 
 fn named_q_from_qpos_names(
@@ -2125,43 +2353,179 @@ fn drive_named_phase(
     } else {
         REACH_ATTEMPTS as usize
     };
+    let ee_sem = semantic_ee(bundle);
     let mut q_reached = false;
     let mut pose_err = f64::INFINITY;
     let mut logged = false;
+    let mut traces: Vec<NamedQStepTrace> = Vec::new();
     for wi in 0..steps {
         let live = named_q_from_qpos_names(model, &w.joint_names, &truth.qpos);
+        let live_q = live.clone().unwrap_or_default();
+        let fk_before = fk_ee_xyz(model, &w.joint_names, &ee_sem, &live_q);
+        let cart_before = fk_before
+            .map(|p| xyz_residual(p, phase.pose.xyz))
+            .unwrap_or(f64::INFINITY);
+        let mujoco_before = privileged_ee_xyz(truth, bundle);
         let cmd = if interpolate_from_live {
             match live.as_ref() {
-                Some(q0) => {
-                    step_toward_named_q(q0, &phase.q, 0.35).unwrap_or_else(|_| phase.q.clone())
-                }
+                Some(q0) => step_toward_named_q(q0, &phase.q, NAMED_Q_STEP_MAX)
+                    .unwrap_or_else(|_| phase.q.clone()),
                 None => phase.q.clone(),
             }
         } else {
             phase.q.clone()
         };
-        let ctrl = compile_named_joint_q(model, &w.joint_names, &cmd, "skill.push")?;
-        let rec = write_ctrl(
-            auth,
-            manifest,
-            model,
-            truth,
-            &ctrl,
-            episode_id,
-            si_base + wi,
-            *now,
-            "drive",
-            phase.pose.xyz,
-        )?;
-        decisions.push(format!("witness-{label}:{:?}:{}", rec.outcome, rec.status));
+        let joint_error_before = named_q_max_abs_error(&live_q, &phase.q);
+        let compiled = compile_named_joint_q(model, &w.joint_names, &cmd, "skill.push");
+        let (ctrl, compile_ok, compile_reason) = match compiled {
+            Ok(c) => (Some(c), true, String::new()),
+            Err(e) => (None, false, format!("{e:?}")),
+        };
+        let mut lowering_ok = compile_ok;
+        let mut lowering_reason = compile_reason;
+        let mut actuator_names = Vec::new();
+        let mut actuator_targets = Vec::new();
+        let mut ctrlrange = Vec::new();
+        let mut control_mode = "position".to_string();
+        let mut saturated = false;
+        if let Some(ctrl) = ctrl.as_ref() {
+            control_mode = ctrl.control_mode.clone();
+            let current = observed_hold_values(model, manifest, &truth.qpos, &truth.ctrl);
+            match lower_named_targets(model, &ctrl.targets, &current) {
+                Ok(lowered) => {
+                    for (name, value) in &lowered {
+                        actuator_names.push(name.clone());
+                        actuator_targets.push(*value);
+                        if let Some(act) = model.actuators.iter().find(|a| a.name == *name) {
+                            if let Some([lo, hi]) = act.ctrlrange.value {
+                                ctrlrange.push([lo, hi]);
+                                let lo_b = lo.min(hi);
+                                let hi_b = lo.max(hi);
+                                if (*value - lo_b).abs() < 1e-9 || (*value - hi_b).abs() < 1e-9 {
+                                    saturated = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    lowering_ok = false;
+                    lowering_reason = format!("{e:?}");
+                }
+            }
+        }
+        let rec = if let Some(ctrl) = ctrl.as_ref() {
+            match write_ctrl(
+                auth,
+                manifest,
+                model,
+                truth,
+                ctrl,
+                episode_id,
+                si_base + wi,
+                *now,
+                "drive",
+                phase.pose.xyz,
+            ) {
+                Ok(r) => r,
+                Err(e) => {
+                    traces.push(NamedQStepTrace {
+                        phase: label.into(),
+                        joint_names: w.joint_names.clone(),
+                        live_q_before: live_q.clone(),
+                        phase_target_q: phase.q.clone(),
+                        commanded_q: cmd.clone(),
+                        interpolate: interpolate_from_live,
+                        max_delta: NAMED_Q_STEP_MAX,
+                        lowering_ok,
+                        lowering_reason,
+                        actuator_names,
+                        actuator_targets,
+                        control_mode,
+                        ctrlrange,
+                        authority_verdict: "REFUSED".into(),
+                        ctrl_applied: truth.ctrl.clone(),
+                        duration_s: 0.0,
+                        live_q_after: live_q.clone(),
+                        joint_error_before,
+                        joint_error_after: joint_error_before,
+                        q_velocity_after: named_qd_from_qvel(model, &w.joint_names, &truth.qvel)
+                            .unwrap_or_default(),
+                        error_reduction_ratio: 0.0,
+                        saturated,
+                        cartesian_residual_before: cart_before,
+                        cartesian_residual_after: cart_before,
+                        expected_fk_ee_from_got: fk_before.unwrap_or([0.0; 3]),
+                        expected_fk_ee_from_target: fk_ee_xyz(
+                            model,
+                            &w.joint_names,
+                            &ee_sem,
+                            &phase.q,
+                        )
+                        .unwrap_or([0.0; 3]),
+                        post_hoc_mujoco_ee: mujoco_before,
+                        fk_mujoco_residual: match (fk_before, mujoco_before) {
+                            (Some(a), Some(b)) => Some(xyz_residual(a, b)),
+                            _ => None,
+                        },
+                        progress: classify_named_q_progress(
+                            joint_error_before,
+                            joint_error_before,
+                            NAMED_Q_REACH_TOL,
+                        ),
+                    });
+                    return Err(e);
+                }
+            }
+        } else {
+            traces.push(NamedQStepTrace {
+                phase: label.into(),
+                joint_names: w.joint_names.clone(),
+                live_q_before: live_q.clone(),
+                phase_target_q: phase.q.clone(),
+                commanded_q: cmd.clone(),
+                interpolate: interpolate_from_live,
+                max_delta: NAMED_Q_STEP_MAX,
+                lowering_ok,
+                lowering_reason,
+                actuator_names,
+                actuator_targets,
+                control_mode,
+                ctrlrange,
+                authority_verdict: "COMPILE_FAILED".into(),
+                ctrl_applied: vec![],
+                duration_s: 0.0,
+                live_q_after: live_q.clone(),
+                joint_error_before,
+                joint_error_after: joint_error_before,
+                q_velocity_after: named_qd_from_qvel(model, &w.joint_names, &truth.qvel)
+                    .unwrap_or_default(),
+                error_reduction_ratio: 0.0,
+                saturated,
+                cartesian_residual_before: cart_before,
+                cartesian_residual_after: cart_before,
+                expected_fk_ee_from_got: fk_before.unwrap_or([0.0; 3]),
+                expected_fk_ee_from_target: fk_ee_xyz(model, &w.joint_names, &ee_sem, &phase.q)
+                    .unwrap_or([0.0; 3]),
+                post_hoc_mujoco_ee: mujoco_before,
+                fk_mujoco_residual: match (fk_before, mujoco_before) {
+                    (Some(a), Some(b)) => Some(xyz_residual(a, b)),
+                    _ => None,
+                },
+                progress: TrackingProgress::LengthMismatch,
+            });
+            return Err(SkillRefuse::InvalidCommand);
+        };
+        let verdict = authority_verdict_label(&rec);
+        decisions.push(format!("witness-{label}:{verdict}:{}", rec.status));
         if !logged {
             logged = true;
             commands.push(json!({
                 "step": si_base,
                 "kind": "witness_q",
                 "phase": label,
-                "adapter_id": ctrl.adapter_id,
-                "ik": ctrl.ik.is_some(),
+                "adapter_id": ctrl.as_ref().map(|c| c.adapter_id.clone()),
+                "ik": ctrl.as_ref().and_then(|c| c.ik.as_ref()).is_some(),
             }));
         }
         if let Some(spent) =
@@ -2169,21 +2533,77 @@ fn drive_named_phase(
         {
             *last_spent_command_id = Some(spent);
         }
+        let now0 = *now;
         let (t, n) = step_sim(shared, manifest, auth, *now).map_err(|_| SkillRefuse::Refuse)?;
         *truth = t;
         *now = n;
+        let duration_s = *now - now0;
         pose_err = ee_distance_to(truth, bundle, phase.pose.xyz);
-        if let Some(got) = named_q_from_qpos_names(model, &w.joint_names, &truth.qpos) {
-            if named_q_reached(&got, &phase.q, NAMED_Q_REACH_TOL) {
-                q_reached = true;
-                break;
-            }
+        let got = named_q_from_qpos_names(model, &w.joint_names, &truth.qpos).unwrap_or_default();
+        let joint_error_after = named_q_max_abs_error(&got, &phase.q);
+        let fk_got = fk_ee_xyz(model, &w.joint_names, &ee_sem, &got);
+        let fk_tgt = fk_ee_xyz(model, &w.joint_names, &ee_sem, &phase.q);
+        let mujoco_ee = privileged_ee_xyz(truth, bundle);
+        let cart_after = fk_got
+            .map(|p| xyz_residual(p, phase.pose.xyz))
+            .unwrap_or(f64::INFINITY);
+        let progress =
+            classify_named_q_progress(joint_error_before, joint_error_after, NAMED_Q_REACH_TOL);
+        traces.push(NamedQStepTrace {
+            phase: label.into(),
+            joint_names: w.joint_names.clone(),
+            live_q_before: live_q,
+            phase_target_q: phase.q.clone(),
+            commanded_q: cmd,
+            interpolate: interpolate_from_live,
+            max_delta: NAMED_Q_STEP_MAX,
+            lowering_ok,
+            lowering_reason,
+            actuator_names,
+            actuator_targets,
+            control_mode,
+            ctrlrange,
+            authority_verdict: verdict,
+            ctrl_applied: truth.ctrl.clone(),
+            duration_s,
+            live_q_after: got.clone(),
+            joint_error_before,
+            joint_error_after,
+            q_velocity_after: named_qd_from_qvel(model, &w.joint_names, &truth.qvel)
+                .unwrap_or_default(),
+            error_reduction_ratio: error_reduction_ratio(joint_error_before, joint_error_after),
+            saturated,
+            cartesian_residual_before: cart_before,
+            cartesian_residual_after: cart_after,
+            expected_fk_ee_from_got: fk_got.unwrap_or([0.0; 3]),
+            expected_fk_ee_from_target: fk_tgt.unwrap_or([0.0; 3]),
+            post_hoc_mujoco_ee: mujoco_ee,
+            fk_mujoco_residual: match (fk_got, mujoco_ee) {
+                (Some(a), Some(b)) => Some(xyz_residual(a, b)),
+                _ => None,
+            },
+            progress,
+        });
+        if named_q_reached(&got, &phase.q, NAMED_Q_REACH_TOL) {
+            q_reached = true;
+            break;
         }
     }
     Ok(NamedPhaseResult {
         q_reached,
         pose_err,
+        traces,
     })
+}
+
+fn privileged_ee_xyz(truth: &VerifierTruth, bundle: &RobotBundle) -> Option<[f64; 3]> {
+    let ee = privileged_ee(bundle);
+    truth
+        .named_pos
+        .get(&ee)
+        .or_else(|| truth.xpos.get(&ee))
+        .filter(|p| p.len() >= 3)
+        .map(|p| [p[0], p[1], p[2]])
 }
 
 fn write_ctrl(
@@ -3876,6 +4296,109 @@ mod tests {
     }
 
     #[test]
+    fn stored_witness_exposes_first_divergence_on_four_robots() {
+        if !ensure_mujoco_or_skip() {
+            return;
+        }
+        let n = std::env::var("REALITYOS_WITNESS_FIDELITY_N")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(8usize)
+            .max(1);
+        let sha = software_sha();
+        let (overall, robots, load_errors) =
+            run_four_robot_funnel(&sha, "witness_first_divergence", n);
+        assert_eq!(overall.n_unauthorized_writes, 0);
+        let mut n_failed_feasible = 0u64;
+        let mut n_classified = 0u64;
+        for label in ["arm_gripper", "panda", "ur5e", "iiwa14"] {
+            let Some(w) = robots.get(label) else {
+                continue;
+            };
+            assert_eq!(w["unauthorized_writes"], 0);
+            for rec in w["episodes"].as_array().into_iter().flatten() {
+                assert_eq!(rec["unauthorized_writes"]["value"], 0);
+                assert!(
+                    rec.get("approach_pose_reached").is_some()
+                        && rec.get("approach_q_reached").is_some(),
+                    "{label} must record pose and named-q separately"
+                );
+                assert_eq!(
+                    rec["mujoco_ee_object_contact"]["tag"],
+                    "PRIVILEGED_SIM_LABEL_ONLY"
+                );
+                assert_eq!(
+                    rec["post_hoc_mujoco_ee"]["tag"],
+                    "PRIVILEGED_SIM_LABEL_ONLY"
+                );
+                assert_eq!(
+                    rec["fk_mujoco_residual"]["tag"],
+                    "PRIVILEGED_SIM_LABEL_ONLY"
+                );
+                assert_eq!(
+                    rec["expected_fk_ee_from_got"]["tag"],
+                    "POLICY_VISIBLE_RUNTIME"
+                );
+                let feasible = rec["feasible_contact_maneuver"]["value"] == true;
+                let executed = rec["executed_witness_q"]["value"] == true;
+                let approach_q = rec["approach_q_reached"]["value"] == true;
+                if feasible && !approach_q {
+                    n_failed_feasible += 1;
+                    let layer = rec["first_divergence_layer"]["value"]
+                        .as_str()
+                        .unwrap_or("");
+                    let why = rec["first_divergence_reason"]["value"]
+                        .as_str()
+                        .unwrap_or("");
+                    assert!(
+                        !layer.is_empty(),
+                        "{label} feasible-but-unrealized witness must name a first-divergence layer (executed={executed})"
+                    );
+                    assert!(
+                        !why.is_empty(),
+                        "{label} first-divergence reason must not be empty"
+                    );
+                    let e0 = rec["joint_error_before"]["value"].as_f64();
+                    let e1 = rec["joint_error_after"]["value"].as_f64();
+                    assert!(
+                        e0.is_some() && e1.is_some(),
+                        "{label} must expose measured live-vs-target joint residuals"
+                    );
+                    if !executed {
+                        assert!(
+                            layer == "INTERPOLATION_INAPPROPRIATE" || layer == "UNKNOWN",
+                            "{label} blocked witness layer={layer}"
+                        );
+                        assert!(
+                            e0.unwrap().is_finite() || layer == "UNKNOWN",
+                            "{label} blocked INTERPOLATION_INAPPROPRIATE must carry a finite live-vs-target error"
+                        );
+                    }
+                    if layer == "UNKNOWN" {
+                        assert!(e0.is_some(), "UNKNOWN must still carry measured residuals");
+                    }
+                    n_classified += 1;
+                }
+            }
+        }
+        assert_eq!(n_classified, n_failed_feasible);
+        if let Ok(path) = std::env::var("REALITYOS_WITNESS_FIDELITY_OUT") {
+            let report = json!({
+                "n": n,
+                "idx_offset": 9,
+                "sha": sha,
+                "evidence_status": SIMULATION_ONLY,
+                "overall": funnel_rates(&overall),
+                "robots": robots,
+                "load_errors": load_errors,
+                "n_failed_feasible_witness": n_failed_feasible,
+            });
+            std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap())
+                .unwrap_or_else(|e| panic!("write {path}: {e}"));
+        }
+    }
+
+    #[test]
     fn push_contact_v2_same_seed_ablation() {
         if !ensure_mujoco_or_skip() {
             return;
@@ -4081,6 +4604,7 @@ mod tests {
             mid_q_reached: false,
             end_q_reached: false,
             executed_witness_q: false,
+            witness_causal: WitnessCausalRecord::default(),
         }
     }
 
@@ -4124,6 +4648,112 @@ mod tests {
         let rec = tagged_push_episode_record(&with_q);
         assert_eq!(rec["approach_pose_reached"]["value"], false);
         assert_eq!(rec["approach_q_reached"]["value"], true);
+        assert_ne!(
+            rec["approach_pose_reached"]["value"], rec["approach_q_reached"]["value"],
+            "overlay must not collapse pose and named-q into one hidden fact"
+        );
+        assert!(rec.get("first_divergence_layer").is_some());
+        assert_eq!(
+            rec["post_hoc_mujoco_ee"]["tag"],
+            "PRIVILEGED_SIM_LABEL_ONLY"
+        );
+        assert_eq!(
+            rec["expected_fk_ee_from_got"]["tag"],
+            "POLICY_VISIBLE_RUNTIME"
+        );
+    }
+
+    #[test]
+    fn tagged_witness_causal_keeps_privileged_ee_off_runtime() {
+        let mut ep = funnel_shell_episode();
+        ep.executed_witness_q = true;
+        ep.approach_q_reached = true;
+        ep.approach_pose_reached = false;
+        ep.witness_causal.first_divergence_layer = "Q_REACHED_POSE_MISMATCH".into();
+        ep.witness_causal.first_divergence_reason = "q_reached_fk_cartesian_missed".into();
+        ep.witness_causal.joint_error_before = 0.4;
+        ep.witness_causal.joint_error_after = 0.05;
+        ep.witness_causal.cartesian_residual_after = 0.25;
+        ep.witness_causal.expected_fk_ee_from_got = [0.1, 0.0, 0.2];
+        ep.witness_causal.post_hoc_mujoco_ee = [0.3, 0.0, 0.2];
+        ep.witness_causal.fk_mujoco_residual = 0.2;
+        let rec = tagged_push_episode_record(&ep);
+        assert_eq!(rec["approach_q_reached"]["value"], true);
+        assert_eq!(rec["approach_pose_reached"]["value"], false);
+        assert_eq!(
+            rec["first_divergence_layer"]["value"],
+            "Q_REACHED_POSE_MISMATCH"
+        );
+        assert_eq!(rec["joint_error_before"]["value"], 0.4);
+        assert_eq!(rec["joint_error_after"]["value"], 0.05);
+        assert_eq!(
+            rec["post_hoc_mujoco_ee"]["tag"],
+            "PRIVILEGED_SIM_LABEL_ONLY"
+        );
+        assert_eq!(
+            rec["fk_mujoco_residual"]["tag"],
+            "PRIVILEGED_SIM_LABEL_ONLY"
+        );
+        assert_eq!(
+            rec["expected_fk_ee_from_got"]["tag"],
+            "POLICY_VISIBLE_RUNTIME"
+        );
+        assert_eq!(rec["first_divergence_layer"]["tag"], "TARGET_LABEL");
+    }
+
+    #[test]
+    fn tagged_blocked_interpolation_exposes_layer_and_live_target_error() {
+        let names = vec!["arm0".into()];
+        let joints = vec![{
+            use realityos_semantics::embodiment::JointKind;
+            use realityos_semantics::provenance::Provenanced;
+            realityos_semantics::embodiment::Joint {
+                name: "arm0".into(),
+                kind: JointKind::Hinge,
+                axis: Provenanced::declared([0.0, 0.0, 1.0], "t", 0.0),
+                qpos_dim: 1,
+                dof_dim: 1,
+                parent_body: "p".into(),
+                child_body: "arm0".into(),
+                q_min: Provenanced::declared(-2.0944, "t", 0.0),
+                q_max: Provenanced::declared(2.0944, "t", 0.0),
+                dq_max: Provenanced::unknown("t", 0.0),
+                effort_max: Provenanced::unknown("t", 0.0),
+                origin_in_child: Provenanced::declared([0.0, 0.0, 0.0], "t", 0.0),
+                parent_to_joint: realityos_semantics::embodiment::unknown_se3("t"),
+                joint_to_child: realityos_semantics::embodiment::unknown_se3("t"),
+                qpos_adr: None,
+                dof_adr: None,
+            }
+        }];
+        let live = [0.0];
+        let target = [-2.0944];
+        let t = realityos_semantics::maneuver_witness::assess_named_interpolation(
+            realityos_semantics::maneuver_witness::TransitionKind::CurrentToApproach,
+            &names,
+            &live,
+            &target,
+            &joints,
+        );
+        let div =
+            classify_blocked_interpolation(&live, &target, &names, &joints, &t.reason, f64::NAN);
+        let mut ep = funnel_shell_episode();
+        ep.had_feasible_contact_maneuver = true;
+        ep.executed_witness_q = false;
+        ep.approach_q_reached = false;
+        ep.witness_causal = causal_from_blocked(div, [0.0; 3], [0.0; 3], [0.0; 3], f64::NAN);
+        let rec = tagged_push_episode_record(&ep);
+        assert_eq!(
+            rec["first_divergence_layer"]["value"],
+            "INTERPOLATION_INAPPROPRIATE"
+        );
+        let e0 = rec["joint_error_before"]["value"].as_f64().unwrap();
+        assert!(
+            e0.is_finite() && e0 > 1.0,
+            "blocked path must not leave joint_error_before at default 0"
+        );
+        assert_eq!(rec["executed_witness_q"]["value"], false);
+        assert_eq!(rec["approach_q_reached"]["value"], false);
     }
 
     #[test]
@@ -4212,6 +4842,7 @@ mod tests {
             mid_q_reached: false,
             end_q_reached: false,
             executed_witness_q: false,
+            witness_causal: WitnessCausalRecord::default(),
         };
         let (tool, unintended, _, _, _, apparent) =
             super::episode_contact_flags(&ep, "obj0", &intended, &robot, &[]);
