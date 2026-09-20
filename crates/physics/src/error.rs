@@ -8,6 +8,10 @@ pub enum PhysicsError {
     NonPositive(&'static str),
     #[error("negative {0}")]
     Negative(&'static str),
+    #[error("singular {0}")]
+    Singular(&'static str),
+    #[error("unevaluable {0}")]
+    Unevaluable(&'static str),
 }
 
 pub type PhysicsResult<T> = Result<T, PhysicsError>;

@@ -3,6 +3,7 @@
 //! These are identities and conventional constants. They are **not** MEASURED
 //! plant parameters. Unknown μ / Kt / I stay caller-supplied screens.
 
+pub mod contact;
 pub mod energy;
 pub mod error;
 pub mod kinematics;
@@ -12,6 +13,11 @@ pub mod newton;
 pub mod sampling;
 pub mod si;
 
+pub use contact::{
+    coulomb_initiation_force_n, friction_cone_membership, max_force_along_direction,
+    supported_normal_force_n, translational_jacobian_at_point, translational_jacobian_column,
+    ConeMembership, DirectionForceBound, JointMotionKind, DIRECTION_COUPLING_EPS,
+};
 pub use energy::{contact_energy_j, mechanical_power_w, rotational_ke_j, translational_ke_j};
 pub use error::{PhysicsError, PhysicsResult};
 pub use kinematics::{coulomb_decel_m_s2, stop_distance_m, stop_time_s};

@@ -1,9 +1,13 @@
 use crate::capability::{CapName, CapStatus, CapabilityGraph};
 use crate::command::{ActuatorCommandSet, HoldSemantics, IkTrace, JointTarget, JointTargetSet};
 use crate::command_domain::authorize_actuator_command;
-use crate::embodiment::{Actuator, EmbodimentModel, JointKind};
+use crate::embodiment::{
+    unknown_se3, Actuator, Body, EmbodimentModel, EndEffector, FrameKind, Joint, JointKind,
+    ModelFrame,
+};
 use crate::kinematics::{resolve_chain_joints, solve_ik};
 use crate::observation::ObservationFrame;
+use crate::provenance::Provenanced;
 use crate::skill::{SkillContract, SkillName, SkillRefuse};
 use crate::transform::{Se3, TransformError, TransformGraph};
 use crate::world::WorldState;
@@ -353,14 +357,6 @@ pub fn compile_named_joint_q(
     })
 }
 
-#[cfg(test)]
-use crate::embodiment::{unknown_se3, Body, EndEffector, FrameKind, Joint, ModelFrame};
-#[cfg(test)]
-use crate::observation::JointStateSample;
-#[cfg(test)]
-use crate::provenance::Provenanced;
-
-#[cfg(test)]
 fn declared_pose(xyz: [f64; 3]) -> (Provenanced<[f64; 3]>, Provenanced<[f64; 4]>) {
     (
         Provenanced::declared(xyz, "test", 0.0),
@@ -368,8 +364,8 @@ fn declared_pose(xyz: [f64; 3]) -> (Provenanced<[f64; 3]>, Provenanced<[f64; 4]>
     )
 }
 
-#[cfg(test)]
-pub(crate) fn synth_planar_two_link() -> EmbodimentModel {
+/// Deterministic planar 2R used by Jacobian / mechanics tests. Not a product robot.
+pub fn synth_planar_two_link() -> EmbodimentModel {
     const L1: f64 = 0.15;
     const L2: f64 = 0.15;
 
@@ -473,6 +469,9 @@ pub(crate) fn synth_planar_two_link() -> EmbodimentModel {
 
     m
 }
+
+#[cfg(test)]
+use crate::observation::JointStateSample;
 
 #[cfg(test)]
 pub(crate) fn zero_joint_obs(model: &EmbodimentModel, epoch: &str, now_s: f64) -> ObservationFrame {

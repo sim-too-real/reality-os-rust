@@ -256,13 +256,18 @@ pub fn forward_kinematics(
 }
 
 pub fn jacobian_translational(fk: &FkState) -> Vec<Vec<f64>> {
+    jacobian_translational_at(fk, fk.ee.xyz)
+}
+
+/// Translational Jacobian of an arbitrary world point (contact offset from EE).
+pub fn jacobian_translational_at(fk: &FkState, point_world: [f64; 3]) -> Vec<Vec<f64>> {
     let n = fk.axes_world.len();
     let mut j = vec![vec![0.0; n], vec![0.0; n], vec![0.0; n]];
     for (i, (kind, axis)) in fk.kinds.iter().zip(fk.axes_world.iter()).enumerate() {
         let col = match kind {
             JointKind::Slide => *axis,
             JointKind::Hinge => {
-                let r = sub3(fk.ee.xyz, fk.joint_origins[i]);
+                let r = sub3(point_world, fk.joint_origins[i]);
                 cross3(*axis, r)
             }
             JointKind::Fixed => [0.0, 0.0, 0.0],
@@ -655,6 +660,21 @@ mod tests {
         assert!((j[0][0] - fk.axes_world[0][0]).abs() < 1e-12);
         assert!((j[1][0] - fk.axes_world[0][1]).abs() < 1e-12);
         assert!((j[2][0] - fk.axes_world[0][2]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn contact_offset_changes_hinge_column() {
+        let m = synth_planar_two_link();
+        let chain = m.ee_joint_chain("ee").unwrap();
+        let fk = forward_kinematics(&m, &chain, "ee", &[0.0, 0.0]).unwrap();
+        let at_ee = jacobian_translational(&fk);
+        let p = [fk.ee.xyz[0], fk.ee.xyz[1] + 0.04, fk.ee.xyz[2]];
+        let at_p = jacobian_translational_at(&fk, p);
+        let r = sub3(p, fk.joint_origins[0]);
+        let col = cross3(fk.axes_world[0], r);
+        assert!((at_p[0][0] - col[0]).abs() < 1e-12);
+        assert!((at_p[1][0] - col[1]).abs() < 1e-12);
+        assert!((at_p[0][0] - at_ee[0][0]).abs() > 1e-9);
     }
 
     #[test]

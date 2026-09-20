@@ -1183,6 +1183,7 @@ dependencies = [
  "hex",
  "parry3d-f64",
  "realityos-kernel",
+ "realityos-physics",
  "serde",
  "serde_json",
  "sha2",

@@ -72,6 +72,15 @@ impl<T> Provenanced<T> {
             uncertainty: None,
         }
     }
+
+    /// A usable value. `Unknown` provenance never counts, even if a number is present.
+    pub fn known_value(&self) -> Option<&T> {
+        if self.provenance == Provenance::Unknown {
+            None
+        } else {
+            self.value.as_ref()
+        }
+    }
 }
 
 #[cfg(test)]

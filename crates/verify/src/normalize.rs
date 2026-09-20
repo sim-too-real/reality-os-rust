@@ -439,10 +439,27 @@ impl RobotManifest {
         }
     }
 
-    pub fn tau_max(&self) -> Vec<f64> {
+    /// Command-scale saturation used by the plant `max_action_abs` envelope.
+    ///
+    /// This is **not** joint torque or actuator force. Position `ctrlrange`
+    /// stays a command bound. Mechanics must not treat this as FORCE_RANGE.
+    pub fn command_scale_abs(&self) -> Vec<f64> {
         self.actuators
             .iter()
             .map(|a| a.ctrlrange[0].abs().max(a.ctrlrange[1].abs()).max(1e-6))
+            .collect()
+    }
+
+    /// Historical name for [`Self::command_scale_abs`]. Not a physical effort bound.
+    pub fn tau_max(&self) -> Vec<f64> {
+        self.command_scale_abs()
+    }
+
+    /// Declared actuator forcerange magnitude when the source forcelimited it.
+    pub fn physical_forcerange_abs(&self) -> Vec<Option<f64>> {
+        self.actuators
+            .iter()
+            .map(|a| a.force_range.map(|fr| fr[0].abs().max(fr[1].abs())))
             .collect()
     }
 

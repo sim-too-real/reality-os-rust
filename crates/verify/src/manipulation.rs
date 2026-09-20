@@ -73,6 +73,34 @@ const NAMED_Q_STEP_MAX: f64 = 0.35;
 
 thread_local! {
     static EXECUTE_STORED_WITNESS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    static EPISODE_QPOS: std::cell::RefCell<Option<Vec<f64>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_episode_qpos<R>(qpos: Option<&[f64]>, f: impl FnOnce() -> R) -> R {
+    EPISODE_QPOS.with(|c| {
+        let prev = c.replace(qpos.map(|v| v.to_vec()));
+        let out = f();
+        *c.borrow_mut() = prev;
+        out
+    })
+}
+
+fn apply_episode_qpos(inst: &mut crate::mujoco_exec::MujocoInstance) -> Result<(), String> {
+    EPISODE_QPOS.with(|c| {
+        let Some(q) = c.borrow().clone() else {
+            return Ok(());
+        };
+        let st = inst.state().map_err(|e| e.to_string())?;
+        let state = st.get("state").cloned().unwrap_or(st);
+        let nv =
+            crate::mujoco_exec::json_f64_vec(state.get("qvel").unwrap_or(&serde_json::Value::Null))
+                .len();
+        let zeros = vec![0.0; nv.max(1)];
+        inst.reset(Some(&q), Some(&zeros))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })
 }
 
 fn execute_stored_witness() -> bool {
@@ -424,7 +452,7 @@ pub fn run_push_matrix_from(
     Ok((eps, metrics))
 }
 
-fn template_objects(planar: bool) -> Vec<Value> {
+pub(crate) fn template_objects(planar: bool) -> Vec<Value> {
     let (table_pos, table_size, table_mass, obj_z) = if planar {
         ([0.24, 0.0, 0.105], [0.40, 0.22, 0.01], 10.0, 0.145)
     } else {
@@ -589,7 +617,10 @@ fn run_release_episode(
     }
 }
 
-fn run_skill_episode(
+pub(crate) type BeforeExecuteHook<'a> =
+    &'a mut dyn FnMut(&PlacementOutcome, &VerifierTruth, &EmbodimentModel) -> Result<(), String>;
+
+pub(crate) fn run_skill_episode(
     bundle: &RobotBundle,
     model: &EmbodimentModel,
     resources: &[ControlledResource],
@@ -605,8 +636,30 @@ fn run_skill_episode(
     ),
     String,
 > {
+    run_skill_episode_ex(bundle, model, resources, sc, sha, skill, loaded, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_skill_episode_ex(
+    bundle: &RobotBundle,
+    model: &EmbodimentModel,
+    resources: &[ControlledResource],
+    sc: &ManipulationScenario,
+    sha: &str,
+    skill: &str,
+    loaded: Option<(crate::mujoco_exec::MujocoInstance, RobotManifest)>,
+    mut before_execute: Option<BeforeExecuteHook<'_>>,
+) -> Result<
+    (
+        ManipulationEpisode,
+        crate::mujoco_exec::MujocoInstance,
+        RobotManifest,
+    ),
+    String,
+> {
     let (mut inst, manifest) = if let Some((mut inst, manifest)) = loaded {
         if let Err(e) = reset_episode_pose(&mut inst)
+            .and_then(|_| apply_episode_qpos(&mut inst))
             .and_then(|_| clamp_qpos_to_joint_limits(&mut inst, &manifest))
             .and_then(|_| apply_scenario_objects(&mut inst, sc))
         {
@@ -617,6 +670,7 @@ fn run_skill_episode(
     } else {
         let (mut inst, manifest) = load_and_normalize(bundle, &sc.objects, sc.seed)?;
         if let Err(e) = reset_episode_pose(&mut inst)
+            .and_then(|_| apply_episode_qpos(&mut inst))
             .and_then(|_| clamp_qpos_to_joint_limits(&mut inst, &manifest))
         {
             checkin_worker(inst);
@@ -862,6 +916,9 @@ fn run_skill_episode(
                 qualification: QualificationStatus::NotApplicable,
                 unsupported_detail: None,
             });
+            if let Some(hook) = before_execute.as_mut() {
+                hook(&placement, &initial, model)?;
+            }
             let (ep, inst) = execute_plan(
                 bundle,
                 inst,
@@ -3233,8 +3290,8 @@ fn ee_workspace(truth: &VerifierTruth, bundle: &RobotBundle) -> Option<[f64; 3]>
 }
 
 #[derive(Clone, Default)]
-struct PlacementOutcome {
-    maneuver: Option<ContactManeuver>,
+pub(crate) struct PlacementOutcome {
+    pub(crate) maneuver: Option<ContactManeuver>,
     reject: Option<ContactInfeasible>,
     rank_why: String,
     adapted_world: bool,
