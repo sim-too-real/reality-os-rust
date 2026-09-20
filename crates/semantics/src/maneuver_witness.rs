@@ -229,6 +229,20 @@ pub fn execution_block_reason(w: &ExecutableContactManeuver) -> Option<String> {
     Some("NOT_EXECUTABLE".into())
 }
 
+/// Min named-joint margin of the witness that would actually execute.
+/// Interpolation assessment already includes phase endpoints; refused
+/// transitions contribute `0`.
+pub fn witness_min_joint_margin(w: &ExecutableContactManeuver) -> f64 {
+    [
+        w.current_to_approach.min_joint_margin,
+        w.approach_to_contact.min_joint_margin,
+        w.contact_to_mid.min_joint_margin,
+        w.mid_to_end.min_joint_margin,
+    ]
+    .into_iter()
+    .fold(1.0_f64, f64::min)
+}
+
 /// Interior+endpoint count from joint displacement, clamped to 5..=20.
 pub fn interpolation_count(qa: &[f64], qb: &[f64]) -> usize {
     let n = qa.len().min(qb.len());
@@ -922,6 +936,34 @@ mod tests {
         assert_eq!(samples.len(), n);
         assert_eq!(samples[0], vec![0.0, 1.0]);
         assert_eq!(samples[n - 1], vec![1.0, 0.0]);
+    }
+
+    #[test]
+    fn witness_min_margin_is_the_worst_named_transition() {
+        use crate::command_domain::named_joint_limit_margin;
+        let names = vec!["arm0".into()];
+        let joints = vec![joint("arm0", -1.0, 1.0)];
+        let w = witness_from_continuing_phases(
+            names,
+            vec![0.0],
+            phase(vec![0.0], vec![0.0]),
+            phase(vec![0.96], vec![0.0]),
+            phase(vec![0.96], vec![0.96]),
+            phase(vec![0.96], vec![0.96]),
+            &joints,
+        );
+        assert!(w.is_executable());
+        let sampled_contact = named_joint_limit_margin(&[0.96], &["arm0".into()], &joints);
+        let min_m = witness_min_joint_margin(&w);
+        assert!(
+            min_m <= w.approach_to_contact.min_joint_margin + 1e-12,
+            "min must include interpolated transitions"
+        );
+        assert!(
+            min_m < sampled_contact + 1e-9 || (sampled_contact - min_m).abs() < 1e-9,
+            "witness min must not exceed a phase margin"
+        );
+        assert!(min_m >= MIN_NAMED_JOINT_MARGIN_FRAC);
     }
 
     #[test]

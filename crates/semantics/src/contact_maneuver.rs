@@ -2,10 +2,12 @@
 //!
 //! No robot name, vendor, URDF filename, bundle ID, or dataset origin.
 
+use crate::command_domain::{named_joint_limit_margin, MIN_NAMED_JOINT_MARGIN_FRAC};
 use crate::embodiment::{EmbodimentModel, Joint};
 use crate::kinematics::{forward_kinematics, solve_ik, with_ik_q_seed};
 use crate::maneuver_witness::{
-    witness_from_continuing_phases, ExecutableContactManeuver, ManeuverPhase,
+    execution_block_reason, witness_from_continuing_phases, witness_min_joint_margin,
+    ExecutableContactManeuver, ManeuverPhase, TransitionVerdict,
 };
 use crate::push::{
     effective_push_distance, push_approach_standoff_m, push_contact_success_radius,
@@ -169,6 +171,9 @@ pub struct RankWhy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContactInfeasible {
     NoFeasibleContactPose,
+    NoIkSolution,
+    InsufficientJointMargin,
+    NoExecutableContactManeuver,
     OrientationInfeasible,
     ApproachCollidesBeforeContact,
     SupportPlaneBlocksEe,
@@ -181,12 +186,74 @@ impl ContactInfeasible {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::NoFeasibleContactPose => "NO_FEASIBLE_CONTACT_POSE",
+            Self::NoIkSolution => "NO_IK_SOLUTION",
+            Self::InsufficientJointMargin => "INSUFFICIENT_JOINT_MARGIN",
+            Self::NoExecutableContactManeuver => "NO_EXECUTABLE_CONTACT_MANEUVER",
             Self::OrientationInfeasible => "ORIENTATION_INFEASIBLE",
             Self::ApproachCollidesBeforeContact => "APPROACH_COLLIDES_BEFORE_CONTACT",
             Self::SupportPlaneBlocksEe => "SUPPORT_PLANE_BLOCKS_EE",
             Self::ContactPoseUnreachableFromApproach => "CONTACT_POSE_UNREACHABLE_FROM_APPROACH",
             Self::WrongContactGeometry => "WRONG_CONTACT_GEOMETRY",
             Self::InsufficientRemainingStroke => "INSUFFICIENT_REMAINING_STROKE",
+        }
+    }
+}
+
+/// Proven layer of Mode B contact selection. Do not call every layer `feasible`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ContactFeasibilityLayer {
+    GeometricCandidate,
+    IkPositionFeasible,
+    WitnessConstructed,
+    WitnessTransitionsFeasible,
+    ExecutableCandidate,
+    SelectedExecutableManeuver,
+}
+
+impl ContactFeasibilityLayer {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::GeometricCandidate => "GEOMETRIC_CANDIDATE",
+            Self::IkPositionFeasible => "IK_POSITION_FEASIBLE",
+            Self::WitnessConstructed => "WITNESS_CONSTRUCTED",
+            Self::WitnessTransitionsFeasible => "WITNESS_TRANSITIONS_FEASIBLE",
+            Self::ExecutableCandidate => "EXECUTABLE_CANDIDATE",
+            Self::SelectedExecutableManeuver => "SELECTED_EXECUTABLE_MANEUVER",
+        }
+    }
+}
+
+/// Honest Mode B selection funnel. Counts are proven program facts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ContactSelectFunnel {
+    pub n_geometric_candidates: u64,
+    pub n_ik_solutions: u64,
+    pub n_complete_witnesses: u64,
+    pub n_joint_margin_valid: u64,
+    pub n_transition_valid: u64,
+    pub n_executable_candidates: u64,
+    pub n_selected_executable: u64,
+    #[serde(default)]
+    pub last_block_reason: String,
+}
+
+impl ContactSelectFunnel {
+    pub fn deepest_proven_layer(&self) -> Option<ContactFeasibilityLayer> {
+        if self.n_selected_executable > 0 {
+            Some(ContactFeasibilityLayer::SelectedExecutableManeuver)
+        } else if self.n_executable_candidates > 0 {
+            Some(ContactFeasibilityLayer::ExecutableCandidate)
+        } else if self.n_transition_valid > 0 {
+            Some(ContactFeasibilityLayer::WitnessTransitionsFeasible)
+        } else if self.n_complete_witnesses > 0 {
+            Some(ContactFeasibilityLayer::WitnessConstructed)
+        } else if self.n_ik_solutions > 0 {
+            Some(ContactFeasibilityLayer::IkPositionFeasible)
+        } else if self.n_geometric_candidates > 0 {
+            Some(ContactFeasibilityLayer::GeometricCandidate)
+        } else {
+            None
         }
     }
 }
@@ -213,6 +280,11 @@ const TOOL_LEN_MIN: f64 = 0.008;
 const STROKE_CORRIDOR_M: f64 = 0.08;
 /// Neighborhood in which a sampled q can seed IK to a geometric contact pose.
 const IK_SEED_RADIUS_M: f64 = 0.15;
+/// Current q + high-margin nearby + nearest. Bound-resting does not end search.
+const MAX_IK_SEEDS_PER_GEOMETRY: usize = 8;
+const MAX_PERTURB_SOURCES: usize = 4;
+const MAX_PERTURBATIONS_PER_SOURCE: usize = 6;
+const MAX_UNIQUE_GEOMETRIES: usize = 6;
 
 fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
@@ -391,9 +463,15 @@ pub fn rank_inputs_of(m: &ContactManeuver, spec: &ContactManeuverSpec) -> RankIn
     } else {
         (0.04 - m.support_clearance) / 0.04
     };
+    let joint_margin = m
+        .executable
+        .as_ref()
+        .filter(|w| execution_block_reason(w).is_none())
+        .map(witness_min_joint_margin)
+        .unwrap_or(m.joint_margin);
     RankInputs {
         approach_distance,
-        joint_margin: m.joint_margin,
+        joint_margin,
         remaining_stroke: m.available_stroke,
         support_clearance: m.support_clearance,
         orientation_error: m.orientation_error,
@@ -418,6 +496,11 @@ pub fn select_contact_maneuver(
 ) -> Option<(usize, RankWhy)> {
     let mut best: Option<(usize, i64, RankInputs)> = None;
     for (i, m) in cands.iter().enumerate() {
+        if let Some(w) = m.executable.as_ref() {
+            if execution_block_reason(w).is_some() {
+                continue;
+            }
+        }
         let inputs = rank_inputs_of(m, spec);
         let score = rank_score(&inputs);
         let better = match &best {
@@ -545,14 +628,14 @@ fn ik_sample_to_target(
     let (q, trace) = with_ik_q_seed(Some(seed.q.as_slice()), || {
         solve_ik(model, &chain, ee, target, &seed.q)
     })
-    .map_err(|_| ContactInfeasible::NoFeasibleContactPose)?;
+    .map_err(|_| ContactInfeasible::NoIkSolution)?;
     if trace.residual > max_residual {
-        return Err(ContactInfeasible::NoFeasibleContactPose);
+        return Err(ContactInfeasible::NoIkSolution);
     }
-    let fk = forward_kinematics(model, &chain, ee, &q)
-        .map_err(|_| ContactInfeasible::NoFeasibleContactPose)?;
+    let fk =
+        forward_kinematics(model, &chain, ee, &q).map_err(|_| ContactInfeasible::NoIkSolution)?;
     if dist3(fk.ee.xyz, target) > max_residual {
-        return Err(ContactInfeasible::NoFeasibleContactPose);
+        return Err(ContactInfeasible::NoIkSolution);
     }
     Ok(SampledEePose {
         xyz: fk.ee.xyz,
@@ -560,6 +643,327 @@ fn ik_sample_to_target(
         q,
         joint_names: chain,
     })
+}
+
+fn seed_matches_chain(seed: &SampledEePose, names: &[String]) -> bool {
+    seed.joint_names == names && seed.q.len() == names.len() && seed.q.iter().all(|v| v.is_finite())
+}
+
+fn q_quantized(q: &[f64]) -> Vec<i64> {
+    q.iter().map(|v| (v * 1e5).round() as i64).collect()
+}
+
+fn xyz_quantized(p: [f64; 3]) -> (i64, i64, i64) {
+    (
+        (p[0] * 1000.0).round() as i64,
+        (p[1] * 1000.0).round() as i64,
+        (p[2] * 1000.0).round() as i64,
+    )
+}
+
+fn sample_from_q(
+    model: &EmbodimentModel,
+    ee: &str,
+    names: &[String],
+    q: Vec<f64>,
+) -> Option<SampledEePose> {
+    let fk = forward_kinematics(model, names, ee, &q).ok()?;
+    Some(SampledEePose {
+        xyz: fk.ee.xyz,
+        quat_wxyz: fk.ee.quat_wxyz,
+        q,
+        joint_names: names.to_vec(),
+    })
+}
+
+/// Current q first, then nearby workspace samples ordered by named-joint margin.
+fn ordered_ik_seeds<'a>(
+    cloud: &'a [SampledEePose],
+    names: &[String],
+    geo_ee: [f64; 3],
+    joints: &[Joint],
+) -> Vec<&'a SampledEePose> {
+    let mut out: Vec<&SampledEePose> = Vec::new();
+    if let Some(cur) = cloud.first().filter(|s| seed_matches_chain(s, names)) {
+        out.push(cur);
+    }
+    let mut nearby: Vec<&SampledEePose> = cloud
+        .iter()
+        .filter(|s| seed_matches_chain(s, names) && dist3(s.xyz, geo_ee) <= IK_SEED_RADIUS_M)
+        .collect();
+    nearby.sort_by(|a, b| {
+        let ma = named_joint_limit_margin(&a.q, &a.joint_names, joints);
+        let mb = named_joint_limit_margin(&b.q, &b.joint_names, joints);
+        mb.partial_cmp(&ma)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                dist3(a.xyz, geo_ee)
+                    .partial_cmp(&dist3(b.xyz, geo_ee))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+    for s in nearby {
+        if out.len() >= MAX_IK_SEEDS_PER_GEOMETRY {
+            break;
+        }
+        if !out.iter().any(|e| e.q == s.q) {
+            out.push(s);
+        }
+    }
+    out
+}
+
+/// Bounded deterministic perturbations of a valid seed. Seeds are clamped
+/// to declared limits; solved q is never interior-clamped.
+fn bounded_seed_perturbations(seed: &SampledEePose, joints: &[Joint]) -> Vec<Vec<f64>> {
+    const FRACS: [f64; 4] = [-0.16, -0.08, 0.08, 0.16];
+    let n = seed.q.len();
+    let mut out = Vec::new();
+    for i in 0..n {
+        let Some(name) = seed.joint_names.get(i) else {
+            continue;
+        };
+        let Some(j) = joints.iter().find(|j| j.name == *name) else {
+            continue;
+        };
+        let (Some(lo), Some(hi)) = (j.q_min.value, j.q_max.value) else {
+            continue;
+        };
+        let span = (hi - lo).abs();
+        if span < 1e-6 {
+            continue;
+        }
+        for f in FRACS {
+            let mut q = seed.q.clone();
+            q[i] = (seed.q[i] + f * span).clamp(lo, hi);
+            if q.iter()
+                .zip(seed.q.iter())
+                .any(|(a, b)| (a - b).abs() > 1e-12)
+            {
+                out.push(q);
+            }
+        }
+    }
+    for sign in [1.0, -1.0] {
+        let mut q = seed.q.clone();
+        let mut changed = false;
+        for i in 0..n.min(3) {
+            let Some(name) = seed.joint_names.get(i) else {
+                continue;
+            };
+            let Some(j) = joints.iter().find(|j| j.name == *name) else {
+                continue;
+            };
+            let (Some(lo), Some(hi)) = (j.q_min.value, j.q_max.value) else {
+                continue;
+            };
+            let span = (hi - lo).abs();
+            if span < 1e-6 {
+                continue;
+            }
+            q[i] = (seed.q[i] + sign * 0.12 * span).clamp(lo, hi);
+            changed = true;
+        }
+        if changed {
+            out.push(q);
+        }
+    }
+    out.truncate(MAX_PERTURBATIONS_PER_SOURCE);
+    out
+}
+
+struct WitnessAttempt {
+    maneuver: Option<ContactManeuver>,
+    err: ContactInfeasible,
+    n_ik: u64,
+}
+
+fn attempt_continuing_witness(
+    model: &EmbodimentModel,
+    ee: &str,
+    ik_seed: &SampledEePose,
+    geo: &GeometricContact,
+    object: BoxObject,
+    support: SupportPlane,
+    spec: &ContactManeuverSpec,
+    cloud: &[SampledEePose],
+    start_q: &[f64],
+    standoff: f64,
+    max_residual: f64,
+) -> WitnessAttempt {
+    let mut n_ik = 0;
+    let approach_xyz = [
+        geo.ee[0] - geo.push[0] * standoff,
+        geo.ee[1] - geo.push[1] * standoff,
+        geo.ee[2],
+    ];
+    let mid_xyz = [
+        geo.ee[0] + geo.push[0] * spec.min_stroke * 0.5,
+        geo.ee[1] + geo.push[1] * spec.min_stroke * 0.5,
+        geo.ee[2],
+    ];
+    let end_xyz = [
+        geo.ee[0] + geo.push[0] * spec.min_stroke,
+        geo.ee[1] + geo.push[1] * spec.min_stroke,
+        geo.ee[2],
+    ];
+    let approach = match ik_sample_to_target(model, ee, ik_seed, approach_xyz, max_residual) {
+        Ok(s) => {
+            n_ik += 1;
+            s
+        }
+        Err(e) => {
+            return WitnessAttempt {
+                maneuver: None,
+                err: e,
+                n_ik,
+            };
+        }
+    };
+    let contact_s = match ik_sample_to_target(model, ee, &approach, geo.ee, max_residual) {
+        Ok(s) => {
+            n_ik += 1;
+            s
+        }
+        Err(e) => {
+            return WitnessAttempt {
+                maneuver: None,
+                err: e,
+                n_ik,
+            };
+        }
+    };
+    let mid = match ik_sample_to_target(model, ee, &contact_s, mid_xyz, max_residual) {
+        Ok(s) => {
+            n_ik += 1;
+            s
+        }
+        Err(e) => {
+            return WitnessAttempt {
+                maneuver: None,
+                err: e,
+                n_ik,
+            };
+        }
+    };
+    let end = match ik_sample_to_target(model, ee, &mid, end_xyz, max_residual) {
+        Ok(s) => {
+            n_ik += 1;
+            s
+        }
+        Err(e) => {
+            return WitnessAttempt {
+                maneuver: None,
+                err: e,
+                n_ik,
+            };
+        }
+    };
+    let mut local = cloud.to_vec();
+    local.push(approach.clone());
+    local.push(contact_s.clone());
+    local.push(mid.clone());
+    local.push(end.clone());
+    let planned = |xyz: [f64; 3], q: &[f64]| SampledEePose {
+        xyz,
+        quat_wxyz: contact_s.quat_wxyz,
+        q: q.to_vec(),
+        joint_names: contact_s.joint_names.clone(),
+    };
+    local.push(planned(approach_xyz, &approach.q));
+    local.push(planned(mid_xyz, &mid.q));
+    local.push(planned(end_xyz, &end.q));
+    match evaluate_sampled_push(&contact_s, &local, object, support, spec, &model.joints) {
+        Ok(mut m) => {
+            m.executable = Some(witness_from_continuing_phases(
+                contact_s.joint_names.clone(),
+                start_q.to_vec(),
+                ManeuverPhase::positional(
+                    pose(approach.xyz, approach.quat_wxyz).unwrap_or(m.approach_pose),
+                    approach.q.clone(),
+                    ik_seed.q.clone(),
+                    0.0,
+                    m.orientation_error,
+                ),
+                ManeuverPhase::positional(
+                    pose(contact_s.xyz, contact_s.quat_wxyz).unwrap_or(m.contact_pose),
+                    contact_s.q.clone(),
+                    approach.q.clone(),
+                    0.0,
+                    m.orientation_error,
+                ),
+                ManeuverPhase::positional(
+                    pose(mid.xyz, mid.quat_wxyz).unwrap_or(m.contact_pose),
+                    mid.q.clone(),
+                    contact_s.q.clone(),
+                    0.0,
+                    m.orientation_error,
+                ),
+                ManeuverPhase::positional(
+                    pose(end.xyz, end.quat_wxyz).unwrap_or(m.contact_pose),
+                    end.q.clone(),
+                    mid.q.clone(),
+                    0.0,
+                    m.orientation_error,
+                ),
+                &model.joints,
+            ));
+            m.sampled_q = contact_s.q.clone();
+            WitnessAttempt {
+                maneuver: Some(m),
+                err: ContactInfeasible::NoFeasibleContactPose,
+                n_ik,
+            }
+        }
+        Err(e) => WitnessAttempt {
+            maneuver: None,
+            err: e,
+            n_ik,
+        },
+    }
+}
+
+fn record_constructed_witness(funnel: &mut ContactSelectFunnel, w: &ExecutableContactManeuver) {
+    funnel.n_complete_witnesses += 1;
+    let transitions = [
+        &w.current_to_approach,
+        &w.approach_to_contact,
+        &w.contact_to_mid,
+        &w.mid_to_end,
+    ];
+    let margin_ok = transitions.iter().all(|t| {
+        t.reason != "JOINT_LIMIT" && t.min_joint_margin + 1e-12 >= MIN_NAMED_JOINT_MARGIN_FRAC
+    });
+    if margin_ok {
+        funnel.n_joint_margin_valid += 1;
+    }
+    let trans_ok = transitions
+        .iter()
+        .all(|t| t.verdict == TransitionVerdict::Feasible);
+    if trans_ok {
+        funnel.n_transition_valid += 1;
+    }
+    if let Some(reason) = execution_block_reason(w) {
+        funnel.last_block_reason = reason;
+    } else {
+        funnel.n_executable_candidates += 1;
+    }
+}
+
+fn select_reject_from_funnel(
+    funnel: &ContactSelectFunnel,
+    last_err: ContactInfeasible,
+) -> ContactInfeasible {
+    if funnel.n_complete_witnesses > 0 {
+        if funnel.last_block_reason == "JOINT_LIMIT" && funnel.n_joint_margin_valid == 0 {
+            return ContactInfeasible::InsufficientJointMargin;
+        }
+        return ContactInfeasible::NoExecutableContactManeuver;
+    }
+    if funnel.n_geometric_candidates > 0 && funnel.n_ik_solutions == 0 {
+        return ContactInfeasible::NoIkSolution;
+    }
+    last_err
 }
 
 /// Mode B with seeded IK: refine a nearby `sampled_q` onto the object face.
@@ -571,16 +975,43 @@ pub fn select_fixed_world_push_seeded(
     support: SupportPlane,
     spec: &ContactManeuverSpec,
 ) -> Result<(ContactManeuver, RankWhy), ContactInfeasible> {
+    select_fixed_world_push_seeded_with_funnel(model, ee, cloud, object, support, spec).0
+}
+
+/// Same path as [`select_fixed_world_push_seeded`], with proven funnel counts.
+pub fn select_fixed_world_push_seeded_with_funnel(
+    model: &EmbodimentModel,
+    ee: &str,
+    cloud: &[SampledEePose],
+    object: BoxObject,
+    support: SupportPlane,
+    spec: &ContactManeuverSpec,
+) -> (
+    Result<(ContactManeuver, RankWhy), ContactInfeasible>,
+    ContactSelectFunnel,
+) {
+    let mut funnel = ContactSelectFunnel::default();
     if cloud.is_empty() {
-        return Err(ContactInfeasible::NoFeasibleContactPose);
+        return (Err(ContactInfeasible::NoFeasibleContactPose), funnel);
     }
+    let Some(chain) = model.ee_joint_chain(ee) else {
+        return (Err(ContactInfeasible::NoFeasibleContactPose), funnel);
+    };
     let max_residual = spec.max_approach_match.max(0.08);
     let standoff = spec
         .approach_standoff
         .max(push_contact_success_radius() + 1e-4);
-    let mut feasible = Vec::new();
+    let start = cloud
+        .first()
+        .filter(|s| seed_matches_chain(s, &chain))
+        .cloned();
     let mut last_err = ContactInfeasible::NoFeasibleContactPose;
+    let mut seen_geo = Vec::new();
+    let mut geometries: Vec<(GeometricContact, SampledEePose)> = Vec::new();
     for seed in cloud {
+        if !seed_matches_chain(seed, &chain) {
+            continue;
+        }
         let Ok(geo) = geometric_contact_ee(object, spec, seed, support, cloud) else {
             last_err = ContactInfeasible::WrongContactGeometry;
             continue;
@@ -588,123 +1019,121 @@ pub fn select_fixed_world_push_seeded(
         if dist3(seed.xyz, geo.ee) > IK_SEED_RADIUS_M {
             continue;
         }
-        let approach_xyz = [
-            geo.ee[0] - geo.push[0] * standoff,
-            geo.ee[1] - geo.push[1] * standoff,
-            geo.ee[2],
-        ];
-        let mid_xyz = [
-            geo.ee[0] + geo.push[0] * spec.min_stroke * 0.5,
-            geo.ee[1] + geo.push[1] * spec.min_stroke * 0.5,
-            geo.ee[2],
-        ];
-        let end_xyz = [
-            geo.ee[0] + geo.push[0] * spec.min_stroke,
-            geo.ee[1] + geo.push[1] * spec.min_stroke,
-            geo.ee[2],
-        ];
-        let mut approach_tries: Vec<(SampledEePose, Vec<f64>)> = Vec::new();
-        if let Some(cur) = cloud
-            .first()
-            .filter(|s| s.joint_names == seed.joint_names && s.q.len() == seed.q.len())
-        {
-            if let Ok(s) = ik_sample_to_target(model, ee, cur, approach_xyz, max_residual) {
-                approach_tries.push((s, cur.q.clone()));
-            }
-        }
-        if let Ok(s) = ik_sample_to_target(model, ee, seed, approach_xyz, max_residual) {
-            let dup = approach_tries.first().is_some_and(|(a, _)| a.q == s.q);
-            if !dup {
-                approach_tries.push((s, seed.q.clone()));
-            }
-        }
-        if approach_tries.is_empty() {
-            last_err = ContactInfeasible::NoFeasibleContactPose;
+        let key = xyz_quantized(geo.ee);
+        if seen_geo.contains(&key) {
             continue;
         }
-        let mut accepted = None;
-        for (approach, approach_seed_q) in approach_tries {
-            let contact_s = match ik_sample_to_target(model, ee, &approach, geo.ee, max_residual) {
-                Ok(s) => s,
-                Err(e) => {
-                    last_err = e;
-                    continue;
-                }
-            };
-            let mid = match ik_sample_to_target(model, ee, &contact_s, mid_xyz, max_residual) {
-                Ok(s) => s,
-                Err(e) => {
-                    last_err = e;
-                    continue;
-                }
-            };
-            let end = match ik_sample_to_target(model, ee, &mid, end_xyz, max_residual) {
-                Ok(s) => s,
-                Err(e) => {
-                    last_err = e;
-                    continue;
-                }
-            };
-            let mut local = cloud.to_vec();
-            local.push(approach.clone());
-            local.push(contact_s.clone());
-            local.push(mid.clone());
-            local.push(end.clone());
-            match evaluate_sampled_push(&contact_s, &local, object, support, spec, &model.joints) {
-                Ok(mut m) => {
-                    let start = cloud
-                        .first()
-                        .filter(|s| {
-                            s.joint_names == contact_s.joint_names && s.q.len() == contact_s.q.len()
-                        })
-                        .cloned()
-                        .unwrap_or_else(|| seed.clone());
-                    m.executable = Some(witness_from_continuing_phases(
-                        contact_s.joint_names.clone(),
-                        start.q.clone(),
-                        ManeuverPhase::positional(
-                            pose(approach.xyz, approach.quat_wxyz).unwrap_or(m.approach_pose),
-                            approach.q.clone(),
-                            approach_seed_q,
-                            0.0,
-                            m.orientation_error,
-                        ),
-                        ManeuverPhase::positional(
-                            pose(contact_s.xyz, contact_s.quat_wxyz).unwrap_or(m.contact_pose),
-                            contact_s.q.clone(),
-                            approach.q.clone(),
-                            0.0,
-                            m.orientation_error,
-                        ),
-                        ManeuverPhase::positional(
-                            pose(mid.xyz, mid.quat_wxyz).unwrap_or(m.contact_pose),
-                            mid.q.clone(),
-                            contact_s.q.clone(),
-                            0.0,
-                            m.orientation_error,
-                        ),
-                        ManeuverPhase::positional(
-                            pose(end.xyz, end.quat_wxyz).unwrap_or(m.contact_pose),
-                            end.q.clone(),
-                            mid.q.clone(),
-                            0.0,
-                            m.orientation_error,
-                        ),
-                        &model.joints,
-                    ));
-                    m.sampled_q = contact_s.q.clone();
-                    accepted = Some(m);
-                    break;
-                }
-                Err(e) => last_err = e,
-            }
-        }
-        if let Some(m) = accepted {
-            feasible.push(m);
+        seen_geo.push(key);
+        geometries.push((geo, seed.clone()));
+        if geometries.len() >= MAX_UNIQUE_GEOMETRIES {
+            break;
         }
     }
-    let (idx, why) = select_contact_maneuver(&feasible, spec).ok_or(last_err)?;
-    Ok((feasible[idx].clone(), why))
+    funnel.n_geometric_candidates = geometries.len() as u64;
+
+    let mut executable: Vec<ContactManeuver> = Vec::new();
+    let mut seen_witness: Vec<Vec<i64>> = Vec::new();
+    let mut perturbation_sources: Vec<SampledEePose> = Vec::new();
+
+    for (geo, _orient) in &geometries {
+        let seeds = ordered_ik_seeds(cloud, &chain, geo.ee, &model.joints);
+        for seed in seeds {
+            let start_q = start.as_ref().map(|s| s.q.as_slice()).unwrap_or(&seed.q);
+            let attempt = attempt_continuing_witness(
+                model,
+                ee,
+                seed,
+                geo,
+                object,
+                support,
+                spec,
+                cloud,
+                start_q,
+                standoff,
+                max_residual,
+            );
+            funnel.n_ik_solutions += attempt.n_ik;
+            if attempt.n_ik > 0
+                && !perturbation_sources
+                    .iter()
+                    .any(|s| q_quantized(&s.q) == q_quantized(&seed.q))
+            {
+                perturbation_sources.push(seed.clone());
+            }
+            if let Some(m) = attempt.maneuver {
+                if let Some(w) = m.executable.as_ref() {
+                    let key = q_quantized(&w.contact.q);
+                    if seen_witness.iter().any(|k| k == &key) {
+                        continue;
+                    }
+                    seen_witness.push(key);
+                    record_constructed_witness(&mut funnel, w);
+                    if execution_block_reason(w).is_none() {
+                        executable.push(m);
+                    }
+                }
+            } else {
+                last_err = attempt.err;
+            }
+        }
+    }
+
+    if executable.is_empty() {
+        for (geo, _) in &geometries {
+            for src in perturbation_sources.iter().take(MAX_PERTURB_SOURCES) {
+                for pq in bounded_seed_perturbations(src, &model.joints) {
+                    let Some(pseed) = sample_from_q(model, ee, &chain, pq) else {
+                        continue;
+                    };
+                    if perturbation_sources
+                        .iter()
+                        .chain(cloud.iter())
+                        .any(|s| q_quantized(&s.q) == q_quantized(&pseed.q))
+                    {
+                        continue;
+                    }
+                    let start_q = start.as_ref().map(|s| s.q.as_slice()).unwrap_or(&pseed.q);
+                    let attempt = attempt_continuing_witness(
+                        model,
+                        ee,
+                        &pseed,
+                        geo,
+                        object,
+                        support,
+                        spec,
+                        cloud,
+                        start_q,
+                        standoff,
+                        max_residual,
+                    );
+                    funnel.n_ik_solutions += attempt.n_ik;
+                    if let Some(m) = attempt.maneuver {
+                        if let Some(w) = m.executable.as_ref() {
+                            let key = q_quantized(&w.contact.q);
+                            if seen_witness.iter().any(|k| k == &key) {
+                                continue;
+                            }
+                            seen_witness.push(key);
+                            record_constructed_witness(&mut funnel, w);
+                            if execution_block_reason(w).is_none() {
+                                executable.push(m);
+                            }
+                        }
+                    } else {
+                        last_err = attempt.err;
+                    }
+                }
+            }
+        }
+    }
+
+    match select_contact_maneuver(&executable, spec) {
+        Some((idx, why)) => {
+            funnel.n_selected_executable = 1;
+            (Ok((executable[idx].clone(), why)), funnel)
+        }
+        None => (Err(select_reject_from_funnel(&funnel, last_err)), funnel),
+    }
 }
 
 /// Evidence-backed pre-contact label. Privileged collision flags are
@@ -713,6 +1142,8 @@ pub fn select_fixed_world_push_seeded(
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum PreContactTaxonomy {
     NoFeasibleContactPose,
+    NoExecutableContactManeuver,
+    InsufficientJointMargin,
     OrientationInfeasible,
     InsufficientStrokeWorkspace,
     SupportCollision,
@@ -726,6 +1157,8 @@ impl PreContactTaxonomy {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::NoFeasibleContactPose => "NO_FEASIBLE_CONTACT_POSE",
+            Self::NoExecutableContactManeuver => "NO_EXECUTABLE_CONTACT_MANEUVER",
+            Self::InsufficientJointMargin => "INSUFFICIENT_JOINT_MARGIN",
             Self::OrientationInfeasible => "ORIENTATION_INFEASIBLE",
             Self::InsufficientStrokeWorkspace => "INSUFFICIENT_STROKE_WORKSPACE",
             Self::SupportCollision => "SUPPORT_COLLISION",
@@ -770,7 +1203,14 @@ pub fn classify_pre_contact(ev: &PreContactEvidence) -> PreContactTaxonomy {
             Some(ContactInfeasible::WrongContactGeometry) => {
                 PreContactTaxonomy::ContactGeometryMismatch
             }
-            Some(ContactInfeasible::NoFeasibleContactPose)
+            Some(ContactInfeasible::InsufficientJointMargin) => {
+                PreContactTaxonomy::InsufficientJointMargin
+            }
+            Some(ContactInfeasible::NoExecutableContactManeuver) => {
+                PreContactTaxonomy::NoExecutableContactManeuver
+            }
+            Some(ContactInfeasible::NoIkSolution)
+            | Some(ContactInfeasible::NoFeasibleContactPose)
             | Some(ContactInfeasible::ContactPoseUnreachableFromApproach)
             | None => PreContactTaxonomy::NoFeasibleContactPose,
         };
@@ -1257,5 +1697,319 @@ mod tests {
             current_world_construction_mode(),
             WorldConstructionMode::FixedWorld
         );
+    }
+
+    fn planar_limited(j0: [f64; 2], j1: [f64; 2]) -> crate::embodiment::EmbodimentModel {
+        use crate::provenance::Provenanced;
+        let mut m = crate::adapter::synth_planar_two_link();
+        for j in &mut m.joints {
+            let (lo, hi) = if j.name == "j0" {
+                (j0[0], j0[1])
+            } else if j.name == "j1" {
+                (j1[0], j1[1])
+            } else {
+                continue;
+            };
+            j.q_min = Provenanced::declared(lo, "test", 0.0);
+            j.q_max = Provenanced::declared(hi, "test", 0.0);
+        }
+        m
+    }
+
+    fn seeded_push_world(
+        model: &crate::embodiment::EmbodimentModel,
+        seed_qs: &[Vec<f64>],
+    ) -> (
+        Vec<SampledEePose>,
+        BoxObject,
+        SupportPlane,
+        ContactManeuverSpec,
+    ) {
+        use crate::kinematics::forward_kinematics;
+        let chain = model.ee_joint_chain("ee").unwrap();
+        let q_contact = vec![0.9, 1.0];
+        let fk_c = forward_kinematics(model, &chain, "ee", &q_contact).unwrap();
+        let mut cloud = Vec::new();
+        for q in seed_qs {
+            let fk = forward_kinematics(model, &chain, "ee", q).unwrap();
+            cloud.push(SampledEePose {
+                xyz: fk.ee.xyz,
+                quat_wxyz: fk.ee.quat_wxyz,
+                q: q.clone(),
+                joint_names: chain.clone(),
+            });
+        }
+        let ahead_q = vec![0.0, 0.0];
+        let fka = forward_kinematics(model, &chain, "ee", &ahead_q).unwrap();
+        cloud.push(SampledEePose {
+            xyz: fka.ee.xyz,
+            quat_wxyz: fka.ee.quat_wxyz,
+            q: ahead_q,
+            joint_names: chain,
+        });
+        let push = [1.0, 0.0, 0.0];
+        let half = [0.03, 0.03, 0.03];
+        let face = half_along_push(half, push) + 0.015;
+        let object = BoxObject {
+            center: [fk_c.ee.xyz[0] + face, fk_c.ee.xyz[1], fk_c.ee.xyz[2]],
+            half_extents: half,
+        };
+        let mut spec = spec_at(cloud[0].xyz, [0.0, 0.0, 0.0]);
+        spec.min_stroke = 0.005;
+        spec.requested_stroke = 0.01;
+        let support = support_under(object.center, 0.03);
+        (cloud, object, support, spec)
+    }
+
+    fn maneuver_with_witness(
+        sampled_margin: f64,
+        w: crate::maneuver_witness::ExecutableContactManeuver,
+    ) -> ContactManeuver {
+        ContactManeuver {
+            contact_pose: pose([0.25, 0.0, 0.16], identity_quat()).unwrap(),
+            approach_pose: pose([0.20, 0.0, 0.16], identity_quat()).unwrap(),
+            contact_point: [0.25, 0.0, 0.16],
+            contact_normal: [-1.0, 0.0, 0.0],
+            push_direction: [1.0, 0.0, 0.0],
+            requested_stroke: 0.05,
+            available_stroke: 0.05,
+            support_clearance: 0.04,
+            joint_margin: sampled_margin,
+            orientation_error: 0.0,
+            object_center: [0.30, 0.0, 0.16],
+            support_top_z: 0.13,
+            sampled_q: w.contact.q.clone(),
+            executable: Some(w),
+        }
+    }
+
+    fn named_phase(q: Vec<f64>, seed: Vec<f64>) -> crate::maneuver_witness::ManeuverPhase {
+        crate::maneuver_witness::ManeuverPhase::positional(Se3::identity(), q, seed, 1e-4, 0.0)
+    }
+
+    #[test]
+    fn complete_witness_failing_joint_limit_is_not_selected_executable() {
+        use crate::maneuver_witness::execution_block_reason;
+        let model = planar_limited([-2.5, 2.5], [0.5, 1.0]);
+        let (cloud, object, support, spec) = seeded_push_world(&model, &[vec![0.85, 0.85]]);
+        let (res, funnel) = select_fixed_world_push_seeded_with_funnel(
+            &model, "ee", &cloud, object, support, &spec,
+        );
+        match res {
+            Ok((m, _)) => {
+                if let Some(w) = m.executable.as_ref() {
+                    assert!(
+                        execution_block_reason(w).is_none(),
+                        "selected witness must be executable, block={:?}",
+                        execution_block_reason(w)
+                    );
+                    let min_m = crate::maneuver_witness::witness_min_joint_margin(w);
+                    assert!(
+                        min_m + 1e-12 >= crate::command_domain::MIN_NAMED_JOINT_MARGIN_FRAC,
+                        "selected executable must meet interior margin, min={min_m}"
+                    );
+                } else {
+                    panic!("selected maneuver must carry an executable witness");
+                }
+            }
+            Err(e) => {
+                assert_ne!(
+                    e,
+                    ContactInfeasible::NoFeasibleContactPose,
+                    "geometry/IK existence must not collapse to NO_FEASIBLE_CONTACT_POSE"
+                );
+                assert!(
+                    e == ContactInfeasible::InsufficientJointMargin
+                        || e == ContactInfeasible::NoExecutableContactManeuver,
+                    "distinct execution-feasibility label, got {e:?}"
+                );
+                assert!(
+                    funnel.n_complete_witnesses >= 1,
+                    "must have constructed a witness before rejecting, funnel={funnel:?}"
+                );
+                assert_eq!(funnel.n_executable_candidates, 0);
+                assert_eq!(funnel.n_selected_executable, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn bound_resting_seed_does_not_hide_interior_executable_branch() {
+        use crate::command_domain::{named_joint_limit_margin, MIN_NAMED_JOINT_MARGIN_FRAC};
+        use crate::kinematics::forward_kinematics;
+        use crate::maneuver_witness::{execution_block_reason, witness_min_joint_margin};
+        let model = planar_limited([-2.5, 2.5], [-2.0, 1.0]);
+        let chain = model.ee_joint_chain("ee").unwrap();
+        let q_bound = vec![0.9, 1.0];
+        let fk_bound = forward_kinematics(&model, &chain, "ee", &q_bound).unwrap();
+        let (q_alt, trace) =
+            crate::kinematics::solve_ik(&model, &chain, "ee", fk_bound.ee.xyz, &[1.85, -0.95])
+                .expect("alternate basin must solve");
+        assert!(
+            trace.residual <= 0.08,
+            "alternate seed must meet Cartesian residual, residual={}",
+            trace.residual
+        );
+        let bound_margin = named_joint_limit_margin(&q_bound, &chain, &model.joints);
+        let alt_margin = named_joint_limit_margin(&q_alt, &chain, &model.joints);
+        assert!(
+            bound_margin + 1e-12 < MIN_NAMED_JOINT_MARGIN_FRAC,
+            "bound seed must rest at/near a limit, margin={bound_margin}"
+        );
+        assert!(
+            alt_margin + 1e-12 >= MIN_NAMED_JOINT_MARGIN_FRAC,
+            "alternate seed must be interior, margin={alt_margin}"
+        );
+        let (cloud, object, support, spec) =
+            seeded_push_world(&model, &[vec![0.85, 0.85], q_alt.clone()]);
+        let (res, funnel) = select_fixed_world_push_seeded_with_funnel(
+            &model, "ee", &cloud, object, support, &spec,
+        );
+        let (m, _) = res.expect("interior executable witness must be selected");
+        let w = m
+            .executable
+            .as_ref()
+            .expect("selected maneuver must store a witness");
+        assert!(
+            execution_block_reason(w).is_none(),
+            "selected witness must be executable, block={:?}",
+            execution_block_reason(w)
+        );
+        let min_m = witness_min_joint_margin(w);
+        assert!(
+            min_m + 1e-12 >= MIN_NAMED_JOINT_MARGIN_FRAC,
+            "selected witness min margin {min_m} must be interior"
+        );
+        assert!(
+            funnel.n_complete_witnesses >= 1,
+            "branch search must construct witnesses, funnel={funnel:?}"
+        );
+        assert!(
+            funnel.n_executable_candidates >= 1,
+            "interior branch must enter the executable pool, funnel={funnel:?}"
+        );
+        assert_eq!(funnel.n_selected_executable, 1);
+        assert_eq!(
+            funnel.deepest_proven_layer(),
+            Some(ContactFeasibilityLayer::SelectedExecutableManeuver)
+        );
+    }
+
+    #[test]
+    fn ranking_uses_actual_witness_min_margin_not_sampled_contact() {
+        use crate::maneuver_witness::{
+            witness_from_continuing_phases, witness_min_joint_margin, MIN_NAMED_JOINT_MARGIN_FRAC,
+        };
+        let names = vec!["arm0".into()];
+        let joints = vec![test_joint("arm0", -1.0, 1.0)];
+        let w_low = witness_from_continuing_phases(
+            names.clone(),
+            vec![-0.96],
+            named_phase(vec![-0.96], vec![-0.96]),
+            named_phase(vec![-0.96], vec![-0.96]),
+            named_phase(vec![-0.96], vec![-0.96]),
+            named_phase(vec![-0.96], vec![-0.96]),
+            &joints,
+        );
+        let w_high = witness_from_continuing_phases(
+            names,
+            vec![0.10],
+            named_phase(vec![0.10], vec![0.10]),
+            named_phase(vec![0.10], vec![0.10]),
+            named_phase(vec![0.10], vec![0.10]),
+            named_phase(vec![0.10], vec![0.10]),
+            &joints,
+        );
+        assert!(w_low.is_executable() && w_high.is_executable());
+        let low_w = witness_min_joint_margin(&w_low);
+        let high_w = witness_min_joint_margin(&w_high);
+        assert!(low_w + 1e-12 >= MIN_NAMED_JOINT_MARGIN_FRAC);
+        assert!(high_w > low_w + 0.1);
+        let worse_sampled = maneuver_with_witness(0.40, w_low);
+        let better_witness = maneuver_with_witness(0.05, w_high);
+        let spec = spec_at([0.20, 0.0, 0.16], [0.0, 0.0, 0.0]);
+        let sampled_prefers_first = rank_score(&rank_inputs_of(
+            &ContactManeuver {
+                executable: None,
+                ..worse_sampled.clone()
+            },
+            &spec,
+        )) > rank_score(&rank_inputs_of(
+            &ContactManeuver {
+                executable: None,
+                ..better_witness.clone()
+            },
+            &spec,
+        ));
+        assert!(
+            sampled_prefers_first,
+            "precondition: sampled-contact margin would prefer the worse witness"
+        );
+        let (idx, why) =
+            select_contact_maneuver(&[worse_sampled, better_witness], &spec).expect("rank");
+        assert_eq!(idx, 1, "selection must follow actual witness min margin");
+        assert!((why.inputs.joint_margin - high_w).abs() < 1e-9);
+    }
+
+    #[test]
+    fn all_complete_witnesses_failing_execution_are_not_no_feasible_contact_pose() {
+        let model = planar_limited([-2.5, 2.5], [0.99, 2.0]);
+        let (cloud, object, support, spec) = seeded_push_world(&model, &[vec![0.9, 1.0]]);
+        let (res, funnel) = select_fixed_world_push_seeded_with_funnel(
+            &model, "ee", &cloud, object, support, &spec,
+        );
+        assert!(res.is_err(), "must not select a non-executable witness");
+        let e = res.unwrap_err();
+        assert_ne!(e, ContactInfeasible::NoFeasibleContactPose);
+        assert!(
+            e == ContactInfeasible::InsufficientJointMargin
+                || e == ContactInfeasible::NoExecutableContactManeuver,
+            "proven non-executable must keep a distinct label, got {e:?} funnel={funnel:?}"
+        );
+        if funnel.n_geometric_candidates > 0 && funnel.n_complete_witnesses > 0 {
+            assert_eq!(funnel.n_executable_candidates, 0);
+            assert_eq!(funnel.n_selected_executable, 0);
+        }
+        assert!(
+            funnel.n_geometric_candidates > 0 || funnel.n_ik_solutions > 0,
+            "must prove geometry or IK existed, funnel={funnel:?}"
+        );
+    }
+
+    #[test]
+    fn select_skips_complete_witness_with_joint_limit_when_executable_exists() {
+        use crate::maneuver_witness::witness_from_continuing_phases;
+        let names = vec!["arm0".into()];
+        let joints = vec![test_joint("arm0", -1.0, 1.0)];
+        let blocked = witness_from_continuing_phases(
+            names.clone(),
+            vec![0.0],
+            named_phase(vec![1.0], vec![0.0]),
+            named_phase(vec![1.0], vec![1.0]),
+            named_phase(vec![1.0], vec![1.0]),
+            named_phase(vec![1.0], vec![1.0]),
+            &joints,
+        );
+        assert!(!blocked.is_executable());
+        let ok = witness_from_continuing_phases(
+            names,
+            vec![0.0],
+            named_phase(vec![0.1], vec![0.0]),
+            named_phase(vec![0.1], vec![0.1]),
+            named_phase(vec![0.1], vec![0.1]),
+            named_phase(vec![0.1], vec![0.1]),
+            &joints,
+        );
+        assert!(ok.is_executable());
+        let spec = spec_at([0.20, 0.0, 0.16], [0.0, 0.0, 0.0]);
+        let (idx, _) = select_contact_maneuver(
+            &[
+                maneuver_with_witness(0.9, blocked),
+                maneuver_with_witness(0.1, ok),
+            ],
+            &spec,
+        )
+        .expect("executable remains");
+        assert_eq!(idx, 1);
     }
 }

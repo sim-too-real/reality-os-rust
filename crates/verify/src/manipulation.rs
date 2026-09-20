@@ -32,9 +32,9 @@ use realityos_semantics::contact::{
 };
 use realityos_semantics::contact_maneuver::{
     classify_pre_contact, current_contact_establishment_mode, current_world_construction_mode,
-    select_fixed_world_push_seeded, select_push_maneuver, tool_offset_in_ee, BoxObject,
+    select_fixed_world_push_seeded_with_funnel, select_push_maneuver, tool_offset_in_ee, BoxObject,
     ContactEstablishmentMode, ContactInfeasible, ContactManeuver, ContactManeuverSpec,
-    PreContactEvidence, SampledEePose, SupportPlane, WorldConstructionMode,
+    ContactSelectFunnel, PreContactEvidence, SampledEePose, SupportPlane, WorldConstructionMode,
 };
 use realityos_semantics::embodiment::EmbodimentModel;
 use realityos_semantics::failure::ManipulationFailure;
@@ -174,6 +174,8 @@ pub struct ManipulationEpisode {
     pub end_q_reached: bool,
     #[serde(default)]
     pub executed_witness_q: bool,
+    #[serde(default)]
+    pub contact_select_funnel: ContactSelectFunnel,
     #[serde(default)]
     pub witness_causal: WitnessCausalRecord,
 }
@@ -700,18 +702,23 @@ fn run_skill_episode(
         skill,
         placement.maneuver.as_ref(),
     ) else {
+        let tax = placement
+            .reject
+            .map(|e| e.as_str())
+            .unwrap_or(ContactInfeasible::NoFeasibleContactPose.as_str());
         let mut ep = refused_episode(
             bundle,
             model,
             sc,
             sha,
             "skill.push",
-            Some(ContactInfeasible::NoFeasibleContactPose.as_str()),
+            Some(tax),
             sc.polarity != Polarity::Positive || sc.expected_refusal.is_some(),
         );
         ep.selected_rank_why = placement.rank_why.clone();
         ep.had_feasible_contact_maneuver = false;
         ep.world_adapted_to_robot = placement.adapted_world;
+        ep.contact_select_funnel = placement.funnel.clone();
         return Ok((ep, inst, manifest));
     };
     let _ = insert_interaction_frame(
@@ -979,9 +986,14 @@ fn execute_plan(
                     Some(&reason),
                     sc.polarity != Polarity::Positive,
                 );
-                ep.had_feasible_contact_maneuver = true;
+                ep.had_feasible_contact_maneuver = placement
+                    .maneuver
+                    .as_ref()
+                    .and_then(|m| m.executable.as_ref())
+                    .is_some_and(|stored| execution_block_reason(stored).is_none());
                 ep.selected_rank_why = placement.rank_why.clone();
                 ep.world_adapted_to_robot = placement.adapted_world;
+                ep.contact_select_funnel = placement.funnel.clone();
                 ep.current_to_approach_feasible =
                     w.current_to_approach.verdict == TransitionVerdict::Feasible;
                 ep.current_to_approach_reason = w.current_to_approach.reason.clone();
@@ -1122,7 +1134,9 @@ fn execute_plan(
                         );
                         ep.ctrl_writes = writes;
                         ep.authority_decisions = decisions;
-                        ep.had_feasible_contact_maneuver = placement.maneuver.is_some();
+                        ep.had_feasible_contact_maneuver =
+                            selected_executable_maneuver(placement.maneuver.as_ref());
+                        ep.contact_select_funnel = placement.funnel.clone();
                         ep.selected_rank_why = placement.rank_why.clone();
                         ep.world_adapted_to_robot = placement.adapted_world;
                         if let Some(w) = placement
@@ -1614,7 +1628,7 @@ fn finish_episode(
             ContactEstablishmentMode::ManeuverV2 => "maneuver_v2".into(),
             ContactEstablishmentMode::XyzSampleBaseline => "xyz_sample".into(),
         },
-        had_feasible_contact_maneuver: placement.maneuver.is_some(),
+        had_feasible_contact_maneuver: selected_executable_maneuver(placement.maneuver.as_ref()),
         pre_contact_taxonomy: String::new(),
         approach_pose_error_m: approach_err.unwrap_or(f64::NAN),
         contact_pose_error_m: contact_err.unwrap_or(f64::NAN),
@@ -1648,6 +1662,7 @@ fn finish_episode(
         mid_q_reached: witness_exec.mid_q,
         end_q_reached: witness_exec.end_q,
         executed_witness_q: witness_exec.executed,
+        contact_select_funnel: placement.funnel.clone(),
         witness_causal: WitnessCausalRecord::default(),
     };
     ep.witness_causal = summarize_witness_causal(
@@ -1780,9 +1795,10 @@ fn refuse_in_flight(
     );
     ep.ctrl_writes = writes;
     ep.authority_decisions = decisions;
-    ep.had_feasible_contact_maneuver = placement.maneuver.is_some();
+    ep.had_feasible_contact_maneuver = selected_executable_maneuver(placement.maneuver.as_ref());
     ep.selected_rank_why = placement.rank_why.clone();
     ep.world_adapted_to_robot = placement.adapted_world;
+    ep.contact_select_funnel = placement.funnel.clone();
     if let Some(w) = placement
         .maneuver
         .as_ref()
@@ -1867,6 +1883,7 @@ fn refused_episode(
         mid_q_reached: false,
         end_q_reached: false,
         executed_witness_q: false,
+        contact_select_funnel: ContactSelectFunnel::default(),
         witness_causal: WitnessCausalRecord::default(),
     }
 }
@@ -2112,6 +2129,38 @@ pub fn tagged_push_episode_record(ep: &ManipulationEpisode) -> Value {
         ("approach_q_reached", json!(ep.approach_q_reached)),
         ("contact_q_reached", json!(ep.contact_q_reached)),
         ("executed_witness_q", json!(ep.executed_witness_q)),
+        (
+            "n_geometric_candidates",
+            json!(ep.contact_select_funnel.n_geometric_candidates),
+        ),
+        (
+            "n_ik_solutions",
+            json!(ep.contact_select_funnel.n_ik_solutions),
+        ),
+        (
+            "n_complete_witnesses",
+            json!(ep.contact_select_funnel.n_complete_witnesses),
+        ),
+        (
+            "n_joint_margin_valid",
+            json!(ep.contact_select_funnel.n_joint_margin_valid),
+        ),
+        (
+            "n_transition_valid",
+            json!(ep.contact_select_funnel.n_transition_valid),
+        ),
+        (
+            "n_executable_candidates",
+            json!(ep.contact_select_funnel.n_executable_candidates),
+        ),
+        (
+            "n_selected_executable",
+            json!(ep.contact_select_funnel.n_selected_executable),
+        ),
+        (
+            "select_last_block_reason",
+            json!(ep.contact_select_funnel.last_block_reason),
+        ),
         (
             "first_divergence_layer",
             json!(ep.witness_causal.first_divergence_layer),
@@ -3188,6 +3237,12 @@ struct PlacementOutcome {
     reject: Option<ContactInfeasible>,
     rank_why: String,
     adapted_world: bool,
+    funnel: ContactSelectFunnel,
+}
+
+fn selected_executable_maneuver(m: Option<&ContactManeuver>) -> bool {
+    m.and_then(|m| m.executable.as_ref())
+        .is_some_and(|w| execution_block_reason(w).is_none())
 }
 
 fn ee_pose_from_truth(truth: &VerifierTruth, bundle: &RobotBundle) -> Option<Se3> {
@@ -3472,22 +3527,38 @@ fn place_object_in_workspace(
                 half_extents: half_xyz,
             };
             if use_v2 {
-                match select_fixed_world_push_seeded(model, ee_name, &cloud, object, support, &spec)
-                {
+                let (res, funnel) = select_fixed_world_push_seeded_with_funnel(
+                    model, ee_name, &cloud, object, support, &spec,
+                );
+                outcome.funnel = funnel;
+                match res {
                     Ok((maneuver, why)) => {
                         outcome.rank_why = format!(
-                            "score={} approach={:.4} stroke={:.4} orient={:.4} clear={:.4}",
+                            "score={} approach={:.4} stroke={:.4} orient={:.4} clear={:.4} geo={} ik={} wit={} exec={}",
                             why.score,
                             why.inputs.approach_distance,
                             why.inputs.remaining_stroke,
                             why.inputs.orientation_error,
-                            why.inputs.support_clearance
+                            why.inputs.support_clearance,
+                            outcome.funnel.n_geometric_candidates,
+                            outcome.funnel.n_ik_solutions,
+                            outcome.funnel.n_complete_witnesses,
+                            outcome.funnel.n_executable_candidates
                         );
                         outcome.maneuver = Some(maneuver);
                     }
                     Err(e) => {
                         outcome.reject = Some(e);
-                        outcome.rank_why = format!("reject={} cloud={}", e.as_str(), cloud.len());
+                        outcome.rank_why = format!(
+                            "reject={} cloud={} geo={} ik={} wit={} exec={} block={}",
+                            e.as_str(),
+                            cloud.len(),
+                            outcome.funnel.n_geometric_candidates,
+                            outcome.funnel.n_ik_solutions,
+                            outcome.funnel.n_complete_witnesses,
+                            outcome.funnel.n_executable_candidates,
+                            outcome.funnel.last_block_reason
+                        );
                     }
                 }
             }
@@ -4074,11 +4145,31 @@ mod tests {
             "n_end_q_reached": funnel.n_end_q_reached,
             "n_executed_witness_q": funnel.n_executed_witness_q,
             "n_approach_given_feasible": funnel.n_approach_given_feasible,
+            "n_geometric_candidates": funnel.n_geometric_candidates,
+            "n_ik_solutions": funnel.n_ik_solutions,
+            "n_complete_witnesses": funnel.n_complete_witnesses,
+            "n_joint_margin_valid": funnel.n_joint_margin_valid,
+            "n_transition_valid": funnel.n_transition_valid,
+            "n_executable_candidates": funnel.n_executable_candidates,
+            "n_selected_executable": funnel.n_selected_executable,
             "p_approach_given_feasible_maneuver": funnel.p_approach_given_feasible_maneuver(),
             "p_approach_q_given_feasible_maneuver": funnel.p_approach_q_given_feasible_maneuver(),
             "p_current_to_approach_given_feasible": funnel.p_current_to_approach_given_feasible(),
             "unauthorized_writes": funnel.n_unauthorized_writes,
         })
+    }
+
+    fn absorb_select_funnel(
+        funnel: &mut crate::push_pipeline::PushFunnel,
+        sel: &ContactSelectFunnel,
+    ) {
+        funnel.n_geometric_candidates += sel.n_geometric_candidates;
+        funnel.n_ik_solutions += sel.n_ik_solutions;
+        funnel.n_complete_witnesses += sel.n_complete_witnesses;
+        funnel.n_joint_margin_valid += sel.n_joint_margin_valid;
+        funnel.n_transition_valid += sel.n_transition_valid;
+        funnel.n_executable_candidates += sel.n_executable_candidates;
+        funnel.n_selected_executable += sel.n_selected_executable;
     }
 
     fn absorb_push_episodes(
@@ -4101,6 +4192,7 @@ mod tests {
             );
             overlay_episode_on_push_evidence(&mut ev, ep);
             funnel.absorb(&ev, ep.unauthorized_writes);
+            absorb_select_funnel(funnel, &ep.contact_select_funnel);
             assert!(
                 !ep.first_stage_entered.is_empty() || ep.expected_refusal,
                 "pipeline stages must be labeled"
@@ -4161,11 +4253,17 @@ mod tests {
                         );
                         overlay_episode_on_push_evidence(&mut ev, ep);
                         overall.absorb(&ev, ep.unauthorized_writes);
+                        absorb_select_funnel(&mut overall, &ep.contact_select_funnel);
                     }
                     eprintln!(
-                        "push_funnel {tag} {label} n={} feasible={} approach_q={} approach_pose={} contact={} p_approach_given_feasible={:.3} p_contact_given_positive={:.3} unauthorized={} executed_witness={}",
+                        "push_funnel {tag} {label} n={} feasible={} geo={} ik={} wit={} exec_cand={} selected={} approach_q={} approach_pose={} contact={} p_approach_given_feasible={:.3} p_contact_given_positive={:.3} unauthorized={} executed_witness={}",
                         funnel.n,
                         funnel.n_feasible_maneuver,
+                        funnel.n_geometric_candidates,
+                        funnel.n_ik_solutions,
+                        funnel.n_complete_witnesses,
+                        funnel.n_executable_candidates,
+                        funnel.n_selected_executable,
                         funnel.n_approach_q_reached,
                         funnel.n_approach,
                         funnel.n_contact,
@@ -4263,10 +4361,25 @@ mod tests {
                     rec["mujoco_ee_object_contact"]["tag"],
                     "PRIVILEGED_SIM_LABEL_ONLY"
                 );
-                if rec["feasible_contact_maneuver"]["value"] == true
-                    && rec["current_to_approach_feasible"]["value"] == true
-                {
-                    assert_eq!(rec["executed_witness_q"]["value"], true);
+                let feasible = rec["feasible_contact_maneuver"]["value"] == true;
+                let current_ok = rec["current_to_approach_feasible"]["value"] == true;
+                let executed = rec["executed_witness_q"]["value"] == true;
+                if feasible && current_ok {
+                    assert_eq!(
+                        rec["executed_witness_q"]["value"], true,
+                        "{label} selected executable must start stored-q execution"
+                    );
+                }
+                if !executed {
+                    let layer = rec["first_divergence_layer"]["value"]
+                        .as_str()
+                        .unwrap_or("");
+                    if layer == "INTERPOLATION_INAPPROPRIATE" {
+                        assert!(
+                            !feasible,
+                            "{label} blocked interpolation is a rejection, not a selected-feasible episode"
+                        );
+                    }
                 }
             }
         }
@@ -4342,11 +4455,23 @@ mod tests {
                 let feasible = rec["feasible_contact_maneuver"]["value"] == true;
                 let executed = rec["executed_witness_q"]["value"] == true;
                 let approach_q = rec["approach_q_reached"]["value"] == true;
+                let layer = rec["first_divergence_layer"]["value"]
+                    .as_str()
+                    .unwrap_or("");
+                if !executed && layer == "INTERPOLATION_INAPPROPRIATE" {
+                    assert!(
+                        !feasible,
+                        "{label} blocked interpolation is a rejection reason, not a selected-feasible episode"
+                    );
+                }
+                if feasible && rec["current_to_approach_feasible"]["value"] == true {
+                    assert!(
+                        executed,
+                        "{label} selected executable must start stored-q execution"
+                    );
+                }
                 if feasible && !approach_q {
                     n_failed_feasible += 1;
-                    let layer = rec["first_divergence_layer"]["value"]
-                        .as_str()
-                        .unwrap_or("");
                     let why = rec["first_divergence_reason"]["value"]
                         .as_str()
                         .unwrap_or("");
@@ -4364,16 +4489,6 @@ mod tests {
                         e0.is_some() && e1.is_some(),
                         "{label} must expose measured live-vs-target joint residuals"
                     );
-                    if !executed {
-                        assert!(
-                            layer == "INTERPOLATION_INAPPROPRIATE" || layer == "UNKNOWN",
-                            "{label} blocked witness layer={layer}"
-                        );
-                        assert!(
-                            e0.unwrap().is_finite() || layer == "UNKNOWN",
-                            "{label} blocked INTERPOLATION_INAPPROPRIATE must carry a finite live-vs-target error"
-                        );
-                    }
                     if layer == "UNKNOWN" {
                         assert!(e0.is_some(), "UNKNOWN must still carry measured residuals");
                     }
@@ -4604,6 +4719,7 @@ mod tests {
             mid_q_reached: false,
             end_q_reached: false,
             executed_witness_q: false,
+            contact_select_funnel: ContactSelectFunnel::default(),
             witness_causal: WitnessCausalRecord::default(),
         }
     }
@@ -4738,7 +4854,7 @@ mod tests {
         let div =
             classify_blocked_interpolation(&live, &target, &names, &joints, &t.reason, f64::NAN);
         let mut ep = funnel_shell_episode();
-        ep.had_feasible_contact_maneuver = true;
+        ep.had_feasible_contact_maneuver = false;
         ep.executed_witness_q = false;
         ep.approach_q_reached = false;
         ep.witness_causal = causal_from_blocked(div, [0.0; 3], [0.0; 3], [0.0; 3], f64::NAN);
@@ -4746,6 +4862,10 @@ mod tests {
         assert_eq!(
             rec["first_divergence_layer"]["value"],
             "INTERPOLATION_INAPPROPRIATE"
+        );
+        assert_eq!(
+            rec["feasible_contact_maneuver"]["value"], false,
+            "blocked interpolation is a rejection, not selected-feasible"
         );
         let e0 = rec["joint_error_before"]["value"].as_f64().unwrap();
         assert!(
@@ -4842,6 +4962,7 @@ mod tests {
             mid_q_reached: false,
             end_q_reached: false,
             executed_witness_q: false,
+            contact_select_funnel: ContactSelectFunnel::default(),
             witness_causal: WitnessCausalRecord::default(),
         };
         let (tool, unintended, _, _, _, apparent) =
@@ -4869,9 +4990,13 @@ mod tests {
             ep.commands.is_empty(),
             "no compiled reach commands when no feasible maneuver"
         );
-        assert_eq!(
-            ep.failure_taxonomy.as_deref(),
-            Some("NO_FEASIBLE_CONTACT_POSE")
+        let tax = ep.failure_taxonomy.as_deref().unwrap_or("");
+        assert!(
+            tax == "NO_FEASIBLE_CONTACT_POSE"
+                || tax == "NO_EXECUTABLE_CONTACT_MANEUVER"
+                || tax == "INSUFFICIENT_JOINT_MARGIN"
+                || tax == "NO_IK_SOLUTION",
+            "Mode B select failure must stay a refusal taxonomy, got {tax}"
         );
         assert!(!ep.had_feasible_contact_maneuver);
         assert_eq!(ep.unauthorized_writes, 0);

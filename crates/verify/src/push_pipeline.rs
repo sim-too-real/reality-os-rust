@@ -416,6 +416,38 @@ pub fn push_diagnostic_field_catalog() -> &'static [TaggedField] {
             tag: FieldTag::PostHocObserved,
         },
         TaggedField {
+            name: "n_geometric_candidates",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "n_ik_solutions",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "n_complete_witnesses",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "n_joint_margin_valid",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "n_transition_valid",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "n_executable_candidates",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "n_selected_executable",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
+            name: "select_last_block_reason",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
             name: "first_divergence_layer",
             tag: FieldTag::TargetLabel,
         },
@@ -526,6 +558,20 @@ pub struct PushFunnel {
     pub n_executed_witness_q: u64,
     #[serde(default)]
     pub n_approach_given_feasible: u64,
+    #[serde(default)]
+    pub n_geometric_candidates: u64,
+    #[serde(default)]
+    pub n_ik_solutions: u64,
+    #[serde(default)]
+    pub n_complete_witnesses: u64,
+    #[serde(default)]
+    pub n_joint_margin_valid: u64,
+    #[serde(default)]
+    pub n_transition_valid: u64,
+    #[serde(default)]
+    pub n_executable_candidates: u64,
+    #[serde(default)]
+    pub n_selected_executable: u64,
 }
 
 impl PushFunnel {
@@ -854,6 +900,14 @@ mod tests {
             "failure_taxonomy",
             "pre_contact_taxonomy",
             "feasible_contact_maneuver",
+            "n_geometric_candidates",
+            "n_ik_solutions",
+            "n_complete_witnesses",
+            "n_joint_margin_valid",
+            "n_transition_valid",
+            "n_executable_candidates",
+            "n_selected_executable",
+            "select_last_block_reason",
             "provenance",
             "mujoco_contact_force",
             "mujoco_ee_object_contact",
