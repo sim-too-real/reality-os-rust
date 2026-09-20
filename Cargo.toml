@@ -90,6 +90,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 proptest = "1"
 trybuild = "1"
+parry3d-f64 = "0.30.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -1,6 +1,6 @@
 //! Finite-face contact manifold. Object-frame geometry only. No robot identity.
 
-use crate::transform::{cross3, norm3, normalize3, scale3, sub3};
+use crate::transform::{cross3, norm3, normalize3, sub3};
 
 fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
@@ -103,6 +103,7 @@ pub struct ManifoldCoords {
     pub v: f64,
 }
 
+#[allow(dead_code)]
 fn box_half_along(half: [f64; 3], dir: [f64; 3]) -> f64 {
     (half[0] * dir[0].abs() + half[1] * dir[1].abs() + half[2] * dir[2].abs()).max(1e-6)
 }
@@ -131,25 +132,70 @@ pub fn box_push_face_manifold(
     support_normal: [f64; 3],
     face_gap: f64,
 ) -> Option<BoxFaceManifold> {
-    let push = normalize3(push)?;
-    let half = box_half_along(half_extents, push);
-    let origin = [
-        object_center[0] - push[0] * half,
-        object_center[1] - push[1] * half,
-        object_center[2] - push[2] * half,
-    ];
-    let normal = scale3(push, -1.0);
-    let (u, v) = tangent_basis(normal, support_normal)?;
-    Some(BoxFaceManifold {
-        origin,
-        normal,
-        u,
-        v,
-        u_half: box_half_along(half_extents, u),
-        v_half: box_half_along(half_extents, v),
-        face_gap: face_gap.max(0.0),
+    box_push_face_manifold_posed(
+        crate::transform::Se3 {
+            xyz: object_center,
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
+        },
+        half_extents,
         push,
-    })
+        support_normal,
+        face_gap,
+    )
+}
+
+/// Object-local faces transformed by `object_pose`. A face is a face of the
+/// object, not a world-AABB support.
+pub fn box_push_face_manifold_posed(
+    object_pose: crate::transform::Se3,
+    half_extents: [f64; 3],
+    push_world: [f64; 3],
+    support_normal: [f64; 3],
+    face_gap: f64,
+) -> Option<BoxFaceManifold> {
+    let push = normalize3(push_world)?;
+    let hx = half_extents[0].abs().max(1e-6);
+    let hy = half_extents[1].abs().max(1e-6);
+    let hz = half_extents[2].abs().max(1e-6);
+    let locals: [([f64; 3], [f64; 3], f64, f64); 6] = [
+        ([hx, 0.0, 0.0], [1.0, 0.0, 0.0], hy, hz),
+        ([-hx, 0.0, 0.0], [-1.0, 0.0, 0.0], hy, hz),
+        ([0.0, hy, 0.0], [0.0, 1.0, 0.0], hx, hz),
+        ([0.0, -hy, 0.0], [0.0, -1.0, 0.0], hx, hz),
+        ([0.0, 0.0, hz], [0.0, 0.0, 1.0], hx, hy),
+        ([0.0, 0.0, -hz], [0.0, 0.0, -1.0], hx, hy),
+    ];
+    let mut best: Option<(f64, BoxFaceManifold)> = None;
+    for (origin_local, n_local, u_half, v_half) in locals {
+        let origin = object_pose.transform_point(origin_local);
+        let normal = object_pose.rotate(n_local);
+        let Some(normal_n) = normalize3(normal) else {
+            continue;
+        };
+        // Tool approaches against the push; the contacted face points toward the tool
+        // (anti-aligned with push).
+        let score = -dot3(normal_n, push);
+        let (u, v) = match tangent_basis(normal_n, support_normal) {
+            Some(uv) => uv,
+            None => continue,
+        };
+        let cand = BoxFaceManifold {
+            origin,
+            normal: normal_n,
+            u,
+            v,
+            u_half,
+            v_half,
+            face_gap: face_gap.max(0.0),
+            push,
+        };
+        match best {
+            None => best = Some((score, cand)),
+            Some((s, _)) if score > s + 1e-12 => best = Some((score, cand)),
+            _ => {}
+        }
+    }
+    best.map(|(_, m)| m)
 }
 
 pub fn manifold_coords(manifold: &BoxFaceManifold, tool_point: [f64; 3]) -> ManifoldCoords {
@@ -187,9 +233,16 @@ pub fn evaluate_box_face_contact(
     if contacting != ContactingBodyKind::DeclaredTool {
         return Err(ManifoldReject::WrongContactingBody);
     }
-    let Some(manifold) =
-        box_push_face_manifold(object_center, half_extents, push, support_normal, face_gap)
-    else {
+    let Some(manifold) = box_push_face_manifold_posed(
+        crate::transform::Se3 {
+            xyz: object_center,
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
+        },
+        half_extents,
+        push,
+        support_normal,
+        face_gap,
+    ) else {
         return Err(ManifoldReject::NormalSeparation);
     };
     let Some(axis) = tool_axis_world.and_then(normalize3) else {
@@ -370,6 +423,33 @@ mod tests {
             )
             .unwrap_err(),
             ManifoldReject::WrongOrientation
+        );
+    }
+
+    #[test]
+    fn rotated_box_face_is_object_local_not_world_aabb() {
+        let pose =
+            crate::transform::Se3::from_axis_angle([0.0, 0.0, 1.0], std::f64::consts::FRAC_PI_4)
+                .unwrap();
+        let posed = crate::transform::Se3 {
+            xyz: [0.30, 0.0, 0.16],
+            quat_wxyz: pose.quat_wxyz,
+        };
+        let half = [0.03, 0.03, 0.03];
+        let push = [1.0, 0.0, 0.0];
+        let m = box_push_face_manifold_posed(posed, half, push, [0.0, 0.0, 1.0], 0.015).unwrap();
+        // Face origin must lie on an object face: local |coord| = half on one axis.
+        let local = posed.inverse().transform_point(m.origin);
+        let on_face = (local[0].abs() - 0.03).abs() < 1e-9
+            || (local[1].abs() - 0.03).abs() < 1e-9
+            || (local[2].abs() - 0.03).abs() < 1e-9;
+        assert!(on_face, "origin not on a face: {local:?}");
+        // World-AABB support along -X would sit at x = 0.30 - 0.03 regardless of rotation.
+        let aabb_x = 0.30 - 0.03;
+        assert!(
+            (m.origin[0] - aabb_x).abs() > 1e-4,
+            "rotated face collapsed to world AABB support x={}",
+            m.origin[0]
         );
     }
 

@@ -1,11 +1,12 @@
 //! Map inspected `RobotManifest` + bundle YAML into `EmbodimentModel` v2.
 
 use crate::bundle::{BaseType, FrameReference, NamedRef, RobotBundle};
-use crate::normalize::RobotManifest;
+use crate::normalize::{GeomRecord, RobotManifest};
 use realityos_semantics::embodiment::{
     unknown_se3, Actuator, BaseKind, Body, EmbodimentModel, EndEffector, FrameKind, Gripper, Joint,
     JointKind, ModelDiagnostic, ModelFrame, Transmission,
 };
+use realityos_semantics::geometry::{CollisionRole, PrimitiveShape, RigidGeometry, SemanticRole};
 use realityos_semantics::provenance::Provenanced;
 use realityos_semantics::transform::Se3;
 
@@ -41,7 +42,53 @@ pub fn embodiment_from_manifest(bundle: &RobotBundle, manifest: &RobotManifest) 
         .diagnostics
         .extend(frame_diagnostics(bundle, manifest));
     model.diagnostics.extend(model.validate_transforms());
+    model.collision_geoms = manifest.geoms.iter().filter_map(map_geom).collect();
     model
+}
+
+fn map_shape(rec: &GeomRecord) -> PrimitiveShape {
+    match rec.geom_type.as_str() {
+        "sphere" => PrimitiveShape::Sphere {
+            radius: rec.size[0].abs(),
+        },
+        "box" => PrimitiveShape::Box {
+            half_extents: [rec.size[0].abs(), rec.size[1].abs(), rec.size[2].abs()],
+        },
+        "capsule" => PrimitiveShape::Capsule {
+            radius: rec.size[0].abs(),
+            half_length: rec.size[1].abs(),
+        },
+        "cylinder" => PrimitiveShape::Cylinder {
+            radius: rec.size[0].abs(),
+            half_length: rec.size[1].abs(),
+        },
+        "plane" => PrimitiveShape::Plane {
+            normal: [0.0, 0.0, 1.0],
+        },
+        other => PrimitiveShape::Unsupported {
+            kind: other.to_string(),
+        },
+    }
+}
+
+fn map_geom(rec: &GeomRecord) -> Option<RigidGeometry> {
+    let pose = Se3::try_new(rec.pos, rec.quat)
+        .or_else(|_| Se3::translation(rec.pos))
+        .ok()?;
+    let collision_role = if rec.contype == 0 && rec.conaffinity == 0 {
+        CollisionRole::Visual
+    } else {
+        CollisionRole::Collision
+    };
+    Some(RigidGeometry::declared(
+        rec.name.clone(),
+        rec.body.clone(),
+        pose,
+        map_shape(rec),
+        collision_role,
+        SemanticRole::Unknown,
+        "verify.inspect.geom",
+    ))
 }
 
 fn map_base(base: BaseType) -> BaseKind {
@@ -436,6 +483,63 @@ mod tests {
             .any(|f| f.name == "ee:ee" && f.pose().is_some()));
     }
 
+    #[test]
+    fn declared_inspect_geoms_become_planner_visible() {
+        let bundle = synth_bundle(vec![synth_named("ee", Some("ee"), Some("link"))]);
+        let mut man = synth_manifest(
+            "link",
+            Some(("ee", "link", [0.1, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0])),
+        );
+        man.geoms.push(crate::normalize::GeomRecord {
+            name: "link_box".into(),
+            body: "link".into(),
+            geom_type: "box".into(),
+            size: [0.04, 0.02, 0.02],
+            pos: [0.05, 0.0, 0.0],
+            quat: [1.0, 0.0, 0.0, 0.0],
+            group: 0,
+            contype: 1,
+            conaffinity: 1,
+        });
+        man.geoms.push(crate::normalize::GeomRecord {
+            name: "viz".into(),
+            body: "link".into(),
+            geom_type: "mesh".into(),
+            size: [0.0, 0.0, 0.0],
+            pos: [0.0, 0.0, 0.0],
+            quat: [1.0, 0.0, 0.0, 0.0],
+            group: 2,
+            contype: 0,
+            conaffinity: 0,
+        });
+        let m = embodiment_from_manifest(&bundle, &man);
+        assert_eq!(m.collision_geoms.len(), 2);
+        let boxg = m
+            .collision_geoms
+            .iter()
+            .find(|g| g.id == "link_box")
+            .expect("declared box");
+        assert_eq!(boxg.owner_body, "link");
+        assert!(matches!(
+            boxg.shape,
+            realityos_semantics::geometry::PrimitiveShape::Box { .. }
+        ));
+        assert_eq!(
+            boxg.collision_role,
+            realityos_semantics::geometry::CollisionRole::Collision
+        );
+        let mesh = m
+            .collision_geoms
+            .iter()
+            .find(|g| g.id == "viz")
+            .expect("visual mesh");
+        assert!(!mesh.shape.query_supported());
+        assert_eq!(
+            mesh.collision_role,
+            realityos_semantics::geometry::CollisionRole::Visual
+        );
+    }
+
     fn synth_named(name: &str, site: Option<&str>, body: Option<&str>) -> NamedRef {
         NamedRef {
             name: name.into(),
@@ -533,6 +637,7 @@ mod tests {
             lost_features: vec![],
             support_bodies: vec![],
             collision_groups: Default::default(),
+            geoms: Vec::new(),
             metal: false,
             evidence_status: crate::honesty::SIMULATION_ONLY.into(),
         };

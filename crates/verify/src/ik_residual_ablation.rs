@@ -133,6 +133,7 @@ fn ablate_model(label: &str, bundle: &RobotBundle) -> Result<Value, String> {
                 fk.ee.xyz[2],
             ],
             half_extents: half,
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let support = SupportPlane {
             origin: [
@@ -247,7 +248,10 @@ mod tests {
     #[test]
     fn four_embodiment_ik_residual_ablation() {
         if !ensure_mujoco_or_skip() {
-            panic!("MuJoCo required for residual ablation; skip is not this step");
+            // Workspace `verify` job has no MuJoCo. The proving lane is
+            // `verify-mujoco` with REALITYOS_REQUIRE_MUJOCO=1, where
+            // ensure_mujoco_or_skip panics if the import is missing.
+            return;
         }
         let report = run_ik_residual_ablation();
         let robots = report["robots"].as_object().expect("robots object");
@@ -270,7 +274,10 @@ mod tests {
     #[test]
     fn mode_b_select_on_arm_gripper_is_precise_or_distinct_refusal() {
         if !ensure_mujoco_or_skip() {
-            panic!("MuJoCo required for consumer select; skip is not this step");
+            // Workspace `verify` job has no MuJoCo. The proving lane is
+            // `verify-mujoco` with REALITYOS_REQUIRE_MUJOCO=1, where
+            // ensure_mujoco_or_skip panics if the import is missing.
+            return;
         }
         let bundle = try_load("arm_gripper").expect("arm_gripper bundle");
         let (inst, manifest) = load_and_normalize(&bundle, &[], 0).expect("load");
@@ -291,6 +298,7 @@ mod tests {
         let object = BoxObject {
             center: [fk.ee.xyz[0] + 0.045, fk.ee.xyz[1], fk.ee.xyz[2]],
             half_extents: half,
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let support = SupportPlane {
             origin: [object.center[0], object.center[1], object.center[2] - 0.03],

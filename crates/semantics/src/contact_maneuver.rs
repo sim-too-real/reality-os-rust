@@ -9,9 +9,9 @@ use crate::contact_collision::{
     NamedBox,
 };
 use crate::contact_manifold::{
-    box_push_face_manifold, contact_constraint_residual, evaluate_box_face_contact,
-    ContactGeometryTolerance, ContactManifoldTarget, ContactingBodyKind, ExecutionPoseTolerance,
-    IkResidual, ManifoldReject, PositionTarget,
+    contact_constraint_residual, evaluate_box_face_contact, ContactGeometryTolerance,
+    ContactManifoldTarget, ContactingBodyKind, ExecutionPoseTolerance, IkResidual, ManifoldReject,
+    PositionTarget,
 };
 use crate::embodiment::{EmbodimentModel, Joint};
 use crate::kinematics::{
@@ -109,6 +109,23 @@ pub struct SupportPlane {
 pub struct BoxObject {
     pub center: [f64; 3],
     pub half_extents: [f64; 3],
+    /// Object-frame orientation (wxyz). Identity means world-aligned.
+    pub quat_wxyz: [f64; 4],
+}
+
+impl BoxObject {
+    pub fn new(center: [f64; 3], half_extents: [f64; 3]) -> Self {
+        Self {
+            center,
+            half_extents,
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
+        }
+    }
+
+    pub fn pose(self) -> Se3 {
+        Se3::try_new(self.center, self.quat_wxyz)
+            .unwrap_or_else(|_| Se3::translation(self.center).unwrap_or_else(|_| Se3::identity()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -130,6 +147,8 @@ pub struct ContactManeuverSpec {
     pub robot_body_volumes: Vec<AttachedSphere>,
     pub obstacle_boxes: Vec<NamedBox>,
     pub object_probe_radius: f64,
+    /// Declared tool approach axis in the EE frame. None = not declared.
+    pub declared_tool_axis_ee: Option<[f64; 3]>,
 }
 
 impl ContactManeuverSpec {
@@ -160,6 +179,7 @@ impl ContactManeuverSpec {
             robot_body_volumes: Vec::new(),
             obstacle_boxes: Vec::new(),
             object_probe_radius: 0.015,
+            declared_tool_axis_ee: None,
         }
     }
 
@@ -663,6 +683,7 @@ pub fn select_push_maneuver(
         let object = BoxObject {
             center,
             half_extents: object_half,
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         match evaluate_sampled_push(sample, cloud, object, support, spec, joints) {
             Ok(m) => feasible.push(m),
@@ -768,12 +789,24 @@ fn ik_sample_to_target(
     ))
 }
 
-fn tool_axis_of(sample: &SampledEePose, spec: &ContactManeuverSpec) -> Option<[f64; 3]> {
+/// Declared semantic axis, mechanically derived tool offset, or UNKNOWN.
+/// Never invents EE-local +X.
+pub fn declared_or_derived_tool_axis(
+    sample: &SampledEePose,
+    spec: &ContactManeuverSpec,
+) -> Option<[f64; 3]> {
+    if let Some(ax) = spec.declared_tool_axis_ee {
+        return normalize3(rotate_by_quat(sample.quat_wxyz, ax));
+    }
     let off = tool_world_offset(sample, spec.tool_offset_ee);
     if norm3(off) >= TOOL_LEN_MIN {
         return normalize3(off);
     }
-    normalize3(rotate_by_quat(sample.quat_wxyz, [1.0, 0.0, 0.0]))
+    None
+}
+
+fn tool_axis_of(sample: &SampledEePose, spec: &ContactManeuverSpec) -> Option<[f64; 3]> {
+    declared_or_derived_tool_axis(sample, spec)
 }
 
 fn prove_contact_manifold(
@@ -784,8 +817,8 @@ fn prove_contact_manifold(
 ) -> Result<(), ContactInfeasible> {
     let tool = add3(sample.xyz, tool_world_offset(sample, spec.tool_offset_ee));
     let push = plane_push(spec.push_direction).ok_or(ContactInfeasible::WrongContactGeometry)?;
-    let Some(manifold) = box_push_face_manifold(
-        object.center,
+    let Some(manifold) = crate::contact_manifold::box_push_face_manifold_posed(
+        object.pose(),
         object.half_extents,
         push,
         support.normal,
@@ -901,6 +934,7 @@ fn collision_world_of(
         object_id: spec.object_id.clone(),
         object_center: object.center,
         object_half: object.half_extents,
+        object_quat: object.quat_wxyz,
         support_id: spec.support_body.clone(),
         support_origin: support.origin,
         support_normal: support.normal,
@@ -910,6 +944,7 @@ fn collision_world_of(
         ee_radius: spec.ee_radius,
         object_probe_radius: spec.object_probe_radius.max(spec.ee_radius),
         tool_offset_ee: spec.tool_offset_ee,
+        declared_geoms: model.collision_geoms.clone(),
     }
 }
 
@@ -1544,6 +1579,29 @@ mod tests {
         [1.0, 0.0, 0.0, 0.0]
     }
 
+    #[test]
+    fn short_tool_offset_without_declared_axis_is_unknown_not_aligned() {
+        let s = sample([0.2, 0.0, 0.16], identity_quat());
+        let spec = ContactManeuverSpec::table_push([1.0, 0.0, 0.0], 0.05, s.xyz, [0.0, 0.0, 0.0]);
+        assert!(
+            declared_or_derived_tool_axis(&s, &spec).is_none(),
+            "missing axis must stay UNKNOWN"
+        );
+        let object = BoxObject {
+            center: [0.30, 0.0, 0.16],
+            half_extents: [0.03, 0.03, 0.03],
+            quat_wxyz: identity_quat(),
+        };
+        let support = SupportPlane {
+            origin: [0.30, 0.0, 0.13],
+            normal: [0.0, 0.0, 1.0],
+        };
+        assert_eq!(
+            prove_contact_manifold(&s, &spec, object, support).unwrap_err(),
+            ContactInfeasible::OrientationInfeasible
+        );
+    }
+
     fn rot_z_90() -> [f64; 4] {
         Se3::from_axis_angle([0.0, 0.0, 1.0], std::f64::consts::FRAC_PI_2)
             .unwrap()
@@ -1551,7 +1609,10 @@ mod tests {
     }
 
     fn spec_at(current: [f64; 3], tool_ee: [f64; 3]) -> ContactManeuverSpec {
-        ContactManeuverSpec::table_push([1.0, 0.0, 0.0], 0.05, current, tool_ee)
+        let mut spec = ContactManeuverSpec::table_push([1.0, 0.0, 0.0], 0.05, current, tool_ee);
+        // Tests that are not about a missing axis declare the EE-frame approach.
+        spec.declared_tool_axis_ee = Some([1.0, 0.0, 0.0]);
+        spec
     }
 
     fn support_under(center: [f64; 3], half_z: f64) -> SupportPlane {
@@ -1571,6 +1632,7 @@ mod tests {
         let object = BoxObject {
             center: [0.335, 0.0, 0.16],
             half_extents: [0.03, 0.03, 0.03],
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let support = support_under(object.center, 0.03);
         let err = evaluate_sampled_push(&bad, &[bad.clone(), ahead], object, support, &spec, &[])
@@ -1588,6 +1650,7 @@ mod tests {
         let object = BoxObject {
             center: [0.29, 0.0, 0.16],
             half_extents: [0.03, 0.03, 0.03],
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let support = SupportPlane {
             origin: [0.29, 0.0, 0.13],
@@ -1605,6 +1668,7 @@ mod tests {
         let object = BoxObject {
             center: [0.29, 0.0, 0.16],
             half_extents: [0.03, 0.03, 0.03],
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let support = support_under(object.center, 0.03);
         let err = evaluate_sampled_push(&s, std::slice::from_ref(&s), object, support, &spec, &[])
@@ -1628,6 +1692,7 @@ mod tests {
         let object = BoxObject {
             center,
             half_extents: [0.03, 0.03, 0.03],
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let support = support_under(center, 0.03);
         let m = evaluate_sampled_push(
@@ -1742,6 +1807,7 @@ mod tests {
         let object = BoxObject {
             center: [0.29, 0.0, 0.16],
             half_extents: [0.03, 0.03, 0.03],
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let support = support_under(object.center, 0.03);
         let err = evaluate_sampled_push(
@@ -1767,6 +1833,7 @@ mod tests {
         let object = BoxObject {
             center: [0.29, 0.0, 0.16],
             half_extents: [0.03, 0.03, 0.03],
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let support = support_under(object.center, 0.03);
         let err = evaluate_sampled_push(
@@ -1837,6 +1904,7 @@ mod tests {
         let object = BoxObject {
             center,
             half_extents: [0.03, 0.03, 0.03],
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let support = support_under(center, 0.03);
         let m = evaluate_sampled_push(
@@ -1863,6 +1931,7 @@ mod tests {
         let object = BoxObject {
             center: [0.305, 0.0, 0.16],
             half_extents: [0.03, 0.03, 0.03],
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let support = support_under(object.center, 0.03);
         let (m, _) = select_fixed_world_push(&[contact, ahead], object, support, &spec, &[])
@@ -1884,6 +1953,7 @@ mod tests {
         let object = BoxObject {
             center: [0.52, 0.0, 0.16],
             half_extents: [0.03, 0.03, 0.03],
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let support = support_under(object.center, 0.03);
         let err = select_fixed_world_push(&[near, ahead], object, support, &spec, &[]).unwrap_err();
@@ -1929,6 +1999,7 @@ mod tests {
         let object = BoxObject {
             center: [fk_c.ee.xyz[0] + face, fk_c.ee.xyz[1], fk_c.ee.xyz[2]],
             half_extents: half,
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let mut spec = spec_at(seed.xyz, [0.0, 0.0, 0.0]);
         spec.min_stroke = 0.005;
@@ -2047,6 +2118,7 @@ mod tests {
         let object = BoxObject {
             center: [fk_c.ee.xyz[0] + face, fk_c.ee.xyz[1], fk_c.ee.xyz[2]],
             half_extents: half,
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let mut spec = spec_at(cloud[0].xyz, [0.0, 0.0, 0.0]);
         spec.min_stroke = 0.005;
@@ -2357,6 +2429,7 @@ mod tests {
         let object = BoxObject {
             center: [far[0] + face, far[1], far[2]],
             half_extents: half,
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let mut spec = spec_at(seed.xyz, [0.0, 0.0, 0.0]);
         spec.min_stroke = 0.005;
@@ -2430,6 +2503,7 @@ mod tests {
         let object = BoxObject {
             center: [0.30, 0.0, 0.16],
             half_extents: [0.03, 0.03, 0.03],
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let support = support_under(object.center, 0.03);
         let spec = spec_at([0.20, 0.0, 0.16], [0.04, 0.0, 0.0]);
@@ -2579,6 +2653,7 @@ mod tests {
         let object = BoxObject {
             center: [fk.ee.xyz[0] + face, fk.ee.xyz[1], fk.ee.xyz[2]],
             half_extents: half,
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let support = support_under(object.center, 0.03);
         let seed = SampledEePose {
@@ -2632,6 +2707,7 @@ mod tests {
         let object = BoxObject {
             center: [fk.ee.xyz[0] + face, fk.ee.xyz[1], fk.ee.xyz[2]],
             half_extents: half,
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let support = support_under(object.center, 0.03);
         let seed = SampledEePose {
@@ -2674,11 +2750,11 @@ mod tests {
         let model = planar_limited([-2.5, 2.5], [-2.0, 2.0]);
         let (cloud, object, support, mut spec) = seeded_push_world(&model, &[vec![0.5, 0.4]]);
         spec.obstacle_boxes
-            .push(crate::contact_collision::NamedBox {
-                name: "obstacle".into(),
-                center: cloud[0].xyz,
-                half_extents: [0.20, 0.20, 0.20],
-            });
+            .push(crate::contact_collision::NamedBox::aabb(
+                "obstacle",
+                cloud[0].xyz,
+                [0.20, 0.20, 0.20],
+            ));
         let (res, funnel) = select_fixed_world_push_seeded_with_funnel(
             &model, "ee", &cloud, object, support, &spec,
         );
@@ -2687,12 +2763,20 @@ mod tests {
 
     #[test]
     fn select_self_collision_is_collision_inadmissible() {
-        let model = crate::adapter::synth_planar_two_link();
+        let mut model = crate::adapter::synth_planar_two_link();
+        model.bodies.push(crate::embodiment::Body {
+            name: "stub".into(),
+            parent: Some("base".into()),
+            mass_kg: crate::provenance::Provenanced::unknown("test", 0.0),
+            com: crate::provenance::Provenanced::unknown("test", 0.0),
+            inertia: crate::provenance::Provenanced::unknown("test", 0.0),
+            local_pose: crate::provenance::Provenanced::declared(Se3::identity(), "test", 0.0),
+        });
         let (cloud, object, mut support, mut spec) = seeded_push_world(&model, &[vec![0.5, 0.4]]);
         support.origin = [object.center[0], object.center[1], object.center[2] - 1.0];
         spec.robot_body_volumes = vec![
             crate::contact_collision::AttachedSphere {
-                body: "link1".into(),
+                body: "stub".into(),
                 radius: 0.20,
                 offset: [0.0, 0.0, 0.0],
             },

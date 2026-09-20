@@ -3,14 +3,20 @@
 //! Uses declared world/embodiment geometry only. Privileged simulator
 //! future labels are not an input.
 
+use crate::allowed_contact::{adjacent_body_pairs, AllowedContactPolicy, ContactPhase};
 use crate::contact::{classify_contact_pair, ContactClassContext, ContactEvidenceClass};
 use crate::embodiment::EmbodimentModel;
+use crate::geometry::{
+    ApproximationClass, CollisionRole, CollisionScene, PrimitiveShape, RigidGeometry, SemanticRole,
+};
 use crate::kinematics::forward_kinematics;
 use crate::maneuver_witness::{
     interpolate_named_q, interpolation_count, ExecutableContactManeuver, PhaseTransition,
     TransitionKind, TransitionVerdict,
 };
-use crate::transform::{add3, norm3, rotate_by_quat, sub3};
+use crate::provenance::Provenance;
+use crate::transform::{add3, norm3, rotate_by_quat, sub3, Se3};
+use crate::transition_validity::validate_transition;
 
 pub const BLOCK_SELF_COLLISION: &str = "SELF_COLLISION";
 pub const BLOCK_SUPPORT_COLLISION: &str = "SUPPORT_COLLISION";
@@ -30,6 +36,18 @@ pub struct NamedBox {
     pub name: String,
     pub center: [f64; 3],
     pub half_extents: [f64; 3],
+    pub quat_wxyz: [f64; 4],
+}
+
+impl NamedBox {
+    pub fn aabb(name: impl Into<String>, center: [f64; 3], half_extents: [f64; 3]) -> Self {
+        Self {
+            name: name.into(),
+            center,
+            half_extents,
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -37,6 +55,7 @@ pub struct CollisionWorld {
     pub object_id: String,
     pub object_center: [f64; 3],
     pub object_half: [f64; 3],
+    pub object_quat: [f64; 4],
     pub support_id: String,
     pub support_origin: [f64; 3],
     pub support_normal: [f64; 3],
@@ -46,6 +65,186 @@ pub struct CollisionWorld {
     pub ee_radius: f64,
     pub object_probe_radius: f64,
     pub tool_offset_ee: [f64; 3],
+    pub declared_geoms: Vec<RigidGeometry>,
+}
+
+fn proxy_geom(
+    id: impl Into<String>,
+    body: impl Into<String>,
+    offset: [f64; 3],
+    shape: PrimitiveShape,
+    role: SemanticRole,
+) -> RigidGeometry {
+    RigidGeometry {
+        id: id.into(),
+        owner_body: body.into(),
+        local_pose: Se3::translation(offset).unwrap_or_else(|_| Se3::identity()),
+        shape,
+        collision_role: CollisionRole::Collision,
+        semantic_role: role,
+        provenance: Provenance::Unknown,
+        approximation: ApproximationClass::NonconservativeApproximation,
+        source: "proxy".into(),
+    }
+}
+
+fn ee_parent_and_local(model: &EmbodimentModel, ee: &str) -> Option<(String, Se3)> {
+    let ee_def = model.end_effectors.iter().find(|e| e.name == ee)?;
+    let frame = model.frames.iter().find(|f| f.name == ee_def.frame)?;
+    let local = frame.pose().unwrap_or_else(Se3::identity);
+    if frame.parent_body.is_empty() {
+        return None;
+    }
+    Some((frame.parent_body.clone(), local))
+}
+
+/// Planner-visible scene. Declared geoms win; proxy spheres are classified.
+pub fn scene_from_collision_world(
+    model: &EmbodimentModel,
+    ee: &str,
+    world: &CollisionWorld,
+) -> CollisionScene {
+    let mut robot = world.declared_geoms.clone();
+    if robot.is_empty() {
+        robot.extend(
+            model
+                .collision_geoms
+                .iter()
+                .filter(|g| g.participates_in_collision())
+                .cloned(),
+        );
+    }
+    if robot.is_empty() {
+        for vol in &world.robot_volumes {
+            if vol.radius <= 0.0 {
+                continue;
+            }
+            let body = if vol.body.is_empty() {
+                "tool".to_string()
+            } else {
+                vol.body.clone()
+            };
+            robot.push(proxy_geom(
+                format!("proxy:{body}"),
+                body,
+                vol.offset,
+                PrimitiveShape::Sphere { radius: vol.radius },
+                SemanticRole::RobotLink,
+            ));
+        }
+        if let Some((parent, ee_local)) = ee_parent_and_local(model, ee) {
+            let tool_local = ee_local.compose(
+                Se3::translation(world.tool_offset_ee).unwrap_or_else(|_| Se3::identity()),
+            );
+            robot.push(RigidGeometry {
+                id: "tool".into(),
+                owner_body: parent,
+                local_pose: tool_local,
+                shape: PrimitiveShape::Sphere {
+                    radius: world.ee_radius.max(1e-4),
+                },
+                collision_role: CollisionRole::Collision,
+                semantic_role: SemanticRole::Tool,
+                provenance: Provenance::Unknown,
+                approximation: ApproximationClass::NonconservativeApproximation,
+                source: "proxy_tool".into(),
+            });
+        }
+    }
+    let object_pose = Se3::try_new(world.object_center, world.object_quat).unwrap_or_else(|_| {
+        Se3::translation(world.object_center).unwrap_or_else(|_| Se3::identity())
+    });
+    let object = vec![RigidGeometry::declared(
+        world.object_id.clone(),
+        world.object_id.clone(),
+        object_pose,
+        PrimitiveShape::Box {
+            half_extents: world.object_half,
+        },
+        CollisionRole::Collision,
+        SemanticRole::Object,
+        "scene.object",
+    )];
+    let n = crate::transform::normalize3(world.support_normal).unwrap_or([0.0, 0.0, 1.0]);
+    let thick = 0.02;
+    let support_center = [
+        world.support_origin[0] - n[0] * thick,
+        world.support_origin[1] - n[1] * thick,
+        world.support_origin[2] - n[2] * thick,
+    ];
+    let extent = world.object_half[0]
+        .abs()
+        .max(world.object_half[1].abs())
+        .max(0.15)
+        * 3.0;
+    let support_pose = Se3::translation(support_center).unwrap_or_else(|_| Se3::identity());
+    let support = vec![RigidGeometry {
+        id: world.support_id.clone(),
+        owner_body: world.support_id.clone(),
+        local_pose: support_pose,
+        shape: PrimitiveShape::Box {
+            half_extents: [extent, extent, thick],
+        },
+        collision_role: CollisionRole::Collision,
+        semantic_role: SemanticRole::Support,
+        provenance: Provenance::UserDeclared,
+        approximation: ApproximationClass::ConservativeApproximation,
+        source: "scene.support_slab".into(),
+    }];
+    let obstacles = world
+        .obstacles
+        .iter()
+        .map(|o| {
+            let pose = Se3::try_new(o.center, o.quat_wxyz)
+                .unwrap_or_else(|_| Se3::translation(o.center).unwrap_or_else(|_| Se3::identity()));
+            RigidGeometry::declared(
+                o.name.clone(),
+                o.name.clone(),
+                pose,
+                PrimitiveShape::Box {
+                    half_extents: o.half_extents,
+                },
+                CollisionRole::Collision,
+                SemanticRole::Obstacle,
+                "scene.obstacle",
+            )
+        })
+        .collect();
+    let mut intended = world.intended_tool_bodies.clone();
+    if let Some((parent, _)) = ee_parent_and_local(model, ee) {
+        if !intended.iter().any(|n| n == &parent) {
+            intended.push(parent);
+        }
+    }
+    CollisionScene {
+        robot,
+        object,
+        support,
+        obstacles,
+        intended_tool_bodies: intended,
+        object_id: world.object_id.clone(),
+        support_id: world.support_id.clone(),
+        adjacent_body_pairs: adjacent_body_pairs(model),
+    }
+}
+
+pub fn policy_from_scene(scene: &CollisionScene) -> AllowedContactPolicy {
+    let mut robot_bodies: Vec<String> = scene.robot.iter().map(|g| g.owner_body.clone()).collect();
+    robot_bodies.extend(scene.intended_tool_bodies.iter().cloned());
+    robot_bodies.sort();
+    robot_bodies.dedup();
+    AllowedContactPolicy::from_names(
+        scene.object_id.clone(),
+        scene.intended_tool_bodies.clone(),
+        robot_bodies,
+        vec![scene.support_id.clone()],
+        scene
+            .obstacles
+            .iter()
+            .map(|g| g.owner_body.clone())
+            .collect(),
+        scene.adjacent_body_pairs.clone(),
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -311,60 +510,54 @@ pub fn apply_collision_admissibility(
     world: &CollisionWorld,
 ) {
     let names = &w.joint_names;
-    let hits = [
+    let scene = scene_from_collision_world(model, ee, world);
+    let policy = policy_from_scene(&scene);
+    let segs = [
         (
             TransitionKind::CurrentToApproach,
-            forbidden_class_on_interpolation(
-                model,
-                ee,
-                names,
-                &w.start_q,
-                &w.approach.q,
-                world,
-                TransitionKind::CurrentToApproach,
-            ),
+            w.start_q.as_slice(),
+            w.approach.q.as_slice(),
         ),
         (
             TransitionKind::ApproachToContact,
-            forbidden_class_on_interpolation(
-                model,
-                ee,
-                names,
-                &w.approach.q,
-                &w.contact.q,
-                world,
-                TransitionKind::ApproachToContact,
-            ),
+            w.approach.q.as_slice(),
+            w.contact.q.as_slice(),
         ),
         (
             TransitionKind::ContactToMidStroke,
-            forbidden_class_on_interpolation(
-                model,
-                ee,
-                names,
-                &w.contact.q,
-                &w.mid_stroke.q,
-                world,
-                TransitionKind::ContactToMidStroke,
-            ),
+            w.contact.q.as_slice(),
+            w.mid_stroke.q.as_slice(),
         ),
         (
             TransitionKind::MidToEndStroke,
-            forbidden_class_on_interpolation(
-                model,
-                ee,
-                names,
-                &w.mid_stroke.q,
-                &w.end_stroke.q,
-                world,
-                TransitionKind::MidToEndStroke,
-            ),
+            w.mid_stroke.q.as_slice(),
+            w.end_stroke.q.as_slice(),
         ),
     ];
-    refuse_if_needed(&mut w.current_to_approach, hits[0].1);
-    refuse_if_needed(&mut w.approach_to_contact, hits[1].1);
-    refuse_if_needed(&mut w.contact_to_mid, hits[2].1);
-    refuse_if_needed(&mut w.mid_to_end, hits[3].1);
+    let reports = segs.map(|(kind, qa, qb)| {
+        let report = validate_transition(
+            model,
+            names,
+            qa,
+            qb,
+            &scene,
+            &policy,
+            ContactPhase::from_transition(kind),
+        );
+        let hit = report.block_reason().map(|r| {
+            (
+                r,
+                report
+                    .class
+                    .unwrap_or(ContactEvidenceClass::ObstacleContact),
+            )
+        });
+        (kind, hit)
+    });
+    refuse_if_needed(&mut w.current_to_approach, reports[0].1);
+    refuse_if_needed(&mut w.approach_to_contact, reports[1].1);
+    refuse_if_needed(&mut w.contact_to_mid, reports[2].1);
+    refuse_if_needed(&mut w.mid_to_end, reports[3].1);
 }
 
 #[cfg(test)]
@@ -383,6 +576,7 @@ mod tests {
             object_id: "object".into(),
             object_center,
             object_half: [0.03, 0.03, 0.03],
+            object_quat: [1.0, 0.0, 0.0, 0.0],
             support_id: "table".into(),
             support_origin: [object_center[0], object_center[1], -0.05],
             support_normal: [0.0, 0.0, 1.0],
@@ -392,6 +586,7 @@ mod tests {
             ee_radius: 0.015,
             object_probe_radius: 1e-3,
             tool_offset_ee: [0.0, 0.0, 0.0],
+            declared_geoms: vec![],
         }
     }
 
@@ -410,7 +605,9 @@ mod tests {
         );
         assert!(w.is_executable(), "precondition: joint-limit safe");
         let mut world = world_at([0.40, 0.0, 0.0]);
-        world.support_origin = [0.0, 0.0, 0.20];
+        // Finite support slab whose top face occupies the EE height so the
+        // joint-limit-safe interpolation still collides with the table.
+        world.support_origin = [0.30, 0.0, 0.0];
         world.support_normal = [0.0, 0.0, 1.0];
         apply_collision_admissibility(&mut w, &model, "ee", &world);
         assert!(!w.is_executable());
@@ -435,11 +632,11 @@ mod tests {
         );
         assert!(w.is_executable());
         let mut world = world_at([2.0, 0.0, 0.0]);
-        world.obstacles.push(NamedBox {
-            name: "obstacle".into(),
-            center: [0.30, 0.0, 0.0],
-            half_extents: [0.05, 0.05, 0.05],
-        });
+        world.obstacles.push(NamedBox::aabb(
+            "obstacle",
+            [0.30, 0.0, 0.0],
+            [0.05, 0.05, 0.05],
+        ));
         apply_collision_admissibility(&mut w, &model, "ee", &world);
         assert!(!w.is_executable());
         assert_eq!(
@@ -450,7 +647,15 @@ mod tests {
 
     #[test]
     fn overlapping_robot_volumes_are_self_collision() {
-        let model = synth_planar_two_link();
+        let mut model = synth_planar_two_link();
+        model.bodies.push(crate::embodiment::Body {
+            name: "stub".into(),
+            parent: Some("base".into()),
+            mass_kg: crate::provenance::Provenanced::unknown("test", 0.0),
+            com: crate::provenance::Provenanced::unknown("test", 0.0),
+            inertia: crate::provenance::Provenanced::unknown("test", 0.0),
+            local_pose: crate::provenance::Provenanced::declared(Se3::identity(), "test", 0.0),
+        });
         let names = vec!["j0".into(), "j1".into()];
         let q = vec![0.0, 0.0];
         let mut w = witness_from_continuing_phases(
@@ -464,14 +669,15 @@ mod tests {
         );
         let mut world = world_at([2.0, 0.0, 0.0]);
         world.support_origin = [0.0, 0.0, -1.0];
+        // stub and link2 are not parent-child; overlap is forbidden self-collision.
         world.robot_volumes.push(AttachedSphere {
-            body: "link1".into(),
-            radius: 0.12,
+            body: "stub".into(),
+            radius: 0.20,
             offset: [0.0, 0.0, 0.0],
         });
         world.robot_volumes.push(AttachedSphere {
             body: "link2".into(),
-            radius: 0.12,
+            radius: 0.20,
             offset: [0.0, 0.0, 0.0],
         });
         apply_collision_admissibility(&mut w, &model, "ee", &world);
@@ -513,6 +719,34 @@ mod tests {
         assert!(
             reason == BLOCK_UNINTENDED_CONTACT || reason == BLOCK_WRONG_PHASE_CONTACT,
             "got {reason}"
+        );
+    }
+
+    #[test]
+    fn tool_above_table_is_not_support_collision() {
+        let model = synth_planar_two_link();
+        let fk =
+            forward_kinematics(&model, &["j0".into(), "j1".into()], "ee", &[0.0, 0.0]).unwrap();
+        let world = world_at(fk.ee.xyz);
+        let scene = scene_from_collision_world(&model, "ee", &world);
+        let policy = policy_from_scene(&scene);
+        let names = vec!["j0".into(), "j1".into()];
+        let q = vec![0.0, 0.0];
+        let r = crate::transition_validity::validate_transition(
+            &model,
+            &names,
+            &q,
+            &q,
+            &scene,
+            &policy,
+            crate::allowed_contact::ContactPhase::CurrentToApproach,
+        );
+        assert_ne!(
+            r.block_reason(),
+            Some(BLOCK_SUPPORT_COLLISION),
+            "witness={:?} coverage={:?}",
+            r.witness,
+            r.coverage.qualification
         );
     }
 

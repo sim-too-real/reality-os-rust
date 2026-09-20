@@ -1,6 +1,7 @@
 //! Physical-intelligence schemas. No plant I/O. SIM ≠ METAL.
 
 pub mod adapter;
+pub mod allowed_contact;
 pub mod capability;
 pub mod command;
 pub mod command_domain;
@@ -10,6 +11,9 @@ pub mod contact_maneuver;
 pub mod contact_manifold;
 pub mod embodiment;
 pub mod failure;
+pub mod geometry;
+pub mod geometry_fk;
+pub mod geometry_query;
 pub mod grasp;
 pub mod gripper_state;
 pub mod interaction;
@@ -23,9 +27,11 @@ pub mod push;
 pub mod reach;
 pub mod release;
 pub mod resource;
+pub mod runtime_interaction;
 pub mod sensor;
 pub mod skill;
 pub mod transform;
+pub mod transition_validity;
 pub mod workspace;
 pub mod world;
 

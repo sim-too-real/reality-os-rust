@@ -3547,6 +3547,7 @@ fn place_object_in_workspace(
             let object = BoxObject {
                 center,
                 half_extents: half_xyz,
+                quat_wxyz: [1.0, 0.0, 0.0, 0.0],
             };
             if use_v2 {
                 let (res, funnel) = select_fixed_world_push_seeded_with_funnel(
@@ -3942,6 +3943,7 @@ mod tests {
             lost_features: vec![],
             support_bodies: vec![],
             collision_groups: Default::default(),
+            geoms: Vec::new(),
             metal: false,
             evidence_status: crate::honesty::SIMULATION_ONLY.into(),
         };

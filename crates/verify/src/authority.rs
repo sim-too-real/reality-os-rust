@@ -503,6 +503,7 @@ mod tests {
             lost_features: vec![],
             support_bodies: vec![],
             collision_groups: Default::default(),
+            geoms: Vec::new(),
             metal: false,
             evidence_status: SIMULATION_ONLY.into(),
         }

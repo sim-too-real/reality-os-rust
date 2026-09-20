@@ -141,6 +141,8 @@ pub struct EmbodimentModel {
     pub diagnostics: Vec<ModelDiagnostic>,
     #[serde(default)]
     pub resources: Vec<crate::resource::ControlledResource>,
+    #[serde(default)]
+    pub collision_geoms: Vec<crate::geometry::RigidGeometry>,
     pub metal: bool,
 }
 
@@ -168,6 +170,7 @@ impl EmbodimentModel {
             transmissions: Vec::new(),
             diagnostics: Vec::new(),
             resources: Vec::new(),
+            collision_geoms: Vec::new(),
             metal: false,
         }
     }

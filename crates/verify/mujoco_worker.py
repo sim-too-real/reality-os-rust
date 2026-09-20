@@ -205,7 +205,19 @@ class Instance:
                 }
             )
         geoms = []
+        _geom_names = {
+            0: "plane",
+            1: "hfield",
+            2: "sphere",
+            3: "capsule",
+            4: "ellipsoid",
+            5: "cylinder",
+            6: "box",
+            7: "mesh",
+            8: "sdf",
+        }
         for i in range(m.ngeom):
+            gtype = int(m.geom_type[i])
             geoms.append(
                 {
                     "name": m.geom(i).name or f"geom_{i}",
@@ -214,6 +226,10 @@ class Instance:
                     "contype": int(m.geom_contype[i]),
                     "conaffinity": int(m.geom_conaffinity[i]),
                     "pos": [float(x) for x in m.geom_pos[i]],
+                    "quat": [float(x) for x in m.geom_quat[i]],
+                    "size": [float(x) for x in m.geom_size[i]],
+                    "type": gtype,
+                    "type_name": _geom_names.get(gtype, f"type_{gtype}"),
                 }
             )
         tendons = []

@@ -15,6 +15,7 @@ pub mod families;
 pub mod fk_oracle;
 pub mod format;
 pub mod foundation_report;
+pub mod geometry_cross_exam;
 pub mod held_out;
 pub mod honesty;
 pub mod ik_residual_ablation;
@@ -272,6 +273,7 @@ mod integration_tests {
             lost_features: vec![],
             support_bodies: vec![],
             collision_groups: Default::default(),
+            geoms: Vec::new(),
             metal: false,
             evidence_status: SIMULATION_ONLY.into(),
         };
@@ -573,6 +575,7 @@ mod integration_tests {
             lost_features: vec![],
             support_bodies: vec![],
             collision_groups: Default::default(),
+            geoms: Vec::new(),
             metal: false,
             evidence_status: SIMULATION_ONLY.into(),
         };
@@ -625,6 +628,7 @@ mod integration_tests {
             lost_features: vec![],
             support_bodies: vec![],
             collision_groups: Default::default(),
+            geoms: Vec::new(),
             metal: false,
             evidence_status: SIMULATION_ONLY.into(),
         };

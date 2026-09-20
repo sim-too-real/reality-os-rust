@@ -214,6 +214,46 @@ pub fn compile_grasp(
     Ok(plan)
 }
 
+/// GRASP uses the same geometry / coverage / allowed-contact / transition
+/// substrate as PUSH. Opening, closure, acquisition, and hold stay skill-local.
+pub fn grasp_approach_geometry(
+    model: &EmbodimentModel,
+    names: &[String],
+    qa: &[f64],
+    qb: &[f64],
+    scene: &crate::geometry::CollisionScene,
+) -> crate::transition_validity::TransitionReport {
+    let policy = crate::contact_collision::policy_from_scene(scene);
+    crate::transition_validity::validate_transition(
+        model,
+        names,
+        qa,
+        qb,
+        scene,
+        &policy,
+        crate::allowed_contact::ContactPhase::GraspApproach,
+    )
+}
+
+pub fn grasp_close_geometry(
+    model: &EmbodimentModel,
+    names: &[String],
+    qa: &[f64],
+    qb: &[f64],
+    scene: &crate::geometry::CollisionScene,
+) -> crate::transition_validity::TransitionReport {
+    let policy = crate::contact_collision::policy_from_scene(scene);
+    crate::transition_validity::validate_transition(
+        model,
+        names,
+        qa,
+        qb,
+        scene,
+        &policy,
+        crate::allowed_contact::ContactPhase::GraspClose,
+    )
+}
+
 pub fn grasp_miss_recovery() -> Vec<SkillStep> {
     vec![SkillStep::OpenThenRetract, SkillStep::Stop]
 }
@@ -399,5 +439,73 @@ mod tests {
         .unwrap_err();
         assert_eq!(err, SkillRefuse::ForceBoundUnavailable);
         assert!(!err.writes_allowed());
+    }
+
+    #[test]
+    fn grasp_and_push_share_transition_substrate() {
+        use crate::allowed_contact::{adjacent_body_pairs, AllowedContactPolicy, ContactPhase};
+        use crate::geometry::{
+            CollisionRole, CollisionScene, PrimitiveShape, RigidGeometry, SemanticRole,
+        };
+        use crate::transition_validity::{validate_transition, GeometryVerdict};
+        let model = crate::adapter::synth_planar_two_link();
+        let names = vec!["j0".into(), "j1".into()];
+        let qa = vec![0.0, 0.0];
+        let qb = vec![0.1, 0.0];
+        let link = RigidGeometry::declared(
+            "link_box",
+            "link1",
+            crate::transform::Se3::identity(),
+            PrimitiveShape::Box {
+                half_extents: [0.02, 0.02, 0.02],
+            },
+            CollisionRole::Collision,
+            SemanticRole::RobotLink,
+            "test",
+        );
+        let obj = RigidGeometry::declared(
+            "object",
+            "object",
+            crate::transform::Se3::translation([2.0, 0.0, 0.0]).unwrap(),
+            PrimitiveShape::Box {
+                half_extents: [0.02, 0.02, 0.02],
+            },
+            CollisionRole::Collision,
+            SemanticRole::Object,
+            "test",
+        );
+        let scene = CollisionScene {
+            robot: vec![link],
+            object: vec![obj],
+            support: vec![],
+            obstacles: vec![],
+            intended_tool_bodies: vec!["link2".into()],
+            object_id: "object".into(),
+            support_id: "table".into(),
+            adjacent_body_pairs: adjacent_body_pairs(&model),
+        };
+        let policy = AllowedContactPolicy::from_names(
+            "object",
+            scene.intended_tool_bodies.clone(),
+            vec!["link1".into(), "link2".into()],
+            vec!["table".into()],
+            vec![],
+            scene.adjacent_body_pairs.clone(),
+        );
+        let push_r = validate_transition(
+            &model,
+            &names,
+            &qa,
+            &qb,
+            &scene,
+            &policy,
+            ContactPhase::CurrentToApproach,
+        );
+        let grasp_r = grasp_approach_geometry(&model, &names, &qa, &qb, &scene);
+        assert_eq!(push_r.verdict, grasp_r.verdict);
+        assert!(!matches!(
+            grasp_r.verdict,
+            GeometryVerdict::ForbiddenContact
+        ));
     }
 }

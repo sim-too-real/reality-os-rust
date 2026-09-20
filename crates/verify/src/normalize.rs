@@ -66,6 +66,26 @@ pub struct SiteRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GeomRecord {
+    pub name: String,
+    pub body: String,
+    #[serde(default)]
+    pub geom_type: String,
+    #[serde(default)]
+    pub size: [f64; 3],
+    #[serde(default)]
+    pub pos: [f64; 3],
+    #[serde(default)]
+    pub quat: [f64; 4],
+    #[serde(default)]
+    pub group: i32,
+    #[serde(default)]
+    pub contype: i32,
+    #[serde(default)]
+    pub conaffinity: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BodyRecord {
     pub name: String,
     pub mass: f64,
@@ -133,6 +153,8 @@ pub struct RobotManifest {
     pub support_bodies: Vec<String>,
     #[serde(default)]
     pub collision_groups: std::collections::BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub geoms: Vec<GeomRecord>,
     pub metal: bool,
     pub evidence_status: String,
 }
@@ -272,6 +294,34 @@ impl RobotManifest {
             .iter()
             .map(|s| (s.name.clone(), s.body.clone()))
             .collect();
+        let geoms: Vec<GeomRecord> = inspect
+            .get("geoms")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|g| {
+                        let type_name = g
+                            .get("type_name")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| {
+                                geom_type_name(g.get("type").and_then(|v| v.as_i64()).unwrap_or(-1))
+                            });
+                        GeomRecord {
+                            name: g["name"].as_str().unwrap_or("").into(),
+                            body: g["body"].as_str().unwrap_or("").into(),
+                            geom_type: type_name,
+                            size: vec3_opt(&g["size"]).unwrap_or([0.0, 0.0, 0.0]),
+                            pos: vec3_opt(&g["pos"]).unwrap_or([0.0, 0.0, 0.0]),
+                            quat: vec4_opt(&g["quat"]).unwrap_or([1.0, 0.0, 0.0, 0.0]),
+                            group: g["group"].as_i64().unwrap_or(0) as i32,
+                            contype: g["contype"].as_i64().unwrap_or(0) as i32,
+                            conaffinity: g["conaffinity"].as_i64().unwrap_or(0) as i32,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let actuated: Vec<String> = actuators
             .iter()
@@ -383,6 +433,7 @@ impl RobotManifest {
                 .map(|f| f.body.clone().unwrap_or_else(|| f.name.clone()))
                 .collect(),
             collision_groups: bundle.manifest.collision_groups.clone(),
+            geoms,
             metal: false,
             evidence_status: crate::honesty::SIMULATION_ONLY.into(),
         }
@@ -538,6 +589,21 @@ fn vec4_opt(v: &serde_json::Value) -> Option<[f64; 4]> {
         arr[2].as_f64()?,
         arr[3].as_f64()?,
     ])
+}
+
+fn geom_type_name(code: i64) -> String {
+    match code {
+        0 => "plane".into(),
+        1 => "hfield".into(),
+        2 => "sphere".into(),
+        3 => "capsule".into(),
+        4 => "ellipsoid".into(),
+        5 => "cylinder".into(),
+        6 => "box".into(),
+        7 => "mesh".into(),
+        8 => "sdf".into(),
+        _ => format!("type_{code}"),
+    }
 }
 
 fn joint_type_name(code: i64) -> String {
