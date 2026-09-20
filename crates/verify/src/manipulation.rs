@@ -1657,20 +1657,7 @@ fn finish_episode(
         ee_object_contact,
         ep.expected_refusal,
     );
-    pev.feasible_maneuver = ep.had_feasible_contact_maneuver;
-    pev.contact_pose_reached = ep.contact_pose_reached;
-    pev.intended_tool_contact = ep.intended_tool_contact;
-    pev.unintended_robot_contact = ep.unintended_robot_contact;
-    pev.apparent_robot_object_contact = ep.apparent_robot_object_contact;
-    if ep.approach_pose_reached || ep.approach_q_reached {
-        pev.approach_reached = true;
-    }
-    pev.current_to_approach_feasible = ep.current_to_approach_feasible;
-    pev.approach_q_reached = ep.approach_q_reached;
-    pev.contact_q_reached = ep.contact_q_reached;
-    pev.mid_q_reached = ep.mid_q_reached;
-    pev.end_q_reached = ep.end_q_reached;
-    pev.executed_witness_q = ep.executed_witness_q;
+    overlay_episode_on_push_evidence(&mut pev, &ep);
     let tr = crate::push_pipeline::classify_push_pipeline(&pev);
     ep.first_stage_entered = tr
         .first_stage_entered
@@ -1685,6 +1672,25 @@ fn finish_episode(
         .map(|s| s.as_str().into())
         .unwrap_or_default();
     ep
+}
+
+/// Replace taxonomy defaults (`!MISS` ⇒ approach) with observed pose/q.
+fn overlay_episode_on_push_evidence(
+    ev: &mut crate::push_pipeline::PushEvidence,
+    ep: &ManipulationEpisode,
+) {
+    ev.feasible_maneuver = ep.had_feasible_contact_maneuver;
+    ev.contact_pose_reached = ep.contact_pose_reached;
+    ev.intended_tool_contact = ep.intended_tool_contact;
+    ev.unintended_robot_contact = ep.unintended_robot_contact;
+    ev.apparent_robot_object_contact = ep.apparent_robot_object_contact;
+    ev.approach_reached = ep.approach_pose_reached || ep.approach_q_reached;
+    ev.current_to_approach_feasible = ep.current_to_approach_feasible;
+    ev.approach_q_reached = ep.approach_q_reached;
+    ev.contact_q_reached = ep.contact_q_reached;
+    ev.mid_q_reached = ep.mid_q_reached;
+    ev.end_q_reached = ep.end_q_reached;
+    ev.executed_witness_q = ep.executed_witness_q;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2011,6 +2017,7 @@ pub fn tagged_push_episode_record(ep: &ManipulationEpisode) -> Value {
             json!(ep.had_feasible_contact_maneuver),
         ),
         ("contact_pose_reached", json!(ep.contact_pose_reached)),
+        ("approach_pose_reached", json!(ep.approach_pose_reached)),
         ("mujoco_ee_object_contact", json!(contact_established)),
         ("intended_tool_contact", json!(ep.intended_tool_contact)),
         (
@@ -3672,20 +3679,7 @@ mod tests {
                 ep.intended_tool_contact,
                 ep.expected_refusal,
             );
-            ev.feasible_maneuver = ep.had_feasible_contact_maneuver;
-            ev.contact_pose_reached = ep.contact_pose_reached;
-            ev.intended_tool_contact = ep.intended_tool_contact;
-            ev.unintended_robot_contact = ep.unintended_robot_contact;
-            ev.apparent_robot_object_contact = ep.apparent_robot_object_contact;
-            if ep.approach_pose_reached || ep.approach_q_reached {
-                ev.approach_reached = true;
-            }
-            ev.current_to_approach_feasible = ep.current_to_approach_feasible;
-            ev.approach_q_reached = ep.approach_q_reached;
-            ev.contact_q_reached = ep.contact_q_reached;
-            ev.mid_q_reached = ep.mid_q_reached;
-            ev.end_q_reached = ep.end_q_reached;
-            ev.executed_witness_q = ep.executed_witness_q;
+            overlay_episode_on_push_evidence(&mut ev, ep);
             funnel.absorb(&ev, ep.unauthorized_writes);
             assert!(
                 !ep.first_stage_entered.is_empty() || ep.expected_refusal,
@@ -3745,20 +3739,7 @@ mod tests {
                             ep.intended_tool_contact,
                             ep.expected_refusal,
                         );
-                        ev.feasible_maneuver = ep.had_feasible_contact_maneuver;
-                        ev.contact_pose_reached = ep.contact_pose_reached;
-                        ev.intended_tool_contact = ep.intended_tool_contact;
-                        ev.unintended_robot_contact = ep.unintended_robot_contact;
-                        ev.apparent_robot_object_contact = ep.apparent_robot_object_contact;
-                        if ep.approach_pose_reached || ep.approach_q_reached {
-                            ev.approach_reached = true;
-                        }
-                        ev.current_to_approach_feasible = ep.current_to_approach_feasible;
-                        ev.approach_q_reached = ep.approach_q_reached;
-                        ev.contact_q_reached = ep.contact_q_reached;
-                        ev.mid_q_reached = ep.mid_q_reached;
-                        ev.end_q_reached = ep.end_q_reached;
-                        ev.executed_witness_q = ep.executed_witness_q;
+                        overlay_episode_on_push_evidence(&mut ev, ep);
                         overall.absorb(&ev, ep.unauthorized_writes);
                     }
                     eprintln!(
@@ -4041,6 +4022,108 @@ mod tests {
         report["tuned_on_holdout"] = json!(false);
         report["episodes"] = json!(recs);
         std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap()).unwrap();
+    }
+
+    fn funnel_shell_episode() -> ManipulationEpisode {
+        ManipulationEpisode {
+            software_sha: "t".into(),
+            robot_id: "uuid".into(),
+            model_hash: "h".into(),
+            object_definitions: vec![],
+            world_seed: 1,
+            skill_contract: "skill.push".into(),
+            semantic_resource: None,
+            resource_topology: None,
+            joint_state: json!([]),
+            object_evidence: json!({"id": "obj0"}),
+            commands: vec![],
+            authority_decisions: vec![],
+            contacts: vec![],
+            support_relations: vec![],
+            task_result: "refuse".into(),
+            failure_taxonomy: Some("NO_FEASIBLE_CONTACT_POSE".into()),
+            evidence_used: vec![],
+            physical_violations: vec![],
+            ctrl_writes: 0,
+            unauthorized_writes: 0,
+            replay_write_delta: None,
+            metal: false,
+            evidence_status: SIMULATION_ONLY.into(),
+            perception: "PERFECT_PERCEPTION".into(),
+            simulation_only: true,
+            expected_refusal: false,
+            earliest_failure_stage: String::new(),
+            first_stage_entered: "TARGET_AVAILABLE".into(),
+            last_stage_completed: String::new(),
+            earliest_pipeline_failed: String::new(),
+            requested_push_direction: [1.0, 0.0, 0.0],
+            requested_push_distance_m: 0.05,
+            contact_establishment: "maneuver_v2".into(),
+            had_feasible_contact_maneuver: false,
+            pre_contact_taxonomy: String::new(),
+            approach_pose_error_m: f64::NAN,
+            contact_pose_error_m: f64::NAN,
+            approach_pose_reached: false,
+            contact_pose_reached: false,
+            selected_rank_why: String::new(),
+            world_construction: "fixed_world".into(),
+            intended_tool_contact: false,
+            unintended_robot_contact: false,
+            support_contact: false,
+            self_collision: false,
+            obstacle_contact: false,
+            apparent_robot_object_contact: false,
+            world_adapted_to_robot: false,
+            current_to_approach_feasible: false,
+            current_to_approach_reason: String::new(),
+            approach_q_reached: false,
+            contact_q_reached: false,
+            mid_q_reached: false,
+            end_q_reached: false,
+            executed_witness_q: false,
+        }
+    }
+
+    #[test]
+    fn overlay_replaces_miss_default_so_no_feasible_is_not_approach() {
+        let ep = funnel_shell_episode();
+        let mut ev = crate::push_pipeline::evidence_from_episode_fields(
+            &ep.task_result,
+            ep.failure_taxonomy.as_deref().unwrap_or(""),
+            &ep.evidence_used,
+            ep.intended_tool_contact,
+            ep.expected_refusal,
+        );
+        assert!(
+            ev.approach_reached,
+            "evidence_from_episode_fields still treats non-MISS as approach"
+        );
+        overlay_episode_on_push_evidence(&mut ev, &ep);
+        assert!(
+            !ev.approach_reached,
+            "shipped overlay must replace !MISS with pose/q"
+        );
+        let mut funnel = crate::push_pipeline::PushFunnel::default();
+        let recs = absorb_push_episodes(&mut funnel, std::slice::from_ref(&ep));
+        assert_eq!(funnel.n_approach, 0);
+        assert_eq!(funnel.n_feasible_maneuver, 0);
+        assert_eq!(recs[0]["approach_pose_reached"]["value"], false);
+        assert_eq!(recs[0]["approach_pose_reached"]["tag"], "POST_HOC_OBSERVED");
+
+        let mut with_q = ep;
+        with_q.approach_q_reached = true;
+        let mut ev_q = crate::push_pipeline::evidence_from_episode_fields(
+            &with_q.task_result,
+            with_q.failure_taxonomy.as_deref().unwrap_or(""),
+            &with_q.evidence_used,
+            with_q.intended_tool_contact,
+            with_q.expected_refusal,
+        );
+        overlay_episode_on_push_evidence(&mut ev_q, &with_q);
+        assert!(ev_q.approach_reached);
+        let rec = tagged_push_episode_record(&with_q);
+        assert_eq!(rec["approach_pose_reached"]["value"], false);
+        assert_eq!(rec["approach_q_reached"]["value"], true);
     }
 
     #[test]

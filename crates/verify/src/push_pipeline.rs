@@ -344,6 +344,10 @@ pub fn push_diagnostic_field_catalog() -> &'static [TaggedField] {
             tag: FieldTag::PostHocObserved,
         },
         TaggedField {
+            name: "approach_pose_reached",
+            tag: FieldTag::PostHocObserved,
+        },
+        TaggedField {
             name: "mujoco_ee_object_contact",
             tag: FieldTag::PrivilegedSimLabelOnly,
         },
@@ -855,6 +859,19 @@ mod tests {
         assert!(!cat.iter().any(|f| {
             f.tag == FieldTag::PolicyVisibleRuntime && f.name == "mujoco_ee_object_contact"
         }));
+        assert!(cat
+            .iter()
+            .any(|f| { f.name == "approach_pose_reached" && f.tag == FieldTag::PostHocObserved }));
+    }
+
+    #[test]
+    fn no_feasible_taxonomy_helper_still_defaults_approach_true() {
+        let ev =
+            evidence_from_episode_fields("refuse", "NO_FEASIBLE_CONTACT_POSE", &[], false, false);
+        assert!(
+            ev.approach_reached,
+            "helper uses !MISS; episode overlay must replace this"
+        );
     }
 
     #[test]
