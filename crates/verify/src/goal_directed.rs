@@ -166,7 +166,7 @@ mod tests {
     use realityos_semantics::provenance::Provenanced;
     use realityos_semantics::recoverability::{
         classify_recoverability, select_recoverable_progress, InteractionRegion,
-        RecoverabilityChoice, RecoverabilityInput,
+        RecoverabilityChoice, RecoverabilityClass, RecoverabilityInput,
     };
     use realityos_semantics::self_load::{gravity_self_load, self_load_provenanced};
     use realityos_semantics::transform::{rotate_by_quat, Se3};
@@ -1186,10 +1186,14 @@ mod tests {
                 let long = prediction_regime(belief, &live_hypotheses, 0.03, quasi_limit_m);
                 !long.quasi_static || long.friction_contradicted
             });
-            let stroke = if belief_short {
-                (quasi_limit_m * 0.5).max(0.004)
+            let long_stroke = remain.clamp(0.02, 0.03);
+            let short_stroke = (quasi_limit_m * 0.5).max(0.004);
+            let stroke = if belief_state.is_some() {
+                long_stroke
+            } else if belief_short {
+                short_stroke
             } else {
-                remain.clamp(0.02, 0.03)
+                long_stroke
             };
             let object_pose = pose_xy_yaw(xy, z, yaw);
             let mut cands = generate_planar_push_candidates(
@@ -1200,6 +1204,20 @@ mod tests {
                 0.015,
                 stroke,
             );
+            if belief_state.is_some() {
+                let mut short_cands = generate_planar_push_candidates(
+                    "obj0",
+                    object_pose,
+                    [size, size, size],
+                    [0.0, 0.0, 1.0],
+                    0.015,
+                    short_stroke,
+                );
+                for cand in &mut short_cands {
+                    cand.id = format!("qs:{short_stroke:.4}:{}", cand.id);
+                }
+                cands.extend(short_cands);
+            }
             let object = BoxObject {
                 center: [xy[0], xy[1], z],
                 half_extents: [size, size, size],
@@ -1216,11 +1234,12 @@ mod tests {
                 Result<ContactManeuver, ContactInfeasible>,
             > = std::collections::BTreeMap::new();
             for c in &cands {
-                if proven.contains_key(&c.face_id) {
+                let proof_key = format!("{}:{:.4}", c.face_id, c.stroke_m);
+                if proven.contains_key(&proof_key) {
                     continue;
                 }
                 proven.insert(
-                    c.face_id.clone(),
+                    proof_key,
                     prove_face(
                         &model,
                         &ee_name,
@@ -1235,7 +1254,8 @@ mod tests {
                 );
             }
             for c in &mut cands {
-                let (reachable, collision, executable, maneuver, why) = match proven.get(&c.face_id)
+                let proof_key = format!("{}:{:.4}", c.face_id, c.stroke_m);
+                let (reachable, collision, executable, maneuver, why) = match proven.get(&proof_key)
                 {
                     Some(Ok(m)) => {
                         let close = {
@@ -1317,18 +1337,29 @@ mod tests {
                         == Some(
                             realityos_semantics::planar_goal::GoalProgressClass::StrictProgress,
                         );
-                    let class = classify_recoverability(&RecoverabilityInput {
-                        physically_feasible: c.executable_for_plant && strict,
+                    let regime = belief_state.as_ref().map(|belief| {
+                        prediction_regime(belief, &live_hypotheses, c.stroke_m, quasi_limit_m)
+                    });
+                    let outside_regime = regime.is_some_and(|regime| !regime.quasi_static);
+                    let mut class = classify_recoverability(&RecoverabilityInput {
+                        physically_feasible: c.executable_for_plant && strict && !outside_regime,
                         makes_progress: strict,
                         current_xy: xy,
                         nominal_dxy: Some([push[0] / nrm * c.stroke_m, push[1] / nrm * c.stroke_m]),
-                        uncertainty_radius_m: Some(0.005),
+                        uncertainty_radius_m: Some(if outside_regime {
+                            reach.max(c.stroke_m) + 0.05
+                        } else {
+                            0.005
+                        }),
                         region: Some(InteractionRegion {
                             center_xy: xy,
-                            radius_m: reach.max(c.stroke_m + 0.01),
+                            radius_m: reach.max(0.02),
                         }),
-                        next_contact_admissible: Some(c.executable_for_plant),
+                        next_contact_admissible: Some(c.executable_for_plant && !outside_regime),
                     });
+                    if strict && outside_regime {
+                        class = RecoverabilityClass::ProgressButCanEnterUnrecoverableState;
+                    }
                     RecoverabilityChoice {
                         id: c.id.clone(),
                         class,
@@ -2358,9 +2389,13 @@ mod tests {
             assert_eq!(follow["unauthorized_writes"], 0);
             let why = follow["selection_rationale"].as_str().unwrap_or("");
             assert!(
-                why.contains("friction_contradicted=true")
-                    || why.contains("long_quasi_static=false"),
-                "next prediction ignored the revised regime: {why}"
+                why.contains("long_quasi_static=false"),
+                "quasi-static regime did not reach the next prediction: {why}"
+            );
+            let carried_belief = follow["reasoning"]["belief_after"].as_str().unwrap_or("");
+            assert!(
+                carried_belief.contains("quasi_static=Some((Contradicted"),
+                "QuasiStaticApplicability was not revised: {carried_belief}"
             );
             assert!(
                 why.contains("stroke_m=0.00") || why.contains("stroke_m=0.01"),

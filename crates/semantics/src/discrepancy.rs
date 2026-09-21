@@ -460,6 +460,15 @@ pub fn apply_probe_observation(
                 ),
             });
         }
+    } else if observed == ObservationTag::HighDisplacementRatio
+        && belief
+            .entry(PhysicalParameter::QuasiStaticApplicability)
+            .is_some()
+    {
+        // A high ratio eliminates the "broken only on long strokes" story and
+        // contradicts the declaration that quasi-static mechanics still applies.
+        // The declared number is left unchanged.
+        belief.contradict_declared(PhysicalParameter::QuasiStaticApplicability, observation_id);
     }
     ProbeUpdate {
         belief,
@@ -651,6 +660,49 @@ mod tests {
             0.015,
         );
         assert!(short.quasi_static);
+        let mut with_regime = PhysicalParameterBelief::declared_point(
+            PhysicalParameter::SupportFriction,
+            0.3,
+            "scene.mu",
+        );
+        with_regime
+            .parameters
+            .push(crate::physical_belief::ParameterBelief {
+                parameter: PhysicalParameter::QuasiStaticApplicability,
+                status: BeliefEpistemicStatus::DeclaredFact,
+                declared: crate::provenance::Provenanced::declared(
+                    1.0,
+                    "declared.quasi_static",
+                    0.0,
+                ),
+                empirical_interval: None,
+                lineage: Vec::new(),
+            });
+        let revised = apply_probe_observation(
+            &with_regime,
+            &live,
+            Stimulus {
+                stroke_m: 0.008,
+                quasi_static_stroke_limit_m: 0.015,
+            },
+            ObservationTag::HighDisplacementRatio,
+            "probe-high",
+        );
+        let quasi = revised
+            .belief
+            .entry(PhysicalParameter::QuasiStaticApplicability)
+            .unwrap();
+        assert_eq!(quasi.declared.value, Some(1.0));
+        assert_eq!(quasi.status, BeliefEpistemicStatus::Contradicted);
+        assert_eq!(
+            quasi.lineage.last().unwrap().inference,
+            DECLARED_MODEL_INCONSISTENT_WITH_OBSERVATION
+        );
+        let long = prediction_regime(&revised.belief, &revised.remaining, 0.03, 0.015);
+        assert!(!long.quasi_static);
+        assert!(long.friction_contradicted);
+        let kept = prediction_regime(&revised.belief, &revised.remaining, 0.004, 0.015);
+        assert!(kept.quasi_static);
     }
 
     #[test]
