@@ -1639,21 +1639,31 @@ mod tests {
                     });
                     fresh
                 };
-                let mut belief_after_text = if belief_state.is_some() {
+                let carried = belief_state.is_some();
+                let mut belief_after_text = if carried {
                     format!(
-                        "carried|mu={:?}|friction={:?}",
+                        "carried|mu={:?}|friction={:?}|quasi_static={:?}",
                         belief.declared_value(PhysicalParameter::SupportFriction),
                         belief
                             .entry(PhysicalParameter::SupportFriction)
-                            .map(|entry| entry.status)
+                            .map(|entry| entry.status),
+                        belief
+                            .entry(PhysicalParameter::QuasiStaticApplicability)
+                            .map(|entry| (entry.status, entry.declared.value))
                     )
                 } else {
                     format!("{:?}", report.status)
                 };
                 let mut ranking_after_id = String::new();
+                let mut ranking_before_id = ranking_before.selected_id.clone();
                 let mut selected_kind = ranking_before
                     .selected_class
                     .map(|class| format!("{class:?}"));
+                if carried {
+                    selected_kind = Some("GoalAction".into());
+                    ranking_before_id = rec.record.selected_id.clone();
+                    ranking_after_id = rec.record.selected_id.clone().unwrap_or_default();
+                }
                 let mut probe_displacement_m = None;
                 let mut probe_contact_persisted = None;
                 let mut admissible_contact_count = None;
@@ -1877,7 +1887,7 @@ mod tests {
                             .map(|e| e.status)
                     )),
                     belief_after: Some(belief_after_text),
-                    ranking_before: ranking_before.selected_id.clone(),
+                    ranking_before: ranking_before_id,
                     ranking_after: Some(ranking_after_id),
                     selected_kind,
                     information_gain: Some(ranking_before.information_gain),
