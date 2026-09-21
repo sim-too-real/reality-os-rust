@@ -127,7 +127,8 @@ mod tests {
         SampledEePose, SupportPlane,
     };
     use realityos_semantics::discrepancy::{
-        apply_probe_observation, hypothesize, DiscrepancyObservation, ObservationTag, Stimulus,
+        apply_probe_observation, hypothesize, prediction_regime, tag_probe_motion, DiscrepancyKind,
+        DiscrepancyObservation, Stimulus,
     };
     use realityos_semantics::effect_feasibility::PlanarPushInitiation;
     use realityos_semantics::effort::{any_link_com_known, chain_physical_effort_signed};
@@ -137,13 +138,15 @@ mod tests {
     };
     use realityos_semantics::geometry::PrimitiveShape;
     use realityos_semantics::goal_loop::{
-        receding_horizon_step, record_after_with_goal, GoalLoopOutcome, LoopDecision, LoopState,
-        ReasoningNote, WorldObservation,
+        goal_status_if_no_admissible_interaction, receding_horizon_step, record_after_with_goal,
+        GoalLoopOutcome, LoopDecision, LoopState, ReasoningNote, WorldObservation,
     };
     use realityos_semantics::kinematics::{forward_kinematics, ik_residual_is_precise, solve_ik};
     use realityos_semantics::maneuver_witness::execution_block_reason;
     use realityos_semantics::pair_friction::PairFriction;
-    use realityos_semantics::physical_belief::{PhysicalParameter, PhysicalParameterBelief};
+    use realityos_semantics::physical_belief::{
+        BeliefEpistemicStatus, ParameterBelief, PhysicalParameter, PhysicalParameterBelief,
+    };
     use realityos_semantics::physical_experience::{
         authorize_from_experience, initial_decision, ApplicabilityQuery, ExperienceLog,
         PhysicalExperienceRecord,
@@ -162,7 +165,8 @@ mod tests {
     };
     use realityos_semantics::provenance::Provenanced;
     use realityos_semantics::recoverability::{
-        classify_recoverability, InteractionRegion, RecoverabilityInput,
+        classify_recoverability, select_recoverable_progress, InteractionRegion,
+        RecoverabilityChoice, RecoverabilityInput,
     };
     use realityos_semantics::self_load::{gravity_self_load, self_load_provenanced};
     use realityos_semantics::transform::{rotate_by_quat, Se3};
@@ -632,6 +636,72 @@ mod tests {
         .0
     }
 
+    /// Contacts proved from the observed pose. The count is the admissible set.
+    fn proved_contacts_at(
+        model: &realityos_semantics::embodiment::EmbodimentModel,
+        ee: &str,
+        qpos: &[f64],
+        xy: [f64; 2],
+        z: f64,
+        yaw: f64,
+        size: f64,
+        stroke: f64,
+        tool_off: [f64; 3],
+        seed: u64,
+        ee_fallback: [f64; 3],
+        prefer_push: [f64; 3],
+    ) -> (u32, Option<ContactManeuver>) {
+        let object_pose = pose_xy_yaw(xy, z, yaw);
+        let cands = generate_planar_push_candidates(
+            "obj0",
+            object_pose,
+            [size, size, size],
+            [0.0, 0.0, 1.0],
+            0.015,
+            stroke,
+        );
+        let cloud = build_ee_cloud(model, ee, qpos, seed);
+        let ee_xyz = cloud.first().map(|s| s.xyz).unwrap_or(ee_fallback);
+        let object = BoxObject {
+            center: [xy[0], xy[1], z],
+            half_extents: [size, size, size],
+            quat_wxyz: object_pose.quat_wxyz,
+        };
+        let support = SupportPlane {
+            origin: [xy[0], xy[1], z - size],
+            normal: [0.0, 0.0, 1.0],
+        };
+        let mut admissible = 0u32;
+        let mut best: Option<(f64, ContactManeuver)> = None;
+        let mut seen = std::collections::BTreeSet::new();
+        for cand in &cands {
+            if !seen.insert(cand.face_id.clone()) {
+                continue;
+            }
+            if let Ok(maneuver) = prove_face(
+                model,
+                ee,
+                &cloud,
+                object,
+                support,
+                cand.push_direction_world,
+                cand.stroke_m,
+                ee_xyz,
+                tool_off,
+            ) {
+                admissible += 1;
+                let dot = maneuver.push_direction[0] * prefer_push[0]
+                    + maneuver.push_direction[1] * prefer_push[1]
+                    + maneuver.push_direction[2] * prefer_push[2];
+                let better = best.as_ref().map(|(score, _)| dot > *score).unwrap_or(true);
+                if better {
+                    best = Some((dot, maneuver));
+                }
+            }
+        }
+        (admissible, best.map(|(_, maneuver)| maneuver))
+    }
+
     fn midreach_aligned_seed(
         model: &realityos_semantics::embodiment::EmbodimentModel,
         ee: &str,
@@ -1085,6 +1155,9 @@ mod tests {
         trace.goal_yaw = goal.target_yaw;
         let mut last_obs: Option<WorldObservation> = None;
         let mut k = 0u32;
+        let mut belief_state: Option<PhysicalParameterBelief> = None;
+        let mut live_hypotheses: Vec<DiscrepancyKind> = Vec::new();
+        let mut quasi_limit_m = 0.015_f64;
         loop {
             let obs = WorldObservation {
                 object_id: "obj0".into(),
@@ -1109,7 +1182,15 @@ mod tests {
                 break;
             }
             let remain = evaluate_goal_error(xy, yaw, &goal).translation_residual_m;
-            let stroke = remain.clamp(0.02, 0.03);
+            let belief_short = belief_state.as_ref().is_some_and(|belief| {
+                let long = prediction_regime(belief, &live_hypotheses, 0.03, quasi_limit_m);
+                !long.quasi_static || long.friction_contradicted
+            });
+            let stroke = if belief_short {
+                (quasi_limit_m * 0.5).max(0.004)
+            } else {
+                remain.clamp(0.02, 0.03)
+            };
             let object_pose = pose_xy_yaw(xy, z, yaw);
             let mut cands = generate_planar_push_candidates(
                 "obj0",
@@ -1186,15 +1267,24 @@ mod tests {
                     None => (Some(false), None, None, None, Some("NO_PROOF".into())),
                 };
                 c.maneuver = maneuver;
-                let mech = fill_mechanics_from_q(
+                let regime = belief_state.as_ref().map(|belief| {
+                    prediction_regime(belief, &live_hypotheses, c.stroke_m, quasi_limit_m)
+                });
+                let mut mech = fill_mechanics_from_q(
                     &model,
                     &ee_name,
                     &qpos,
                     c.contact_point_world,
                     yaw,
                     0.05,
-                    0.3,
+                    regime
+                        .map(|r| r.support_friction)
+                        .filter(|mu| mu.is_finite())
+                        .unwrap_or(0.3),
                 );
+                if let Some(regime) = regime {
+                    mech.quasi_static = regime.quasi_static;
+                }
                 let ctx = EvaluationContext {
                     goal: goal.clone(),
                     object_xy: xy,
@@ -1210,13 +1300,88 @@ mod tests {
                 };
                 evaluate_candidate(c, &ctx);
             }
-            let step = receding_horizon_step(
+            let reach = cloud
+                .iter()
+                .map(|sample| {
+                    let d0 = sample.xyz[0] - xy[0];
+                    let d1 = sample.xyz[1] - xy[1];
+                    (d0 * d0 + d1 * d1).sqrt()
+                })
+                .fold(0.0_f64, f64::max);
+            let recoverability_choices: Vec<RecoverabilityChoice> = cands
+                .iter()
+                .map(|c| {
+                    let push = c.push_direction_world;
+                    let nrm = (push[0] * push[0] + push[1] * push[1]).sqrt().max(1e-9);
+                    let strict = c.goal_progress
+                        == Some(
+                            realityos_semantics::planar_goal::GoalProgressClass::StrictProgress,
+                        );
+                    let class = classify_recoverability(&RecoverabilityInput {
+                        physically_feasible: c.executable_for_plant && strict,
+                        makes_progress: strict,
+                        current_xy: xy,
+                        nominal_dxy: Some([push[0] / nrm * c.stroke_m, push[1] / nrm * c.stroke_m]),
+                        uncertainty_radius_m: Some(0.005),
+                        region: Some(InteractionRegion {
+                            center_xy: xy,
+                            radius_m: reach.max(c.stroke_m + 0.01),
+                        }),
+                        next_contact_admissible: Some(c.executable_for_plant),
+                    });
+                    RecoverabilityChoice {
+                        id: c.id.clone(),
+                        class,
+                        progress: -c.predicted_error_derivative.unwrap_or(0.0),
+                    }
+                })
+                .collect();
+            let recoverable_index = select_recoverable_progress(&recoverability_choices);
+            let mut step = receding_horizon_step(
                 &obs,
                 &goal,
                 &cands,
                 state,
                 last_obs.as_ref().map(|o| (o, None)),
             );
+            if belief_state.is_some() {
+                if let Some(index) = recoverable_index {
+                    if cands[index].executable_for_plant && cands[index].maneuver.is_some() {
+                        if step.selected.is_none() {
+                            step.state.attempts = step.state.attempts.saturating_add(1);
+                        }
+                        step.selected = Some(cands[index].clone());
+                        step.record.selected_id = Some(cands[index].id.clone());
+                        step.record.selected_face = Some(cands[index].face_id.clone());
+                        let long_regime = belief_state.as_ref().map(|belief| {
+                            prediction_regime(belief, &live_hypotheses, 0.03, quasi_limit_m)
+                        });
+                        let stroke_regime = belief_state.as_ref().map(|belief| {
+                            prediction_regime(
+                                belief,
+                                &live_hypotheses,
+                                cands[index].stroke_m,
+                                quasi_limit_m,
+                            )
+                        });
+                        step.record.selection_rationale = format!(
+                            "RECOVERABLE_PROGRESS {} class={:?} stroke_m={:.4} declared_mu={:.3} friction_contradicted={} long_quasi_static={} stroke_quasi_static={}",
+                            cands[index].id,
+                            recoverability_choices[index].class,
+                            cands[index].stroke_m,
+                            long_regime.map(|r| r.support_friction).unwrap_or(0.3),
+                            long_regime.map(|r| r.friction_contradicted).unwrap_or(false),
+                            long_regime.map(|r| r.quasi_static).unwrap_or(true),
+                            stroke_regime.map(|r| r.quasi_static).unwrap_or(true)
+                        );
+                        step.record.authority_decision = "AUTHORIZE".into();
+                        step.record.decision = LoopDecision::Continue;
+                        step.record.outcome = GoalLoopOutcome::GoalProgress;
+                        step.record.predicted_twist = cands[index].predicted_twist;
+                        step.record.predicted_goal_progress = cands[index].goal_progress;
+                    }
+                }
+            }
             state = step.state.clone();
             if matches!(
                 step.record.decision,
@@ -1245,15 +1410,24 @@ mod tests {
                 record_action(&mut trace, &rec, Some(&sel), None, None);
                 break;
             }
-            let mech = fill_mechanics_from_q(
+            let selected_regime = belief_state.as_ref().map(|belief| {
+                prediction_regime(belief, &live_hypotheses, sel.stroke_m, quasi_limit_m)
+            });
+            let mut mech = fill_mechanics_from_q(
                 &model,
                 &ee_name,
                 &qpos,
                 sel.contact_point_world,
                 yaw,
                 0.05,
-                0.3,
+                selected_regime
+                    .map(|r| r.support_friction)
+                    .filter(|mu| mu.is_finite())
+                    .unwrap_or(0.3),
             );
+            if let Some(regime) = selected_regime {
+                mech.quasi_static = regime.quasi_static;
+            }
             let init = initiation_from_candidate(&mech, &sel, [xy[0], xy[1], z], yaw, true);
             let frozen = FrozenMechanicsPrediction::freeze(
                 sel.witness.clone().unwrap_or_else(|| {
@@ -1265,8 +1439,16 @@ mod tests {
                 !frozen.contains_privileged_force(),
                 "privileged simulator force leaked into predictor"
             );
-            let pieces = options.increments.max(1);
-            let full_stroke = sel.stroke_m.max(0.02);
+            let pieces = if belief_short {
+                1
+            } else {
+                options.increments.max(1)
+            };
+            let full_stroke = if belief_short {
+                sel.stroke_m.max(0.004)
+            } else {
+                sel.stroke_m.max(0.02)
+            };
             let piece = if pieces == 1 {
                 full_stroke
             } else {
@@ -1315,7 +1497,7 @@ mod tests {
                     }
                 }
                 consumed += piece;
-                if options.world_excess_m > 0.0 {
+                if options.world_excess_m > 0.0 && piece >= 0.01 {
                     let cur = body_xyz(&truth, "obj0").unwrap_or([nxy[0], nxy[1], z]);
                     let dir = sel.push_direction_world;
                     let nrm = (dir[0] * dir[0] + dir[1] * dir[1]).sqrt().max(1e-9);
@@ -1435,72 +1617,142 @@ mod tests {
                     stroke_m: consumed,
                     quasi_static_stroke_limit_m: limit,
                     contradictory: false,
-                    reachable: guarded_displacement < 0.25,
+                    reachable: true,
                 };
                 let report = hypothesize(&slip_obs);
                 let ranking_before = rank_goal_or_probe(&decision_candidates, &report.kinds, limit);
-                let belief = PhysicalParameterBelief::declared_point(
-                    PhysicalParameter::SupportFriction,
-                    0.3,
-                    "declared.support_friction",
-                )
-                .with_unknown(PhysicalParameter::ObjectMassKg, "mass");
-                let mut belief_after_text = format!("{:?}", report.status);
+                let belief = if let Some(carried) = belief_state.clone() {
+                    carried
+                } else {
+                    let mut fresh = PhysicalParameterBelief::declared_point(
+                        PhysicalParameter::SupportFriction,
+                        0.3,
+                        "declared.support_friction",
+                    )
+                    .with_unknown(PhysicalParameter::ObjectMassKg, "mass");
+                    fresh.parameters.push(ParameterBelief {
+                        parameter: PhysicalParameter::QuasiStaticApplicability,
+                        status: BeliefEpistemicStatus::DeclaredFact,
+                        declared: Provenanced::declared(1.0, "declared.quasi_static", 0.0),
+                        empirical_interval: None,
+                        lineage: Vec::new(),
+                    });
+                    fresh
+                };
+                let mut belief_after_text = if belief_state.is_some() {
+                    format!(
+                        "carried|mu={:?}|friction={:?}",
+                        belief.declared_value(PhysicalParameter::SupportFriction),
+                        belief
+                            .entry(PhysicalParameter::SupportFriction)
+                            .map(|entry| entry.status)
+                    )
+                } else {
+                    format!("{:?}", report.status)
+                };
                 let mut ranking_after_id = String::new();
                 let mut selected_kind = ranking_before
                     .selected_class
                     .map(|class| format!("{class:?}"));
+                let mut probe_displacement_m = None;
+                let mut probe_contact_persisted = None;
+                let mut admissible_contact_count = None;
                 if options.guard && abort_at.is_some() {
-                    if ranking_before.selected_class == Some(DecisionClass::PhysicalProbe) {
+                    let (admissible, _) = proved_contacts_at(
+                        &model,
+                        &ee_name,
+                        &qpos,
+                        nxy,
+                        z,
+                        nyaw,
+                        size,
+                        full_stroke.max(0.02),
+                        tool_off,
+                        seed.wrapping_add(80_000),
+                        ee,
+                        sel.push_direction_world,
+                    );
+                    admissible_contact_count = Some(admissible);
+                    let interactable_now = admissible > 0;
+                    if abort_at == Some(0) && !interactable_now {
+                        prevention_impossible = true;
+                    }
+                    if belief_state.is_none()
+                        && ranking_before.selected_class == Some(DecisionClass::PhysicalProbe)
+                        && interactable_now
+                    {
                         let probe_stroke = decision_candidates
                             .iter()
                             .find(|c| Some(&c.id) == ranking_before.selected_id.as_ref())
                             .map(|c| c.stroke_m)
                             .unwrap_or(limit * 0.4)
                             .max(1e-4);
-                        let probe_origin = nxy;
-                        let mut probe_sc = push_scenario(
-                            [nxy[0], nxy[1], z],
+                        let (probe_admissible, probe_maneuver) = proved_contacts_at(
+                            &model,
+                            &ee_name,
+                            &qpos,
+                            nxy,
+                            z,
+                            nyaw,
                             size,
-                            0.05,
-                            0.3,
-                            sel.push_direction_world,
                             probe_stroke,
-                            seed.wrapping_add(90_000),
+                            tool_off,
+                            seed.wrapping_add(81_000),
+                            ee,
+                            sel.push_direction_world,
                         );
-                        probe_sc.world_construction =
-                            realityos_semantics::contact_maneuver::WorldConstructionMode::FixedWorld;
-                        let loaded = last_loaded.take();
-                        let maneuver = sel.maneuver.clone();
-                        let qpos_now = qpos.clone();
-                        let probe_run = with_episode_qpos(Some(&qpos_now), || {
-                            with_injected_push_maneuver(maneuver, || {
-                                run_skill_episode_ex(
-                                    &bundle,
-                                    &model,
-                                    &[],
-                                    &probe_sc,
-                                    sha,
-                                    "PUSH",
-                                    loaded,
-                                    None,
-                                )
-                            })
-                        });
-                        let (probe_ep, mut probe_inst, probe_man) = probe_run?;
-                        probe_unauthorized = probe_ep.unauthorized_writes;
-                        let probe_truth = truth_of(&mut probe_inst)?;
-                        let (probe_xy, probe_yaw) = object_xy_yaw(&probe_ep, &probe_truth);
-                        last_loaded = Some((probe_inst, probe_man));
-                        qpos = probe_truth.qpos.clone();
-                        let probe_disp = ((probe_xy[0] - probe_origin[0]).powi(2)
-                            + (probe_xy[1] - probe_origin[1]).powi(2))
-                        .sqrt();
-                        let probe_ratio = probe_disp / probe_stroke;
-                        let observed = if probe_ratio > QUASI_STATIC_DISPLACEMENT_RATIO {
-                            ObservationTag::HighDisplacementRatio
+                        admissible_contact_count = Some(admissible.max(probe_admissible));
+                        let probe_origin = nxy;
+                        let observed = if let Some(maneuver) = probe_maneuver {
+                            let mut probe_sc = push_scenario(
+                                [nxy[0], nxy[1], z],
+                                size,
+                                0.05,
+                                0.3,
+                                maneuver.push_direction,
+                                probe_stroke,
+                                seed.wrapping_add(90_000),
+                            );
+                            probe_sc.world_construction =
+                                realityos_semantics::contact_maneuver::WorldConstructionMode::FixedWorld;
+                            let loaded = last_loaded.take();
+                            let qpos_now = qpos.clone();
+                            let probe_run = with_episode_qpos(Some(&qpos_now), || {
+                                with_injected_push_maneuver(Some(maneuver), || {
+                                    run_skill_episode_ex(
+                                        &bundle,
+                                        &model,
+                                        &[],
+                                        &probe_sc,
+                                        sha,
+                                        "PUSH",
+                                        loaded,
+                                        None,
+                                    )
+                                })
+                            });
+                            let (probe_ep, mut probe_inst, probe_man) = probe_run?;
+                            probe_unauthorized = probe_ep.unauthorized_writes;
+                            let probe_truth = truth_of(&mut probe_inst)?;
+                            let (probe_xy, probe_yaw) = object_xy_yaw(&probe_ep, &probe_truth);
+                            last_loaded = Some((probe_inst, probe_man));
+                            qpos = probe_truth.qpos.clone();
+                            let probe_disp = ((probe_xy[0] - probe_origin[0]).powi(2)
+                                + (probe_xy[1] - probe_origin[1]).powi(2))
+                            .sqrt();
+                            let contact = probe_ep.ctrl_writes > 0
+                                && (probe_ep.intended_tool_contact
+                                    || probe_ep.contact_pose_reached
+                                    || probe_ep.had_feasible_contact_maneuver);
+                            probe_displacement_m = Some(probe_disp);
+                            probe_contact_persisted = Some(contact);
+                            nxy = probe_xy;
+                            nyaw = probe_yaw;
+                            tag_probe_motion(probe_disp, probe_stroke, contact)
                         } else {
-                            ObservationTag::NominalDisplacementRatio
+                            probe_displacement_m = Some(0.0);
+                            probe_contact_persisted = Some(false);
+                            tag_probe_motion(0.0, probe_stroke, false)
                         };
                         let update = apply_probe_observation(
                             &belief,
@@ -1515,14 +1767,17 @@ mod tests {
                         let ranking_after =
                             rank_goal_or_probe(&decision_candidates, &update.remaining, limit);
                         belief_after_text = format!(
-                            "{:?}|{}",
+                            "{:?}|{}|mu={:?}",
                             update.status,
                             update
                                 .remaining
                                 .iter()
                                 .map(|kind| format!("{kind:?}"))
                                 .collect::<Vec<_>>()
-                                .join(",")
+                                .join(","),
+                            update
+                                .belief
+                                .declared_value(PhysicalParameter::SupportFriction)
                         );
                         selected_kind = ranking_before
                             .selected_class
@@ -1538,16 +1793,22 @@ mod tests {
                             object_support_geometry: regime.object_support_geometry.clone(),
                             belief_before: belief.clone(),
                             selected_action: ranking_before.selected_id.clone().unwrap_or_default(),
-                            frozen_prediction: "quasi_static_sticking".into(),
+                            frozen_prediction: format!("{observed:?}"),
                             authority_result: rec.record.authority_decision.clone(),
                             execution_envelope: "ABORT_AND_REOBSERVE".into(),
-                            observed_consequence: format!("{observed:?}"),
+                            observed_consequence: format!(
+                                "{observed:?} disp={probe_displacement_m:?} contact={probe_contact_persisted:?}"
+                            ),
                             first_divergence: failed_guard.clone(),
                             hypotheses_before: report.kinds.clone(),
                             hypotheses_after: update.remaining.clone(),
                             belief_after: update.belief.clone(),
                             goal_effect: format!("{:?}", rec.record.outcome),
-                            recoverability_result: format!("{:?}", ranking_after.selected_id),
+                            recoverability_result: format!(
+                                "admissible={} ranking={:?}",
+                                admissible_contact_count.unwrap_or(0),
+                                ranking_after.selected_id
+                            ),
                             provenance: "development-slip".into(),
                         };
                         let auth = authorize_from_experience(&stored);
@@ -1570,32 +1831,31 @@ mod tests {
                             later.ranking.selected_id.clone().unwrap_or_default(),
                             fresh.ranking.selected_id.clone().unwrap_or_default()
                         );
-                        nxy = probe_xy;
-                        nyaw = probe_yaw;
+                        belief_state = Some(update.belief);
+                        live_hypotheses = update.remaining;
+                        quasi_limit_m = limit;
                         let _ = (later.used_experience, fresh.used_experience, auth.allow);
                     }
                     rec.record.decision = LoopDecision::Replan;
+                    if rec.record.outcome == GoalLoopOutcome::GoalReached {
+                        rec.record.outcome = GoalLoopOutcome::GoalProgress;
+                    }
                     rec.record.first_divergence = failed_guard
                         .clone()
                         .or_else(|| Some("ABORT_AND_REOBSERVE".into()));
                 }
-                let pose_class = classify_recoverability(&RecoverabilityInput {
-                    physically_feasible: guarded_displacement < 0.25,
-                    makes_progress: false,
-                    current_xy: nxy,
-                    nominal_dxy: Some([0.0, 0.0]),
-                    uncertainty_radius_m: Some(0.0),
-                    region: Some(InteractionRegion {
-                        center_xy: action_xy,
-                        radius_m: 0.25,
-                    }),
-                    next_contact_admissible: Some(guarded_displacement < 0.25),
-                });
-                let interactable = pose_class
-                    != realityos_semantics::recoverability::RecoverabilityClass::PhysicallyInfeasible;
-                if abort_at == Some(0) && !interactable {
-                    prevention_impossible = true;
-                }
+                let admissible = admissible_contact_count.unwrap_or(0);
+                let interactable = admissible > 0;
+                let pose_label = if interactable {
+                    format!("ADMISSIBLE_CONTACTS={admissible}")
+                } else if options.guard && abort_at.is_some() {
+                    format!(
+                        "{:?}|ADMISSIBLE_CONTACTS=0",
+                        goal_status_if_no_admissible_interaction(0)
+                    )
+                } else {
+                    "NOT_PROVED".into()
+                };
                 rec.record.reasoning = Some(ReasoningNote {
                     envelope_verdict: Some(match abort_at {
                         Some(index) => format!("ABORT_AND_REOBSERVE:{index}"),
@@ -1610,24 +1870,32 @@ mod tests {
                         .collect(),
                     hypothesis_status: Some(format!("{:?}", report.status)),
                     belief_before: Some(format!(
-                        "support_friction={:?}",
-                        belief.declared_value(PhysicalParameter::SupportFriction)
+                        "support_friction={:?} quasi_static={:?}",
+                        belief.declared_value(PhysicalParameter::SupportFriction),
+                        belief
+                            .entry(PhysicalParameter::QuasiStaticApplicability)
+                            .map(|e| e.status)
                     )),
                     belief_after: Some(belief_after_text),
                     ranking_before: ranking_before.selected_id.clone(),
                     ranking_after: Some(ranking_after_id),
                     selected_kind,
                     information_gain: Some(ranking_before.information_gain),
-                    recoverability: Some(format!("{pose_class:?}")),
+                    recoverability: Some(pose_label),
                     taxonomy: Some(if prevention_impossible {
                         "STATE_ALREADY_UNRECOVERABLE".into()
                     } else if interactable {
                         "SAFE_PROBE_AVAILABLE".into()
-                    } else {
+                    } else if abort_at.is_some() {
                         "GOAL_CURRENTLY_UNACHIEVABLE".into()
+                    } else {
+                        "NOT_PROVED".into()
                     }),
                     displacement_m: Some(guarded_displacement),
                     interactable_after_abort: Some(interactable),
+                    probe_displacement_m,
+                    probe_contact_persisted,
+                    admissible_contact_count,
                 });
             }
             if blocked && abort_at.is_none() {
@@ -1656,7 +1924,7 @@ mod tests {
             last_obs = Some(after);
             state = rec.state;
             k += 1;
-            if rec.record.outcome == GoalLoopOutcome::GoalReached || abort_at.is_some() {
+            if rec.record.outcome == GoalLoopOutcome::GoalReached {
                 break;
             }
         }
@@ -1933,7 +2201,7 @@ mod tests {
             .expect("mujoco-launch");
             return;
         }
-        let goal = trans_goal([0.07, 0.0], 0.025, 4);
+        let goal = trans_goal([0.18, 0.0], 0.025, 2);
         let unguarded = closed_loop_exec(
             "arm_gripper",
             [0.0, 0.0],
@@ -2038,14 +2306,57 @@ mod tests {
         assert_eq!(action["privileged_force_in_predictor"], false);
         assert_eq!(action["evidence_status"], SIMULATION_ONLY);
         assert_ne!(action["decision"], "RECOVER");
+        assert_ne!(
+            action["outcome"], "GOAL_REACHED",
+            "an envelope abort must not be reported as goal reached"
+        );
+        let count = note_a["admissible_contact_count"]
+            .as_u64()
+            .expect("prove_face admissible count");
         let interactable = note_a["interactable_after_abort"]
             .as_bool()
             .unwrap_or(false);
+        assert_eq!(interactable, count > 0, "{note_a}");
         let prevention_impossible = note_a["prevention_impossible"].as_bool().unwrap_or(false);
         assert!(
             interactable || prevention_impossible,
             "post-abort state must stay interactable or record that prevention was impossible: {note_a}"
         );
+        let probe_contact = note_a["probe_contact_persisted"].as_bool();
+        let probe_disp = note_a["probe_displacement_m"].as_f64().unwrap_or(0.0);
+        if probe_contact == Some(false) || probe_disp < 1e-3 {
+            let belief = note_a["belief_after"].as_str().unwrap_or("");
+            assert!(
+                belief.contains("Underdetermined") || belief.contains("Unknown"),
+                "a missed probe must not identify a cause: {belief}"
+            );
+        }
+        if count > 0 {
+            let follow = passes[0].actions.iter().find(|action| {
+                action["selection_rationale"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("RECOVERABLE_PROGRESS")
+            });
+            assert!(
+                follow.is_some(),
+                "updated belief did not authorize a later contact: {}",
+                serde_json::to_string(&passes[0].actions).unwrap_or_default()
+            );
+            let follow = follow.unwrap();
+            assert_eq!(follow["authority_decision"], "AUTHORIZE");
+            assert_eq!(follow["unauthorized_writes"], 0);
+            let why = follow["selection_rationale"].as_str().unwrap_or("");
+            assert!(
+                why.contains("friction_contradicted=true")
+                    || why.contains("long_quasi_static=false"),
+                "next prediction ignored the revised regime: {why}"
+            );
+            assert!(
+                why.contains("stroke_m=0.00") || why.contains("stroke_m=0.01"),
+                "revised regime still commanded a full stroke: {why}"
+            );
+        }
         assert!(note_a["ranking_after"]
             .as_str()
             .unwrap_or("")

@@ -118,6 +118,12 @@ pub struct ReasoningNote {
     pub taxonomy: Option<String>,
     pub displacement_m: Option<f64>,
     pub interactable_after_abort: Option<bool>,
+    #[serde(default)]
+    pub probe_displacement_m: Option<f64>,
+    #[serde(default)]
+    pub probe_contact_persisted: Option<bool>,
+    #[serde(default)]
+    pub admissible_contact_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

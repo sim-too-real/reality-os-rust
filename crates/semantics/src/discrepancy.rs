@@ -134,6 +134,64 @@ impl TaxonomyFacts {
     }
 }
 
+/// Classify a probe's measured motion. Lost contact or almost no motion is not
+/// a nominal quasi-static result.
+pub fn tag_probe_motion(
+    displacement_m: f64,
+    stroke_m: f64,
+    contact_persisted: bool,
+) -> ObservationTag {
+    let stroke = stroke_m.max(1e-9);
+    if !contact_persisted || !displacement_m.is_finite() || displacement_m < 0.25 * stroke {
+        return ObservationTag::Insufficient;
+    }
+    let ratio = displacement_m / stroke;
+    if ratio > crate::execution_envelope::QUASI_STATIC_DISPLACEMENT_RATIO {
+        ObservationTag::HighDisplacementRatio
+    } else {
+        ObservationTag::NominalDisplacementRatio
+    }
+}
+
+/// Friction value and quasi-static flag used to freeze the next prediction.
+/// The declared friction number is not rewritten.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PredictionRegime {
+    /// Declared coefficient. Not replaced when the declaration is contradicted.
+    pub support_friction: f64,
+    pub friction_contradicted: bool,
+    pub quasi_static: bool,
+}
+
+pub fn prediction_regime(
+    belief: &PhysicalParameterBelief,
+    live: &[DiscrepancyKind],
+    stroke_m: f64,
+    quasi_static_limit_m: f64,
+) -> PredictionRegime {
+    let support_friction = belief
+        .declared_value(PhysicalParameter::SupportFriction)
+        .unwrap_or(f64::NAN);
+    let friction_contradicted = live.contains(&DiscrepancyKind::SupportFrictionInconsistent)
+        || belief
+            .entry(PhysicalParameter::SupportFriction)
+            .is_some_and(|entry| entry.status == BeliefEpistemicStatus::Contradicted);
+    let quasi_broken = live.contains(&DiscrepancyKind::QuasiStaticAssumptionBroken)
+        || belief
+            .entry(PhysicalParameter::QuasiStaticApplicability)
+            .is_some_and(|entry| {
+                matches!(
+                    entry.status,
+                    BeliefEpistemicStatus::DerivedConstraint | BeliefEpistemicStatus::Contradicted
+                )
+            });
+    PredictionRegime {
+        support_friction,
+        friction_contradicted,
+        quasi_static: !quasi_broken || stroke_m <= quasi_static_limit_m,
+    }
+}
+
 /// What `kind` predicts for a stimulus of this stroke. Not a probability.
 pub fn predicted_tag(kind: DiscrepancyKind, stimulus: Stimulus) -> ObservationTag {
     match kind {
@@ -316,6 +374,35 @@ pub fn apply_probe_observation(
     observed: ObservationTag,
     observation_id: &str,
 ) -> ProbeUpdate {
+    if observed == ObservationTag::Insufficient {
+        let mut belief = belief.clone();
+        if let Some(entry) = belief.entry_mut(PhysicalParameter::SupportFriction) {
+            let declared = entry.declared.value;
+            entry.lineage.push(BeliefLineage {
+                belief_before: format!(
+                    "support_friction declared={declared:?} status={:?}",
+                    entry.status
+                ),
+                observation: observation_id.to_string(),
+                inference: "INSUFFICIENT_PROBE_MOTION".into(),
+                belief_after: format!(
+                    "support_friction declared={declared:?} status={:?} unchanged",
+                    entry.status
+                ),
+            });
+        }
+        return ProbeUpdate {
+            belief,
+            remaining: live.to_vec(),
+            eliminated: Vec::new(),
+            status: if live.len() > 1 {
+                Identifiability::Underdetermined
+            } else {
+                Identifiability::Unknown
+            },
+            observation_id: observation_id.to_string(),
+        };
+    }
     let mut remaining = Vec::new();
     let mut eliminated = Vec::new();
     for kind in live {
@@ -504,6 +591,66 @@ mod tests {
         assert_eq!(line.inference, DECLARED_MODEL_INCONSISTENT_WITH_OBSERVATION);
         assert!(!line.belief_before.is_empty());
         assert!(!line.belief_after.is_empty());
+    }
+
+    #[test]
+    fn missed_contact_or_no_motion_does_not_identify_quasi_static() {
+        assert_eq!(
+            tag_probe_motion(0.0, 0.008, false),
+            ObservationTag::Insufficient
+        );
+        assert_eq!(
+            tag_probe_motion(0.0001, 0.008, true),
+            ObservationTag::Insufficient
+        );
+        assert_eq!(
+            tag_probe_motion(0.007, 0.008, true),
+            ObservationTag::NominalDisplacementRatio
+        );
+        let belief = PhysicalParameterBelief::declared_point(
+            PhysicalParameter::SupportFriction,
+            0.3,
+            "scene.mu",
+        );
+        let live = vec![
+            DiscrepancyKind::SupportFrictionInconsistent,
+            DiscrepancyKind::QuasiStaticAssumptionBroken,
+        ];
+        let update = apply_probe_observation(
+            &belief,
+            &live,
+            Stimulus {
+                stroke_m: 0.008,
+                quasi_static_stroke_limit_m: 0.015,
+            },
+            ObservationTag::Insufficient,
+            "probe-miss",
+        );
+        assert_eq!(update.eliminated, Vec::<DiscrepancyKind>::new());
+        assert_eq!(update.remaining, live);
+        assert_eq!(update.status, Identifiability::Underdetermined);
+        assert_eq!(
+            update
+                .belief
+                .declared_value(PhysicalParameter::SupportFriction),
+            Some(0.3)
+        );
+        let regime = prediction_regime(
+            &belief,
+            &[DiscrepancyKind::QuasiStaticAssumptionBroken],
+            0.03,
+            0.015,
+        );
+        assert_eq!(regime.support_friction, 0.3);
+        assert!(!regime.quasi_static);
+        assert!(!regime.friction_contradicted);
+        let short = prediction_regime(
+            &belief,
+            &[DiscrepancyKind::QuasiStaticAssumptionBroken],
+            0.008,
+            0.015,
+        );
+        assert!(short.quasi_static);
     }
 
     #[test]
