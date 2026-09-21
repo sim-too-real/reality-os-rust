@@ -223,7 +223,7 @@ pub fn grasp_approach_geometry(
     qb: &[f64],
     scene: &crate::geometry::CollisionScene,
 ) -> crate::transition_validity::TransitionReport {
-    let policy = crate::contact_collision::policy_from_scene(scene);
+    let policy = crate::contact_collision::policy_from_scene_model(Some(model), scene);
     crate::transition_validity::validate_transition(
         model,
         names,
@@ -242,7 +242,7 @@ pub fn grasp_close_geometry(
     qb: &[f64],
     scene: &crate::geometry::CollisionScene,
 ) -> crate::transition_validity::TransitionReport {
-    let policy = crate::contact_collision::policy_from_scene(scene);
+    let policy = crate::contact_collision::policy_from_scene_model(Some(model), scene);
     crate::transition_validity::validate_transition(
         model,
         names,

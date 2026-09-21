@@ -98,19 +98,62 @@ fn ee_parent_and_local(model: &EmbodimentModel, ee: &str) -> Option<(String, Se3
     Some((frame.parent_body.clone(), local))
 }
 
+fn is_kinematic_robot_body(model: &EmbodimentModel, name: &str) -> bool {
+    if name.is_empty() || name == "world" {
+        return false;
+    }
+    model
+        .joints
+        .iter()
+        .any(|j| j.parent_body == name || j.child_body == name)
+        || model.frames.iter().any(|f| {
+            f.parent_body == name
+                && matches!(
+                    f.kind,
+                    crate::embodiment::FrameKind::Ee | crate::embodiment::FrameKind::Tool
+                )
+        })
+}
+
+fn kinematic_root_bodies(model: &EmbodimentModel) -> Vec<String> {
+    let children: std::collections::BTreeSet<&str> =
+        model.joints.iter().map(|j| j.child_body.as_str()).collect();
+    let mut roots = std::collections::BTreeSet::new();
+    for j in &model.joints {
+        if j.parent_body.is_empty() || j.parent_body == "world" {
+            continue;
+        }
+        if !children.contains(j.parent_body.as_str()) {
+            roots.insert(j.parent_body.clone());
+        }
+    }
+    roots.into_iter().collect()
+}
+
 /// Planner-visible scene. Declared geoms win; proxy spheres are classified.
 pub fn scene_from_collision_world(
     model: &EmbodimentModel,
     ee: &str,
     world: &CollisionWorld,
 ) -> CollisionScene {
-    let mut robot = world.declared_geoms.clone();
+    let keep_robot = |g: &RigidGeometry| {
+        g.participates_in_collision()
+            && is_kinematic_robot_body(model, &g.owner_body)
+            && g.owner_body != world.object_id
+            && g.owner_body != world.support_id
+    };
+    let mut robot = world
+        .declared_geoms
+        .iter()
+        .filter(|g| keep_robot(g))
+        .cloned()
+        .collect::<Vec<_>>();
     if robot.is_empty() {
         robot.extend(
             model
                 .collision_geoms
                 .iter()
-                .filter(|g| g.participates_in_collision())
+                .filter(|g| keep_robot(g))
                 .cloned(),
         );
     }
@@ -229,11 +272,18 @@ pub fn scene_from_collision_world(
 }
 
 pub fn policy_from_scene(scene: &CollisionScene) -> AllowedContactPolicy {
+    policy_from_scene_model(None, scene)
+}
+
+pub fn policy_from_scene_model(
+    model: Option<&EmbodimentModel>,
+    scene: &CollisionScene,
+) -> AllowedContactPolicy {
     let mut robot_bodies: Vec<String> = scene.robot.iter().map(|g| g.owner_body.clone()).collect();
     robot_bodies.extend(scene.intended_tool_bodies.iter().cloned());
     robot_bodies.sort();
     robot_bodies.dedup();
-    AllowedContactPolicy::from_names(
+    let mut policy = AllowedContactPolicy::from_names(
         scene.object_id.clone(),
         scene.intended_tool_bodies.clone(),
         robot_bodies,
@@ -244,7 +294,11 @@ pub fn policy_from_scene(scene: &CollisionScene) -> AllowedContactPolicy {
             .map(|g| g.owner_body.clone())
             .collect(),
         scene.adjacent_body_pairs.clone(),
-    )
+    );
+    if let Some(model) = model {
+        policy.fixed_mount_bodies = kinematic_root_bodies(model);
+    }
+    policy
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -511,7 +565,7 @@ pub fn apply_collision_admissibility(
 ) {
     let names = &w.joint_names;
     let scene = scene_from_collision_world(model, ee, world);
-    let policy = policy_from_scene(&scene);
+    let policy = policy_from_scene_model(Some(model), &scene);
     let segs = [
         (
             TransitionKind::CurrentToApproach,

@@ -117,19 +117,22 @@ mod tests {
     use crate::runner::load_and_normalize;
     use crate::semantics_map::embodiment_from_manifest;
     use realityos_physics::{PressureDistribution, SupportFrictionModel};
+    use realityos_semantics::command_domain::named_joint_limit_margin;
     use realityos_semantics::contact::declared_manipulation_contact_bodies;
     use realityos_semantics::contact_jacobian::contact_jacobian_witness;
     use realityos_semantics::contact_maneuver::{
-        select_fixed_world_push_seeded_with_funnel, tool_offset_in_ee, BoxObject,
-        ContactInfeasible, ContactManeuver, ContactManeuverSpec, SampledEePose, SupportPlane,
+        object_center_for_sample, select_fixed_world_push_seeded_with_funnel, tool_offset_in_ee,
+        BoxObject, ContactInfeasible, ContactManeuver, ContactManeuverSpec, ContactSelectFunnel,
+        SampledEePose, SupportPlane,
     };
     use realityos_semantics::effect_feasibility::PlanarPushInitiation;
     use realityos_semantics::effort::{any_link_com_known, chain_physical_effort_signed};
+    use realityos_semantics::geometry::PrimitiveShape;
     use realityos_semantics::goal_loop::{
         receding_horizon_step, record_after_with_goal, GoalLoopOutcome, LoopDecision, LoopState,
         WorldObservation,
     };
-    use realityos_semantics::kinematics::forward_kinematics;
+    use realityos_semantics::kinematics::{forward_kinematics, ik_residual_is_precise, solve_ik};
     use realityos_semantics::maneuver_witness::execution_block_reason;
     use realityos_semantics::pair_friction::PairFriction;
     use realityos_semantics::physical_interaction::{
@@ -143,7 +146,7 @@ mod tests {
     };
     use realityos_semantics::provenance::Provenanced;
     use realityos_semantics::self_load::{gravity_self_load, self_load_provenanced};
-    use realityos_semantics::transform::Se3;
+    use realityos_semantics::transform::{rotate_by_quat, Se3};
     use realityos_semantics::workspace::reachable_ee_poses;
     use serde_json::json;
     use std::path::PathBuf;
@@ -350,12 +353,14 @@ mod tests {
     }
 
     fn object_xy_yaw(ep: &ManipulationEpisode, truth: &VerifierTruth) -> ([f64; 2], f64) {
-        let xy = ep
-            .object_evidence
-            .get("pose")
-            .and_then(|p| p.as_array())
-            .and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?]))
-            .or_else(|| body_xyz(truth, "obj0").map(|p| [p[0], p[1]]))
+        let xy = body_xyz(truth, "obj0")
+            .map(|p| [p[0], p[1]])
+            .or_else(|| {
+                ep.object_evidence
+                    .get("pose")
+                    .and_then(|p| p.as_array())
+                    .and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?]))
+            })
             .unwrap_or([0.0, 0.0]);
         let yaw = truth
             .xquat
@@ -530,7 +535,7 @@ mod tests {
         p
     }
 
-    fn prove_face(
+    fn prove_face_funnel(
         model: &realityos_semantics::embodiment::EmbodimentModel,
         ee: &str,
         cloud: &[SampledEePose],
@@ -540,7 +545,10 @@ mod tests {
         stroke: f64,
         ee_xyz: [f64; 3],
         tool_off: [f64; 3],
-    ) -> Result<ContactManeuver, ContactInfeasible> {
+    ) -> (
+        Result<ContactManeuver, ContactInfeasible>,
+        ContactSelectFunnel,
+    ) {
         let mut spec = ContactManeuverSpec::table_push(push, stroke, ee_xyz, tool_off);
         spec.object_id = "obj0".into();
         spec.intended_tool_bodies =
@@ -563,21 +571,123 @@ mod tests {
                     offset: [0.0, 0.0, 0.0],
                 });
         }
-        let (res, _funnel) =
+        let (res, funnel) =
             select_fixed_world_push_seeded_with_funnel(model, ee, cloud, object, support, &spec);
-        match res {
-            Ok((m, _)) => {
-                if m.executable
-                    .as_ref()
-                    .is_some_and(|w| execution_block_reason(w).is_none())
-                {
-                    Ok(m)
-                } else {
-                    Err(ContactInfeasible::NoExecutableContactManeuver)
+        (
+            match res {
+                Ok((m, _)) => {
+                    if m.executable
+                        .as_ref()
+                        .is_some_and(|w| execution_block_reason(w).is_none())
+                    {
+                        Ok(m)
+                    } else {
+                        Err(ContactInfeasible::NoExecutableContactManeuver)
+                    }
                 }
-            }
-            Err(e) => Err(e),
+                Err(e) => Err(e),
+            },
+            funnel,
+        )
+    }
+
+    fn prove_face(
+        model: &realityos_semantics::embodiment::EmbodimentModel,
+        ee: &str,
+        cloud: &[SampledEePose],
+        object: BoxObject,
+        support: SupportPlane,
+        push: [f64; 3],
+        stroke: f64,
+        ee_xyz: [f64; 3],
+        tool_off: [f64; 3],
+    ) -> Result<ContactManeuver, ContactInfeasible> {
+        prove_face_funnel(
+            model, ee, cloud, object, support, push, stroke, ee_xyz, tool_off,
+        )
+        .0
+    }
+
+    fn midreach_aligned_seed(
+        model: &realityos_semantics::embodiment::EmbodimentModel,
+        ee: &str,
+        desired: [f64; 3],
+        z: f64,
+        tool_off: [f64; 3],
+    ) -> Option<SampledEePose> {
+        let chain = model.ee_joint_chain(ee)?;
+        let n = chain.len();
+        if n == 0 {
+            return None;
         }
+        let target = [desired[0] * 0.30, desired[1] * 0.30, z];
+        let mut guesses = vec![vec![0.0; n]];
+        let mut g1 = vec![0.0; n];
+        if n > 1 {
+            g1[1] = -0.9;
+        }
+        if n > 0 {
+            g1[0] = 0.45;
+        }
+        if n > 2 {
+            g1[2] = 0.45;
+        }
+        guesses.push(g1);
+        let mut g2 = vec![0.0; n];
+        if n > 1 {
+            g2[1] = 0.9;
+        }
+        if n > 0 {
+            g2[0] = -0.45;
+        }
+        if n > 2 {
+            g2[2] = -0.45;
+        }
+        guesses.push(g2);
+        let mut g3 = vec![0.0; n];
+        if n > 0 {
+            g3[0] = 0.7;
+        }
+        if n > 1 {
+            g3[1] = -1.3;
+        }
+        if n > 2 {
+            g3[2] = 0.6;
+        }
+        guesses.push(g3);
+        let mut best: Option<(SampledEePose, f64)> = None;
+        for seed in guesses {
+            let Ok((q, tr)) = solve_ik(model, &chain, ee, target, &seed) else {
+                continue;
+            };
+            if !ik_residual_is_precise(tr.residual) {
+                continue;
+            }
+            let Ok(fk) = forward_kinematics(model, &chain, ee, &q) else {
+                continue;
+            };
+            let s = SampledEePose {
+                xyz: fk.ee.xyz,
+                quat_wxyz: fk.ee.quat_wxyz,
+                q,
+                joint_names: chain.clone(),
+            };
+            let align = planar_tool_axis(s.quat_wxyz, tool_off)
+                .map(|ax| ax[0] * desired[0] + ax[1] * desired[1])
+                .unwrap_or(-1.0);
+            let margin = named_joint_limit_margin(&s.q, &s.joint_names, &model.joints);
+            if margin < 0.04 || align < 0.85 {
+                continue;
+            }
+            let better = match &best {
+                None => true,
+                Some((_, a)) => align > *a,
+            };
+            if better {
+                best = Some((s, align));
+            }
+        }
+        best.map(|(s, _)| s)
     }
 
     fn ee_from_truth(truth: &VerifierTruth, bundle: &RobotBundle) -> Option<[f64; 3]> {
@@ -595,6 +705,238 @@ mod tests {
             }
         }
         None
+    }
+
+    fn ee_quat_from_truth(truth: &VerifierTruth, ee_name: &str) -> [f64; 4] {
+        truth
+            .site_xquat
+            .get(ee_name)
+            .or_else(|| truth.xquat.get(ee_name))
+            .and_then(|q| {
+                if q.len() >= 4 {
+                    Some([q[0], q[1], q[2], q[3]])
+                } else {
+                    None
+                }
+            })
+            .unwrap_or([1.0, 0.0, 0.0, 0.0])
+    }
+
+    fn geom_local_points(shape: &PrimitiveShape) -> Vec<[f64; 3]> {
+        match *shape {
+            PrimitiveShape::Box { half_extents } => {
+                let h = half_extents;
+                let mut v = Vec::with_capacity(8);
+                for sx in [-1.0, 1.0] {
+                    for sy in [-1.0, 1.0] {
+                        for sz in [-1.0, 1.0] {
+                            v.push([sx * h[0], sy * h[1], sz * h[2]]);
+                        }
+                    }
+                }
+                v
+            }
+            PrimitiveShape::Sphere { radius } => vec![
+                [radius, 0.0, 0.0],
+                [-radius, 0.0, 0.0],
+                [0.0, radius, 0.0],
+                [0.0, -radius, 0.0],
+                [0.0, 0.0, radius],
+                [0.0, 0.0, -radius],
+            ],
+            PrimitiveShape::Capsule {
+                radius,
+                half_length,
+            }
+            | PrimitiveShape::Cylinder {
+                radius,
+                half_length,
+            } => vec![
+                [0.0, 0.0, half_length],
+                [0.0, 0.0, -half_length],
+                [radius, 0.0, 0.0],
+                [-radius, 0.0, 0.0],
+            ],
+            PrimitiveShape::Plane { .. } | PrimitiveShape::Unsupported { .. } => {
+                vec![[0.0, 0.0, 0.0]]
+            }
+        }
+    }
+
+    fn offset_len(o: [f64; 3]) -> f64 {
+        (o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt()
+    }
+
+    /// Tool offset in the EE frame from declared intended-tool geometry, not invented +X.
+    /// Distal points are those furthest along the live planar reach, averaged so a
+    /// two-finger tool yields a centered contact rather than a single corner.
+    fn derived_tool_offset_ee(
+        model: &realityos_semantics::embodiment::EmbodimentModel,
+        ee_name: &str,
+        ee_xyz: [f64; 3],
+        ee_quat: [f64; 4],
+        truth: &VerifierTruth,
+    ) -> [f64; 3] {
+        let intended =
+            declared_manipulation_contact_bodies(model, model.resources.first(), ee_name);
+        let reach_n = ee_xyz[0].hypot(ee_xyz[1]);
+        let reach = if reach_n > 1e-6 {
+            [ee_xyz[0] / reach_n, ee_xyz[1] / reach_n, 0.0]
+        } else {
+            [1.0, 0.0, 0.0]
+        };
+        let mut pts: Vec<[f64; 3]> = Vec::new();
+        let mut max_along = f64::NEG_INFINITY;
+        for g in &model.collision_geoms {
+            if !intended.iter().any(|n| n == &g.owner_body) {
+                continue;
+            }
+            let Some(bx) = truth
+                .xpos
+                .get(&g.owner_body)
+                .or_else(|| truth.named_pos.get(&g.owner_body))
+            else {
+                continue;
+            };
+            if bx.len() < 3 {
+                continue;
+            }
+            let bq = truth
+                .xquat
+                .get(&g.owner_body)
+                .and_then(|q| {
+                    if q.len() >= 4 {
+                        Some([q[0], q[1], q[2], q[3]])
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or([1.0, 0.0, 0.0, 0.0]);
+            let Ok(body) = Se3::try_new([bx[0], bx[1], bx[2]], bq) else {
+                continue;
+            };
+            let gw = body.compose(g.local_pose);
+            for local in geom_local_points(&g.shape) {
+                let p = gw.transform_point(local);
+                if (p[2] - ee_xyz[2]).abs() > 0.012 {
+                    continue;
+                }
+                let along = p[0] * reach[0] + p[1] * reach[1];
+                if along > max_along + 1e-4 {
+                    max_along = along;
+                    pts.clear();
+                    pts.push(p);
+                } else if (along - max_along).abs() <= 1e-4 {
+                    pts.push(p);
+                }
+            }
+        }
+        if !pts.is_empty() && max_along.is_finite() {
+            let n = pts.len() as f64;
+            let avg = [
+                pts.iter().map(|p| p[0]).sum::<f64>() / n,
+                pts.iter().map(|p| p[1]).sum::<f64>() / n,
+                pts.iter().map(|p| p[2]).sum::<f64>() / n,
+            ];
+            let o = tool_offset_in_ee(ee_quat, avg, ee_xyz);
+            if offset_len(o) >= 0.008 {
+                return o;
+            }
+        }
+        for b in &intended {
+            if let Some(p) = truth.xpos.get(b).or_else(|| truth.named_pos.get(b)) {
+                if p.len() >= 3 {
+                    let o = tool_offset_in_ee(ee_quat, [p[0], p[1], p[2]], ee_xyz);
+                    if offset_len(o) >= 0.008 {
+                        return o;
+                    }
+                }
+            }
+        }
+        [0.0, 0.0, 0.0]
+    }
+
+    fn planar_tool_axis(quat: [f64; 4], tool_off: [f64; 3]) -> Option<[f64; 3]> {
+        let w = rotate_by_quat(quat, tool_off);
+        let n = (w[0] * w[0] + w[1] * w[1]).sqrt();
+        if n < 1e-6 {
+            return None;
+        }
+        Some([w[0] / n, w[1] / n, 0.0])
+    }
+
+    fn desired_planar_push(goal: &PlanarObjectGoal, start_xy: [f64; 2]) -> [f64; 3] {
+        let t = goal.target_xy.unwrap_or([start_xy[0] + 0.03, start_xy[1]]);
+        let d = [t[0] - start_xy[0], t[1] - start_xy[1]];
+        let n = d[0].hypot(d[1]);
+        if n > 1e-6 {
+            [d[0] / n, d[1] / n, 0.0]
+        } else {
+            [1.0, 0.0, 0.0]
+        }
+    }
+
+    fn select_seed_aligned<'a>(
+        cloud: &'a [SampledEePose],
+        tool_off: [f64; 3],
+        desired: [f64; 3],
+        joints: &[realityos_semantics::embodiment::Joint],
+    ) -> Option<&'a SampledEePose> {
+        // Leave stroke room inside the planar workspace (~0.41 m max reach).
+        const R_LO: f64 = 0.20;
+        const R_HI: f64 = 0.34;
+        const R_PREF: f64 = 0.28;
+        const MIN_MARGIN: f64 = 0.04;
+        let mut best: Option<(&'a SampledEePose, f64, f64, f64)> = None;
+        for s in cloud {
+            let r = s.xyz[0].hypot(s.xyz[1]);
+            if !(R_LO..=R_HI).contains(&r) {
+                continue;
+            }
+            let margin = named_joint_limit_margin(&s.q, &s.joint_names, joints);
+            if margin < MIN_MARGIN {
+                continue;
+            }
+            let d = match planar_tool_axis(s.quat_wxyz, tool_off) {
+                Some(ax) => ax[0] * desired[0] + ax[1] * desired[1],
+                None => continue,
+            };
+            if d < 0.5 {
+                continue;
+            }
+            let r_score = -(r - R_PREF).abs();
+            let better = match best {
+                None => true,
+                Some((_, bd, bm, br)) => {
+                    d > bd + 1e-9
+                        || ((d - bd).abs() <= 1e-9 && margin > bm + 1e-9)
+                        || ((d - bd).abs() <= 1e-9 && (margin - bm).abs() <= 1e-9 && r_score > br)
+                }
+            };
+            if better {
+                best = Some((s, d, margin, r_score));
+            }
+        }
+        best.map(|(s, _, _, _)| s)
+    }
+
+    fn apply_sample_qpos(
+        model: &realityos_semantics::embodiment::EmbodimentModel,
+        ee: &str,
+        qpos: &mut [f64],
+        sample: &SampledEePose,
+    ) {
+        if let Some(chain) = model.ee_joint_chain(ee) {
+            for (name, qi) in chain.iter().zip(sample.q.iter()) {
+                if let Some(j) = model.joints.iter().find(|j| j.name == *name) {
+                    if let Some(adr) = j.qpos_adr {
+                        if let Some(slot) = qpos.get_mut(adr as usize) {
+                            *slot = *qi;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn closed_loop_on_bundle(
@@ -631,64 +973,30 @@ mod tests {
             return Err("insufficient_serial_chain".into());
         }
         model.resources = qualified;
-        let tool_off = {
-            let ee_xyz = ee_from_truth(&t0, &bundle).unwrap_or(ee);
-            let ee_q = t0
-                .site_xquat
-                .get(&ee_name)
-                .or_else(|| t0.xquat.get(&ee_name))
-                .and_then(|q| {
-                    if q.len() >= 4 {
-                        Some([q[0], q[1], q[2], q[3]])
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or([1.0, 0.0, 0.0, 0.0]);
-            let mut off = [0.0, 0.0, 0.0];
-            for b in declared_manipulation_contact_bodies(&model, model.resources.first(), &ee_name)
-            {
-                if let Some(p) = t0.xpos.get(&b).or_else(|| t0.named_pos.get(&b)) {
-                    if p.len() >= 3 {
-                        let o = tool_offset_in_ee(ee_q, [p[0], p[1], p[2]], ee_xyz);
-                        let n = (o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt();
-                        if n >= 0.008 {
-                            off = o;
-                            break;
-                        }
-                    }
-                }
-            }
-            off
-        };
+        let ee_xyz0 = ee_from_truth(&t0, &bundle).unwrap_or(ee);
+        let ee_q0 = ee_quat_from_truth(&t0, &ee_name);
+        let tool_off = derived_tool_offset_ee(&model, &ee_name, ee_xyz0, ee_q0, &t0);
         let sha = "goal-directed-loop";
         let size = 0.025;
+        let half = [size, size, size];
+        let face_gap = 0.015;
         let _ = ee;
         let mut qpos = t0.qpos.clone();
-        let cloud0 = build_ee_cloud(&model, &ee_name, &qpos, seed);
-        let seed_pose = cloud0.iter().min_by(|a, b| {
-            let da = (a.xyz[0] - 0.22).hypot(a.xyz[1]);
-            let db = (b.xyz[0] - 0.22).hypot(b.xyz[1]);
-            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        let mut cloud0 = build_ee_cloud(&model, &ee_name, &qpos, seed);
+        let desired = desired_planar_push(goal, start_xy);
+        if let Some(s) = midreach_aligned_seed(&model, &ee_name, desired, ee_xyz0[2], tool_off) {
+            cloud0.insert(0, s);
+        }
+        let seed_pose = select_seed_aligned(&cloud0, tool_off, desired, &model.joints)
+            .or_else(|| cloud0.first());
         let (mut xy, z) = if let Some(s) = seed_pose {
-            if let Some(chain) = model.ee_joint_chain(&ee_name) {
-                for (name, qi) in chain.iter().zip(s.q.iter()) {
-                    if let Some(j) = model.joints.iter().find(|j| j.name == *name) {
-                        if let Some(adr) = j.qpos_adr {
-                            if let Some(slot) = qpos.get_mut(adr as usize) {
-                                *slot = *qi;
-                            }
-                        }
-                    }
-                }
-            }
-            (
-                [s.xyz[0] + size + 0.05 + start_xy[0], s.xyz[1] + start_xy[1]],
-                0.145,
-            )
+            apply_sample_qpos(&model, &ee_name, &mut qpos, s);
+            let place_push = planar_tool_axis(s.quat_wxyz, tool_off).unwrap_or(desired);
+            let center = object_center_for_sample(s, tool_off, place_push, half, face_gap)
+                .unwrap_or([s.xyz[0] + size + face_gap, s.xyz[1], s.xyz[2]]);
+            ([center[0], center[1]], center[2])
         } else {
-            ([0.22 + start_xy[0], start_xy[1]], 0.145)
+            ([ee_xyz0[0] + size + face_gap, ee_xyz0[1]], ee_xyz0[2])
         };
         let mut goal = goal.clone();
         if let Some(t) = goal.target_xy {
@@ -732,7 +1040,7 @@ mod tests {
                 pose(xy, z),
                 [size, size, size],
                 [0.0, 0.0, 1.0],
-                0.01,
+                0.015,
                 0.03,
             );
             let object = BoxObject {
@@ -904,7 +1212,8 @@ mod tests {
             let mut truth = truth_of(&mut inst).unwrap_or_default();
             if k == 0 {
                 if let Some(p) = perturb_after {
-                    let disp = [xy[0] + p[0], xy[1] + p[1], z];
+                    let cur = body_xyz(&truth, "obj0").unwrap_or([xy[0], xy[1], z]);
+                    let disp = [cur[0] + p[0], cur[1] + p[1], cur[2]];
                     let _ = inst.set_body_pos("obj0", disp);
                     if let Ok(t) = truth_of(&mut inst) {
                         truth = t;
@@ -1003,6 +1312,97 @@ mod tests {
         Ok(trace)
     }
 
+    #[test]
+    fn mode_b_executable_witness_from_observed_q() {
+        if !ensure_mujoco_or_skip() {
+            write_scratch(
+                "mode-b-witness.log",
+                "ensure_mujoco_or_skip() == false; MuJoCo worker not started\n",
+            );
+            return;
+        }
+        let bundle = RobotBundle::load(corpus::robot_dir("arm_gripper")).expect("bundle");
+        let (mut probe, man) =
+            load_and_normalize(&bundle, &template_objects(true), 0).expect("load");
+        let t0 = truth_of(&mut probe).expect("truth");
+        let discovered =
+            crate::resource_discover::discover_resources(&bundle, &man, &probe.inspect);
+        let mut qualified = Vec::new();
+        for r in &discovered {
+            if let Ok((_, q)) = crate::resource_qualify::qualify_resource(&bundle, r) {
+                qualified.push(q);
+            }
+        }
+        let mut model = embodiment_from_manifest(&bundle, &man);
+        model.resources = qualified;
+        let ee_name = bundle.manifest.end_effectors[0].name.clone();
+        let ee_xyz = ee_from_truth(&t0, &bundle).expect("ee");
+        let ee_q = ee_quat_from_truth(&t0, &ee_name);
+        let tool_off = derived_tool_offset_ee(&model, &ee_name, ee_xyz, ee_q, &t0);
+        let qpos = t0.qpos.clone();
+        let mut cloud = build_ee_cloud(&model, &ee_name, &qpos, 21);
+        let desired = [1.0, 0.0, 0.0];
+        if let Some(s) = midreach_aligned_seed(&model, &ee_name, desired, ee_xyz[2], tool_off) {
+            cloud.insert(0, s);
+        }
+        let half = [0.025, 0.025, 0.025];
+        let sample = midreach_aligned_seed(&model, &ee_name, desired, ee_xyz[2], tool_off)
+            .or_else(|| select_seed_aligned(&cloud, tool_off, desired, &model.joints).cloned())
+            .expect("aligned seed");
+        let place_push = planar_tool_axis(sample.quat_wxyz, tool_off).unwrap_or(desired);
+        let center = object_center_for_sample(&sample, tool_off, place_push, half, 0.015)
+            .expect("object_center_for_sample");
+        let object = BoxObject {
+            center,
+            half_extents: half,
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
+        };
+        let support = SupportPlane {
+            origin: [center[0], center[1], center[2] - half[2]],
+            normal: [0.0, 0.0, 1.0],
+        };
+        let (proved, funnel) = prove_face_funnel(
+            &model,
+            &ee_name,
+            std::slice::from_ref(&sample),
+            object,
+            support,
+            place_push,
+            0.03,
+            sample.xyz,
+            tool_off,
+        );
+        write_scratch(
+            "mode-b-witness.log",
+            &format!(
+                "ee_xyz={ee_xyz:?} tool_off={tool_off:?} seed={:?} object={center:?} place_push={place_push:?} funnel={funnel:?} proved={}\n",
+                sample.xyz,
+                match &proved {
+                    Ok(m) => format!("Ok(contact={:?})", m.contact_point),
+                    Err(e) => format!("Err({e:?})"),
+                }
+            ),
+        );
+        checkin_worker(probe);
+        let m = proved.expect("Mode B must produce an executable contact from observed q onto the observed object without moving the world");
+        assert_eq!(
+            m.object_center, center,
+            "FixedWorld: object must stay where observation placed it"
+        );
+        assert!(
+            (m.object_center[2] - sample.xyz[2]).abs() < 0.04,
+            "object must sit on the live EE plane, object_z={} ee_z={}",
+            m.object_center[2],
+            sample.xyz[2]
+        );
+        let w = m.executable.as_ref().expect("executable witness");
+        assert!(
+            execution_block_reason(w).is_none(),
+            "witness blocked: {:?}",
+            execution_block_reason(w)
+        );
+    }
+
     fn assert_trace_honest(t: &ClosedLoopTrace, pass: i32) {
         assert_eq!(t.unauthorized_writes, 0, "pass {pass}");
         assert_eq!(t.authority_violations, 0, "pass {pass}");
@@ -1070,7 +1470,7 @@ mod tests {
                             [0.0, 0.0],
                             &g,
                             Some([0.0, 0.03]),
-                            23,
+                            21,
                         ) {
                             assert_trace_honest(&tc, pass);
                             row["perturbed"] = json!(tc);
@@ -1114,6 +1514,23 @@ mod tests {
                     "passes": traces,
                 }))
                 .unwrap(),
+            );
+            let any_reached = traces.iter().any(|row| {
+                [
+                    "from_neg_x",
+                    "from_pos_x",
+                    "perturbed",
+                    "yaw_and_translation",
+                ]
+                .iter()
+                .any(|k| {
+                    row.get(*k).and_then(|v| v.get("final_outcome")) == Some(&json!("GoalReached"))
+                })
+            });
+            assert!(
+                any_reached,
+                "closed loop must reach PlanarObjectGoal at least once; traces={}",
+                serde_json::to_string(&traces).unwrap_or_default()
             );
         }
     }

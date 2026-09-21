@@ -56,6 +56,9 @@ pub struct AllowedContactPolicy {
     pub support_bodies: Vec<String>,
     pub obstacle_bodies: Vec<String>,
     pub adjacent_body_pairs: Vec<(String, String)>,
+    /// World-fixed mounting bodies. Their intersection with the support
+    /// surface is the fixture, not a manipulation collision.
+    pub fixed_mount_bodies: Vec<String>,
 }
 
 impl AllowedContactPolicy {
@@ -74,6 +77,7 @@ impl AllowedContactPolicy {
             support_bodies: support,
             obstacle_bodies: obstacles,
             adjacent_body_pairs: adjacent,
+            fixed_mount_bodies: Vec::new(),
         }
     }
 
@@ -123,8 +127,14 @@ impl AllowedContactPolicy {
                     PairPermission::Forbidden
                 }
             }
-            ContactEvidenceClass::SupportContact
-            | ContactEvidenceClass::ObstacleContact
+            ContactEvidenceClass::SupportContact => {
+                if self.fixed_mount_bodies.iter().any(|m| m == a || m == b) {
+                    PairPermission::Allowed
+                } else {
+                    PairPermission::Forbidden
+                }
+            }
+            ContactEvidenceClass::ObstacleContact
             | ContactEvidenceClass::UnintendedRobotContact => PairPermission::Forbidden,
         }
     }
