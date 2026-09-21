@@ -39,6 +39,8 @@ pub mod resource_discover;
 pub mod resource_qualify;
 pub mod runner;
 pub mod scenario;
+#[cfg(test)]
+mod self_correction;
 pub mod semantics_map;
 pub mod task;
 pub mod validate;

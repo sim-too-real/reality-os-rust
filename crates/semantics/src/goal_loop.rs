@@ -97,6 +97,27 @@ pub struct CausalActionRecord {
     pub outcome: GoalLoopOutcome,
     pub contact_switch: Option<ContactSwitch>,
     pub unauthorized_writes: u64,
+    pub reasoning: Option<ReasoningNote>,
+}
+
+/// Causal notes from the self-correction loop. Absent on an unchanged decision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ReasoningNote {
+    pub envelope_verdict: Option<String>,
+    pub failed_guard: Option<String>,
+    pub prevention_impossible: bool,
+    pub hypotheses: Vec<String>,
+    pub hypothesis_status: Option<String>,
+    pub belief_before: Option<String>,
+    pub belief_after: Option<String>,
+    pub ranking_before: Option<String>,
+    pub ranking_after: Option<String>,
+    pub selected_kind: Option<String>,
+    pub information_gain: Option<u32>,
+    pub recoverability: Option<String>,
+    pub taxonomy: Option<String>,
+    pub displacement_m: Option<f64>,
+    pub interactable_after_abort: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -290,6 +311,7 @@ pub fn receding_horizon_step(
             outcome: GoalLoopOutcome::InsufficientPhysicalEvidence,
             contact_switch: None,
             unauthorized_writes: 0,
+            reasoning: None,
         };
         state.last_record = Some(record.clone());
         return RecedingHorizonResult {
@@ -325,6 +347,7 @@ pub fn receding_horizon_step(
             outcome: GoalLoopOutcome::GoalReached,
             contact_switch: None,
             unauthorized_writes: 0,
+            reasoning: None,
         };
         state.last_record = Some(record.clone());
         return RecedingHorizonResult {
@@ -360,6 +383,7 @@ pub fn receding_horizon_step(
             outcome: GoalLoopOutcome::GoalCurrentlyUnachievable,
             contact_switch: None,
             unauthorized_writes: 0,
+            reasoning: None,
         };
         state.last_record = Some(record.clone());
         return RecedingHorizonResult {
@@ -485,6 +509,7 @@ pub fn receding_horizon_step(
         outcome,
         contact_switch: switch,
         unauthorized_writes: 0,
+        reasoning: None,
     };
     // Never carry a predicted world as the next planning state.
     state.last_predicted_pose = None;
@@ -493,6 +518,16 @@ pub fn receding_horizon_step(
         record,
         state,
         selected,
+    }
+}
+
+/// No admissible interaction means the goal is currently unachievable.
+/// An unreachable object is not reported as recoverable.
+pub fn goal_status_if_no_admissible_interaction(admissible: usize) -> GoalLoopOutcome {
+    if admissible == 0 {
+        GoalLoopOutcome::GoalCurrentlyUnachievable
+    } else {
+        GoalLoopOutcome::GoalProgress
     }
 }
 
@@ -873,5 +908,97 @@ mod tests {
             classify_model_validity(None, RotationSign::Clockwise, None, None),
             ModelValidity::InsufficientEvidence
         );
+    }
+
+    #[test]
+    fn consistent_model_still_authorizes_strict_progress() {
+        let g = goal_plus_x();
+        let start = obs([0.0, 0.0], None);
+        let cands = evaluated(start.xy, &g);
+        let step = receding_horizon_step(&start, &g, &cands, LoopState::default(), None);
+        assert!(step.record.selection_rationale.contains("STRICT_PROGRESS"));
+        assert_eq!(step.record.authority_decision, "AUTHORIZE");
+        assert_eq!(step.record.unauthorized_writes, 0);
+        assert_eq!(step.state.unauthorized_writes, 0);
+        assert!(step.selected.is_some());
+        assert!(step.record.reasoning.is_none());
+    }
+
+    #[test]
+    fn authorized_stroke_aborts_on_the_first_excess_increment() {
+        use crate::execution_envelope::{
+            check_execution_envelope, EnvelopeVerdict, ExecutionEnvelope,
+            RuntimeExecutionObservation,
+        };
+        use crate::kinematics::IK_ACCEPT_M;
+        use crate::recoverability::{
+            classify_recoverability, select_recoverable_progress, InteractionRegion,
+            RecoverabilityChoice, RecoverabilityClass, RecoverabilityInput,
+        };
+
+        assert_eq!(IK_ACCEPT_M, 1e-3);
+        let g = goal_plus_x();
+        let start = obs([0.0, 0.0], None);
+        let cands = evaluated(start.xy, &g);
+        let step = receding_horizon_step(&start, &g, &cands, LoopState::default(), None);
+        let selected = step.selected.expect("authorized action");
+        let commanded = selected.stroke_m;
+        let envelope = ExecutionEnvelope::for_quasi_static_stroke(commanded, commanded);
+        let mut sample = RuntimeExecutionObservation {
+            stroke_consumed_m: commanded * 0.25,
+            commanded_stroke_m: commanded,
+            object_displacement_m: commanded * 0.2,
+            yaw_change_rad: 0.0,
+            intended_contact_persists: true,
+            goal_error_before: 1.0,
+            goal_error_now: 0.8,
+            robot_tracking_error_m: 0.0,
+            reachability_margin_m: 0.05,
+            quasi_static_applicable: Some(true),
+            authority_ok: true,
+        };
+        let continued = check_execution_envelope(&envelope, &sample);
+        assert_eq!(continued.verdict, EnvelopeVerdict::Continue);
+        sample.stroke_consumed_m = commanded * 0.5;
+        sample.object_displacement_m = commanded * 4.0;
+        let abort = check_execution_envelope(&envelope, &sample);
+        assert_eq!(abort.verdict, EnvelopeVerdict::AbortAndReobserve);
+        assert!(abort.early);
+        assert!(sample.stroke_consumed_m < commanded);
+        let unguarded_displacement = commanded * 8.0;
+        assert!(abort.displacement_m < unguarded_displacement);
+
+        let outside = classify_recoverability(&RecoverabilityInput {
+            physically_feasible: false,
+            makes_progress: false,
+            current_xy: [1.0, 1.0],
+            nominal_dxy: None,
+            uncertainty_radius_m: None,
+            region: Some(InteractionRegion {
+                center_xy: [0.0, 0.0],
+                radius_m: 0.1,
+            }),
+            next_contact_admissible: Some(false),
+        });
+        assert_eq!(outside, RecoverabilityClass::PhysicallyInfeasible);
+        assert_ne!(outside, RecoverabilityClass::ProgressAndRecoverable);
+        assert_eq!(
+            goal_status_if_no_admissible_interaction(0),
+            GoalLoopOutcome::GoalCurrentlyUnachievable
+        );
+        let preferred = select_recoverable_progress(&[
+            RecoverabilityChoice {
+                id: "eject".into(),
+                class: RecoverabilityClass::ProgressButCanEnterUnrecoverableState,
+                progress: 0.8,
+            },
+            RecoverabilityChoice {
+                id: "stay".into(),
+                class: RecoverabilityClass::ProgressAndRecoverable,
+                progress: 0.2,
+            },
+        ])
+        .unwrap();
+        assert_eq!(preferred, 1);
     }
 }
