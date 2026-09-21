@@ -7,7 +7,7 @@ use crate::physical_interaction::{
     select_interaction, FunnelStage, PhysicalInteractionCandidate, SelectionOutcome,
 };
 use crate::planar_goal::{
-    evaluate_goal_error, wrap_pi, GoalError, GoalProgressClass, PlanarObjectGoal,
+    evaluate_goal_error, twist_in_world, wrap_pi, GoalError, GoalProgressClass, PlanarObjectGoal,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,11 +181,11 @@ pub fn classify_model_validity(
                 let nb = (b[0] * b[0] + b[1] * b[1]).sqrt();
                 if na > 1e-9 && nb > 1e-9 {
                     let cos = ((a[0] * b[0] + a[1] * b[1]) / (na * nb)).clamp(-1.0, 1.0);
-                    if cos < 0.0 && p == observed_sign {
-                        return ModelValidity::WeaklyConsistent;
-                    }
                     if cos < -0.5 {
                         return ModelValidity::Contradicted;
+                    }
+                    if cos < 0.0 {
+                        return ModelValidity::WeaklyConsistent;
                     }
                 }
             }
@@ -230,7 +230,7 @@ pub fn receding_horizon_step(
 ) -> RecedingHorizonResult {
     let err_now = evaluate_goal_error(observation.xy, observation.yaw, goal);
     if let Some((after, obs_sign)) = observed_consequence {
-        if let Some(prev) = state.last_record.as_ref() {
+        if let Some(prev) = state.last_record.clone() {
             let dxy = [
                 after.xy[0] - prev.object_xy[0],
                 after.xy[1] - prev.object_xy[1],
@@ -241,19 +241,24 @@ pub fn receding_horizon_step(
                     dxy,
                 )
             });
-            let pred_xy = prev.predicted_twist.map(|t| [t.vx, t.vy]);
+            let pred_xy = prev.predicted_twist.map(|t| {
+                let w = twist_in_world(t, prev.object_yaw);
+                [w.vx, w.vy]
+            });
             state.model_validity =
                 classify_model_validity(prev.predicted_rotation_sign, sign, pred_xy, Some(dxy));
             if state.model_validity == ModelValidity::Contradicted {
-                if let Some(key) = prev.selected_id.as_ref() {
-                    let k = candidates
-                        .iter()
-                        .find(|c| c.id == *key)
-                        .map(|c| c.action_key())
-                        .unwrap_or_else(|| key.clone());
-                    if !state.forbidden_action_keys.contains(&k) {
-                        state.forbidden_action_keys.push(k);
-                    }
+                let k = candidates
+                    .iter()
+                    .find(|c| prev.selected_id.as_ref().is_some_and(|id| &c.id == id))
+                    .map(|c| c.action_key())
+                    .or_else(|| prev.selected_id.clone())
+                    .unwrap_or_default();
+                if !k.is_empty() && !state.forbidden_action_keys.contains(&k) {
+                    state.forbidden_action_keys.push(k);
+                }
+                if let Some(rec) = state.last_record.as_mut() {
+                    rec.first_divergence = Some("MODEL_DISAGREEMENT".into());
                 }
             }
         }
@@ -516,19 +521,27 @@ pub fn record_after_with_goal(
             dir + (t.omega_z - dyaw).abs()
         });
         let obs_sign = observed_rotation_sign(dyaw, dxy);
-        if let Some(p) = result.record.predicted_rotation_sign {
-            if opposite_sign(p, obs_sign) {
-                result.record.first_divergence = Some("MODEL_DISAGREEMENT".into());
-                result.state.model_validity = ModelValidity::Contradicted;
-                if let Some(id) = result.record.selected_id.clone() {
-                    let key = result
-                        .selected
-                        .as_ref()
-                        .map(|c| c.action_key())
-                        .unwrap_or(id);
-                    if !result.state.forbidden_action_keys.contains(&key) {
-                        result.state.forbidden_action_keys.push(key);
-                    }
+        let pred_xy = result.record.predicted_twist.map(|t| {
+            let w = twist_in_world(t, result.record.object_yaw);
+            [w.vx, w.vy]
+        });
+        let validity = classify_model_validity(
+            result.record.predicted_rotation_sign,
+            obs_sign,
+            pred_xy,
+            Some(dxy),
+        );
+        result.state.model_validity = validity;
+        if validity == ModelValidity::Contradicted {
+            result.record.first_divergence = Some("MODEL_DISAGREEMENT".into());
+            if let Some(id) = result.record.selected_id.clone() {
+                let key = result
+                    .selected
+                    .as_ref()
+                    .map(|c| c.action_key())
+                    .unwrap_or(id);
+                if !result.state.forbidden_action_keys.contains(&key) {
+                    result.state.forbidden_action_keys.push(key);
                 }
             }
         }
@@ -693,6 +706,7 @@ mod tests {
             robot_reachable: None,
             collision_admissible: None,
             executable_witness: None,
+            robot_reject_reason: None,
         };
         evaluate_all(&mut cands, &ctx);
         cands
@@ -738,6 +752,50 @@ mod tests {
             step2.record.first_divergence.as_deref(),
             Some("MODEL_DISAGREEMENT")
         );
+    }
+
+    #[test]
+    fn opposite_translation_is_model_disagreement_and_forbids_repeat() {
+        let g = goal_plus_x();
+        let start = obs([0.0, 0.0], None);
+        let cands = evaluated(start.xy, &g);
+        let step1 = receding_horizon_step(&start, &g, &cands, LoopState::default(), None);
+        let first_key = step1.selected.as_ref().unwrap().action_key();
+        let mut predicted = step1;
+        predicted.record.predicted_twist = Some(realityos_physics::PlanarTwist {
+            vx: 1.0,
+            vy: 0.0,
+            omega_z: 0.0,
+            frame: realityos_physics::PlanarFrameKind::World,
+        });
+        predicted.record.predicted_rotation_sign = Some(RotationSign::TranslationOnly);
+        predicted.state.last_record = Some(predicted.record.clone());
+        let after = obs([-0.04, 0.0], None);
+        let rec = record_after_with_goal(predicted, &after, &g);
+        assert_eq!(rec.state.model_validity, ModelValidity::Contradicted);
+        assert_eq!(
+            rec.record.first_divergence.as_deref(),
+            Some("MODEL_DISAGREEMENT")
+        );
+        let step2 = receding_horizon_step(
+            &after,
+            &g,
+            &cands,
+            rec.state,
+            Some((&after, Some(RotationSign::TranslationOnly))),
+        );
+        assert!(
+            step2
+                .state
+                .forbidden_action_keys
+                .iter()
+                .any(|k| k == &first_key),
+            "forbidden={:?}",
+            step2.state.forbidden_action_keys
+        );
+        if let Some(sel) = step2.selected.as_ref() {
+            assert_ne!(sel.action_key(), first_key);
+        }
     }
 
     #[test]

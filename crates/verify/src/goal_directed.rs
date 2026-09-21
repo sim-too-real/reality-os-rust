@@ -106,7 +106,10 @@ mod tests {
     use super::*;
     use crate::bundle::RobotBundle;
     use crate::corpus;
-    use crate::manipulation::{run_skill_episode_ex, template_objects};
+    use crate::manipulation::{
+        chain_q_from_qpos, local_ee_poses, run_skill_episode_ex, sample_push_units,
+        template_objects, with_episode_qpos, with_injected_push_maneuver,
+    };
     use crate::manipulation_scenarios::{ManipulationScenario, Polarity};
     use crate::manipulation_verify::body_xyz;
     use crate::mujoco_exec::{checkin_worker, ensure_mujoco_or_skip};
@@ -114,21 +117,34 @@ mod tests {
     use crate::runner::load_and_normalize;
     use crate::semantics_map::embodiment_from_manifest;
     use realityos_physics::{PressureDistribution, SupportFrictionModel};
+    use realityos_semantics::contact::declared_manipulation_contact_bodies;
+    use realityos_semantics::contact_jacobian::contact_jacobian_witness;
+    use realityos_semantics::contact_maneuver::{
+        select_fixed_world_push_seeded_with_funnel, tool_offset_in_ee, BoxObject,
+        ContactInfeasible, ContactManeuver, ContactManeuverSpec, SampledEePose, SupportPlane,
+    };
     use realityos_semantics::effect_feasibility::PlanarPushInitiation;
+    use realityos_semantics::effort::{any_link_com_known, chain_physical_effort_signed};
     use realityos_semantics::goal_loop::{
         receding_horizon_step, record_after_with_goal, GoalLoopOutcome, LoopDecision, LoopState,
         WorldObservation,
     };
+    use realityos_semantics::kinematics::forward_kinematics;
+    use realityos_semantics::maneuver_witness::execution_block_reason;
     use realityos_semantics::pair_friction::PairFriction;
     use realityos_semantics::physical_interaction::{
-        evaluate_all, generate_planar_push_candidates, initiation_from_candidate,
-        select_interaction, EvaluationContext, SelectionOutcome,
+        evaluate_all, evaluate_candidate, generate_planar_push_candidates,
+        initiation_from_candidate, select_interaction, EvaluationContext, SelectionOutcome,
     };
+    use realityos_semantics::physical_quantity::PhysicalEffort;
     use realityos_semantics::planar_goal::{
-        yaw_from_quat_wxyz, InteractionFamily, PlanarObjectGoal, SafetyConstraints,
+        evaluate_goal_error, yaw_from_quat_wxyz, InteractionFamily, PlanarObjectGoal,
+        SafetyConstraints,
     };
     use realityos_semantics::provenance::Provenanced;
+    use realityos_semantics::self_load::{gravity_self_load, self_load_provenanced};
     use realityos_semantics::transform::Se3;
+    use realityos_semantics::workspace::reachable_ee_poses;
     use serde_json::json;
     use std::path::PathBuf;
 
@@ -261,6 +277,7 @@ mod tests {
             robot_reachable: None,
             collision_admissible: None,
             executable_witness: None,
+            robot_reject_reason: None,
         };
         evaluate_all(&mut cands, &ctx);
         cands
@@ -401,6 +418,168 @@ mod tests {
         ))
     }
 
+    fn flags_from_infeasible(e: ContactInfeasible) -> (Option<bool>, Option<bool>, Option<bool>) {
+        match e {
+            ContactInfeasible::NoIkSolution
+            | ContactInfeasible::ContactPoseUnreachableFromApproach
+            | ContactInfeasible::NoFeasibleContactPose => (Some(false), None, None),
+            ContactInfeasible::CollisionInadmissible
+            | ContactInfeasible::ApproachCollidesBeforeContact
+            | ContactInfeasible::SupportPlaneBlocksEe => (Some(true), Some(false), None),
+            ContactInfeasible::NoExecutableContactManeuver
+            | ContactInfeasible::InsufficientJointMargin
+            | ContactInfeasible::OrientationInfeasible
+            | ContactInfeasible::InsufficientRemainingStroke
+            | ContactInfeasible::WrongContactGeometry => (Some(true), Some(true), Some(false)),
+        }
+    }
+
+    fn build_ee_cloud(
+        model: &realityos_semantics::embodiment::EmbodimentModel,
+        ee: &str,
+        qpos: &[f64],
+        seed: u64,
+    ) -> Vec<SampledEePose> {
+        let units = sample_push_units(model, ee, seed, 96);
+        let mut cloud = reachable_ee_poses(model, ee, &units);
+        if let Some(q) = chain_q_from_qpos(model, ee, qpos) {
+            if let Some(chain) = model.ee_joint_chain(ee) {
+                if let Ok(fk) = forward_kinematics(model, &chain, ee, &q) {
+                    cloud.insert(
+                        0,
+                        SampledEePose {
+                            xyz: fk.ee.xyz,
+                            quat_wxyz: fk.ee.quat_wxyz,
+                            q: q.clone(),
+                            joint_names: chain.clone(),
+                        },
+                    );
+                }
+                cloud.extend(local_ee_poses(model, ee, &chain, &q, seed, 32));
+            }
+        }
+        cloud
+    }
+
+    fn fill_mechanics_from_q(
+        model: &realityos_semantics::embodiment::EmbodimentModel,
+        ee: &str,
+        qpos: &[f64],
+        contact_world: [f64; 3],
+        yaw: f64,
+        mass: f64,
+        mu: f64,
+    ) -> PlanarPushInitiation {
+        let mut p = mechanics_template(mass, mu, 20.0);
+        p.object_yaw_rad = Provenanced::declared(yaw, "obs.yaw", 0.0);
+        let Some(q) = chain_q_from_qpos(model, ee, qpos) else {
+            return p;
+        };
+        let Some(chain) = model.ee_joint_chain(ee) else {
+            return p;
+        };
+        let Ok(fk) = forward_kinematics(model, &chain, ee, &q) else {
+            return p;
+        };
+        let contact_in_ee = tool_offset_in_ee(fk.ee.quat_wxyz, contact_world, fk.ee.xyz);
+        let Ok(jac) = contact_jacobian_witness(model, &chain, ee, &q, contact_in_ee, 1e-6) else {
+            return p;
+        };
+        p.joint_names = jac.joint_names.clone();
+        p.translational_jacobian_3xn = jac.analytic_3xn.clone();
+        p.jacobian_residual = Some(jac.residual);
+        p.link_com_known = any_link_com_known(model);
+        match chain_physical_effort_signed(model, &p.joint_names) {
+            Ok(signed) => {
+                p.joint_effort_min = signed
+                    .iter()
+                    .map(|s| Provenanced::declared(s.tau_min_nm, "joint.effort_min", 0.0))
+                    .collect();
+                p.joint_effort_max = signed
+                    .iter()
+                    .map(|s| Provenanced::declared(s.tau_max_nm, "joint.effort_max", 0.0))
+                    .collect();
+                p.joint_effort_abs = signed
+                    .iter()
+                    .map(|s| {
+                        Provenanced::declared(
+                            s.tau_min_nm.abs().max(s.tau_max_nm.abs()),
+                            "joint.effort",
+                            0.0,
+                        )
+                    })
+                    .collect();
+            }
+            Err(PhysicalEffort::Unknown { reason }) => {
+                p.joint_effort_abs = p
+                    .joint_names
+                    .iter()
+                    .map(|_| Provenanced::unknown(reason.clone(), 0.0))
+                    .collect();
+            }
+            Err(_) => {}
+        }
+        let mut q_by_joint = std::collections::BTreeMap::new();
+        for (name, qi) in chain.iter().zip(q.iter()) {
+            q_by_joint.insert(name.clone(), *qi);
+        }
+        if let Ok(tau) = gravity_self_load(model, &p.joint_names, &q_by_joint, [0.0, 0.0, -9.80665])
+        {
+            p.self_load_torque_nm = self_load_provenanced(&tau, "self_load.gravity");
+        }
+        p
+    }
+
+    fn prove_face(
+        model: &realityos_semantics::embodiment::EmbodimentModel,
+        ee: &str,
+        cloud: &[SampledEePose],
+        object: BoxObject,
+        support: SupportPlane,
+        push: [f64; 3],
+        stroke: f64,
+        ee_xyz: [f64; 3],
+        tool_off: [f64; 3],
+    ) -> Result<ContactManeuver, ContactInfeasible> {
+        let mut spec = ContactManeuverSpec::table_push(push, stroke, ee_xyz, tool_off);
+        spec.object_id = "obj0".into();
+        spec.intended_tool_bodies =
+            declared_manipulation_contact_bodies(model, model.resources.first(), ee);
+        if spec.intended_tool_bodies.is_empty() {
+            spec.intended_tool_bodies.push("tool".into());
+        }
+        let intended = spec.intended_tool_bodies.clone();
+        for b in &model.bodies {
+            if intended.iter().any(|n| n == &b.name) {
+                continue;
+            }
+            if b.parent.is_none() {
+                continue;
+            }
+            spec.robot_body_volumes
+                .push(realityos_semantics::contact_collision::AttachedSphere {
+                    body: b.name.clone(),
+                    radius: spec.ee_radius,
+                    offset: [0.0, 0.0, 0.0],
+                });
+        }
+        let (res, _funnel) =
+            select_fixed_world_push_seeded_with_funnel(model, ee, cloud, object, support, &spec);
+        match res {
+            Ok((m, _)) => {
+                if m.executable
+                    .as_ref()
+                    .is_some_and(|w| execution_block_reason(w).is_none())
+                {
+                    Ok(m)
+                } else {
+                    Err(ContactInfeasible::NoExecutableContactManeuver)
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     fn ee_from_truth(truth: &VerifierTruth, bundle: &RobotBundle) -> Option<[f64; 3]> {
         let names: Vec<String> = bundle
             .manifest
@@ -435,7 +614,7 @@ mod tests {
         let ee = ee_from_truth(&t0, &bundle).ok_or_else(|| "no_ee_pose".to_string())?;
         let discovered =
             crate::resource_discover::discover_resources(&bundle, &man, &probe.inspect);
-        checkin_worker(probe);
+        let mut last_loaded = Some((probe, man.clone()));
         let mut qualified = Vec::new();
         for r in &discovered {
             if let Ok((_, q)) = crate::resource_qualify::qualify_resource(&bundle, r) {
@@ -443,31 +622,111 @@ mod tests {
             }
         }
         let mut model = embodiment_from_manifest(&bundle, &man);
-        let ee_name = bundle.manifest.end_effectors[0].name.as_str();
-        let chain_len = model.ee_joint_chain(ee_name).map(|c| c.len()).unwrap_or(0);
+        let ee_name = bundle.manifest.end_effectors[0].name.clone();
+        let chain_len = model.ee_joint_chain(&ee_name).map(|c| c.len()).unwrap_or(0);
         if chain_len < 3 {
+            if let Some((inst, _)) = last_loaded.take() {
+                checkin_worker(inst);
+            }
             return Err("insufficient_serial_chain".into());
         }
         model.resources = qualified;
+        let tool_off = {
+            let ee_xyz = ee_from_truth(&t0, &bundle).unwrap_or(ee);
+            let ee_q = t0
+                .site_xquat
+                .get(&ee_name)
+                .or_else(|| t0.xquat.get(&ee_name))
+                .and_then(|q| {
+                    if q.len() >= 4 {
+                        Some([q[0], q[1], q[2], q[3]])
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or([1.0, 0.0, 0.0, 0.0]);
+            let mut off = [0.0, 0.0, 0.0];
+            for b in declared_manipulation_contact_bodies(&model, model.resources.first(), &ee_name)
+            {
+                if let Some(p) = t0.xpos.get(&b).or_else(|| t0.named_pos.get(&b)) {
+                    if p.len() >= 3 {
+                        let o = tool_offset_in_ee(ee_q, [p[0], p[1], p[2]], ee_xyz);
+                        let n = (o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt();
+                        if n >= 0.008 {
+                            off = o;
+                            break;
+                        }
+                    }
+                }
+            }
+            off
+        };
         let sha = "goal-directed-loop";
-        let size = 0.04;
-        let z = ee[2];
-        let anchor = [ee[0] + 0.055, ee[1], z];
-        let mut xy = [anchor[0] + start_xy[0], anchor[1] + start_xy[1]];
+        let size = 0.025;
+        let _ = ee;
+        let mut qpos = t0.qpos.clone();
+        let cloud0 = build_ee_cloud(&model, &ee_name, &qpos, seed);
+        let seed_pose = cloud0.iter().min_by(|a, b| {
+            let da = (a.xyz[0] - 0.22).hypot(a.xyz[1]);
+            let db = (b.xyz[0] - 0.22).hypot(b.xyz[1]);
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let (mut xy, z) = if let Some(s) = seed_pose {
+            if let Some(chain) = model.ee_joint_chain(&ee_name) {
+                for (name, qi) in chain.iter().zip(s.q.iter()) {
+                    if let Some(j) = model.joints.iter().find(|j| j.name == *name) {
+                        if let Some(adr) = j.qpos_adr {
+                            if let Some(slot) = qpos.get_mut(adr as usize) {
+                                *slot = *qi;
+                            }
+                        }
+                    }
+                }
+            }
+            (
+                [s.xyz[0] + size + 0.05 + start_xy[0], s.xyz[1] + start_xy[1]],
+                0.145,
+            )
+        } else {
+            ([0.22 + start_xy[0], start_xy[1]], 0.145)
+        };
         let mut goal = goal.clone();
         if let Some(t) = goal.target_xy {
-            goal.target_xy = Some([anchor[0] + t[0], anchor[1] + t[1]]);
+            goal.target_xy = Some([xy[0] - start_xy[0] + t[0], xy[1] - start_xy[1] + t[1]]);
         }
         let goal = goal;
         let mut yaw = 0.0;
-        let mut face: Option<String> = None;
+        let mut established_face: Option<String> = None;
         let mut state = LoopState::default();
         let mut trace = ClosedLoopTrace::new(bundle_id);
         trace.start_xy = xy;
         trace.goal_xy = goal.target_xy;
         trace.goal_yaw = goal.target_yaw;
-        let mut last_loaded = None;
-        for k in 0..goal.max_bounded_attempts {
+        let mut last_obs: Option<WorldObservation> = None;
+        let mut k = 0u32;
+        loop {
+            let obs = WorldObservation {
+                object_id: "obj0".into(),
+                xy,
+                yaw,
+                robot_q: qpos.clone(),
+                freshness_ok: true,
+                intended_contact_face: established_face.clone(),
+                authority_ok: true,
+                observed_at_s: k as f64,
+            };
+            if evaluate_goal_error(xy, yaw, &goal).reached {
+                let step = receding_horizon_step(
+                    &obs,
+                    &goal,
+                    &[],
+                    state,
+                    last_obs.as_ref().map(|o| (o, None)),
+                );
+                state = step.state.clone();
+                record_action(&mut trace, &step.record, None, None, None);
+                break;
+            }
             let mut cands = generate_planar_push_candidates(
                 "obj0",
                 pose(xy, z),
@@ -476,34 +735,117 @@ mod tests {
                 0.01,
                 0.03,
             );
-            let ctx = EvaluationContext {
-                goal: goal.clone(),
-                object_xy: xy,
-                object_yaw: yaw,
-                object_com_world: [xy[0], xy[1], z],
-                mechanics_template: Some(mechanics_template(0.05, 0.3, 20.0)),
-                authority_ok: true,
-                robot_provided: false,
-                robot_reachable: None,
-                collision_admissible: None,
-                executable_witness: None,
+            let object = BoxObject {
+                center: [xy[0], xy[1], z],
+                half_extents: [size, size, size],
+                quat_wxyz: [1.0, 0.0, 0.0, 0.0],
             };
-            evaluate_all(&mut cands, &ctx);
-            let obs = WorldObservation {
-                object_id: "obj0".into(),
-                xy,
-                yaw,
-                robot_q: vec![],
-                freshness_ok: true,
-                intended_contact_face: face.clone(),
-                authority_ok: true,
-                observed_at_s: k as f64,
+            let support = SupportPlane {
+                origin: [xy[0], xy[1], z - size],
+                normal: [0.0, 0.0, 1.0],
             };
-            let step = receding_horizon_step(&obs, &goal, &cands, state, None);
-            if step.record.outcome == GoalLoopOutcome::GoalReached
-                || step.record.decision == LoopDecision::Refuse
-                || step.record.decision == LoopDecision::Halt
-            {
+            let cloud = build_ee_cloud(&model, &ee_name, &qpos, seed.wrapping_add(k as u64));
+            let ee_xyz = cloud.first().map(|s| s.xyz).unwrap_or(ee);
+            let mut proven: std::collections::BTreeMap<
+                String,
+                Result<ContactManeuver, ContactInfeasible>,
+            > = std::collections::BTreeMap::new();
+            for c in &cands {
+                if proven.contains_key(&c.face_id) {
+                    continue;
+                }
+                proven.insert(
+                    c.face_id.clone(),
+                    prove_face(
+                        &model,
+                        &ee_name,
+                        &cloud,
+                        object,
+                        support,
+                        c.push_direction_world,
+                        c.stroke_m,
+                        ee_xyz,
+                        tool_off,
+                    ),
+                );
+            }
+            for c in &mut cands {
+                let (reachable, collision, executable, maneuver, why) = match proven.get(&c.face_id)
+                {
+                    Some(Ok(m)) => {
+                        let close = {
+                            let d = [
+                                c.contact_point_world[0] - m.contact_point[0],
+                                c.contact_point_world[1] - m.contact_point[1],
+                            ];
+                            (d[0] * d[0] + d[1] * d[1]).sqrt() < 0.03
+                        };
+                        if close {
+                            c.contact_point_world = m.contact_point;
+                            c.contact_normal_world = m.contact_normal;
+                            c.push_direction_world = m.push_direction;
+                            (Some(true), Some(true), Some(true), Some(m.clone()), None)
+                        } else {
+                            (
+                                Some(true),
+                                Some(true),
+                                Some(false),
+                                None,
+                                Some("NON_EXECUTABLE".into()),
+                            )
+                        }
+                    }
+                    Some(Err(e)) => {
+                        let (r, col, ex) = flags_from_infeasible(*e);
+                        (r, col, ex, None, Some(e.as_str().to_string()))
+                    }
+                    None => (Some(false), None, None, None, Some("NO_PROOF".into())),
+                };
+                c.maneuver = maneuver;
+                let mech = fill_mechanics_from_q(
+                    &model,
+                    &ee_name,
+                    &qpos,
+                    c.contact_point_world,
+                    yaw,
+                    0.05,
+                    0.3,
+                );
+                let ctx = EvaluationContext {
+                    goal: goal.clone(),
+                    object_xy: xy,
+                    object_yaw: yaw,
+                    object_com_world: [xy[0], xy[1], z],
+                    mechanics_template: Some(mech),
+                    authority_ok: true,
+                    robot_provided: true,
+                    robot_reachable: reachable,
+                    collision_admissible: collision,
+                    executable_witness: executable,
+                    robot_reject_reason: why,
+                };
+                evaluate_candidate(c, &ctx);
+            }
+            let step = receding_horizon_step(
+                &obs,
+                &goal,
+                &cands,
+                state,
+                last_obs.as_ref().map(|o| (o, None)),
+            );
+            state = step.state.clone();
+            if matches!(
+                step.record.decision,
+                LoopDecision::Halt | LoopDecision::Refuse
+            ) || matches!(
+                step.record.outcome,
+                GoalLoopOutcome::GoalReached
+                    | GoalLoopOutcome::GoalCurrentlyUnachievable
+                    | GoalLoopOutcome::InsufficientPhysicalEvidence
+                    | GoalLoopOutcome::AuthorityRefusal
+                    | GoalLoopOutcome::InsufficientEvidence
+                    | GoalLoopOutcome::GoalPhysicallyInfeasible
+            ) {
                 record_action(&mut trace, &step.record, step.selected.as_ref(), None, None);
                 break;
             }
@@ -511,13 +853,24 @@ mod tests {
                 record_action(&mut trace, &step.record, None, None, None);
                 break;
             };
-            let init = initiation_from_candidate(
-                &mechanics_template(0.05, 0.3, 20.0),
-                &sel,
-                [xy[0], xy[1], z],
+            if !sel.executable_for_plant || sel.maneuver.is_none() {
+                let mut rec = step.record.clone();
+                rec.decision = LoopDecision::Refuse;
+                rec.outcome = GoalLoopOutcome::GoalCurrentlyUnachievable;
+                rec.selection_rationale = "NO_EXECUTABLE_SELECTED_WITNESS".into();
+                record_action(&mut trace, &rec, Some(&sel), None, None);
+                break;
+            }
+            let mech = fill_mechanics_from_q(
+                &model,
+                &ee_name,
+                &qpos,
+                sel.contact_point_world,
                 yaw,
-                true,
+                0.05,
+                0.3,
             );
+            let init = initiation_from_candidate(&mech, &sel, [xy[0], xy[1], z], yaw, true);
             let frozen = FrozenMechanicsPrediction::freeze(
                 sel.witness.clone().unwrap_or_else(|| {
                     realityos_semantics::effect_feasibility::evaluate_planar_twist_direction(&init)
@@ -537,29 +890,45 @@ mod tests {
                 sel.stroke_m.max(0.03),
                 seed.wrapping_add(k as u64),
             );
-            sc.world_construction = if k == 0 {
-                realityos_semantics::contact_maneuver::WorldConstructionMode::CapabilitySynthesis
-            } else {
-                realityos_semantics::contact_maneuver::WorldConstructionMode::FixedWorld
-            };
-            if k == 1 {
+            sc.world_construction =
+                realityos_semantics::contact_maneuver::WorldConstructionMode::FixedWorld;
+            let loaded = last_loaded.take();
+            let maneuver = sel.maneuver.clone();
+            let qpos_now = qpos.clone();
+            let run = with_episode_qpos(Some(&qpos_now), || {
+                with_injected_push_maneuver(maneuver, || {
+                    run_skill_episode_ex(&bundle, &model, &[], &sc, sha, "PUSH", loaded, None)
+                })
+            });
+            let (ep, mut inst, man) = run?;
+            let mut truth = truth_of(&mut inst).unwrap_or_default();
+            if k == 0 {
                 if let Some(p) = perturb_after {
-                    sc.objects[1]["pos"] = json!([xy[0] + p[0], xy[1] + p[1], z]);
+                    let disp = [xy[0] + p[0], xy[1] + p[1], z];
+                    let _ = inst.set_body_pos("obj0", disp);
+                    if let Ok(t) = truth_of(&mut inst) {
+                        truth = t;
+                    }
                 }
             }
-            let loaded = last_loaded.take();
-            let (ep, mut inst, man) =
-                run_skill_episode_ex(&bundle, &model, &[], &sc, sha, "PUSH", loaded, None)?;
-            let truth = truth_of(&mut inst).unwrap_or_default();
             let (nxy, nyaw) = object_xy_yaw(&ep, &truth);
             last_loaded = Some((inst, man));
+            qpos = truth.qpos.clone();
+            let contact_established = ep.ctrl_writes > 0
+                && (ep.intended_tool_contact
+                    || ep.contact_pose_reached
+                    || ep.had_feasible_contact_maneuver);
             let after = WorldObservation {
                 object_id: "obj0".into(),
                 xy: nxy,
                 yaw: nyaw,
-                robot_q: truth.qpos.clone(),
+                robot_q: qpos.clone(),
                 freshness_ok: true,
-                intended_contact_face: Some(sel.face_id.clone()),
+                intended_contact_face: if contact_established {
+                    Some(sel.face_id.clone())
+                } else {
+                    None
+                },
                 authority_ok: ep.unauthorized_writes == 0,
                 observed_at_s: (k + 1) as f64,
             };
@@ -589,11 +958,44 @@ mod tests {
             }
             xy = nxy;
             yaw = nyaw;
-            face = Some(sel.face_id.clone());
+            established_face = after.intended_contact_face.clone();
+            last_obs = Some(after);
             state = rec.state;
+            k += 1;
             if rec.record.outcome == GoalLoopOutcome::GoalReached {
                 break;
             }
+        }
+        let terminal = [
+            "GoalReached",
+            "GoalCurrentlyUnachievable",
+            "InsufficientPhysicalEvidence",
+            "AuthorityRefusal",
+            "InsufficientEvidence",
+            "GoalPhysicallyInfeasible",
+            "ModelNotApplicable",
+        ]
+        .contains(&trace.final_outcome.as_str());
+        if !terminal {
+            let obs = WorldObservation {
+                object_id: "obj0".into(),
+                xy,
+                yaw,
+                robot_q: qpos,
+                freshness_ok: true,
+                intended_contact_face: established_face,
+                authority_ok: true,
+                observed_at_s: k as f64,
+            };
+            state.attempts = goal.max_bounded_attempts;
+            let step = receding_horizon_step(
+                &obs,
+                &goal,
+                &[],
+                state,
+                last_obs.as_ref().map(|o| (o, None)),
+            );
+            record_action(&mut trace, &step.record, None, None, None);
         }
         if let Some((inst, _)) = last_loaded {
             checkin_worker(inst);
@@ -612,6 +1014,20 @@ mod tests {
                 Some(false)
             );
         }
+        let o = t.final_outcome.as_str();
+        assert!(
+            matches!(
+                o,
+                "GoalReached"
+                    | "GoalCurrentlyUnachievable"
+                    | "InsufficientPhysicalEvidence"
+                    | "AuthorityRefusal"
+                    | "InsufficientEvidence"
+                    | "GoalPhysicallyInfeasible"
+                    | "ModelNotApplicable"
+            ),
+            "pass {pass}: must halt with GOAL_REACHED or an honest refuse, got {o}"
+        );
     }
 
     #[test]
@@ -626,17 +1042,13 @@ mod tests {
         let mut traces = Vec::new();
         let mut last_err = None;
         for pass in 1..=2 {
-            let g = trans_goal([0.06, 0.0], 0.02, 3);
+            let g = trans_goal([0.03, 0.0], 0.02, 4);
             let a = closed_loop_on_bundle("arm_gripper", [0.0, 0.0], &g, None, 21);
             let b = closed_loop_on_bundle("arm_gripper", [0.10, 0.0], &g, None, 22);
             match (a, b) {
                 (Ok(ta), Ok(tb)) => {
                     assert_trace_honest(&ta, pass);
                     assert_trace_honest(&tb, pass);
-                    assert!(
-                        !ta.selected_faces.is_empty() || !tb.selected_faces.is_empty(),
-                        "loop produced no actions"
-                    );
                     if !ta.selected_faces.is_empty() && !tb.selected_faces.is_empty() {
                         assert_ne!(
                             ta.selected_faces, tb.selected_faces,

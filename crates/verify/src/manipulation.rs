@@ -77,6 +77,26 @@ thread_local! {
 }
 
 #[cfg(test)]
+thread_local! {
+    static INJECTED_PUSH_MANEUVER: std::cell::RefCell<Option<ContactManeuver>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Execute this Mode B witness instead of re-ranking contacts inside placement.
+#[cfg(test)]
+pub(crate) fn with_injected_push_maneuver<R>(
+    m: Option<ContactManeuver>,
+    f: impl FnOnce() -> R,
+) -> R {
+    INJECTED_PUSH_MANEUVER.with(|c| {
+        let prev = c.replace(m);
+        let out = f();
+        *c.borrow_mut() = prev;
+        out
+    })
+}
+
+#[cfg(test)]
 pub(crate) fn with_episode_qpos<R>(qpos: Option<&[f64]>, f: impl FnOnce() -> R) -> R {
     EPISODE_QPOS.with(|c| {
         let prev = c.replace(qpos.map(|v| v.to_vec()));
@@ -3375,7 +3395,7 @@ fn tool_bodies_from_model(model: &EmbodimentModel, ee_name: &str) -> Vec<String>
     names
 }
 
-fn local_ee_poses(
+pub(crate) fn local_ee_poses(
     model: &EmbodimentModel,
     ee_name: &str,
     chain: &[String],
@@ -3415,7 +3435,11 @@ fn local_ee_poses(
     out
 }
 
-fn chain_q_from_qpos(model: &EmbodimentModel, ee: &str, qpos: &[f64]) -> Option<Vec<f64>> {
+pub(crate) fn chain_q_from_qpos(
+    model: &EmbodimentModel,
+    ee: &str,
+    qpos: &[f64],
+) -> Option<Vec<f64>> {
     let chain = model.ee_joint_chain(ee)?;
     let mut q = Vec::with_capacity(chain.len());
     for name in &chain {
@@ -3426,7 +3450,12 @@ fn chain_q_from_qpos(model: &EmbodimentModel, ee: &str, qpos: &[f64]) -> Option<
     Some(q)
 }
 
-fn sample_push_units(model: &EmbodimentModel, ee_name: &str, seed: u64, n_draw: usize) -> Vec<f64> {
+pub(crate) fn sample_push_units(
+    model: &EmbodimentModel,
+    ee_name: &str,
+    seed: u64,
+    n_draw: usize,
+) -> Vec<f64> {
     use rand::{Rng, SeedableRng};
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed ^ 0x00A1_1CE5);
     let n_chain = model.ee_joint_chain(ee_name).map(|c| c.len()).unwrap_or(0);
@@ -3538,6 +3567,16 @@ fn place_object_in_workspace(
         apply_object_and_support(inst, sc, pos, anchor, !sc.planar);
         return Ok(PlacementOutcome {
             adapted_world: true,
+            ..PlacementOutcome::default()
+        });
+    }
+
+    #[cfg(test)]
+    if let Some(maneuver) = INJECTED_PUSH_MANEUVER.with(|c| c.borrow().clone()) {
+        return Ok(PlacementOutcome {
+            maneuver: Some(maneuver),
+            rank_why: "injected_selected_witness".into(),
+            adapted_world: false,
             ..PlacementOutcome::default()
         });
     }

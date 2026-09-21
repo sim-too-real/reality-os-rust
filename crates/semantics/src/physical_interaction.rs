@@ -4,6 +4,7 @@
 use realityos_physics::{ContactMode, PlanarTwist, RotationSign};
 use serde::{Deserialize, Serialize};
 
+use crate::contact_maneuver::ContactManeuver;
 use crate::contact_manifold::box_vertical_face_manifolds_posed;
 use crate::effect_feasibility::{
     evaluate_planar_twist_direction, EffectFeasibility, EffectFeasibilityWitness,
@@ -94,6 +95,9 @@ pub struct PhysicalInteractionCandidate {
     pub witness: Option<EffectFeasibilityWitness>,
     pub authority_ok: bool,
     pub executable_for_plant: bool,
+    /// Proven Mode B maneuver. Not serialized; execution-only.
+    #[serde(skip)]
+    pub maneuver: Option<ContactManeuver>,
 }
 
 impl PhysicalInteractionCandidate {
@@ -138,6 +142,7 @@ pub struct EvaluationContext {
     pub robot_reachable: Option<bool>,
     pub collision_admissible: Option<bool>,
     pub executable_witness: Option<bool>,
+    pub robot_reject_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -193,6 +198,7 @@ pub fn generate_planar_push_candidates(
                 witness: None,
                 authority_ok: true,
                 executable_for_plant: false,
+                maneuver: None,
             });
         }
     }
@@ -254,7 +260,13 @@ pub fn evaluate_candidate(cand: &mut PhysicalInteractionCandidate, ctx: &Evaluat
     match (ctx.robot_provided, ctx.robot_reachable) {
         (true, Some(true)) => pass(cand, FunnelStage::RobotReachable, None),
         (true, Some(false)) => {
-            halt(cand, FunnelStage::RobotReachable, "UNREACHABLE");
+            halt(
+                cand,
+                FunnelStage::RobotReachable,
+                ctx.robot_reject_reason
+                    .clone()
+                    .unwrap_or_else(|| "UNREACHABLE".into()),
+            );
             return;
         }
         (true, None) => {
@@ -278,7 +290,9 @@ pub fn evaluate_candidate(cand: &mut PhysicalInteractionCandidate, ctx: &Evaluat
             halt(
                 cand,
                 FunnelStage::CollisionAdmissible,
-                "COLLISION_INADMISSIBLE",
+                ctx.robot_reject_reason
+                    .clone()
+                    .unwrap_or_else(|| "COLLISION_INADMISSIBLE".into()),
             );
             return;
         }
@@ -303,7 +317,13 @@ pub fn evaluate_candidate(cand: &mut PhysicalInteractionCandidate, ctx: &Evaluat
             cand.executable_for_plant = true;
         }
         (true, Some(false)) => {
-            halt(cand, FunnelStage::ExecutableWitness, "NON_EXECUTABLE");
+            halt(
+                cand,
+                FunnelStage::ExecutableWitness,
+                ctx.robot_reject_reason
+                    .clone()
+                    .unwrap_or_else(|| "NON_EXECUTABLE".into()),
+            );
             return;
         }
         (true, None) => {
@@ -513,6 +533,7 @@ pub fn select_interaction(
         if geom_goalish
             || cands.iter().any(|c| {
                 rejected_at(c, FunnelStage::RobotReachable)
+                    || rejected_at(c, FunnelStage::CollisionAdmissible)
                     || rejected_at(c, FunnelStage::ExecutableWitness)
             })
         {
@@ -683,6 +704,7 @@ mod tests {
             robot_reachable: reachable,
             collision_admissible: collision,
             executable_witness: exec,
+            robot_reject_reason: None,
         }
     }
 
