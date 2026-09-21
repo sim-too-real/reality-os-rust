@@ -106,9 +106,7 @@ pub fn compare_gravity_torque(
         for (i, name) in joint_names.iter().enumerate() {
             let pred = predicted.get(i).copied().unwrap_or(0.0);
             let oj = o_joints.iter().find(|j| j["name"] == *name);
-            let ora = oj
-                .and_then(|j| j["qfrc_bias"].as_f64())
-                .unwrap_or(f64::NAN);
+            let ora = oj.and_then(|j| j["qfrc_bias"].as_f64()).unwrap_or(f64::NAN);
             let abs = (pred - ora).abs();
             let rel = abs / (1.0 + ora.abs());
             max_abs = max_abs.max(abs);
@@ -166,9 +164,11 @@ pub fn compare_gravity_torque(
     }
 
     let mut missing = model.clone();
-    if let Some(b) = missing.bodies.iter_mut().find(|b| {
-        b.mass_kg.value.unwrap_or(0.0) > 0.05 && b.parent.is_some()
-    }) {
+    if let Some(b) = missing
+        .bodies
+        .iter_mut()
+        .find(|b| b.mass_kg.value.unwrap_or(0.0) > 0.05 && b.parent.is_some())
+    {
         b.mass_kg = realityos_semantics::provenance::Provenanced::unknown("planted_missing", 0.0);
     }
     let missing_pred = gravity_self_load(&missing, &joint_names, &qmap, g);
@@ -200,8 +200,6 @@ fn inspect_gravity_vec(inspect: &Value) -> [f64; 3] {
         .unwrap_or([0.0, 0.0, -9.81])
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,7 +208,9 @@ mod tests {
     use serde_json::json;
 
     fn scratch() -> std::path::PathBuf {
-        std::path::PathBuf::from(r"C:\Users\moram\AppData\Local\Temp\grok-goal-3f834bc45751\implementer")
+        std::path::PathBuf::from(
+            r"C:\Users\moram\AppData\Local\Temp\grok-goal-3f834bc45751\implementer",
+        )
     }
 
     #[test]

@@ -180,7 +180,10 @@ impl SupportFrictionModel {
 
 /// τ_max = μ N (2/3) R for a circular patch with declared uniform pressure.
 pub fn tau_max_uniform_circle(mu: f64, normal_n: f64, radius_m: f64) -> PhysicsResult<f64> {
-    Ok(nonneg(mu, "mu")? * nonneg(normal_n, "normal_force")? * (2.0 / 3.0) * positive(radius_m, "radius")?)
+    Ok(nonneg(mu, "mu")?
+        * nonneg(normal_n, "normal_force")?
+        * (2.0 / 3.0)
+        * positive(radius_m, "radius")?)
 }
 
 pub fn f_max_coulomb(mu: f64, normal_n: f64) -> PhysicsResult<f64> {
@@ -199,7 +202,11 @@ pub fn project_to_plane(v: [f64; 3], support_normal: [f64; 3]) -> PhysicsResult<
         return Err(PhysicsError::NonPositive("support_normal"));
     }
     let nh = [n[0] / nn, n[1] / nn, n[2] / nn];
-    let v = [finite(v[0], "vec")?, finite(v[1], "vec")?, finite(v[2], "vec")?];
+    let v = [
+        finite(v[0], "vec")?,
+        finite(v[1], "vec")?,
+        finite(v[2], "vec")?,
+    ];
     let vn = v[0] * nh[0] + v[1] * nh[1] + v[2] * nh[2];
     let t = [v[0] - nh[0] * vn, v[1] - nh[1] * vn, v[2] - nh[2] * vn];
     // Plane basis: e1 = world x projected, or world y if n ≈ x.
@@ -209,7 +216,11 @@ pub fn project_to_plane(v: [f64; 3], support_normal: [f64; 3]) -> PhysicsResult<
         [0.0, 1.0, 0.0]
     };
     let exn = ex[0] * nh[0] + ex[1] * nh[1] + ex[2] * nh[2];
-    let e1 = [ex[0] - nh[0] * exn, ex[1] - nh[1] * exn, ex[2] - nh[2] * exn];
+    let e1 = [
+        ex[0] - nh[0] * exn,
+        ex[1] - nh[1] * exn,
+        ex[2] - nh[2] * exn,
+    ];
     let n1 = (e1[0] * e1[0] + e1[1] * e1[1] + e1[2] * e1[2]).sqrt();
     if n1 <= 0.0 {
         return Err(PhysicsError::Singular("plane_basis"));
@@ -432,13 +443,19 @@ pub fn contact_mode_from_pusher(
     if into < -MODE_EPS {
         return Ok(ContactMode::Separating);
     }
-    let SupportFrictionModel::Ellipsoidal { f_max, tau_max, pressure } = model else {
+    let SupportFrictionModel::Ellipsoidal {
+        f_max,
+        tau_max,
+        pressure,
+    } = model
+    else {
         return Ok(ContactMode::Unknown);
     };
     if matches!(pressure, PressureDistribution::Unknown) {
         return Ok(ContactMode::Unknown);
     }
-    let (v_left, v_right) = motion_cone_edges(n, mu_tool, contact_offset_object_xy, f_max, tau_max)?;
+    let (v_left, v_right) =
+        motion_cone_edges(n, mu_tool, contact_offset_object_xy, f_max, tau_max)?;
     // Inside if vp is between v_right and v_left (CCW from right to left about the cone).
     let cr = cross2(v_right, vp);
     let cl = cross2(vp, v_left);
@@ -474,7 +491,12 @@ pub fn motion_compatibility(
     mu_tool: f64,
     model: SupportFrictionModel,
 ) -> PhysicsResult<MotionCompatibility> {
-    let SupportFrictionModel::Ellipsoidal { f_max, tau_max, pressure } = model else {
+    let SupportFrictionModel::Ellipsoidal {
+        f_max,
+        tau_max,
+        pressure,
+    } = model
+    else {
         return Ok(MotionCompatibility::Unknown);
     };
     if matches!(pressure, PressureDistribution::Unknown) {
@@ -485,7 +507,8 @@ pub fn motion_compatibility(
     if dot2(vc, n) < -MODE_EPS {
         return Ok(MotionCompatibility::MotionIncompatible);
     }
-    let (v_left, v_right) = motion_cone_edges(n, mu_tool, contact_offset_object_xy, f_max, tau_max)?;
+    let (v_left, v_right) =
+        motion_cone_edges(n, mu_tool, contact_offset_object_xy, f_max, tau_max)?;
     let cr = cross2(v_right, vc);
     let cl = cross2(vc, v_left);
     if cr.abs() < 1e-6 || cl.abs() < 1e-6 {
@@ -566,7 +589,8 @@ mod tests {
 
     #[test]
     fn centered_force_is_translation_only() {
-        let (tw, sign) = twist_from_contact_force([2.0, 0.0], [0.0, 0.0], ellip(1.0, 0.05)).unwrap();
+        let (tw, sign) =
+            twist_from_contact_force([2.0, 0.0], [0.0, 0.0], ellip(1.0, 0.05)).unwrap();
         assert_eq!(sign, RotationSign::TranslationOnly);
         assert!(tw.omega_z.abs() < 1e-12);
         assert!(tw.vx > 0.0);

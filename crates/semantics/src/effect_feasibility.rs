@@ -12,17 +12,15 @@ use realityos_physics::{
 use serde::{Deserialize, Serialize};
 
 use crate::contact_jacobian::{contact_jacobian_witness, jacobian_3xn_columns};
-use crate::effort::{
-    any_link_com_known, chain_physical_effort, chain_physical_effort_signed,
-};
+use crate::effort::{any_link_com_known, chain_physical_effort, chain_physical_effort_signed};
 use crate::embodiment::EmbodimentModel;
-use crate::self_load::{gravity_self_load, self_load_provenanced};
 use crate::mechanics_regime::{
     support_is_horizontal, AssumptionState, PlanarPushAssumptions, RegimeApplicability,
 };
 use crate::pair_friction::PairFriction;
 use crate::physical_quantity::{PhysicalEffort, PhysicalFactProvenance};
 use crate::provenance::Provenanced;
+use crate::self_load::{gravity_self_load, self_load_provenanced};
 use crate::skill::SkillRefuse;
 use crate::transform::{cross3, norm3, normalize3, scale3, sub3};
 
@@ -64,6 +62,13 @@ impl PhysicalEffectLevels {
             instantaneous_motion: EffectFeasibility::Unknown,
             sustained_effect: EffectFeasibility::Unknown,
         }
+    }
+
+    /// SUSTAINED_EFFECT = FEASIBLE is only honest when every lower level is FEASIBLE.
+    pub fn all_prerequisites_of_sustained_are_feasible(self) -> bool {
+        self.contact_geometrically_feasible == EffectFeasibility::Feasible
+            && self.motion_initiation == EffectFeasibility::Feasible
+            && self.instantaneous_motion == EffectFeasibility::Feasible
     }
 }
 
@@ -359,7 +364,11 @@ pub fn evaluate_planar_push_initiation(input: &PlanarPushInitiation) -> EffectFe
     w.pressure_model_kind = Some(input.support_friction_model.pressure_name().into());
     w.pusher_velocity = input.pusher_velocity_world.known_value().copied();
     w.contact_force_direction = force_direction_of(input);
-    if input.self_load_torque_nm.iter().any(|t| t.known_value().is_some()) {
+    if input
+        .self_load_torque_nm
+        .iter()
+        .any(|t| t.known_value().is_some())
+    {
         w.notes.push("self_load_present".into());
     } else if input.link_com_known {
         w.notes
@@ -754,10 +763,7 @@ fn fill_twist_fields(
             w.rotation_sign = Some(sign);
         }
         Err(_) => {
-            if matches!(
-                input.support_friction_model.pressure_name(),
-                "UNKNOWN"
-            ) {
+            if matches!(input.support_friction_model.pressure_name(), "UNKNOWN") {
                 w.rotation_sign = Some(RotationSign::Unknown);
             }
         }
@@ -784,8 +790,7 @@ fn fill_twist_fields(
         w.contact_mode = Some(mode);
     }
     if let Some(tw) = w.planar_twist {
-        if let Ok(comp) =
-            motion_compatibility(tw, r_obj, n_obj, mu_t, input.support_friction_model)
+        if let Ok(comp) = motion_compatibility(tw, r_obj, n_obj, mu_t, input.support_friction_model)
         {
             w.motion_compatibility = Some(comp);
         }
@@ -834,7 +839,11 @@ pub fn evaluate_planar_push_at_model(
             params.joint_effort_abs = signed
                 .iter()
                 .map(|s| {
-                    Provenanced::declared(s.tau_min_nm.abs().max(s.tau_max_nm.abs()), "joint.effort", 0.0)
+                    Provenanced::declared(
+                        s.tau_min_nm.abs().max(s.tau_max_nm.abs()),
+                        "joint.effort",
+                        0.0,
+                    )
                 })
                 .collect();
         }
@@ -853,7 +862,11 @@ pub fn evaluate_planar_push_at_model(
                 .collect();
         }
     }
-    if params.joint_effort_abs.iter().all(|e| e.known_value().is_none()) {
+    if params
+        .joint_effort_abs
+        .iter()
+        .all(|e| e.known_value().is_none())
+    {
         if let Ok(tau) = chain_physical_effort(model, &params.joint_names) {
             params.joint_effort_abs = tau
                 .into_iter()
@@ -901,18 +914,12 @@ pub fn evaluate_planar_twist_direction(input: &PlanarPushInitiation) -> EffectFe
     {
         w.physical_levels.instantaneous_motion = EffectFeasibility::Feasible;
     } else if w.planar_twist.is_none()
-        || matches!(
-            w.rotation_sign,
-            Some(RotationSign::Unknown) | None
-        )
+        || matches!(w.rotation_sign, Some(RotationSign::Unknown) | None)
     {
         w.physical_levels.instantaneous_motion = EffectFeasibility::Unknown;
         if w.unknown_reason.is_none()
             && w.feasibility != EffectFeasibility::Infeasible
-            && matches!(
-                input.support_friction_model,
-                SupportFrictionModel::Unknown
-            )
+            && matches!(input.support_friction_model, SupportFrictionModel::Unknown)
         {
             w.unknown_reason = Some("SUPPORT_MODEL_UNKNOWN".into());
         }
@@ -972,23 +979,43 @@ pub fn evaluate_sustained_effect(checkpoints: &[PlanarPushInitiation]) -> Sustai
             break;
         }
         let local = evaluate_planar_twist_direction(cp);
-        let ok = local.feasibility == EffectFeasibility::Feasible
-            && local.physical_levels.instantaneous_motion != EffectFeasibility::Infeasible;
+        let initiation = local.feasibility;
+        let instant = local.physical_levels.instantaneous_motion;
+        let contact = local.physical_levels.contact_geometrically_feasible;
+        let any_infeasible =
+            [initiation, instant, contact].contains(&EffectFeasibility::Infeasible);
+        let all_feasible = initiation == EffectFeasibility::Feasible
+            && instant == EffectFeasibility::Feasible
+            && contact == EffectFeasibility::Feasible;
         out_cp.push(local);
-        if !ok {
+        if any_infeasible {
             first_bad = Some(i);
             first_reason = out_cp[i]
                 .infeasible_reason
                 .clone()
-                .or_else(|| out_cp[i].unknown_reason.clone());
+                .or_else(|| out_cp[i].unknown_reason.clone())
+                .or_else(|| Some("PREREQUISITE_INFEASIBLE".into()));
+            break;
+        }
+        if !all_feasible {
+            first_reason = out_cp[i]
+                .unknown_reason
+                .clone()
+                .or_else(|| Some("PREREQUISITE_NOT_FEASIBLE".into()));
             break;
         }
     }
-    if first_bad.is_none() && !checkpoints.is_empty() {
+    if first_bad.is_none()
+        && first_reason.is_none()
+        && !checkpoints.is_empty()
+        && out_cp.first().is_some_and(|w| {
+            w.physical_levels
+                .all_prerequisites_of_sustained_are_feasible()
+        })
+    {
         if let Some(first) = out_cp.first() {
             levels = first.physical_levels;
             levels.sustained_effect = EffectFeasibility::Feasible;
-            levels.motion_initiation = EffectFeasibility::Feasible;
         }
     } else {
         if let Some(first) = out_cp.first() {
@@ -1139,7 +1166,10 @@ mod tests {
 
     #[test]
     fn zero_vs_high_support_friction_reverses_initiation() {
-        let low = evaluate_planar_push_initiation(&with_available(centered_input(0.5, 0.0, 1.0, 5.0), 5.0));
+        let low = evaluate_planar_push_initiation(&with_available(
+            centered_input(0.5, 0.0, 1.0, 5.0),
+            5.0,
+        ));
         let high = evaluate_planar_push_initiation(&centered_input(0.5, 8.0, 1.0, 5.0));
         assert_eq!(low.feasibility, EffectFeasibility::Feasible);
         assert_eq!(
@@ -1195,7 +1225,11 @@ mod tests {
         );
         assert_ne!(w.feasibility, EffectFeasibility::Feasible);
         assert_eq!(w.feasibility, EffectFeasibility::Infeasible);
-        assert!(w.available_lambda.unwrap() < 0.2, "{:?}", w.available_lambda);
+        assert!(
+            w.available_lambda.unwrap() < 0.2,
+            "{:?}",
+            w.available_lambda
+        );
     }
 
     #[test]
@@ -1481,23 +1515,19 @@ mod tests {
 
     #[test]
     fn later_checkpoint_infeasible_is_not_sustainably_feasible() {
-        let q0 = with_available(centered_input(0.05, 0.1, 1.0, 20.0), 20.0);
+        let mut q0 = with_available(centered_input(0.05, 0.1, 1.0, 20.0), 20.0);
+        q0.support_friction_model = declared_ellip(0.1, 0.05);
+        q0.pusher_velocity_world = Provenanced::declared([1.0, 0.0, 0.0], "test.vp", 0.0);
         let mut q1 = q0.clone();
         q1.joint_effort_min = vec![Provenanced::declared(-0.01, "t", 0.0); 3];
         q1.joint_effort_max = vec![Provenanced::declared(0.01, "t", 0.0); 3];
         q1.mass_kg = Provenanced::declared(3.0, "t", 0.0);
-        q1.object_support_friction = PairFriction::coulomb(
-            "object",
-            "support",
-            Provenanced::declared(2.0, "t", 0.0),
-        );
+        q1.object_support_friction =
+            PairFriction::coulomb("object", "support", Provenanced::declared(2.0, "t", 0.0));
         let s = evaluate_sustained_effect(&[q0, q1]);
         assert_ne!(s.feasibility, EffectFeasibility::Feasible);
         assert_eq!(s.first_infeasible_checkpoint, Some(1));
-        assert_eq!(
-            s.checkpoints[0].feasibility,
-            EffectFeasibility::Feasible
-        );
+        assert_eq!(s.checkpoints[0].feasibility, EffectFeasibility::Feasible);
         assert_eq!(s.effect_class, EffectClass::SustainedEffect);
         assert!(!s.claims_requested_displacement);
         assert_eq!(
@@ -1516,5 +1546,100 @@ mod tests {
         p.intended_contact_lost = true;
         let l = evaluate_sustained_effect(&[p]);
         assert_eq!(l.first_reason.as_deref(), Some("INTENDED_CONTACT_LOST"));
+    }
+
+    /// P0: initiation FEASIBLE + instantaneous UNKNOWN must not mint SUSTAINED FEASIBLE.
+    /// `centered_input` uses SupportFrictionModel::Unknown, so twist stays unevaluable.
+    #[test]
+    fn instantaneous_unknown_cannot_make_sustained_feasible() {
+        let p = with_available(centered_input(0.1, 0.2, 0.8, 20.0), 20.0);
+        let local = evaluate_planar_twist_direction(&p);
+        assert_eq!(local.feasibility, EffectFeasibility::Feasible);
+        assert_eq!(
+            local.physical_levels.instantaneous_motion,
+            EffectFeasibility::Unknown
+        );
+        let s = evaluate_sustained_effect(&[p]);
+        assert_ne!(s.feasibility, EffectFeasibility::Feasible);
+        assert_ne!(
+            s.physical_levels.sustained_effect,
+            EffectFeasibility::Feasible
+        );
+        assert_eq!(s.feasibility, EffectFeasibility::Unknown);
+        assert_eq!(
+            s.physical_levels.instantaneous_motion,
+            EffectFeasibility::Unknown
+        );
+        assert_eq!(s.first_infeasible_checkpoint, None);
+    }
+
+    #[test]
+    fn sustained_feasible_implies_every_prerequisite_feasible() {
+        let mut p = with_available(centered_input(0.1, 0.2, 0.8, 20.0), 20.0);
+        p.support_friction_model = declared_ellip(0.2, 0.1);
+        p.pusher_velocity_world = Provenanced::declared([1.0, 0.0, 0.0], "test.vp", 0.0);
+        let local = evaluate_planar_twist_direction(&p);
+        let s = evaluate_sustained_effect(&[p]);
+        if s.feasibility == EffectFeasibility::Feasible {
+            assert_eq!(
+                local.physical_levels.instantaneous_motion,
+                EffectFeasibility::Feasible
+            );
+        }
+        assert_sustained_levels_monotonic(&s.physical_levels);
+        assert_eq!(
+            s.physical_levels.sustained_effect == EffectFeasibility::Feasible,
+            s.physical_levels
+                .all_prerequisites_of_sustained_are_feasible()
+                && s.feasibility == EffectFeasibility::Feasible
+        );
+        if s.feasibility == EffectFeasibility::Feasible {
+            assert_eq!(
+                s.physical_levels.contact_geometrically_feasible,
+                EffectFeasibility::Feasible
+            );
+            assert_eq!(
+                s.physical_levels.motion_initiation,
+                EffectFeasibility::Feasible
+            );
+            assert_eq!(
+                s.physical_levels.instantaneous_motion,
+                EffectFeasibility::Feasible
+            );
+        }
+    }
+
+    #[test]
+    fn shipped_sustained_effect_does_not_treat_not_infeasible_as_feasible() {
+        let src = include_str!("effect_feasibility.rs");
+        let hole = ["instantaneous_motion != ", "EffectFeasibility::Infeasible"].concat();
+        assert!(
+            !src.contains(&hole),
+            "SUSTAINED_EFFECT must not treat instantaneous != INFEASIBLE as a pass"
+        );
+    }
+
+    fn assert_sustained_levels_monotonic(levels: &PhysicalEffectLevels) {
+        if levels.sustained_effect == EffectFeasibility::Feasible {
+            assert_eq!(
+                levels.contact_geometrically_feasible,
+                EffectFeasibility::Feasible
+            );
+            assert_eq!(levels.motion_initiation, EffectFeasibility::Feasible);
+            assert_eq!(levels.instantaneous_motion, EffectFeasibility::Feasible);
+        }
+        if levels.instantaneous_motion == EffectFeasibility::Feasible {
+            assert_eq!(levels.motion_initiation, EffectFeasibility::Feasible);
+            assert_eq!(
+                levels.contact_geometrically_feasible,
+                EffectFeasibility::Feasible
+            );
+        }
+        if levels.motion_initiation == EffectFeasibility::Feasible {
+            assert_eq!(
+                levels.contact_geometrically_feasible,
+                EffectFeasibility::Feasible
+            );
+        }
     }
 }

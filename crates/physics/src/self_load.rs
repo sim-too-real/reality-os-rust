@@ -209,7 +209,12 @@ mod tests {
         }];
         let tau = gravity_torque_nm(&joints, &bodies, [0.0, 0.0, -G]).unwrap();
         let expected = G * (0.8 + 0.2);
-        assert!((tau[0] - expected).abs() < 1e-12, "{} vs {}", tau[0], expected);
+        assert!(
+            (tau[0] - expected).abs() < 1e-12,
+            "{} vs {}",
+            tau[0],
+            expected
+        );
     }
 
     #[test]
@@ -254,6 +259,9 @@ mod tests {
         }];
         let a = gravity_torque_nm(&joints_full, &full, [0.0, 0.0, -G]).unwrap();
         let b = gravity_torque_nm(&joints_omit, &full, [0.0, 0.0, -G]).unwrap();
-        assert!((a[0] - b[0]).abs() > 1.0, "planted missing mass must not average away");
+        assert!(
+            (a[0] - b[0]).abs() > 1.0,
+            "planted missing mass must not average away"
+        );
     }
 }

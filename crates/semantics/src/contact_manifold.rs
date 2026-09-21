@@ -198,6 +198,56 @@ pub fn box_push_face_manifold_posed(
     best.map(|(_, m)| m)
 }
 
+/// Vertical (non-support) faces of a posed box. Face ids are object-local.
+pub fn box_vertical_face_manifolds_posed(
+    object_pose: crate::transform::Se3,
+    half_extents: [f64; 3],
+    support_normal: [f64; 3],
+    face_gap: f64,
+) -> Vec<(String, BoxFaceManifold)> {
+    let n_s = normalize3(support_normal).unwrap_or([0.0, 0.0, 1.0]);
+    let hx = half_extents[0].abs().max(1e-6);
+    let hy = half_extents[1].abs().max(1e-6);
+    let hz = half_extents[2].abs().max(1e-6);
+    let locals = [
+        ("+x", [hx, 0.0, 0.0], [1.0, 0.0, 0.0], hy, hz),
+        ("-x", [-hx, 0.0, 0.0], [-1.0, 0.0, 0.0], hy, hz),
+        ("+y", [0.0, hy, 0.0], [0.0, 1.0, 0.0], hx, hz),
+        ("-y", [0.0, -hy, 0.0], [0.0, -1.0, 0.0], hx, hz),
+    ];
+    let mut out = Vec::new();
+    for (id, origin_local, n_local, u_half, v_half) in locals {
+        let origin = object_pose.transform_point(origin_local);
+        let normal = object_pose.rotate(n_local);
+        let Some(normal_n) = normalize3(normal) else {
+            continue;
+        };
+        if dot3(normal_n, n_s).abs() > 0.7 {
+            continue;
+        }
+        let Some((u, v)) = tangent_basis(normal_n, n_s) else {
+            continue;
+        };
+        let Some(push) = normalize3([-normal_n[0], -normal_n[1], -normal_n[2]]) else {
+            continue;
+        };
+        out.push((
+            id.to_string(),
+            BoxFaceManifold {
+                origin,
+                normal: normal_n,
+                u,
+                v,
+                u_half,
+                v_half,
+                face_gap: face_gap.max(0.0),
+                push,
+            },
+        ));
+    }
+    out
+}
+
 pub fn manifold_coords(manifold: &BoxFaceManifold, tool_point: [f64; 3]) -> ManifoldCoords {
     let d = sub3(tool_point, manifold.origin);
     ManifoldCoords {
@@ -518,5 +568,31 @@ mod tests {
             .unwrap_err(),
             ManifoldReject::TangentUOutside
         );
+    }
+
+    #[test]
+    fn vertical_faces_are_the_four_object_sides() {
+        let pose = crate::transform::Se3 {
+            xyz: [0.3, 0.0, 0.16],
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
+        };
+        let faces =
+            box_vertical_face_manifolds_posed(pose, [0.03, 0.04, 0.05], [0.0, 0.0, 1.0], 0.01);
+        assert_eq!(faces.len(), 4);
+        let ids: Vec<&str> = faces.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(ids.contains(&"+x") && ids.contains(&"-x"));
+        assert!(ids.contains(&"+y") && ids.contains(&"-y"));
+        for (_, m) in &faces {
+            assert!((m.normal[2]).abs() < 0.2, "side normal should be planar");
+            let into = [
+                m.push[0] + m.normal[0],
+                m.push[1] + m.normal[1],
+                m.push[2] + m.normal[2],
+            ];
+            assert!(
+                (into[0] * into[0] + into[1] * into[1] + into[2] * into[2]).sqrt() < 1e-9,
+                "push must be anti-aligned with outward normal"
+            );
+        }
     }
 }

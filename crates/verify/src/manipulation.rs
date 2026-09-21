@@ -617,13 +617,12 @@ fn run_release_episode(
     }
 }
 
-pub(crate) type BeforeExecuteHook<'a> =
-    &'a mut dyn FnMut(
-        &PlacementOutcome,
-        &VerifierTruth,
-        &EmbodimentModel,
-        &mut crate::mujoco_exec::MujocoInstance,
-    ) -> Result<(), String>;
+pub(crate) type BeforeExecuteHook<'a> = &'a mut dyn FnMut(
+    &PlacementOutcome,
+    &VerifierTruth,
+    &EmbodimentModel,
+    &mut crate::mujoco_exec::MujocoInstance,
+) -> Result<(), String>;
 
 pub(crate) fn run_skill_episode(
     bundle: &RobotBundle,

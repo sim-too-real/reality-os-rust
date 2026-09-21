@@ -4,11 +4,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use realityos_physics::{ContactMode, RotationSign, SupportFrictionModel};
 use realityos_semantics::effect_feasibility::{
     evaluate_planar_push_initiation, EffectFeasibility, EffectFeasibilityWitness,
     PlanarPushInitiation,
 };
-use realityos_physics::{ContactMode, RotationSign, SupportFrictionModel};
 use realityos_semantics::pair_friction::PairFriction;
 use realityos_semantics::provenance::Provenanced;
 
@@ -354,11 +354,7 @@ pub fn classify_mechanics_divergence(
 }
 
 fn quasi_static_assumption_broken(outcome: &MechanicsExecuteOutcome) -> bool {
-    let dyaw = outcome
-        .yaw_change
-        .map(principal_angle)
-        .unwrap_or(0.0)
-        .abs();
+    let dyaw = outcome.yaw_change.map(principal_angle).unwrap_or(0.0).abs();
     if dyaw > std::f64::consts::FRAC_PI_2 {
         return true;
     }
@@ -428,7 +424,11 @@ pub fn declared_centered_push(
         contact_point_world: Provenanced::user_declared(contact, "scenario.contact", 0.0),
         contact_normal_world: Provenanced::user_declared(normal, "scenario.contact_n", 0.0),
         push_direction_world: Provenanced::user_declared(direction, "scenario.dir", 0.0),
-        contact_force_direction_world: Provenanced::user_declared(direction, "scenario.force_dir", 0.0),
+        contact_force_direction_world: Provenanced::user_declared(
+            direction,
+            "scenario.force_dir",
+            0.0,
+        ),
         pusher_velocity_world: Provenanced::user_declared(direction, "scenario.vp", 0.0),
         joint_names: vec!["j0".into(), "j1".into(), "j2".into()],
         translational_jacobian_3xn: identity_translational_jacobian(),
@@ -949,13 +949,10 @@ mod tests {
             0.0,
         ];
         if toward[0] * into_object[0] + toward[1] * into_object[1] < 0.0 {
-            into_object = [
-                -into_object[0],
-                -into_object[1],
-                -into_object[2],
-            ];
+            into_object = [-into_object[0], -into_object[1], -into_object[2]];
         }
-        let n_into = (into_object[0] * into_object[0] + into_object[1] * into_object[1]
+        let n_into = (into_object[0] * into_object[0]
+            + into_object[1] * into_object[1]
             + into_object[2] * into_object[2])
             .sqrt();
         if n_into > 1e-9 {
@@ -1047,8 +1044,9 @@ mod tests {
             intended_contact_lost: false,
             authority_ok: true,
         };
-        let mut witness = evaluate_planar_push_at_model(model, ee, &q, contact_in_ee, params.clone())
-            .map_err(|e| format!("evaluate_planar_push_at_model:{e:?}"))?;
+        let mut witness =
+            evaluate_planar_push_at_model(model, ee, &q, contact_in_ee, params.clone())
+                .map_err(|e| format!("evaluate_planar_push_at_model:{e:?}"))?;
         if witness.jacobian_residual.is_none() {
             return Err("shipped Jacobian residual missing".into());
         }
@@ -1175,31 +1173,32 @@ mod tests {
                 let object_id = sc.object_id.clone();
                 let mut frozen: Option<FrozenMechanicsPrediction> = None;
                 let mut start_xy: Option<[f64; 2]> = None;
-                let mut hook = |placement: &PlacementOutcome,
-                                initial: &VerifierTruth,
-                                model: &EmbodimentModel,
-                                _inst: &mut crate::mujoco_exec::MujocoInstance| {
-                    start_xy = body_xyz(initial, &object_id).map(|p| [p[0], p[1]]);
-                    let mut mechanics_model = model.clone();
-                    declare_joint_effort(&mut mechanics_model, 4.0);
-                    let vp = placement
-                        .maneuver
-                        .as_ref()
-                        .map(|m| m.contact_normal)
-                        .unwrap_or([1.0, 0.0, 0.0]);
-                    frozen = Some(freeze_from_geometry_witness(
-                        &mechanics_model,
-                        &ee_name,
-                        placement,
-                        mass,
-                        mu_s,
-                        mu_tool,
-                        size,
-                        vp,
-                        0.0,
-                    )?);
-                    Ok(())
-                };
+                let mut hook =
+                    |placement: &PlacementOutcome,
+                     initial: &VerifierTruth,
+                     model: &EmbodimentModel,
+                     _inst: &mut crate::mujoco_exec::MujocoInstance| {
+                        start_xy = body_xyz(initial, &object_id).map(|p| [p[0], p[1]]);
+                        let mut mechanics_model = model.clone();
+                        declare_joint_effort(&mut mechanics_model, 4.0);
+                        let vp = placement
+                            .maneuver
+                            .as_ref()
+                            .map(|m| m.contact_normal)
+                            .unwrap_or([1.0, 0.0, 0.0]);
+                        frozen = Some(freeze_from_geometry_witness(
+                            &mechanics_model,
+                            &ee_name,
+                            placement,
+                            mass,
+                            mu_s,
+                            mu_tool,
+                            size,
+                            vp,
+                            0.0,
+                        )?);
+                        Ok(())
+                    };
                 let loaded =
                     load_and_normalize(&bundle, &crate::manipulation::template_objects(true), 0)
                         .ok();
@@ -1346,10 +1345,8 @@ mod tests {
             tau_max: 0.1 * 0.05 * 9.80665 * (2.0 / 3.0) * 0.05,
             pressure: PressureDistribution::DeclaredUniform,
         };
-        let f = FrozenMechanicsPrediction::freeze(
-            evaluate_planar_twist_direction(&with_ls),
-            &with_ls,
-        );
+        let f =
+            FrozenMechanicsPrediction::freeze(evaluate_planar_twist_direction(&with_ls), &with_ls);
         assert!(!f.contains_privileged_force());
         assert_eq!(
             f.witness.effort_bound_kind,
@@ -1362,8 +1359,7 @@ mod tests {
         );
 
         let mut tan = with_ls.clone();
-        tan.pusher_velocity_world =
-            Provenanced::user_declared([1.0, 3.0, 0.0], "scenario.vp", 0.0);
+        tan.pusher_velocity_world = Provenanced::user_declared([1.0, 3.0, 0.0], "scenario.vp", 0.0);
         let tan_w = evaluate_planar_twist_direction(&tan);
         assert_ne!(tan_w.pusher_velocity, tan_w.contact_force_direction);
         assert_ne!(tan_w.contact_mode, Some(ContactMode::Sticking));
@@ -1445,7 +1441,9 @@ mod tests {
 
     fn truth_now(inst: &mut crate::mujoco_exec::MujocoInstance) -> Result<VerifierTruth, String> {
         let st = inst.step(0).map_err(|e| e.to_string())?;
-        Ok(VerifierTruth::from_mujoco_state(st.get("state").unwrap_or(&st)))
+        Ok(VerifierTruth::from_mujoco_state(
+            st.get("state").unwrap_or(&st),
+        ))
     }
 
     fn apply_named_q(
@@ -1595,229 +1593,219 @@ mod tests {
                 let mut t0_contact_rec = false;
                 let mut t1_contact_rec = false;
                 let mut horizon_s_rec = 0.0_f64;
-                let mut hook = |placement: &PlacementOutcome,
-                                initial: &VerifierTruth,
-                                model: &EmbodimentModel,
-                                inst: &mut crate::mujoco_exec::MujocoInstance| {
-                    let mut mechanics_model = model.clone();
-                    declare_joint_effort(&mut mechanics_model, 4.0);
-                    let fr = freeze_from_geometry_witness(
-                        &mechanics_model,
-                        &ee_name,
-                        placement,
-                        0.02,
-                        0.08,
-                        0.25,
-                        size,
-                        pusher_vel,
-                        y_off,
-                    )?;
-                    assert!(
-                        !fr.contains_privileged_force(),
-                        "{name}: privileged force in predictor"
-                    );
-                    let placed = body_xyz(initial, &object_id)
-                        .ok_or_else(|| format!("{name}: missing object pose"))?;
-                    let mnv = placement.maneuver.as_ref().ok_or("maneuver")?;
-                    let q_c = contact_chain_q(model, &ee_name, mnv)?;
-                    let n = fr.witness.contact_normal.unwrap_or(mnv.contact_normal);
-                    let mut tvec = [-n[1], n[0], 0.0];
-                    let tn = (tvec[0] * tvec[0] + tvec[1] * tvec[1]).sqrt();
-                    if tn > 1e-9 {
-                        tvec = [tvec[0] / tn, tvec[1] / tn, 0.0];
-                    }
-                    // Contact on the object face at freeze r (COM fixed, ±y along tangent).
-                    let half = size.max(1e-4);
-                    let contact_shifted = [
-                        placed[0] - half * n[0] + y_off * tvec[0],
-                        placed[1] - half * n[1] + y_off * tvec[1],
-                        placed[2],
-                    ];
-                    let mut dir = n;
-                    if tangential {
-                        dir = [n[0] + 3.0 * tvec[0], n[1] + 3.0 * tvec[1], n[2]];
-                    }
-                    let dn = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
-                    if dn > 1e-9 {
-                        dir = [dir[0] / dn, dir[1] / dn, dir[2] / dn];
-                    }
-                    // EE site is ~1 cm behind the fingertips. Start far enough
-                    // that t0 is not an overlap teleport; command just past the
-                    // face, not a 5 cm slam.
-                    let backoff = 0.028;
-                    let pre_pt = [
-                        contact_shifted[0] - backoff * n[0],
-                        contact_shifted[1] - backoff * n[1],
-                        contact_shifted[2] - backoff * n[2],
-                    ];
-                    let stroke_m = 0.055;
-                    let nudge = 0.008;
-                    let push_pt = [
-                        contact_shifted[0] + nudge * dir[0],
-                        contact_shifted[1] + nudge * dir[1],
-                        contact_shifted[2] + nudge * dir[2],
-                    ];
-                    let (q_at, pre_tr) = solve_ik(model, &chain, &ee_name, pre_pt, &q_c)
-                        .map_err(|e| format!("{name}: ik_pre {e:?}"))?;
-                    if pre_tr.residual > 5e-3 {
-                        return Err(format!(
-                            "{name}: pre-contact IK residual {} m (target {pre_pt:?})",
-                            pre_tr.residual
-                        ));
-                    }
-                    let (q_push, push_tr) = solve_ik(model, &chain, &ee_name, push_pt, &q_at)
-                        .map_err(|e| format!("{name}: ik_push {e:?}"))?;
-                    if push_tr.residual > 8e-3 {
-                        return Err(format!(
-                            "{name}: push IK residual {} m (target {push_pt:?})",
-                            push_tr.residual
-                        ));
-                    }
-                    q_cmd = q_push.clone();
-                    let after_place = truth_now(inst)?;
-                    let mut qpos = after_place.qpos.clone();
-                    for (jn, qi) in chain.iter().zip(q_at.iter()) {
-                        if let Some(j) = model.joints.iter().find(|j| j.name == *jn) {
-                            if let Some(adr) = j.qpos_adr {
-                                if let Some(slot) = qpos.get_mut(adr as usize) {
-                                    *slot = *qi;
+                let mut hook =
+                    |placement: &PlacementOutcome,
+                     initial: &VerifierTruth,
+                     model: &EmbodimentModel,
+                     inst: &mut crate::mujoco_exec::MujocoInstance| {
+                        let mut mechanics_model = model.clone();
+                        declare_joint_effort(&mut mechanics_model, 4.0);
+                        let fr = freeze_from_geometry_witness(
+                            &mechanics_model,
+                            &ee_name,
+                            placement,
+                            0.02,
+                            0.08,
+                            0.25,
+                            size,
+                            pusher_vel,
+                            y_off,
+                        )?;
+                        assert!(
+                            !fr.contains_privileged_force(),
+                            "{name}: privileged force in predictor"
+                        );
+                        let placed = body_xyz(initial, &object_id)
+                            .ok_or_else(|| format!("{name}: missing object pose"))?;
+                        let mnv = placement.maneuver.as_ref().ok_or("maneuver")?;
+                        let q_c = contact_chain_q(model, &ee_name, mnv)?;
+                        let n = fr.witness.contact_normal.unwrap_or(mnv.contact_normal);
+                        let mut tvec = [-n[1], n[0], 0.0];
+                        let tn = (tvec[0] * tvec[0] + tvec[1] * tvec[1]).sqrt();
+                        if tn > 1e-9 {
+                            tvec = [tvec[0] / tn, tvec[1] / tn, 0.0];
+                        }
+                        // Contact on the object face at freeze r (COM fixed, ±y along tangent).
+                        let half = size.max(1e-4);
+                        let contact_shifted = [
+                            placed[0] - half * n[0] + y_off * tvec[0],
+                            placed[1] - half * n[1] + y_off * tvec[1],
+                            placed[2],
+                        ];
+                        let mut dir = n;
+                        if tangential {
+                            dir = [n[0] + 3.0 * tvec[0], n[1] + 3.0 * tvec[1], n[2]];
+                        }
+                        let dn = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+                        if dn > 1e-9 {
+                            dir = [dir[0] / dn, dir[1] / dn, dir[2] / dn];
+                        }
+                        // EE site is ~1 cm behind the fingertips. Start far enough
+                        // that t0 is not an overlap teleport; command just past the
+                        // face, not a 5 cm slam.
+                        let backoff = 0.028;
+                        let pre_pt = [
+                            contact_shifted[0] - backoff * n[0],
+                            contact_shifted[1] - backoff * n[1],
+                            contact_shifted[2] - backoff * n[2],
+                        ];
+                        let stroke_m = 0.055;
+                        let nudge = 0.008;
+                        let push_pt = [
+                            contact_shifted[0] + nudge * dir[0],
+                            contact_shifted[1] + nudge * dir[1],
+                            contact_shifted[2] + nudge * dir[2],
+                        ];
+                        let (q_at, pre_tr) = solve_ik(model, &chain, &ee_name, pre_pt, &q_c)
+                            .map_err(|e| format!("{name}: ik_pre {e:?}"))?;
+                        if pre_tr.residual > 5e-3 {
+                            return Err(format!(
+                                "{name}: pre-contact IK residual {} m (target {pre_pt:?})",
+                                pre_tr.residual
+                            ));
+                        }
+                        let (q_push, push_tr) = solve_ik(model, &chain, &ee_name, push_pt, &q_at)
+                            .map_err(|e| format!("{name}: ik_push {e:?}"))?;
+                        if push_tr.residual > 8e-3 {
+                            return Err(format!(
+                                "{name}: push IK residual {} m (target {push_pt:?})",
+                                push_tr.residual
+                            ));
+                        }
+                        q_cmd = q_push.clone();
+                        let after_place = truth_now(inst)?;
+                        let mut qpos = after_place.qpos.clone();
+                        for (jn, qi) in chain.iter().zip(q_at.iter()) {
+                            if let Some(j) = model.joints.iter().find(|j| j.name == *jn) {
+                                if let Some(adr) = j.qpos_adr {
+                                    if let Some(slot) = qpos.get_mut(adr as usize) {
+                                        *slot = *qi;
+                                    }
                                 }
                             }
                         }
-                    }
-                    let nv = after_place.qvel.len();
-                    inst.reset(Some(&qpos), Some(&vec![0.0; nv.max(1)]))
-                        .map_err(|e| e.to_string())?;
-                    // Object COM stays at the freeze COM. Do not add y_off here.
-                    inst.set_body_pos(&object_id, placed)
-                        .map_err(|e| e.to_string())?;
-                    apply_named_q(inst, model, &chain, &q_push, &qpos)?;
-                    let t0 = truth_now(inst)?;
-                    t0_q = chain
-                        .iter()
-                        .filter_map(|nm| {
-                            let j = model.joints.iter().find(|j| j.name == *nm)?;
-                            let adr = j.qpos_adr? as usize;
-                            t0.qpos.get(adr).copied()
-                        })
-                        .collect();
-                    start_xy_rec = body_xyz(&t0, &object_id).map(|p| [p[0], p[1]]);
-                    let start_xy = start_xy_rec;
-                    let start_yaw = t0.xquat.get(&object_id).and_then(|q| yaw_wxyz(q));
-                    let tool_obj_contact = |t: &VerifierTruth| {
-                        t.contacts.iter().any(|c| {
-                            let a = c.body1.as_str();
-                            let b = c.body2.as_str();
-                            (a == object_id || b == object_id) && a != "table" && b != "table"
-                        })
-                    };
-                    t0_contact_rec = tool_obj_contact(&t0);
-                    let ee0 = t0
-                        .named_pos
-                        .get("ee")
-                        .cloned()
-                        .or_else(|| t0.xpos.get("ee").cloned());
-                    let mut saw_contact = t0_contact_rec;
-                    let mut t1 = t0.clone();
-                    let mut stepped = 0u32;
-                    let mut post = 0u32;
-                    let max_approach = 150u32;
-                    let max_post = 25u32;
-                    loop {
-                        let end_now = body_xyz(&t1, &object_id).map(|p| [p[0], p[1]]);
-                        let disp_now = match (start_xy, end_now) {
-                            (Some(a), Some(b)) => hypot2([b[0] - a[0], b[1] - a[1]]),
-                            _ => 0.0,
+                        let nv = after_place.qvel.len();
+                        inst.reset(Some(&qpos), Some(&vec![0.0; nv.max(1)]))
+                            .map_err(|e| e.to_string())?;
+                        // Object COM stays at the freeze COM. Do not add y_off here.
+                        inst.set_body_pos(&object_id, placed)
+                            .map_err(|e| e.to_string())?;
+                        apply_named_q(inst, model, &chain, &q_push, &qpos)?;
+                        let t0 = truth_now(inst)?;
+                        t0_q = chain
+                            .iter()
+                            .filter_map(|nm| {
+                                let j = model.joints.iter().find(|j| j.name == *nm)?;
+                                let adr = j.qpos_adr? as usize;
+                                t0.qpos.get(adr).copied()
+                            })
+                            .collect();
+                        start_xy_rec = body_xyz(&t0, &object_id).map(|p| [p[0], p[1]]);
+                        let start_xy = start_xy_rec;
+                        let start_yaw = t0.xquat.get(&object_id).and_then(|q| yaw_wxyz(q));
+                        let tool_obj_contact = |t: &VerifierTruth| {
+                            t.contacts.iter().any(|c| {
+                                let a = c.body1.as_str();
+                                let b = c.body2.as_str();
+                                (a == object_id || b == object_id) && a != "table" && b != "table"
+                            })
                         };
-                        if local_horizon_stop(
-                            saw_contact,
-                            disp_now,
-                            stroke_m,
-                            post,
-                            max_post,
-                        ) {
-                            break;
+                        t0_contact_rec = tool_obj_contact(&t0);
+                        let ee0 = t0
+                            .named_pos
+                            .get("ee")
+                            .cloned()
+                            .or_else(|| t0.xpos.get("ee").cloned());
+                        let mut saw_contact = t0_contact_rec;
+                        let mut t1 = t0.clone();
+                        let mut stepped = 0u32;
+                        let mut post = 0u32;
+                        let max_approach = 150u32;
+                        let max_post = 25u32;
+                        loop {
+                            let end_now = body_xyz(&t1, &object_id).map(|p| [p[0], p[1]]);
+                            let disp_now = match (start_xy, end_now) {
+                                (Some(a), Some(b)) => hypot2([b[0] - a[0], b[1] - a[1]]),
+                                _ => 0.0,
+                            };
+                            if local_horizon_stop(saw_contact, disp_now, stroke_m, post, max_post) {
+                                break;
+                            }
+                            if !saw_contact && stepped >= max_approach {
+                                break;
+                            }
+                            let _ = inst.step(1);
+                            stepped += 1;
+                            t1 = truth_now(inst)?;
+                            if tool_obj_contact(&t1) {
+                                saw_contact = true;
+                            }
+                            if saw_contact {
+                                post += 1;
+                            }
                         }
-                        if !saw_contact && stepped >= max_approach {
-                            break;
-                        }
-                        let _ = inst.step(1);
-                        stepped += 1;
-                        t1 = truth_now(inst)?;
-                        if tool_obj_contact(&t1) {
-                            saw_contact = true;
-                        }
-                        if saw_contact {
-                            post += 1;
-                        }
-                    }
-                    let outcome_at_ns = monotonic_ns();
-                    t1_contact_rec = saw_contact;
-                    horizon_s_rec = f64::from(stepped) * 0.002;
-                    let end_xy = body_xyz(&t1, &object_id).map(|p| [p[0], p[1]]);
-                    let end_yaw = t1.xquat.get(&object_id).and_then(|q| yaw_wxyz(q));
-                    let dxy = match (start_xy, end_xy) {
-                        (Some(a), Some(b)) => Some([b[0] - a[0], b[1] - a[1]]),
-                        _ => None,
+                        let outcome_at_ns = monotonic_ns();
+                        t1_contact_rec = saw_contact;
+                        horizon_s_rec = f64::from(stepped) * 0.002;
+                        let end_xy = body_xyz(&t1, &object_id).map(|p| [p[0], p[1]]);
+                        let end_yaw = t1.xquat.get(&object_id).and_then(|q| yaw_wxyz(q));
+                        let dxy = match (start_xy, end_xy) {
+                            (Some(a), Some(b)) => Some([b[0] - a[0], b[1] - a[1]]),
+                            _ => None,
+                        };
+                        disp = dxy.map(hypot2).unwrap_or(0.0);
+                        let dyaw = match (start_yaw, end_yaw) {
+                            (Some(a), Some(b)) => Some(principal_yaw_delta(a, b)),
+                            _ => None,
+                        };
+                        let dt = horizon_s_rec.max(0.002);
+                        let obj_v = dxy.map(|d| [d[0] / dt, d[1] / dt]).unwrap_or([0.0, 0.0]);
+                        let omega = dyaw.unwrap_or(0.0) / dt;
+                        let ee1 = t1
+                            .named_pos
+                            .get("ee")
+                            .cloned()
+                            .or_else(|| t1.xpos.get("ee").cloned());
+                        let ee_dxy = match (ee0.as_ref(), ee1.as_ref()) {
+                            (Some(a), Some(b)) if a.len() >= 2 && b.len() >= 2 => {
+                                Some([b[0] - a[0], b[1] - a[1]])
+                            }
+                            _ => None,
+                        };
+                        ee_dxy_rec = ee_dxy;
+                        let ee_vp = ee_dxy.map(|d| [d[0] / dt, d[1] / dt]).unwrap_or([0.0, 0.0]);
+                        let r_xy = [
+                            contact_shifted[0] - placed[0],
+                            contact_shifted[1] - placed[1],
+                        ];
+                        r_xy_rec = Some(r_xy);
+                        contact_shifted_rec = Some(contact_shifted);
+                        let n_obs = fr.witness.contact_normal.unwrap_or(n);
+                        let obs_mode =
+                            infer_observed_mode(ee_vp, [n_obs[0], n_obs[1]], obj_v, omega, r_xy);
+                        outcome = MechanicsExecuteOutcome {
+                            contact_established: saw_contact,
+                            unauthorized_writes: 0,
+                            ctrl_writes: 2,
+                            authority_refused: false,
+                            translation_xy: dxy,
+                            yaw_change: dyaw,
+                            contact_mode: obs_mode,
+                            outcome_at_ns,
+                            motion_detected: Some(disp > 5e-4),
+                            commanded_stroke_m: Some(stroke_m),
+                        };
+                        obs_sign = match (dyaw, dxy) {
+                            (Some(y), Some(xy)) => Some(observed_rotation_sign(y, xy)),
+                            _ => None,
+                        };
+                        dir_err = match (frozen_world_translation(&fr), dxy) {
+                            (Some(fxy), Some(oxy)) => translation_direction_error(fxy, oxy),
+                            _ => None,
+                        };
+                        frozen = Some(fr);
+                        Ok(())
                     };
-                    disp = dxy.map(hypot2).unwrap_or(0.0);
-                    let dyaw = match (start_yaw, end_yaw) {
-                        (Some(a), Some(b)) => Some(principal_yaw_delta(a, b)),
-                        _ => None,
-                    };
-                    let dt = horizon_s_rec.max(0.002);
-                    let obj_v = dxy.map(|d| [d[0] / dt, d[1] / dt]).unwrap_or([0.0, 0.0]);
-                    let omega = dyaw.unwrap_or(0.0) / dt;
-                    let ee1 = t1
-                        .named_pos
-                        .get("ee")
-                        .cloned()
-                        .or_else(|| t1.xpos.get("ee").cloned());
-                    let ee_dxy = match (ee0.as_ref(), ee1.as_ref()) {
-                        (Some(a), Some(b)) if a.len() >= 2 && b.len() >= 2 => {
-                            Some([b[0] - a[0], b[1] - a[1]])
-                        }
-                        _ => None,
-                    };
-                    ee_dxy_rec = ee_dxy;
-                    let ee_vp = ee_dxy.map(|d| [d[0] / dt, d[1] / dt]).unwrap_or([0.0, 0.0]);
-                    let r_xy = [contact_shifted[0] - placed[0], contact_shifted[1] - placed[1]];
-                    r_xy_rec = Some(r_xy);
-                    contact_shifted_rec = Some(contact_shifted);
-                    let n_obs = fr.witness.contact_normal.unwrap_or(n);
-                    let obs_mode = infer_observed_mode(
-                        ee_vp,
-                        [n_obs[0], n_obs[1]],
-                        obj_v,
-                        omega,
-                        r_xy,
-                    );
-                    outcome = MechanicsExecuteOutcome {
-                        contact_established: saw_contact,
-                        unauthorized_writes: 0,
-                        ctrl_writes: 2,
-                        authority_refused: false,
-                        translation_xy: dxy,
-                        yaw_change: dyaw,
-                        contact_mode: obs_mode,
-                        outcome_at_ns,
-                        motion_detected: Some(disp > 5e-4),
-                        commanded_stroke_m: Some(stroke_m),
-                    };
-                    obs_sign = match (dyaw, dxy) {
-                        (Some(y), Some(xy)) => Some(observed_rotation_sign(y, xy)),
-                        _ => None,
-                    };
-                    dir_err = match (
-                        frozen_world_translation(&fr),
-                        dxy,
-                    ) {
-                        (Some(fxy), Some(oxy)) => translation_direction_error(fxy, oxy),
-                        _ => None,
-                    };
-                    frozen = Some(fr);
-                    Ok(())
-                };
                 let loaded =
                     load_and_normalize(&bundle, &crate::manipulation::template_objects(true), 0)
                         .ok();
@@ -1835,8 +1823,7 @@ mod tests {
                 crate::mujoco_exec::checkin_worker(inst);
                 let frozen = frozen.expect(name);
                 assert!(
-                    frozen.frozen_at_ns < outcome.outcome_at_ns
-                        || outcome.outcome_at_ns == 0,
+                    frozen.frozen_at_ns < outcome.outcome_at_ns || outcome.outcome_at_ns == 0,
                     "{name}: freeze must precede outcome {} vs {}",
                     frozen.frozen_at_ns,
                     outcome.outcome_at_ns
@@ -1886,15 +1873,17 @@ mod tests {
         );
         for r in &rows {
             assert_eq!(
-                r["t0_contact"],
-                false,
+                r["t0_contact"], false,
                 "t0 must not be an overlap teleport: {r}"
             );
         }
         let plus = rows.iter().find(|r| r["name"] == "offset_plus").unwrap();
         let minus = rows.iter().find(|r| r["name"] == "offset_minus").unwrap();
         let tan = rows.iter().find(|r| r["name"] == "tangential_vp").unwrap();
-        let cen = rows.iter().find(|r| r["name"] == "centered_normal").unwrap();
+        let cen = rows
+            .iter()
+            .find(|r| r["name"] == "centered_normal")
+            .unwrap();
         let start_y = |r: &Value| {
             r["start_xy"]
                 .as_array()
@@ -2024,7 +2013,9 @@ mod tests {
                 );
             }
             assert!(
-                r["horizon_s"].as_f64().is_some_and(|h| h > 0.0 && h <= 0.35),
+                r["horizon_s"]
+                    .as_f64()
+                    .is_some_and(|h| h > 0.0 && h <= 0.35),
                 "horizon_s must be the stepped time, not a hardcoded 0.4s: {r}"
             );
         }
@@ -2103,24 +2094,27 @@ mod tests {
             &serde_json::to_string_pretty(&doc).unwrap(),
         );
         let mut metrics = serde_json::from_str::<Value>(
-            &std::fs::read_to_string(scratch_dir().join("metrics.json")).unwrap_or_else(|_| "{}".into()),
+            &std::fs::read_to_string(scratch_dir().join("metrics.json"))
+                .unwrap_or_else(|_| "{}".into()),
         )
         .unwrap_or(json!({}));
         if let Some(obj) = metrics.as_object_mut() {
             obj.insert("rotation_sign_accuracy".into(), sign_acc);
             obj.insert("contact_mode_accuracy".into(), mode_acc);
             obj.insert("instantaneous_twist_direction_error".into(), twist_err);
-            obj.insert(
-                "first_divergence_distribution".into(),
-                json!(div_counts),
-            );
+            obj.insert("first_divergence_distribution".into(), json!(div_counts));
             obj.insert("unauthorized_writes".into(), json!(unauth));
             obj.insert("old_gross_effort_feasible_was_sound".into(), json!(false));
             obj.insert("metal".into(), json!(false));
             obj.insert("evidence_status".into(), json!(SIMULATION_ONLY));
             obj.insert(
                 "execute_cases".into(),
-                json!(["centered_normal", "tangential_vp", "offset_plus", "offset_minus"]),
+                json!([
+                    "centered_normal",
+                    "tangential_vp",
+                    "offset_plus",
+                    "offset_minus"
+                ]),
             );
         }
         write_scratch(

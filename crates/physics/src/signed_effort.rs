@@ -159,22 +159,10 @@ mod tests {
     fn asymmetric_bounds_change_limiting_joint() {
         let cols = vec![[1.0, 0.0, 0.0], [0.5, 0.0, 0.0]];
         let d = [1.0, 0.0, 0.0];
-        let a = available_lambda_interval(
-            &cols,
-            d,
-            &[0.0, 0.0],
-            &[-20.0, -20.0],
-            &[20.0, 20.0],
-        )
-        .unwrap();
-        let b = available_lambda_interval(
-            &cols,
-            d,
-            &[0.0, 0.0],
-            &[-20.0, -1.0],
-            &[20.0, 2.0],
-        )
-        .unwrap();
+        let a = available_lambda_interval(&cols, d, &[0.0, 0.0], &[-20.0, -20.0], &[20.0, 20.0])
+            .unwrap();
+        let b =
+            available_lambda_interval(&cols, d, &[0.0, 0.0], &[-20.0, -1.0], &[20.0, 2.0]).unwrap();
         assert_eq!(a.limiting_index, 0);
         assert_eq!(b.limiting_index, 1);
         assert!(b.lambda_max < a.lambda_max - 1.0);
@@ -186,7 +174,8 @@ mod tests {
         let cols = vec![[1.0, 0.0, 0.0]];
         let (tmin, tmax) = joint_torque_limits_from_actuator(-1.0, 5.0, -2.0).unwrap();
         let along_pos = available_lambda_interval(&cols, [1.0, 0.0, 0.0], &[0.0], &[tmin], &[tmax]);
-        let along_neg = available_lambda_interval(&cols, [-1.0, 0.0, 0.0], &[0.0], &[tmin], &[tmax]);
+        let along_neg =
+            available_lambda_interval(&cols, [-1.0, 0.0, 0.0], &[0.0], &[tmin], &[tmax]);
         let pos = along_pos.unwrap();
         let neg = along_neg.unwrap();
         assert!((pos.lambda_max - 2.0).abs() < 1e-12);

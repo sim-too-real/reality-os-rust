@@ -2,9 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use realityos_physics::{
-    gravity_torque_nm, JointForGravity, JointMotionKind, RigidBodyInertial,
-};
+use realityos_physics::{gravity_torque_nm, JointForGravity, JointMotionKind, RigidBodyInertial};
 
 use crate::embodiment::{EmbodimentModel, JointKind};
 use crate::kinematics::{motion_transform, world_to_body_ref};
@@ -33,13 +31,19 @@ fn body_local(model: &EmbodimentModel, name: &str) -> Result<Se3, SelfLoadError>
         .iter()
         .find(|b| b.name == name)
         .ok_or(SelfLoadError::Unsupported)?;
-    body.local_pose
-        .value
-        .ok_or(SelfLoadError::Unknown(format!("PARAMETER_MISSING:body_pose:{name}")))
+    body.local_pose.value.ok_or(SelfLoadError::Unknown(format!(
+        "PARAMETER_MISSING:body_pose:{name}"
+    )))
 }
 
-fn joint_moving_child<'a>(model: &'a EmbodimentModel, child: &str) -> Option<&'a crate::embodiment::Joint> {
-    model.joints.iter().find(|j| j.child_body == child && j.kind != JointKind::Fixed)
+fn joint_moving_child<'a>(
+    model: &'a EmbodimentModel,
+    child: &str,
+) -> Option<&'a crate::embodiment::Joint> {
+    model
+        .joints
+        .iter()
+        .find(|j| j.child_body == child && j.kind != JointKind::Fixed)
 }
 
 fn descendants_of(model: &EmbodimentModel, root: &str) -> Vec<String> {
@@ -53,7 +57,10 @@ fn descendants_of(model: &EmbodimentModel, root: &str) -> Vec<String> {
             if out.iter().any(|n| n == &b.name) {
                 continue;
             }
-            if b.parent.as_deref().is_some_and(|p| out.iter().any(|n| n == p)) {
+            if b.parent
+                .as_deref()
+                .is_some_and(|p| out.iter().any(|n| n == p))
+            {
                 out.push(b.name.clone());
                 changed = true;
             }
@@ -247,15 +254,11 @@ pub fn gravity_self_load(
         });
     }
 
-    gravity_torque_nm(&joints_phys, &bodies_phys, gravity_m_s2).map_err(|e| {
-        SelfLoadError::Unknown(format!("GRAVITY_TORQUE:{e}"))
-    })
+    gravity_torque_nm(&joints_phys, &bodies_phys, gravity_m_s2)
+        .map_err(|e| SelfLoadError::Unknown(format!("GRAVITY_TORQUE:{e}")))
 }
 
-pub fn self_load_provenanced(
-    tau: &[f64],
-    source: &str,
-) -> Vec<Provenanced<f64>> {
+pub fn self_load_provenanced(tau: &[f64], source: &str) -> Vec<Provenanced<f64>> {
     tau.iter()
         .map(|v| Provenanced::declared(*v, source, 0.0))
         .collect()
@@ -308,7 +311,8 @@ mod tests {
         let mut q = BTreeMap::new();
         q.insert("j0".into(), 0.4);
         q.insert("j1".into(), -0.3);
-        let tau = gravity_self_load(&m, &["j0".into(), "j1".into()], &q, [0.0, 0.0, -9.80665]).unwrap();
+        let tau =
+            gravity_self_load(&m, &["j0".into(), "j1".into()], &q, [0.0, 0.0, -9.80665]).unwrap();
         assert!(tau[0].abs() < 1e-12, "{tau:?}");
         assert!(tau[1].abs() < 1e-12, "{tau:?}");
     }
@@ -319,7 +323,8 @@ mod tests {
         let mut q = BTreeMap::new();
         q.insert("j0".into(), 0.0);
         q.insert("j1".into(), 0.0);
-        let tau = gravity_self_load(&m, &["j0".into(), "j1".into()], &q, [0.0, 0.0, -9.80665]).unwrap();
+        let tau =
+            gravity_self_load(&m, &["j0".into(), "j1".into()], &q, [0.0, 0.0, -9.80665]).unwrap();
         let g = 9.80665;
         let t0 = -g * (2.0 * 0.075 + 1.0 * (0.15 + 0.075));
         let t1 = -g * 1.0 * 0.075;
