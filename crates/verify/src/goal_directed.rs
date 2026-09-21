@@ -1377,6 +1377,34 @@ mod tests {
                 last_obs.as_ref().map(|o| (o, None)),
             );
             if belief_state.is_some() {
+                let proved_pick = recoverable_index
+                    .map(|index| cands[index].id.clone())
+                    .unwrap_or_else(|| "none".into());
+                if let Some(prev) = trace.actions.last_mut() {
+                    let probed = prev
+                        .pointer("/reasoning/probe_displacement_m")
+                        .and_then(|value| value.as_f64())
+                        .is_some();
+                    if probed {
+                        if let Some(note) = prev.get_mut("reasoning") {
+                            let prior = note
+                                .get("ranking_after")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("");
+                            let experience =
+                                prior.split_once('|').map(|(_, rest)| rest).unwrap_or("");
+                            let class = recoverable_index
+                                .map(|index| format!("{:?}", recoverability_choices[index].class))
+                                .unwrap_or_else(|| "none".into());
+                            let ranking = if experience.is_empty() {
+                                format!("{proved_pick}|class={class}")
+                            } else {
+                                format!("{proved_pick}|class={class}|{experience}")
+                            };
+                            note["ranking_after"] = json!(ranking);
+                        }
+                    }
+                }
                 let long_regime = belief_state
                     .as_ref()
                     .map(|belief| prediction_regime(belief, &live_hypotheses, 0.03, quasi_limit_m));
@@ -1495,7 +1523,9 @@ mod tests {
                                         .map(|entry| (entry.status, entry.declared.value))
                                 )),
                                 ranking_before: picked.clone(),
-                                ranking_after: Some("REFUSED_NOT_ROBUST".into()),
+                                ranking_after: Some(
+                                    picked.clone().unwrap_or_else(|| "none".into()),
+                                ),
                                 selected_kind: None,
                                 information_gain: Some(ranking.information_gain),
                                 recoverability: Some("NO_ROBUST_STRICT_PROGRESS".into()),
@@ -2566,7 +2596,36 @@ mod tests {
                 carried_belief.contains("friction=Some(Contradicted)"),
                 "support friction was not contradicted: {carried_belief}"
             );
+            let follow_rank = follow["reasoning"]["ranking_after"].as_str().unwrap_or("");
+            let probe_rank = note_a["ranking_after"].as_str().unwrap_or("");
+            let proved_head = probe_rank.split('|').next().unwrap_or("");
+            assert!(
+                !proved_head.is_empty() && !proved_head.starts_with("goal_"),
+                "post-probe ranking_after is not select_recoverable_progress on a proved contact: {probe_rank}"
+            );
+            assert_eq!(
+                follow_rank, proved_head,
+                "follow-up ranking_after diverged from the proved recoverable contact"
+            );
+            assert!(
+                why.contains(&format!("recoverable_pick={proved_head}")),
+                "refusal did not name the proved recoverable contact: {why}"
+            );
+            assert!(
+                follow["rejection_reasons"]
+                    .as_array()
+                    .unwrap_or(&Vec::new())
+                    .iter()
+                    .any(|reason| { reason.as_str().unwrap_or("").starts_with(proved_head) }),
+                "proved contact {proved_head} is absent from the post-probe rejections"
+            );
         }
+        assert_ne!(passes[0].final_outcome, "GoalReached");
+        assert_ne!(passes[1].final_outcome, "GoalReached");
+        assert!(passes[0]
+            .actions
+            .iter()
+            .all(|action| action["outcome"] != "GOAL_REACHED"));
         assert!(note_a["ranking_after"]
             .as_str()
             .unwrap_or("")
