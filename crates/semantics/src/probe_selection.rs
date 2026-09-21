@@ -240,6 +240,36 @@ pub fn rank_goal_or_probe(
     }
 }
 
+/// A goal contact predicted only at a contradicted declared coefficient.
+///
+/// That prediction is one optimistic endpoint. The low-friction consequence is
+/// unproven, so `rank_goal_or_probe` does not treat the contact as
+/// `RobustStrictProgress`.
+pub fn goal_contact_at_contradicted_declared_friction(
+    id: impl Into<String>,
+    stroke_m: f64,
+    immediate_progress: f64,
+    progress_at_declared: GoalProgressClass,
+    recoverability_at_declared: RecoverabilityClass,
+    executable: bool,
+) -> DecisionCandidate {
+    DecisionCandidate {
+        id: id.into(),
+        class: DecisionClass::GoalAction,
+        stroke_m,
+        immediate_progress,
+        safe: executable,
+        recoverability: recoverability_at_declared,
+        recoverability_if_low_friction: RecoverabilityClass::ProgressButCanEnterUnrecoverableState,
+        progress_declared: progress_at_declared,
+        progress_if_low_friction: GoalProgressClass::Neutral,
+        shrinks_interval: false,
+        determines_contact_regime: false,
+        determines_quasi_static: false,
+        resolves_unknown_predicate: false,
+    }
+}
+
 /// Same geometry, same goal, candidates distinguished only by stroke scale
 /// relative to the quasi-static limit.
 pub fn candidates_for_uncertainty(quasi_static_limit_m: f64) -> Vec<DecisionCandidate> {
@@ -498,5 +528,27 @@ mod tests {
             after_friction.selected_id.as_deref(),
             Some("goal_guarded_short")
         );
+    }
+
+    #[test]
+    fn contradicted_declared_friction_does_not_authorize_the_short_goal_push() {
+        let short = goal_contact_at_contradicted_declared_friction(
+            "qs:0.0040:-x:-0.55",
+            0.004,
+            1.0,
+            GoalProgressClass::StrictProgress,
+            RecoverabilityClass::ProgressAndRecoverable,
+            true,
+        );
+        let ranking = rank_goal_or_probe(
+            &[short],
+            &[DiscrepancyKind::SupportFrictionInconsistent],
+            LIMIT,
+        );
+        assert_eq!(ranking.selected_id, None);
+        assert_eq!(ranking.selected_class, None);
+        assert!(ranking.refused.iter().any(|(id, reason)| {
+            id == "qs:0.0040:-x:-0.55" && reason == "UnsafeForPartOfBeliefSet"
+        }));
     }
 }
