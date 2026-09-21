@@ -76,6 +76,94 @@ pub fn physical_joint_effort(joint: &Joint, actuator: Option<&Actuator>) -> Phys
     }
 }
 
+/// Signed joint torque interval. Asymmetric forcerange and negative gear are preserved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SignedJointEffort {
+    pub tau_min_nm: f64,
+    pub tau_max_nm: f64,
+    pub gear: Option<f64>,
+    pub provenance: PhysicalFactProvenance,
+    pub source: String,
+}
+
+pub fn physical_joint_effort_signed(
+    joint: &Joint,
+    actuator: Option<&Actuator>,
+) -> Result<SignedJointEffort, PhysicalEffort> {
+    if let Some(&tau) = joint.effort_max.known_value() {
+        if tau.is_finite() && tau >= 0.0 {
+            return Ok(SignedJointEffort {
+                tau_min_nm: -tau,
+                tau_max_nm: tau,
+                gear: None,
+                provenance: PhysicalFactProvenance::from(joint.effort_max.provenance),
+                source: joint.effort_max.source.clone(),
+            });
+        }
+    }
+    let Some(act) = actuator else {
+        return Err(PhysicalEffort::Unknown {
+            reason: "NO_DECLARED_JOINT_EFFORT_OR_ACTUATOR".into(),
+        });
+    };
+    let kind = act.transmission_kind.as_str();
+    if kind == "tendon" || kind == "coupled" {
+        return Err(PhysicalEffort::Unknown {
+            reason: "TENDON_COMMAND_IS_NOT_JOINT_TORQUE".into(),
+        });
+    }
+    let mode = act.control_mode.to_ascii_lowercase();
+    if mode == "pwm" {
+        return Err(PhysicalEffort::Unknown {
+            reason: "PWM_IS_NOT_TORQUE".into(),
+        });
+    }
+    let Some(&[lo, hi]) = act.forcerange.known_value() else {
+        if act.ctrlrange.known_value().is_some() {
+            return Err(PhysicalEffort::Unknown {
+                reason: "CTRLRANGE_IS_NOT_FORCE_RANGE".into(),
+            });
+        }
+        return Err(PhysicalEffort::Unknown {
+            reason: "NO_DECLARED_PHYSICAL_EFFORT".into(),
+        });
+    };
+    let Some(&gear) = act.gear.known_value() else {
+        return Err(PhysicalEffort::Unknown {
+            reason: "TRANSMISSION_GEAR_UNKNOWN".into(),
+        });
+    };
+    match realityos_physics::joint_torque_limits_from_actuator(lo, hi, gear) {
+        Ok((tmin, tmax)) => Ok(SignedJointEffort {
+            tau_min_nm: tmin,
+            tau_max_nm: tmax,
+            gear: Some(gear),
+            provenance: PhysicalFactProvenance::from(act.forcerange.provenance),
+            source: act.forcerange.source.clone(),
+        }),
+        Err(_) => Err(PhysicalEffort::Unknown {
+            reason: "TRANSMISSION_GEAR_UNKNOWN".into(),
+        }),
+    }
+}
+
+pub fn chain_physical_effort_signed(
+    model: &EmbodimentModel,
+    joint_names: &[String],
+) -> Result<Vec<SignedJointEffort>, PhysicalEffort> {
+    let mut out = Vec::with_capacity(joint_names.len());
+    for name in joint_names {
+        let Some(joint) = model.joints.iter().find(|j| j.name == *name) else {
+            return Err(PhysicalEffort::Unknown {
+                reason: format!("JOINT_NOT_IN_MODEL:{name}"),
+            });
+        };
+        let act = model.actuator_for_joint(name);
+        out.push(physical_joint_effort_signed(joint, act)?);
+    }
+    Ok(out)
+}
+
 pub fn chain_physical_effort(
     model: &EmbodimentModel,
     joint_names: &[String],
@@ -213,5 +301,17 @@ mod tests {
         let m = synth_planar_two_link();
         let err = chain_physical_effort(&m, &["j0".into(), "j1".into()]).unwrap_err();
         assert!(err.is_unknown());
+    }
+
+    #[test]
+    fn negative_gear_preserves_asymmetric_signed_limits() {
+        let mut m = synth_planar_two_link();
+        m.joints[0].effort_max = Provenanced::unknown("test", 0.0);
+        m.actuators[0].forcerange = Provenanced::declared([-1.0, 5.0], "test.fr", 0.0);
+        m.actuators[0].gear = Provenanced::declared(-2.0, "test.gear", 0.0);
+        let e = physical_joint_effort_signed(&m.joints[0], Some(&m.actuators[0])).unwrap();
+        assert!((e.tau_min_nm + 10.0).abs() < 1e-12);
+        assert!((e.tau_max_nm - 2.0).abs() < 1e-12);
+        assert_eq!(e.gear, Some(-2.0));
     }
 }

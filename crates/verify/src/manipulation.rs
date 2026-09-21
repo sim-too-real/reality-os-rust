@@ -618,7 +618,12 @@ fn run_release_episode(
 }
 
 pub(crate) type BeforeExecuteHook<'a> =
-    &'a mut dyn FnMut(&PlacementOutcome, &VerifierTruth, &EmbodimentModel) -> Result<(), String>;
+    &'a mut dyn FnMut(
+        &PlacementOutcome,
+        &VerifierTruth,
+        &EmbodimentModel,
+        &mut crate::mujoco_exec::MujocoInstance,
+    ) -> Result<(), String>;
 
 pub(crate) fn run_skill_episode(
     bundle: &RobotBundle,
@@ -917,7 +922,7 @@ pub(crate) fn run_skill_episode_ex(
                 unsupported_detail: None,
             });
             if let Some(hook) = before_execute.as_mut() {
-                hook(&placement, &initial, model)?;
+                hook(&placement, &initial, model, &mut inst)?;
             }
             let (ep, inst) = execute_plan(
                 bundle,

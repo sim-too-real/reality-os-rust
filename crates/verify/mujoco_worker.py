@@ -890,6 +890,53 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                 nan = True
                 break
         return {"ok": not nan, "peak_speed": peak, "nan": nan, "state": INST.state()}
+    if cmd == "gravity_oracle":
+        # Privileged post-hoc gravity generalized force. Never a predictor input.
+        m, d = INST.model, INST.data
+        if "qpos" in msg:
+            q = msg["qpos"]
+            if len(q) != m.nq:
+                return {"ok": False, "error": f"qpos_dim:{len(q)}!={m.nq}"}
+            d.qpos[:] = q
+        d.qvel[:] = 0
+        d.qacc[:] = 0
+        d.ctrl[:] = 0
+        mujoco.mj_fwdPosition(m, d)
+        mujoco.mj_fwdVelocity(m, d)
+        joints = []
+        for i in range(m.njnt):
+            j = m.joint(i)
+            dof = int(m.jnt_dofadr[i])
+            qadr = int(m.jnt_qposadr[i])
+            jtype = int(m.jnt_type[i])
+            qv = float(d.qpos[qadr]) if jtype in (2, 3) else None
+            tau = float(d.qfrc_bias[dof]) if 0 <= dof < m.nv else None
+            joints.append(
+                {
+                    "name": j.name or f"joint_{i}",
+                    "dofadr": dof,
+                    "qposadr": qadr,
+                    "type": jtype,
+                    "q": qv,
+                    "qfrc_bias": tau,
+                }
+            )
+        xipos = {}
+        for i in range(m.nbody):
+            name = m.body(i).name or f"body_{i}"
+            xipos[name] = [float(x) for x in d.xipos[i]]
+        return {
+            "ok": True,
+            "privileged": True,
+            "predictor_forbidden": True,
+            "qfrc_bias": [float(x) for x in d.qfrc_bias],
+            "gravity": [float(x) for x in m.opt.gravity],
+            "joints": joints,
+            "xipos": xipos,
+            "note": "post_hoc_oracle_not_for_predictor",
+            "metal": False,
+            "evidence_status": EVIDENCE_STATUS,
+        }
     if cmd == "render":
         return {"ok": False, "error": "NOT_IMPLEMENTED_IN_VERIFY_V1"}
     if cmd == "solve_ik":

@@ -95,6 +95,9 @@ pub struct BodyRecord {
     pub pos: Option<[f64; 3]>,
     #[serde(default)]
     pub quat: Option<[f64; 4]>,
+    /// Body-frame inertial pos (MuJoCo `ipos`). Not world COM.
+    #[serde(default)]
+    pub ipos: Option<[f64; 3]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -270,6 +273,7 @@ impl RobotManifest {
                         parent: b["parent"].as_str().unwrap_or("").into(),
                         pos: vec3_opt(&b["pos"]),
                         quat: vec4_opt(&b["quat"]),
+                        ipos: vec3_opt(&b["ipos"]),
                     })
                     .collect()
             })

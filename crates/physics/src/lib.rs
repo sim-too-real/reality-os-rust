@@ -10,13 +10,28 @@ pub mod kinematics;
 pub mod limits;
 pub mod motor;
 pub mod newton;
+pub mod planar;
 pub mod sampling;
+pub mod self_load;
+pub mod signed_effort;
 pub mod si;
 
 pub use contact::{
     coulomb_initiation_force_n, friction_cone_membership, max_force_along_direction,
     supported_normal_force_n, translational_jacobian_at_point, translational_jacobian_column,
     ConeMembership, DirectionForceBound, JointMotionKind, DIRECTION_COUPLING_EPS,
+};
+pub use planar::{
+    contact_force_object_wrench, contact_mode_from_pusher, f_max_coulomb, lambda_to_limit_surface,
+    motion_compatibility, normalize_twist, project_to_plane, project_wrench_to_ellipsoid,
+    rotate_twist_world, rotate_wrench_world, rotation_sign_from_omega, tau_max_uniform_circle,
+    twist_from_contact_force, twist_from_ellipsoidal_wrench, velocity_at_offset, ContactMode,
+    MotionCompatibility, PlanarFrameKind, PlanarTwist, PlanarWrench, PressureDistribution,
+    RotationSign, SupportFrictionModel,
+};
+pub use self_load::{gravity_torque_nm, JointForGravity, RigidBodyInertial};
+pub use signed_effort::{
+    available_lambda_interval, joint_torque_limits_from_actuator, AvailableLambda,
 };
 pub use energy::{contact_energy_j, mechanical_power_w, rotational_ke_j, translational_ke_j};
 pub use error::{PhysicsError, PhysicsResult};

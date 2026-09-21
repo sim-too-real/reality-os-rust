@@ -122,7 +122,12 @@ fn map_body(b: &crate::normalize::BodyRecord) -> Body {
             Some(b.parent.clone())
         },
         mass_kg,
-        com: Provenanced::unknown(SOURCE, 0.0),
+        com: match b.ipos {
+            Some(ipos) if ipos.iter().all(|x| x.is_finite()) => {
+                Provenanced::simulator_derived(ipos, "verify.inspect.body_ipos", 0.0)
+            }
+            _ => Provenanced::unknown(SOURCE, 0.0),
+        },
         inertia,
         local_pose: pose_from_parts(b.pos, b.quat),
     }
@@ -477,6 +482,10 @@ mod tests {
             .iter()
             .all(|j| j.axis.value.is_some() && j.axis.provenance == Provenance::SimulatorDerived));
         assert!(m.bodies.iter().all(|b| b.local_pose.value.is_some()));
+        assert!(
+            m.bodies.iter().any(|b| b.com.known_value().is_some()),
+            "inspect ipos must be carried as provenanced COM"
+        );
         assert!(m
             .frames
             .iter()
@@ -626,6 +635,7 @@ mod tests {
                 parent: "world".into(),
                 pos: Some([0.0, 0.0, 0.0]),
                 quat: Some([1.0, 0.0, 0.0, 0.0]),
+                ipos: None,
             }],
             sites: vec![],
             site_records: vec![],

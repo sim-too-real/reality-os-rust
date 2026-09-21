@@ -35,6 +35,7 @@ pub mod reach;
 pub mod release;
 pub mod resource;
 pub mod runtime_interaction;
+pub mod self_load;
 pub mod sensor;
 pub mod skill;
 pub mod transform;

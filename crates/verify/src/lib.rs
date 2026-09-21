@@ -16,6 +16,7 @@ pub mod fk_oracle;
 pub mod format;
 pub mod foundation_report;
 pub mod geometry_cross_exam;
+pub mod gravity_oracle;
 pub mod held_out;
 pub mod honesty;
 pub mod ik_residual_ablation;

@@ -340,6 +340,22 @@ impl MujocoInstance {
         Ok(r)
     }
 
+    /// Privileged gravity generalized force after the prediction is frozen.
+    /// Must not enter the pre-execution predictor.
+    pub fn gravity_oracle(&mut self, qpos: Option<&[f64]>) -> Result<Value, ExecError> {
+        let mut msg = json!({"cmd": "gravity_oracle"});
+        if let Some(q) = qpos {
+            msg["qpos"] = json!(q);
+        }
+        let r = self.rpc(&msg)?;
+        if r["ok"] != true {
+            return Err(ExecError::Msg(
+                r["error"].as_str().unwrap_or("gravity_oracle").into(),
+            ));
+        }
+        Ok(r)
+    }
+
     pub fn peek_ctrl(&mut self) -> Result<(Vec<f64>, u64), ExecError> {
         let r = self.rpc(&json!({"cmd":"peek_ctrl"}))?;
         let ctrl = json_f64_vec(&r["ctrl"]);
