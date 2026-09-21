@@ -240,11 +240,11 @@ pub fn rank_goal_or_probe(
     }
 }
 
-/// A goal contact predicted only at a contradicted declared coefficient.
+/// A goal contact whose declared-friction prediction is in doubt.
 ///
-/// That prediction is one optimistic endpoint. The low-friction consequence is
-/// unproven, so `rank_goal_or_probe` does not treat the contact as
-/// `RobustStrictProgress`.
+/// The low-friction recoverability endpoint is the geometric class already
+/// proved for that contact. It is not replaced with a constant
+/// unrecoverable label.
 pub fn goal_contact_at_contradicted_declared_friction(
     id: impl Into<String>,
     stroke_m: f64,
@@ -260,9 +260,9 @@ pub fn goal_contact_at_contradicted_declared_friction(
         immediate_progress,
         safe: executable,
         recoverability: recoverability_at_declared,
-        recoverability_if_low_friction: RecoverabilityClass::ProgressButCanEnterUnrecoverableState,
+        recoverability_if_low_friction: recoverability_at_declared,
         progress_declared: progress_at_declared,
-        progress_if_low_friction: GoalProgressClass::Neutral,
+        progress_if_low_friction: progress_at_declared,
         shrinks_interval: false,
         determines_contact_regime: false,
         determines_quasi_static: false,
@@ -531,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn contradicted_declared_friction_does_not_authorize_the_short_goal_push() {
+    fn recoverable_short_contact_is_robust_under_live_friction() {
         let short = goal_contact_at_contradicted_declared_friction(
             "qs:0.0040:-x:-0.55",
             0.004,
@@ -540,15 +540,41 @@ mod tests {
             RecoverabilityClass::ProgressAndRecoverable,
             true,
         );
+        assert_eq!(
+            short.recoverability_if_low_friction,
+            RecoverabilityClass::ProgressAndRecoverable
+        );
         let ranking = rank_goal_or_probe(
             &[short],
             &[DiscrepancyKind::SupportFrictionInconsistent],
             LIMIT,
         );
-        assert_eq!(ranking.selected_id, None);
-        assert_eq!(ranking.selected_class, None);
-        assert!(ranking.refused.iter().any(|(id, reason)| {
-            id == "qs:0.0040:-x:-0.55" && reason == "UnsafeForPartOfBeliefSet"
+        assert_eq!(ranking.selected_id.as_deref(), Some("qs:0.0040:-x:-0.55"));
+        assert_eq!(ranking.selected_class, Some(DecisionClass::GoalAction));
+        assert!(ranking.robustness.iter().any(|(id, robust)| {
+            id == "qs:0.0040:-x:-0.55" && *robust == BeliefRobustness::RobustStrictProgress
         }));
+        let long = goal_contact_at_contradicted_declared_friction(
+            "long",
+            0.03,
+            2.0,
+            GoalProgressClass::StrictProgress,
+            RecoverabilityClass::ProgressButCanEnterUnrecoverableState,
+            true,
+        );
+        assert_eq!(
+            long.recoverability_if_low_friction,
+            RecoverabilityClass::ProgressButCanEnterUnrecoverableState
+        );
+        let refused = rank_goal_or_probe(
+            &[long],
+            &[DiscrepancyKind::SupportFrictionInconsistent],
+            LIMIT,
+        );
+        assert_eq!(refused.selected_id, None);
+        assert!(refused
+            .refused
+            .iter()
+            .any(|(id, reason)| { id == "long" && reason == "UnsafeForPartOfBeliefSet" }));
     }
 }

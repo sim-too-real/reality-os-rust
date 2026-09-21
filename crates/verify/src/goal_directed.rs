@@ -703,6 +703,21 @@ mod tests {
         (admissible, best.map(|(_, maneuver)| maneuver))
     }
 
+    /// Stroke length of the witness end pose, not the shorter requested probe.
+    fn executed_witness_stroke(maneuver: &ContactManeuver) -> f64 {
+        if let Some(witness) = &maneuver.executable {
+            let from = witness.contact.pose.xyz;
+            let to = witness.end_stroke.pose.xyz;
+            let d =
+                ((to[0] - from[0]).powi(2) + (to[1] - from[1]).powi(2) + (to[2] - from[2]).powi(2))
+                    .sqrt();
+            if d.is_finite() && d > 1e-6 {
+                return d;
+            }
+        }
+        realityos_semantics::push::effective_push_distance(maneuver.requested_stroke)
+    }
+
     fn midreach_aligned_seed(
         model: &realityos_semantics::embodiment::EmbodimentModel,
         ee: &str,
@@ -1483,16 +1498,37 @@ mod tests {
                         step.record.selected_face = None;
                         step.record.predicted_twist = None;
                         step.record.predicted_goal_progress = None;
+                        let picked_reason = picked
+                            .as_ref()
+                            .and_then(|id| {
+                                ranking
+                                    .refused
+                                    .iter()
+                                    .find(|(rid, _)| rid == id)
+                                    .map(|(_, why)| why.clone())
+                            })
+                            .unwrap_or_else(|| "NO_ROBUST_STRICT_PROGRESS".into());
                         step.record.authority_decision = "REFUSE".into();
                         step.record.decision = LoopDecision::Refuse;
                         step.record.outcome = GoalLoopOutcome::InsufficientEvidence;
                         step.record.unauthorized_writes = 0;
-                        step.record.first_divergence = Some("UNSAFE_FOR_PART_OF_BELIEF_SET".into());
+                        step.record.first_divergence = Some(picked_reason.clone());
                         step.record.selection_rationale = format!(
-                            "BELIEF_SET_REFUSAL declared_mu={:.3} friction_contradicted=true long_quasi_static={} recoverable_pick={} robust_goal=false",
+                            "BELIEF_SET_REFUSAL declared_mu={:.3} friction_status={:?} quasi_status={:?} long_quasi_static={} recoverable_pick={} robust_goal=false reason={}",
                             long_regime.map(|r| r.support_friction).unwrap_or(f64::NAN),
+                            belief_state.as_ref().and_then(|belief| {
+                                belief
+                                    .entry(PhysicalParameter::SupportFriction)
+                                    .map(|entry| entry.status)
+                            }),
+                            belief_state.as_ref().and_then(|belief| {
+                                belief
+                                    .entry(PhysicalParameter::QuasiStaticApplicability)
+                                    .map(|entry| entry.status)
+                            }),
                             long_regime.map(|r| r.quasi_static).unwrap_or(true),
-                            picked.as_deref().unwrap_or("none")
+                            picked.as_deref().unwrap_or("none"),
+                            picked_reason.clone()
                         );
                         if let Some(belief) = belief_state.as_ref() {
                             step.record.reasoning = Some(ReasoningNote {
@@ -1529,7 +1565,7 @@ mod tests {
                                 selected_kind: None,
                                 information_gain: Some(ranking.information_gain),
                                 recoverability: Some("NO_ROBUST_STRICT_PROGRESS".into()),
-                                taxonomy: Some("UNSAFE_FOR_PART_OF_BELIEF_SET".into()),
+                                taxonomy: Some(picked_reason.clone()),
                                 admissible_contact_count: Some(
                                     cands
                                         .iter()
@@ -1888,7 +1924,7 @@ mod tests {
                         && ranking_before.selected_class == Some(DecisionClass::PhysicalProbe)
                         && interactable_now
                     {
-                        let probe_stroke = decision_candidates
+                        let mut probe_stroke = decision_candidates
                             .iter()
                             .find(|c| Some(&c.id) == ranking_before.selected_id.as_ref())
                             .map(|c| c.stroke_m)
@@ -1911,6 +1947,8 @@ mod tests {
                         admissible_contact_count = Some(admissible.max(probe_admissible));
                         let probe_origin = nxy;
                         let observed = if let Some(maneuver) = probe_maneuver {
+                            let executed = executed_witness_stroke(&maneuver);
+                            probe_stroke = executed;
                             let mut probe_sc = push_scenario(
                                 [nxy[0], nxy[1], z],
                                 size,
@@ -2568,33 +2606,31 @@ mod tests {
             assert_ne!(follow["decision"], "RECOVER");
             let why = follow["selection_rationale"].as_str().unwrap_or("");
             assert!(
-                why.contains("friction_contradicted=true"),
-                "refusal did not cite contradicted friction: {why}"
-            );
-            assert!(
-                why.contains("long_quasi_static=false"),
-                "quasi-static regime did not reach the refusal: {why}"
-            );
-            assert!(
                 why.contains("robust_goal=false"),
                 "refusal still treated the short push as robust: {why}"
             );
+            let probe_belief = note_a["belief_after"].as_str().unwrap_or("");
             assert!(
-                passes[0].actions.iter().all(|action| {
-                    let rationale = action["selection_rationale"].as_str().unwrap_or("");
-                    action["authority_decision"] != "AUTHORIZE"
-                        || !rationale.contains("friction_contradicted=true")
-                }),
-                "a contradicted-friction goal push was authorized"
+                probe_belief.contains("Underdetermined"),
+                "executed probe stroke above the quasi-static limit must stay underdetermined: {probe_belief}"
+            );
+            assert!(
+                probe_belief.contains("SupportFrictionInconsistent")
+                    && probe_belief.contains("QuasiStaticAssumptionBroken"),
+                "both hypotheses must remain: {probe_belief}"
+            );
+            assert!(
+                !probe_belief.starts_with("Identified"),
+                "probe identified a cause from the requested stroke instead of the executed stroke: {probe_belief}"
             );
             let carried_belief = follow["reasoning"]["belief_after"].as_str().unwrap_or("");
             assert!(
-                carried_belief.contains("quasi_static=Some((Contradicted"),
-                "QuasiStaticApplicability was not revised: {carried_belief}"
+                !carried_belief.contains("Contradicted"),
+                "a non-separating probe contradicted a declared value: {carried_belief}"
             );
             assert!(
-                carried_belief.contains("friction=Some(Contradicted)"),
-                "support friction was not contradicted: {carried_belief}"
+                carried_belief.contains("DeclaredFact"),
+                "declared belief was not carried: {carried_belief}"
             );
             let follow_rank = follow["reasoning"]["ranking_after"].as_str().unwrap_or("");
             let probe_rank = note_a["ranking_after"].as_str().unwrap_or("");
