@@ -457,6 +457,20 @@ fn is_goal_useful(c: &PhysicalInteractionCandidate) -> bool {
         && c.goal_progress == Some(GoalProgressClass::StrictProgress)
 }
 
+/// Lower predicted error derivative wins. Equal derivative: less |ω|, then
+/// smaller |contact offset| — centered translation over an off-center spin.
+fn selection_rank_key(c: &PhysicalInteractionCandidate) -> (f64, f64, f64) {
+    let de = c.predicted_error_derivative.unwrap_or(0.0);
+    let omega = c.predicted_twist.map(|t| t.omega_z.abs()).unwrap_or(0.0);
+    (de, omega, c.contact_offset_u.abs())
+}
+
+fn rank_key_better(a: (f64, f64, f64), b: (f64, f64, f64)) -> bool {
+    a.0 < b.0 - 1e-9
+        || ((a.0 - b.0).abs() <= 1e-9 && a.1 < b.1 - 1e-12)
+        || ((a.0 - b.0).abs() <= 1e-9 && (a.1 - b.1).abs() <= 1e-12 && a.2 + 1e-12 < b.2)
+}
+
 fn rejected_at(c: &PhysicalInteractionCandidate, stage: FunnelStage) -> bool {
     c.funnel
         .transitions
@@ -473,8 +487,8 @@ pub fn select_interaction(
             reason: "NO_CANDIDATES_GENERATED".into(),
         };
     }
-    let mut best_auth: Option<(usize, f64)> = None;
-    let mut best_unauth: Option<(usize, f64)> = None;
+    let mut best_auth: Option<(usize, (f64, f64, f64))> = None;
+    let mut best_unauth: Option<(usize, (f64, f64, f64))> = None;
     for (i, c) in cands.iter().enumerate() {
         if forbidden_keys.iter().any(|k| k == &c.action_key()) {
             continue;
@@ -482,26 +496,26 @@ pub fn select_interaction(
         if !is_goal_useful(c) {
             continue;
         }
-        let de = c.predicted_error_derivative.unwrap_or(0.0);
+        let key = selection_rank_key(c);
         if c.authority_ok {
             let better = match best_auth {
                 None => true,
-                Some((_, d)) => de < d,
+                Some((_, k)) => rank_key_better(key, k),
             };
             if better {
-                best_auth = Some((i, de));
+                best_auth = Some((i, key));
             }
         } else {
             let better = match best_unauth {
                 None => true,
-                Some((_, d)) => de < d,
+                Some((_, k)) => rank_key_better(key, k),
             };
             if better {
-                best_unauth = Some((i, de));
+                best_unauth = Some((i, key));
             }
         }
     }
-    if let Some((index, de)) = best_auth {
+    if let Some((index, (de, _, _))) = best_auth {
         return SelectionOutcome::Selected {
             index,
             reason: format!(

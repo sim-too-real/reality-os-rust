@@ -179,9 +179,14 @@ mod tests {
     }
 
     fn pose(xy: [f64; 2], z: f64) -> Se3 {
+        pose_xy_yaw(xy, z, 0.0)
+    }
+
+    fn pose_xy_yaw(xy: [f64; 2], z: f64, yaw: f64) -> Se3 {
+        let rot = Se3::from_axis_angle([0.0, 0.0, 1.0], yaw).unwrap_or_else(|_| Se3::identity());
         Se3 {
             xyz: [xy[0], xy[1], z],
-            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
+            quat_wxyz: rot.quat_wxyz,
         }
     }
 
@@ -620,7 +625,7 @@ mod tests {
         if n == 0 {
             return None;
         }
-        let target = [desired[0] * 0.30, desired[1] * 0.30, z];
+        let target = [0.30, 0.0, z];
         let mut guesses = vec![vec![0.0; n]];
         let mut g1 = vec![0.0; n];
         if n > 1 {
@@ -655,6 +660,17 @@ mod tests {
             g3[2] = 0.6;
         }
         guesses.push(g3);
+        let mut g4 = vec![0.0; n];
+        if n > 0 {
+            g4[0] = 1.1;
+        }
+        if n > 1 {
+            g4[1] = 0.9;
+        }
+        if n > 2 {
+            g4[2] = 1.1;
+        }
+        guesses.push(g4);
         let mut best: Option<(SampledEePose, f64)> = None;
         for seed in guesses {
             let Ok((q, tr)) = solve_ik(model, &chain, ee, target, &seed) else {
@@ -865,12 +881,11 @@ mod tests {
         Some([w[0] / n, w[1] / n, 0.0])
     }
 
-    fn desired_planar_push(goal: &PlanarObjectGoal, start_xy: [f64; 2]) -> [f64; 3] {
-        let t = goal.target_xy.unwrap_or([start_xy[0] + 0.03, start_xy[1]]);
-        let d = [t[0] - start_xy[0], t[1] - start_xy[1]];
-        let n = d[0].hypot(d[1]);
+    fn desired_planar_push(goal: &PlanarObjectGoal) -> [f64; 3] {
+        let t = goal.target_xy.unwrap_or([0.07, 0.0]);
+        let n = t[0].hypot(t[1]);
         if n > 1e-6 {
-            [d[0] / n, d[1] / n, 0.0]
+            [t[0] / n, t[1] / n, 0.0]
         } else {
             [1.0, 0.0, 0.0]
         }
@@ -983,7 +998,8 @@ mod tests {
         let _ = ee;
         let mut qpos = t0.qpos.clone();
         let mut cloud0 = build_ee_cloud(&model, &ee_name, &qpos, seed);
-        let desired = desired_planar_push(goal, start_xy);
+        let _ = start_xy;
+        let desired = desired_planar_push(goal);
         if let Some(s) = midreach_aligned_seed(&model, &ee_name, desired, ee_xyz0[2], tool_off) {
             cloud0.insert(0, s);
         }
@@ -1000,7 +1016,7 @@ mod tests {
         };
         let mut goal = goal.clone();
         if let Some(t) = goal.target_xy {
-            goal.target_xy = Some([xy[0] - start_xy[0] + t[0], xy[1] - start_xy[1] + t[1]]);
+            goal.target_xy = Some([xy[0] + t[0], xy[1] + t[1]]);
         }
         let goal = goal;
         let mut yaw = 0.0;
@@ -1035,18 +1051,21 @@ mod tests {
                 record_action(&mut trace, &step.record, None, None, None);
                 break;
             }
+            let remain = evaluate_goal_error(xy, yaw, &goal).translation_residual_m;
+            let stroke = remain.clamp(0.02, 0.03);
+            let object_pose = pose_xy_yaw(xy, z, yaw);
             let mut cands = generate_planar_push_candidates(
                 "obj0",
-                pose(xy, z),
+                object_pose,
                 [size, size, size],
                 [0.0, 0.0, 1.0],
                 0.015,
-                0.03,
+                stroke,
             );
             let object = BoxObject {
                 center: [xy[0], xy[1], z],
                 half_extents: [size, size, size],
-                quat_wxyz: [1.0, 0.0, 0.0, 0.0],
+                quat_wxyz: object_pose.quat_wxyz,
             };
             let support = SupportPlane {
                 origin: [xy[0], xy[1], z - size],
@@ -1195,7 +1214,7 @@ mod tests {
                 0.05,
                 0.3,
                 sel.push_direction_world,
-                sel.stroke_m.max(0.03),
+                sel.stroke_m.max(0.02),
                 seed.wrapping_add(k as u64),
             );
             sc.world_construction =
@@ -1242,7 +1261,14 @@ mod tests {
                 observed_at_s: (k + 1) as f64,
             };
             let mut rec = record_after_with_goal(step, &after, &goal);
-            let blocked = ep.ctrl_writes == 0
+            let flung = rec
+                .record
+                .goal_error_after
+                .as_ref()
+                .zip(rec.record.goal_error_before.as_ref())
+                .is_some_and(|(a, b)| a.translation_residual_m > b.translation_residual_m + 0.06);
+            let blocked = flung
+                || ep.ctrl_writes == 0
                 || matches!(
                     ep.failure_taxonomy.as_deref(),
                     Some("COLLISION_INADMISSIBLE") | Some("NO_FEASIBLE_CONTACT_POSE")
@@ -1430,6 +1456,92 @@ mod tests {
         );
     }
 
+    fn n_bounded_executes(t: &ClosedLoopTrace) -> usize {
+        t.actions
+            .iter()
+            .filter(|a| a.get("ctrl_writes").and_then(|v| v.as_u64()).unwrap_or(0) > 0)
+            .count()
+    }
+
+    fn has_contact_switch(t: &ClosedLoopTrace) -> bool {
+        t.actions
+            .iter()
+            .any(|a| a.get("contact_switch").is_some_and(|v| v.is_object()))
+    }
+
+    fn assert_one_push_insufficient(t: &ClosedLoopTrace, pass: i32) {
+        if t.final_outcome != "GoalReached" {
+            return;
+        }
+        assert!(
+            n_bounded_executes(t) >= 2 || has_contact_switch(t),
+            "pass {pass}: GOAL_REACHED must need ≥2 bounded executes or a contact switch, faces={:?} n_exec={}",
+            t.selected_faces,
+            n_bounded_executes(t)
+        );
+    }
+
+    fn assert_no_fling(t: &ClosedLoopTrace, pass: i32) {
+        let mut prev: Option<f64> = None;
+        for (i, a) in t.actions.iter().enumerate() {
+            let writes = a.get("ctrl_writes").and_then(|v| v.as_u64()).unwrap_or(0);
+            let after = a
+                .get("goal_error_after")
+                .and_then(|e| e.get("translation_residual_m"))
+                .and_then(|v| v.as_f64());
+            if writes > 0 {
+                if let (Some(p), Some(n)) = (prev, after) {
+                    assert!(
+                        n < p + 0.08,
+                        "pass {pass} action {i}: execute must not fling, residual {p} → {n}"
+                    );
+                }
+            }
+            if let Some(n) = after {
+                prev = Some(n);
+            }
+        }
+    }
+
+    #[test]
+    fn generated_contacts_use_observed_yaw() {
+        let yaw = std::f64::consts::FRAC_PI_2;
+        let cands = generate_planar_push_candidates(
+            "obj0",
+            pose_xy_yaw([0.0, 0.0], 0.03, yaw),
+            [0.04, 0.03, 0.03],
+            [0.0, 0.0, 1.0],
+            0.01,
+            0.02,
+        );
+        let plus_x = cands
+            .iter()
+            .find(|c| c.face_id == "+x" && c.contact_offset_u.abs() < 1e-9)
+            .expect("+x face");
+        assert!(
+            plus_x.push_direction_world[1].abs() > 0.9,
+            "object-local +x at yaw=π/2 must push in world ±Y, got {:?}",
+            plus_x.push_direction_world
+        );
+        let ident = generate_planar_push_candidates(
+            "obj0",
+            pose([0.0, 0.0], 0.03),
+            [0.04, 0.03, 0.03],
+            [0.0, 0.0, 1.0],
+            0.01,
+            0.02,
+        );
+        let ident_x = ident
+            .iter()
+            .find(|c| c.face_id == "+x" && c.contact_offset_u.abs() < 1e-9)
+            .expect("identity +x");
+        assert!(
+            ident_x.push_direction_world[0].abs() > 0.9,
+            "identity +x must push in world ±X, got {:?}",
+            ident_x.push_direction_world
+        );
+    }
+
     #[test]
     fn closed_loop_mujoco_goal_directed() {
         if !ensure_mujoco_or_skip() {
@@ -1442,13 +1554,22 @@ mod tests {
         let mut traces = Vec::new();
         let mut last_err = None;
         for pass in 1..=2 {
-            let g = trans_goal([0.03, 0.0], 0.02, 4);
-            let a = closed_loop_on_bundle("arm_gripper", [0.0, 0.0], &g, None, 21);
-            let b = closed_loop_on_bundle("arm_gripper", [0.10, 0.0], &g, None, 22);
+            let g_plus = trans_goal([0.07, 0.0], 0.025, 6);
+            let g_minus = trans_goal([-0.07, 0.0], 0.025, 6);
+            let a = closed_loop_on_bundle("arm_gripper", [0.0, 0.0], &g_plus, None, 21);
+            let b = closed_loop_on_bundle("arm_gripper", [0.0, 0.0], &g_minus, None, 22);
             match (a, b) {
                 (Ok(ta), Ok(tb)) => {
                     assert_trace_honest(&ta, pass);
                     assert_trace_honest(&tb, pass);
+                    assert_eq!(
+                        ta.final_outcome, "GoalReached",
+                        "pass {pass}: 7 cm +X goal must GOAL_REACHED after multiple bounded executes"
+                    );
+                    assert_one_push_insufficient(&ta, pass);
+                    assert_one_push_insufficient(&tb, pass);
+                    assert_no_fling(&ta, pass);
+                    assert_no_fling(&tb, pass);
                     if !ta.selected_faces.is_empty() && !tb.selected_faces.is_empty() {
                         assert_ne!(
                             ta.selected_faces, tb.selected_faces,
@@ -1462,28 +1583,31 @@ mod tests {
                         "from_pos_x": tb,
                     });
                     if pass == 1 {
-                        let mut g_yaw = g.clone();
+                        let mut g_yaw = g_plus.clone();
                         g_yaw.target_yaw = Some(0.35);
                         g_yaw.orientation_tolerance_rad = 0.15;
                         if let Ok(tc) = closed_loop_on_bundle(
                             "arm_gripper",
                             [0.0, 0.0],
-                            &g,
+                            &g_plus,
                             Some([0.0, 0.03]),
                             21,
                         ) {
                             assert_trace_honest(&tc, pass);
+                            assert_no_fling(&tc, pass);
                             row["perturbed"] = json!(tc);
                         }
                         if let Ok(td) =
                             closed_loop_on_bundle("arm_gripper", [0.0, 0.0], &g_yaw, None, 24)
                         {
                             assert_trace_honest(&td, pass);
+                            assert_one_push_insufficient(&td, pass);
                             row["yaw_and_translation"] = json!(td);
                         }
                         let mut emb = serde_json::Map::new();
                         for id in corpus::corpus_ids() {
-                            if let Ok(t) = closed_loop_on_bundle(id, [0.0, 0.0], &g, None, 25) {
+                            if let Ok(t) = closed_loop_on_bundle(id, [0.0, 0.0], &g_plus, None, 25)
+                            {
                                 assert_trace_honest(&t, pass);
                                 emb.insert(id.to_string(), json!(t.selected_faces));
                             }
