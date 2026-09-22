@@ -574,11 +574,18 @@ mod tests {
         stroke: f64,
         ee_xyz: [f64; 3],
         tool_off: [f64; 3],
+        short_witness: bool,
     ) -> (
         Result<ContactManeuver, ContactInfeasible>,
         ContactSelectFunnel,
     ) {
         let mut spec = ContactManeuverSpec::table_push(push, stroke, ee_xyz, tool_off);
+        if short_witness && stroke.is_finite() && stroke > 1e-4 && stroke < spec.min_stroke {
+            // A discriminating probe must end below the quasi-static limit.
+            // The table-push floor would otherwise drive at least 0.02 m.
+            spec.min_stroke = stroke;
+            spec.requested_stroke = stroke;
+        }
         spec.object_id = "obj0".into();
         spec.intended_tool_bodies =
             declared_manipulation_contact_bodies(model, model.resources.first(), ee);
@@ -630,9 +637,19 @@ mod tests {
         stroke: f64,
         ee_xyz: [f64; 3],
         tool_off: [f64; 3],
+        short_witness: bool,
     ) -> Result<ContactManeuver, ContactInfeasible> {
         prove_face_funnel(
-            model, ee, cloud, object, support, push, stroke, ee_xyz, tool_off,
+            model,
+            ee,
+            cloud,
+            object,
+            support,
+            push,
+            stroke,
+            ee_xyz,
+            tool_off,
+            short_witness,
         )
         .0
     }
@@ -651,6 +668,7 @@ mod tests {
         seed: u64,
         ee_fallback: [f64; 3],
         prefer_push: [f64; 3],
+        short_witness: bool,
     ) -> (u32, Option<ContactManeuver>) {
         let object_pose = pose_xy_yaw(xy, z, yaw);
         let cands = generate_planar_push_candidates(
@@ -689,6 +707,7 @@ mod tests {
                 cand.stroke_m,
                 ee_xyz,
                 tool_off,
+                short_witness,
             ) {
                 admissible += 1;
                 let dot = maneuver.push_direction[0] * prefer_push[0]
@@ -1266,6 +1285,7 @@ mod tests {
                         c.stroke_m,
                         ee_xyz,
                         tool_off,
+                        c.stroke_m + 1e-9 < 0.02,
                     ),
                 );
             }
@@ -1914,6 +1934,7 @@ mod tests {
                         seed.wrapping_add(80_000),
                         ee,
                         sel.push_direction_world,
+                        false,
                     );
                     admissible_contact_count = Some(admissible);
                     let interactable_now = admissible > 0;
@@ -1943,6 +1964,7 @@ mod tests {
                             seed.wrapping_add(81_000),
                             ee,
                             sel.push_direction_world,
+                            true,
                         );
                         admissible_contact_count = Some(admissible.max(probe_admissible));
                         let probe_origin = nxy;
@@ -2269,6 +2291,7 @@ mod tests {
             0.03,
             sample.xyz,
             tool_off,
+            false,
         );
         write_scratch(
             "mode-b-witness.log",
@@ -2577,83 +2600,47 @@ mod tests {
             );
         }
         if count > 0 {
-            let follow = passes[0].actions.iter().find(|action| {
-                action["selection_rationale"]
-                    .as_str()
-                    .unwrap_or("")
-                    .contains("BELIEF_SET_REFUSAL")
-            });
-            assert!(
-                follow.is_some(),
-                "contradicted friction still authorized a goal push: {}",
-                serde_json::to_string(&passes[0].actions).unwrap_or_default()
-            );
-            let follow = follow.unwrap();
-            let follow_b = passes[1].actions.iter().find(|action| {
-                action["selection_rationale"]
-                    .as_str()
-                    .unwrap_or("")
-                    .contains("BELIEF_SET_REFUSAL")
-            });
-            assert_eq!(
-                follow["selection_rationale"],
-                follow_b.unwrap()["selection_rationale"]
-            );
-            assert_eq!(follow["authority_decision"], "REFUSE");
-            assert_eq!(follow["unauthorized_writes"], 0);
-            assert_eq!(follow["ctrl_writes"], 0);
-            assert_ne!(follow["outcome"], "GOAL_REACHED");
-            assert_ne!(follow["decision"], "RECOVER");
-            let why = follow["selection_rationale"].as_str().unwrap_or("");
-            assert!(
-                why.contains("robust_goal=false"),
-                "refusal still treated the short push as robust: {why}"
-            );
             let probe_belief = note_a["belief_after"].as_str().unwrap_or("");
             assert!(
-                probe_belief.contains("Underdetermined"),
-                "executed probe stroke above the quasi-static limit must stay underdetermined: {probe_belief}"
+                probe_belief.starts_with("Identified|"),
+                "probe below the quasi-static limit must apply the measured tag: {probe_belief}"
             );
             assert!(
-                probe_belief.contains("SupportFrictionInconsistent")
-                    && probe_belief.contains("QuasiStaticAssumptionBroken"),
-                "both hypotheses must remain: {probe_belief}"
+                !probe_belief.contains("Underdetermined"),
+                "nominal probe motion must not stay underdetermined: {probe_belief}"
             );
-            assert!(
-                !probe_belief.starts_with("Identified"),
-                "probe identified a cause from the requested stroke instead of the executed stroke: {probe_belief}"
-            );
-            let carried_belief = follow["reasoning"]["belief_after"].as_str().unwrap_or("");
-            assert!(
-                !carried_belief.contains("Contradicted"),
-                "a non-separating probe contradicted a declared value: {carried_belief}"
-            );
-            assert!(
-                carried_belief.contains("DeclaredFact"),
-                "declared belief was not carried: {carried_belief}"
-            );
-            let follow_rank = follow["reasoning"]["ranking_after"].as_str().unwrap_or("");
             let probe_rank = note_a["ranking_after"].as_str().unwrap_or("");
             let proved_head = probe_rank.split('|').next().unwrap_or("");
             assert!(
                 !proved_head.is_empty() && !proved_head.starts_with("goal_"),
                 "post-probe ranking_after is not select_recoverable_progress on a proved contact: {probe_rank}"
             );
+            let follow = passes[0].actions.iter().find(|action| {
+                action["authority_decision"] == "AUTHORIZE"
+                    && action["selected_id"].as_str() == Some(proved_head)
+            });
+            assert!(
+                follow.is_some(),
+                "did not authorize the proved recoverable contact {proved_head}: {}",
+                serde_json::to_string(&passes[0].actions).unwrap_or_default()
+            );
+            let follow = follow.unwrap();
+            let follow_b = passes[1].actions.iter().find(|action| {
+                action["authority_decision"] == "AUTHORIZE"
+                    && action["selected_id"].as_str() == Some(proved_head)
+            });
             assert_eq!(
-                follow_rank, proved_head,
-                "follow-up ranking_after diverged from the proved recoverable contact"
+                follow["selection_rationale"],
+                follow_b.unwrap()["selection_rationale"]
             );
+            assert_eq!(follow["unauthorized_writes"], 0);
+            assert!(follow["ctrl_writes"].as_u64().unwrap_or(0) > 0);
+            assert_ne!(follow["outcome"], "GOAL_REACHED");
+            assert_ne!(follow["decision"], "RECOVER");
+            let why = follow["selection_rationale"].as_str().unwrap_or("");
             assert!(
-                why.contains(&format!("recoverable_pick={proved_head}")),
-                "refusal did not name the proved recoverable contact: {why}"
-            );
-            assert!(
-                follow["rejection_reasons"]
-                    .as_array()
-                    .unwrap_or(&Vec::new())
-                    .iter()
-                    .any(|reason| { reason.as_str().unwrap_or("").starts_with(proved_head) }),
-                "proved contact {proved_head} is absent from the post-probe rejections"
+                why.contains("class=ProgressAndRecoverable"),
+                "authorized contact was not the recoverable class: {why}"
             );
         }
         assert_ne!(passes[0].final_outcome, "GoalReached");

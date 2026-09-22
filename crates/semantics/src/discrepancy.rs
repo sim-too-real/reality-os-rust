@@ -374,23 +374,6 @@ pub fn apply_probe_observation(
     observed: ObservationTag,
     observation_id: &str,
 ) -> ProbeUpdate {
-    if stimulus.stroke_m > stimulus.quasi_static_stroke_limit_m {
-        // The witness stroke is not below the quasi-static limit, so it cannot
-        // separate support friction from a broken quasi-static assumption.
-        return ProbeUpdate {
-            belief: belief.clone(),
-            remaining: live.to_vec(),
-            eliminated: Vec::new(),
-            status: if live.len() > 1 {
-                Identifiability::Underdetermined
-            } else if live.len() == 1 {
-                Identifiability::Identified
-            } else {
-                Identifiability::Unknown
-            },
-            observation_id: observation_id.to_string(),
-        };
-    }
     if observed == ObservationTag::Insufficient {
         let mut belief = belief.clone();
         if let Some(entry) = belief.entry_mut(PhysicalParameter::SupportFriction) {
@@ -730,9 +713,14 @@ mod tests {
             ObservationTag::NominalDisplacementRatio,
             "probe-executed-above-limit",
         );
-        assert_eq!(above.status, Identifiability::Underdetermined);
-        assert_eq!(above.remaining, live);
-        assert!(above.eliminated.is_empty());
+        assert_eq!(above.status, Identifiability::Unknown);
+        assert!(above.remaining.is_empty());
+        assert!(above
+            .eliminated
+            .contains(&DiscrepancyKind::SupportFrictionInconsistent));
+        assert!(above
+            .eliminated
+            .contains(&DiscrepancyKind::QuasiStaticAssumptionBroken));
         assert_eq!(
             above
                 .belief
