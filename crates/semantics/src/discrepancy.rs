@@ -287,8 +287,21 @@ pub fn hypothesize(observation: &DiscrepancyObservation) -> HypothesisReport {
     }
     let ratio = observation.displacement_ratio.unwrap_or(1.0);
     let mut kinds = Vec::new();
-    let tracking_high = observation.tracking_error_m.unwrap_or(0.0) > 0.03;
-    let geometry_bad = observation.geometry_residual_m.unwrap_or(0.0) > 0.02;
+    let tracking_low = observation
+        .tracking_error_m
+        .is_some_and(|v| v.is_finite() && v >= 0.0 && v <= 0.03);
+    let tracking_high = observation
+        .tracking_error_m
+        .is_some_and(|v| v.is_finite() && v > 0.03);
+    let geometry_low = observation
+        .geometry_residual_m
+        .is_some_and(|v| v.is_finite() && v >= 0.0 && v <= 0.02);
+    let geometry_bad = observation
+        .geometry_residual_m
+        .is_some_and(|v| v.is_finite() && v > 0.02);
+    if !(tracking_low || tracking_high) || !(geometry_low || geometry_bad) {
+        kinds.push(DiscrepancyKind::StaleOrInsufficientObservation);
+    }
     let yaw_flip = matches!(
         (observation.predicted_yaw_sign, observation.observed_yaw_sign),
         (Some(a), Some(b)) if a != 0 && b != 0 && a != b
@@ -306,7 +319,7 @@ pub fn hypothesize(observation: &DiscrepancyObservation) -> HypothesisReport {
     if contact_lost {
         kinds.push(DiscrepancyKind::ToolContactFrictionInconsistent);
     }
-    if high_ratio(ratio) && !tracking_high {
+    if high_ratio(ratio) && tracking_low && geometry_low {
         kinds.push(DiscrepancyKind::SupportFrictionInconsistent);
         if observation.stroke_m > observation.quasi_static_stroke_limit_m {
             kinds.push(DiscrepancyKind::QuasiStaticAssumptionBroken);
@@ -318,16 +331,19 @@ pub fn hypothesize(observation: &DiscrepancyObservation) -> HypothesisReport {
     let hypotheses = kinds
         .iter()
         .map(|kind| {
-            let supporting = if *kind == DiscrepancyKind::UnidentifiableFromCurrentEvidence {
-                &[][..]
-            } else {
-                &["motion_consistent_with_hypothesis"][..]
+            let supporting = match kind {
+                DiscrepancyKind::UnidentifiableFromCurrentEvidence => &[][..],
+                DiscrepancyKind::StaleOrInsufficientObservation => {
+                    &["missing_or_invalid_tracking_or_geometry_measurement"][..]
+                }
+                _ => &["motion_consistent_with_hypothesis"][..],
             };
             hypothesis(*kind, supporting, &[], stimulus)
         })
         .collect();
     let status = match kinds.as_slice() {
-        [DiscrepancyKind::UnidentifiableFromCurrentEvidence] => Identifiability::Unknown,
+        [DiscrepancyKind::UnidentifiableFromCurrentEvidence]
+        | [DiscrepancyKind::StaleOrInsufficientObservation] => Identifiability::Unknown,
         [_] => Identifiability::Identified,
         _ => Identifiability::Underdetermined,
     };
@@ -522,6 +538,88 @@ mod tests {
             predicted_tag(DiscrepancyKind::SupportFrictionInconsistent, stimulus),
             predicted_tag(DiscrepancyKind::QuasiStaticAssumptionBroken, stimulus)
         );
+    }
+
+    #[test]
+    fn removing_required_discriminators_never_identifies_friction() {
+        let mut fully_observed = large_slip();
+        fully_observed.tracking_error_m = Some(0.0);
+        fully_observed.geometry_residual_m = Some(0.0);
+        let full_report = hypothesize(&fully_observed);
+        assert!(full_report
+            .kinds
+            .contains(&DiscrepancyKind::SupportFrictionInconsistent));
+
+        let discriminator_combinations = [
+            (None, None),
+            (None, Some(0.0)),
+            (Some(0.0), None),
+            (Some(0.0), Some(0.0)),
+        ];
+        for (tracking, geometry) in discriminator_combinations {
+            let mut observation = large_slip();
+            observation.tracking_error_m = tracking;
+            observation.geometry_residual_m = geometry;
+            let report = hypothesize(&observation);
+            if tracking.is_some() && geometry.is_some() {
+                assert!(report
+                    .kinds
+                    .contains(&DiscrepancyKind::SupportFrictionInconsistent));
+            } else {
+                assert!(!report
+                    .kinds
+                    .contains(&DiscrepancyKind::SupportFrictionInconsistent));
+                assert!(report
+                    .kinds
+                    .contains(&DiscrepancyKind::StaleOrInsufficientObservation));
+                assert_ne!(report.status, Identifiability::Identified);
+            }
+        }
+
+        for (tracking, geometry) in [
+            (Some(f64::NAN), Some(0.0)),
+            (Some(0.0), Some(f64::INFINITY)),
+        ] {
+            let mut observation = large_slip();
+            observation.tracking_error_m = tracking;
+            observation.geometry_residual_m = geometry;
+            let report = hypothesize(&observation);
+            assert!(!report
+                .kinds
+                .contains(&DiscrepancyKind::SupportFrictionInconsistent));
+            assert!(report
+                .kinds
+                .contains(&DiscrepancyKind::StaleOrInsufficientObservation));
+            assert_ne!(report.status, Identifiability::Identified);
+        }
+    }
+
+    #[test]
+    fn present_positive_discrepancy_evidence_is_preserved() {
+        let low = hypothesize(&large_slip());
+        assert!(low
+            .kinds
+            .contains(&DiscrepancyKind::SupportFrictionInconsistent));
+
+        let mut tracking_high = large_slip();
+        tracking_high.tracking_error_m = Some(0.031);
+        let tracking_report = hypothesize(&tracking_high);
+        assert!(tracking_report
+            .kinds
+            .contains(&DiscrepancyKind::ExecutionTrackingDivergence));
+        assert!(!tracking_report
+            .kinds
+            .contains(&DiscrepancyKind::SupportFrictionInconsistent));
+
+        let mut geometry_high = large_slip();
+        geometry_high.geometry_residual_m = Some(0.021);
+        let geometry_report = hypothesize(&geometry_high);
+        assert!(geometry_report
+            .kinds
+            .contains(&DiscrepancyKind::ContactGeometryDisagreement));
+        assert!(!geometry_report
+            .kinds
+            .contains(&DiscrepancyKind::SupportFrictionInconsistent));
     }
 
     #[test]
