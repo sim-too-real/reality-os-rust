@@ -111,9 +111,7 @@ pub fn check_execution_envelope(
         Some("AUTHORITY_STATE")
     } else if prevention_impossible || outside {
         Some("REACHABILITY_MARGIN")
-    } else if consumed > 1e-9 && ratio > envelope.max_displacement_ratio {
-        Some("MODEL_DISAGREEMENT")
-    } else if disagreement {
+    } else if (consumed > 1e-9 && ratio > envelope.max_displacement_ratio) || disagreement {
         Some("MODEL_DISAGREEMENT")
     } else if observation.yaw_change_rad.abs() > envelope.max_yaw_abs_rad {
         Some("YAW_CHANGE")

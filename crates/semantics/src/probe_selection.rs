@@ -79,12 +79,8 @@ pub fn classify_robustness(
     let all_regression = endpoint_progress
         .iter()
         .all(|p| *p == GoalProgressClass::Regression);
-    let any_strict = endpoint_progress
-        .iter()
-        .any(|p| *p == GoalProgressClass::StrictProgress);
-    let any_regression = endpoint_progress
-        .iter()
-        .any(|p| *p == GoalProgressClass::Regression);
+    let any_strict = endpoint_progress.contains(&GoalProgressClass::StrictProgress);
+    let any_regression = endpoint_progress.contains(&GoalProgressClass::Regression);
     if all_strict {
         BeliefRobustness::RobustStrictProgress
     } else if all_regression {
