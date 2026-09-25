@@ -23,6 +23,17 @@ pub const BLOCK_SUPPORT_COLLISION: &str = "SUPPORT_COLLISION";
 pub const BLOCK_OBSTACLE_COLLISION: &str = "OBSTACLE_COLLISION";
 pub const BLOCK_UNINTENDED_CONTACT: &str = "UNINTENDED_ROBOT_OBJECT_CONTACT";
 pub const BLOCK_WRONG_PHASE_CONTACT: &str = "WRONG_PHASE_OBJECT_CONTACT";
+pub const BLOCK_INVALID_COLLISION_WORLD: &str = "INVALID_COLLISION_WORLD";
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CollisionWorldError {
+    #[error("invalid object pose in collision world")]
+    InvalidObjectPose,
+    #[error("invalid pose for obstacle {name}")]
+    InvalidObstaclePose { name: String },
+    #[error("invalid support plane in collision world")]
+    InvalidSupportPlane,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AttachedSphere {
@@ -66,6 +77,30 @@ pub struct CollisionWorld {
     pub object_probe_radius: f64,
     pub tool_offset_ee: [f64; 3],
     pub declared_geoms: Vec<RigidGeometry>,
+}
+
+fn validate_world_geometry(
+    world: &CollisionWorld,
+) -> Result<(Se3, [f64; 3], Vec<Se3>), CollisionWorldError> {
+    let object_pose = Se3::try_new(world.object_center, world.object_quat)
+        .map_err(|_| CollisionWorldError::InvalidObjectPose)?;
+    if !world.support_origin.iter().all(|v| v.is_finite()) {
+        return Err(CollisionWorldError::InvalidSupportPlane);
+    }
+    let support_normal = crate::transform::normalize3(world.support_normal)
+        .ok_or(CollisionWorldError::InvalidSupportPlane)?;
+    let obstacle_poses = world
+        .obstacles
+        .iter()
+        .map(|obstacle| {
+            Se3::try_new(obstacle.center, obstacle.quat_wxyz).map_err(|_| {
+                CollisionWorldError::InvalidObstaclePose {
+                    name: obstacle.name.clone(),
+                }
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((object_pose, support_normal, obstacle_poses))
 }
 
 fn proxy_geom(
@@ -135,7 +170,8 @@ pub fn scene_from_collision_world(
     model: &EmbodimentModel,
     ee: &str,
     world: &CollisionWorld,
-) -> CollisionScene {
+) -> Result<CollisionScene, CollisionWorldError> {
+    let (object_pose, n, obstacle_poses) = validate_world_geometry(world)?;
     let keep_robot = |g: &RigidGeometry| {
         g.participates_in_collision()
             && is_kinematic_robot_body(model, &g.owner_body)
@@ -194,9 +230,6 @@ pub fn scene_from_collision_world(
             });
         }
     }
-    let object_pose = Se3::try_new(world.object_center, world.object_quat).unwrap_or_else(|_| {
-        Se3::translation(world.object_center).unwrap_or_else(|_| Se3::identity())
-    });
     let object = vec![RigidGeometry::declared(
         world.object_id.clone(),
         world.object_id.clone(),
@@ -208,7 +241,6 @@ pub fn scene_from_collision_world(
         SemanticRole::Object,
         "scene.object",
     )];
-    let n = crate::transform::normalize3(world.support_normal).unwrap_or([0.0, 0.0, 1.0]);
     let thick = 0.02;
     let support_center = [
         world.support_origin[0] - n[0] * thick,
@@ -220,7 +252,8 @@ pub fn scene_from_collision_world(
         .max(world.object_half[1].abs())
         .max(0.15)
         * 3.0;
-    let support_pose = Se3::translation(support_center).unwrap_or_else(|_| Se3::identity());
+    let support_pose =
+        Se3::translation(support_center).map_err(|_| CollisionWorldError::InvalidSupportPlane)?;
     let support = vec![RigidGeometry {
         id: world.support_id.clone(),
         owner_body: world.support_id.clone(),
@@ -237,9 +270,8 @@ pub fn scene_from_collision_world(
     let obstacles = world
         .obstacles
         .iter()
-        .map(|o| {
-            let pose = Se3::try_new(o.center, o.quat_wxyz)
-                .unwrap_or_else(|_| Se3::translation(o.center).unwrap_or_else(|_| Se3::identity()));
+        .zip(obstacle_poses)
+        .map(|(o, pose)| {
             RigidGeometry::declared(
                 o.name.clone(),
                 o.name.clone(),
@@ -259,7 +291,7 @@ pub fn scene_from_collision_world(
             intended.push(parent);
         }
     }
-    CollisionScene {
+    Ok(CollisionScene {
         robot,
         object,
         support,
@@ -268,7 +300,7 @@ pub fn scene_from_collision_world(
         object_id: world.object_id.clone(),
         support_id: world.support_id.clone(),
         adjacent_body_pairs: adjacent_body_pairs(model),
-    }
+    })
 }
 
 pub fn policy_from_scene(scene: &CollisionScene) -> AllowedContactPolicy {
@@ -320,12 +352,19 @@ fn sphere_aabb(s: Sphere, center: [f64; 3], half: [f64; 3]) -> bool {
     norm3(sub3(s.center, closest)) <= s.radius + 1e-9
 }
 
-fn sphere_plane(s: Sphere, origin: [f64; 3], normal: [f64; 3]) -> bool {
-    let n = crate::transform::normalize3(normal).unwrap_or([0.0, 0.0, 1.0]);
+fn sphere_plane(
+    s: Sphere,
+    origin: [f64; 3],
+    normal: [f64; 3],
+) -> Result<bool, CollisionWorldError> {
+    if !origin.iter().all(|v| v.is_finite()) {
+        return Err(CollisionWorldError::InvalidSupportPlane);
+    }
+    let n = crate::transform::normalize3(normal).ok_or(CollisionWorldError::InvalidSupportPlane)?;
     let h = n[0] * (s.center[0] - origin[0])
         + n[1] * (s.center[1] - origin[1])
         + n[2] * (s.center[2] - origin[2]);
-    h < s.radius - 1e-9
+    Ok(h < s.radius - 1e-9)
 }
 
 fn sphere_sphere(a: Sphere, b: Sphere) -> bool {
@@ -443,9 +482,12 @@ pub fn forbidden_class_on_interpolation(
     qb: &[f64],
     world: &CollisionWorld,
     kind: TransitionKind,
-) -> Option<(&'static str, ContactEvidenceClass)> {
+) -> Result<Option<(&'static str, ContactEvidenceClass)>, CollisionWorldError> {
+    let (_, support_normal, _) = validate_world_geometry(world)?;
     let n = interpolation_count(qa, qb);
-    let samples = interpolate_named_q(qa, qb, n).ok()?;
+    let Ok(samples) = interpolate_named_q(qa, qb, n) else {
+        return Ok(None);
+    };
     let mut robot_names: Vec<String> = world.robot_volumes.iter().map(|v| v.body.clone()).collect();
     robot_names.push("tool".into());
     for (i, q) in samples.iter().enumerate() {
@@ -461,22 +503,22 @@ pub fn forbidden_class_on_interpolation(
             if let Some(class) = classify_named("tool", &world.object_id, world, &robot_names) {
                 let reason = block_reason(class, !intended_ok);
                 if !reason.is_empty() {
-                    return Some((reason, class));
+                    return Ok(Some((reason, class)));
                 }
             }
         }
-        if sphere_plane(tool, world.support_origin, world.support_normal) {
-            return Some((
+        if sphere_plane(tool, world.support_origin, support_normal)? {
+            return Ok(Some((
                 BLOCK_SUPPORT_COLLISION,
                 ContactEvidenceClass::SupportContact,
-            ));
+            )));
         }
         for obs in &world.obstacles {
             if sphere_aabb(tool, obs.center, obs.half_extents) {
-                return Some((
+                return Ok(Some((
                     BLOCK_OBSTACLE_COLLISION,
                     ContactEvidenceClass::ObstacleContact,
-                ));
+                )));
             }
         }
         let mut vol_spheres: Vec<(String, Sphere)> = Vec::new();
@@ -498,22 +540,22 @@ pub fn forbidden_class_on_interpolation(
                             class == ContactEvidenceClass::IntendedToolContact && !intended_ok;
                         let reason = block_reason(class, wrong_phase);
                         if !reason.is_empty() {
-                            return Some((reason, class));
+                            return Ok(Some((reason, class)));
                         }
                     }
                 }
-                if sphere_plane(s, world.support_origin, world.support_normal) {
-                    return Some((
+                if sphere_plane(s, world.support_origin, support_normal)? {
+                    return Ok(Some((
                         BLOCK_SUPPORT_COLLISION,
                         ContactEvidenceClass::SupportContact,
-                    ));
+                    )));
                 }
                 for obs in &world.obstacles {
                     if sphere_aabb(s, obs.center, obs.half_extents) {
-                        return Some((
+                        return Ok(Some((
                             BLOCK_OBSTACLE_COLLISION,
                             ContactEvidenceClass::ObstacleContact,
-                        ));
+                        )));
                     }
                 }
                 vol_spheres.push((name, s));
@@ -526,14 +568,14 @@ pub fn forbidden_class_on_interpolation(
                         classify_named(&vol_spheres[i].0, &vol_spheres[j].0, world, &robot_names)
                     {
                         if class == ContactEvidenceClass::SelfCollision {
-                            return Some((BLOCK_SELF_COLLISION, class));
+                            return Ok(Some((BLOCK_SELF_COLLISION, class)));
                         }
                     }
                 }
             }
         }
     }
-    None
+    Ok(None)
 }
 
 pub fn is_collision_block_reason(reason: &str) -> bool {
@@ -544,14 +586,18 @@ pub fn is_collision_block_reason(reason: &str) -> bool {
             | BLOCK_OBSTACLE_COLLISION
             | BLOCK_UNINTENDED_CONTACT
             | BLOCK_WRONG_PHASE_CONTACT
+            | BLOCK_INVALID_COLLISION_WORLD
     )
 }
 
 fn refuse_if_needed(t: &mut PhaseTransition, hit: Option<(&'static str, ContactEvidenceClass)>) {
-    if t.verdict != TransitionVerdict::Feasible {
-        return;
-    }
     if let Some((reason, _)) = hit {
+        refuse_with_reason_if_needed(t, reason);
+    }
+}
+
+fn refuse_with_reason_if_needed(t: &mut PhaseTransition, reason: &'static str) {
+    if t.verdict == TransitionVerdict::Feasible {
         *t = PhaseTransition::refused(t.kind, reason, t.n_samples);
     }
 }
@@ -564,7 +610,16 @@ pub fn apply_collision_admissibility(
     world: &CollisionWorld,
 ) {
     let names = &w.joint_names;
-    let scene = scene_from_collision_world(model, ee, world);
+    let scene = match scene_from_collision_world(model, ee, world) {
+        Ok(scene) => scene,
+        Err(_) => {
+            refuse_with_reason_if_needed(&mut w.current_to_approach, BLOCK_INVALID_COLLISION_WORLD);
+            refuse_with_reason_if_needed(&mut w.approach_to_contact, BLOCK_INVALID_COLLISION_WORLD);
+            refuse_with_reason_if_needed(&mut w.contact_to_mid, BLOCK_INVALID_COLLISION_WORLD);
+            refuse_with_reason_if_needed(&mut w.mid_to_end, BLOCK_INVALID_COLLISION_WORLD);
+            return;
+        }
+    };
     let policy = policy_from_scene_model(Some(model), &scene);
     let segs = [
         (
@@ -642,6 +697,137 @@ mod tests {
             tool_offset_ee: [0.0, 0.0, 0.0],
             declared_geoms: vec![],
         }
+    }
+
+    fn executable_witness(model: &EmbodimentModel) -> ExecutableContactManeuver {
+        let names = vec!["j0".into(), "j1".into()];
+        witness_from_continuing_phases(
+            names,
+            vec![0.0, 0.0],
+            named_phase(vec![0.2, 0.2], vec![0.0, 0.0]),
+            named_phase(vec![0.2, 0.2], vec![0.2, 0.2]),
+            named_phase(vec![0.2, 0.2], vec![0.2, 0.2]),
+            named_phase(vec![0.2, 0.2], vec![0.2, 0.2]),
+            &model.joints,
+        )
+    }
+
+    #[test]
+    fn invalid_collision_world_refuses_feasible_phases() {
+        let model = synth_planar_two_link();
+        let mut witness = executable_witness(&model);
+        assert!(witness.is_executable(), "precondition: all phases feasible");
+
+        let mut world = world_at([2.0, 0.0, 0.0]);
+        world.object_quat = [0.0; 4];
+        assert!(matches!(
+            scene_from_collision_world(&model, "ee", &world),
+            Err(CollisionWorldError::InvalidObjectPose)
+        ));
+        apply_collision_admissibility(&mut witness, &model, "ee", &world);
+
+        assert!(
+            !witness.is_executable(),
+            "invalid object pose must refuse a previously feasible witness"
+        );
+        for transition in [
+            &witness.current_to_approach,
+            &witness.approach_to_contact,
+            &witness.contact_to_mid,
+            &witness.mid_to_end,
+        ] {
+            assert_eq!(transition.verdict, TransitionVerdict::Refused);
+            assert_eq!(transition.reason, "INVALID_COLLISION_WORLD");
+        }
+        assert!(is_collision_block_reason(BLOCK_INVALID_COLLISION_WORLD));
+
+        let mut invalid_support = world_at([2.0, 0.0, 0.0]);
+        invalid_support.support_normal = [0.0; 3];
+        assert!(matches!(
+            scene_from_collision_world(&model, "ee", &invalid_support),
+            Err(CollisionWorldError::InvalidSupportPlane)
+        ));
+        assert!(matches!(
+            forbidden_class_on_interpolation(
+                &model,
+                "ee",
+                &["j0".into(), "j1".into()],
+                &[0.0, 0.0],
+                &[0.2, 0.2],
+                &invalid_support,
+                TransitionKind::CurrentToApproach,
+            ),
+            Err(CollisionWorldError::InvalidSupportPlane)
+        ));
+
+        let mut invalid_support_origin = world_at([2.0, 0.0, 0.0]);
+        invalid_support_origin.support_origin[0] = f64::INFINITY;
+        assert!(matches!(
+            scene_from_collision_world(&model, "ee", &invalid_support_origin),
+            Err(CollisionWorldError::InvalidSupportPlane)
+        ));
+
+        let mut preserved = executable_witness(&model);
+        preserved.approach_to_contact =
+            PhaseTransition::refused(TransitionKind::ApproachToContact, "PREEXISTING_REFUSAL", 7);
+        apply_collision_admissibility(&mut preserved, &model, "ee", &world);
+        assert_eq!(preserved.approach_to_contact.reason, "PREEXISTING_REFUSAL");
+        assert_eq!(
+            preserved.current_to_approach.reason,
+            BLOCK_INVALID_COLLISION_WORLD
+        );
+    }
+
+    #[test]
+    fn malformed_obstacle_invalidates_scene() {
+        let model = synth_planar_two_link();
+        let mut world = world_at([2.0, 0.0, 0.0]);
+        world.obstacles.push(NamedBox {
+            name: "malformed-obstacle".into(),
+            center: [f64::NAN, 0.0, 0.0],
+            half_extents: [0.05; 3],
+            quat_wxyz: [0.0; 4],
+        });
+
+        assert!(matches!(
+            scene_from_collision_world(&model, "ee", &world),
+            Err(CollisionWorldError::InvalidObstaclePose { name })
+                if name == "malformed-obstacle"
+        ));
+        assert!(matches!(
+            forbidden_class_on_interpolation(
+                &model,
+                "ee",
+                &["j0".into(), "j1".into()],
+                &[0.0, 0.0],
+                &[0.2, 0.2],
+                &world,
+                TransitionKind::CurrentToApproach,
+            ),
+            Err(CollisionWorldError::InvalidObstaclePose { name })
+                if name == "malformed-obstacle"
+        ));
+        let mut witness = executable_witness(&model);
+        apply_collision_admissibility(&mut witness, &model, "ee", &world);
+        assert_eq!(
+            crate::maneuver_witness::execution_block_reason(&witness).as_deref(),
+            Some(BLOCK_INVALID_COLLISION_WORLD)
+        );
+    }
+
+    #[test]
+    fn valid_non_unit_pose_and_support_direction_are_preserved() {
+        let model = synth_planar_two_link();
+        let mut world = world_at([0.0, 0.0, 0.03]);
+        world.object_quat = [2.0, 0.0, 0.0, 0.0];
+        world.support_normal = [0.0, 0.0, 2.0];
+
+        let scene = scene_from_collision_world(&model, "ee", &world).unwrap();
+        assert_eq!(scene.object[0].local_pose.quat_wxyz, [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(
+            scene.support[0].local_pose.xyz,
+            [0.0, 0.0, world.support_origin[2] - 0.02]
+        );
     }
 
     #[test]
@@ -782,7 +968,7 @@ mod tests {
         let fk =
             forward_kinematics(&model, &["j0".into(), "j1".into()], "ee", &[0.0, 0.0]).unwrap();
         let world = world_at(fk.ee.xyz);
-        let scene = scene_from_collision_world(&model, "ee", &world);
+        let scene = scene_from_collision_world(&model, "ee", &world).unwrap();
         let policy = policy_from_scene(&scene);
         let names = vec!["j0".into(), "j1".into()];
         let q = vec![0.0, 0.0];
