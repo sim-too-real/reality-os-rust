@@ -163,9 +163,9 @@ pub fn generate_planar_push_candidates(
     support_normal: [f64; 3],
     face_gap: f64,
     stroke_m: f64,
-) -> Vec<PhysicalInteractionCandidate> {
+) -> Result<Vec<PhysicalInteractionCandidate>, crate::contact_manifold::ManifoldReject> {
     let faces =
-        box_vertical_face_manifolds_posed(object_pose, half_extents, support_normal, face_gap);
+        box_vertical_face_manifolds_posed(object_pose, half_extents, support_normal, face_gap)?;
     let standoff = push_approach_standoff_m();
     let stroke = stroke_m.max(1e-4);
     let mut out = Vec::new();
@@ -202,7 +202,7 @@ pub fn generate_planar_push_candidates(
             });
         }
     }
-    out
+    Ok(out)
 }
 
 fn finite3(v: [f64; 3]) -> bool {
@@ -731,7 +731,8 @@ mod tests {
             [0.0, 0.0, 1.0],
             0.01,
             0.02,
-        );
+        )
+        .unwrap();
         assert_eq!(cands.len(), 12);
         assert!(cands
             .iter()
@@ -739,6 +740,67 @@ mod tests {
         let faces: Vec<_> = cands.iter().map(|c| c.face_id.as_str()).collect();
         assert!(faces.contains(&"-x") && faces.contains(&"+x"));
         assert!(faces.contains(&"-y") && faces.contains(&"+y"));
+    }
+
+    #[test]
+    fn removing_physical_geometry_evidence_never_creates_push_candidates() {
+        let pose = pose_at([0.0, 0.0]);
+        let valid = generate_planar_push_candidates(
+            "obj0",
+            pose,
+            [0.04, 0.03, 0.03],
+            [0.0, 0.0, 1.0],
+            0.01,
+            0.02,
+        )
+        .unwrap();
+        assert_eq!(valid.len(), 12, "valid explicit support is the control");
+
+        for missing_support in [[0.0; 3], [f64::NAN, 0.0, 1.0], [0.0, f64::INFINITY, 1.0]] {
+            assert_eq!(
+                generate_planar_push_candidates(
+                    "obj0",
+                    pose,
+                    [0.04, 0.03, 0.03],
+                    missing_support,
+                    0.01,
+                    0.02,
+                )
+                .unwrap_err(),
+                crate::contact_manifold::ManifoldReject::InvalidSupportPlane,
+                "removing support evidence ({missing_support:?}) must not produce candidates"
+            );
+        }
+        let large_finite_direction = generate_planar_push_candidates(
+            "obj0",
+            pose,
+            [0.04, 0.03, 0.03],
+            [f64::MAX, 0.0, 0.0],
+            0.01,
+            0.02,
+        )
+        .unwrap();
+        assert_eq!(large_finite_direction.len(), 6);
+        assert!(large_finite_direction
+            .iter()
+            .all(|candidate| candidate.contact_point_world.iter().all(|v| v.is_finite())));
+
+        let malformed_pose = Se3 {
+            xyz: [f64::NAN, 0.0, 0.03],
+            quat_wxyz: [1.0, 0.0, 0.0, 0.0],
+        };
+        assert_eq!(
+            generate_planar_push_candidates(
+                "obj0",
+                malformed_pose,
+                [0.04, 0.03, 0.03],
+                [0.0, 0.0, 1.0],
+                0.01,
+                0.02,
+            )
+            .unwrap_err(),
+            crate::contact_manifold::ManifoldReject::InvalidObjectPose
+        );
     }
 
     #[test]
@@ -752,7 +814,8 @@ mod tests {
             [0.0, 0.0, 1.0],
             0.01,
             0.02,
-        );
+        )
+        .unwrap();
         let one = cands.remove(0);
         let mut geom = one.clone();
         geom.stroke_m = 0.0;
@@ -870,7 +933,8 @@ mod tests {
             [0.0, 0.0, 1.0],
             0.01,
             0.02,
-        );
+        )
+        .unwrap();
         let mech = mechanics(0.1, 0.2, 20.0, true);
         let ctx_plus = ctx_for(
             trans_goal([0.2, 0.0]),
@@ -905,7 +969,8 @@ mod tests {
             [0.0, 0.0, 1.0],
             0.01,
             0.02,
-        );
+        )
+        .unwrap();
         let ctx_minus = ctx_for(trans_goal([-0.2, 0.0]), xy, mech, false, None, None, None);
         evaluate_all(&mut away, &ctx_minus);
         let sel_b = select_interaction(&away, &[]);

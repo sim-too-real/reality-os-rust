@@ -735,7 +735,8 @@ mod tests {
             [0.0, 0.0, 1.0],
             0.01,
             0.02,
-        );
+        )
+        .expect("valid fixture support geometry");
         let ctx = EvaluationContext {
             goal: g.clone(),
             object_xy: xy,

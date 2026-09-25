@@ -46,18 +46,10 @@ impl Se3 {
         if !quat_wxyz.iter().all(|v| v.is_finite()) {
             return Err(TransformError::NonFiniteRotation);
         }
-        let n = quat_norm(quat_wxyz);
-        if n < 1e-12 {
-            return Err(TransformError::InvalidRotation);
-        }
+        let normalized = normalize_quaternion(quat_wxyz).ok_or(TransformError::InvalidRotation)?;
         Ok(Self {
             xyz,
-            quat_wxyz: [
-                quat_wxyz[0] / n,
-                quat_wxyz[1] / n,
-                quat_wxyz[2] / n,
-                quat_wxyz[3] / n,
-            ],
+            quat_wxyz: normalized,
         })
     }
 
@@ -65,11 +57,7 @@ impl Se3 {
         if !axis.iter().all(|v| v.is_finite()) || !angle.is_finite() {
             return Err(TransformError::NonFiniteRotation);
         }
-        let n = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
-        if n < 1e-12 {
-            return Err(TransformError::InvalidRotation);
-        }
-        let a = [axis[0] / n, axis[1] / n, axis[2] / n];
+        let a = normalize3(axis).ok_or(TransformError::InvalidRotation)?;
         let half = angle * 0.5;
         let s = half.sin();
         Self::try_new([0.0, 0.0, 0.0], [half.cos(), a[0] * s, a[1] * s, a[2] * s])
@@ -309,7 +297,43 @@ impl TransformGraph {
 }
 
 pub fn quat_norm(q: [f64; 4]) -> f64 {
-    (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt()
+    if q.iter().any(|v| v.is_nan()) {
+        return f64::NAN;
+    }
+    if q.iter().any(|v| v.is_infinite()) {
+        return f64::INFINITY;
+    }
+    let scale = q.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    if scale == 0.0 {
+        return 0.0;
+    }
+    let scaled = q.map(|v| v / scale);
+    scale
+        * (scaled[0] * scaled[0]
+            + scaled[1] * scaled[1]
+            + scaled[2] * scaled[2]
+            + scaled[3] * scaled[3])
+            .sqrt()
+}
+
+fn normalize_quaternion(q: [f64; 4]) -> Option<[f64; 4]> {
+    if !q.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let scale = q.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    if scale == 0.0 {
+        return None;
+    }
+    let scaled = q.map(|v| v / scale);
+    let scaled_norm = (scaled[0] * scaled[0]
+        + scaled[1] * scaled[1]
+        + scaled[2] * scaled[2]
+        + scaled[3] * scaled[3])
+        .sqrt();
+    if scale < 1e-12 / scaled_norm {
+        return None;
+    }
+    Some(scaled.map(|v| v / scaled_norm))
 }
 
 pub fn quat_conj(q: [f64; 4]) -> [f64; 4] {
@@ -368,15 +392,37 @@ pub fn scale3(a: [f64; 3], s: f64) -> [f64; 3] {
 }
 
 pub fn norm3(v: [f64; 3]) -> f64 {
-    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+    let scale = v.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
+    if !scale.is_finite() {
+        return if v.iter().any(|x| x.is_nan()) {
+            f64::NAN
+        } else {
+            f64::INFINITY
+        };
+    }
+    if scale == 0.0 {
+        return 0.0;
+    }
+    let scaled = v.map(|x| x / scale);
+    scale * (scaled[0] * scaled[0] + scaled[1] * scaled[1] + scaled[2] * scaled[2]).sqrt()
 }
 
 pub fn normalize3(v: [f64; 3]) -> Option<[f64; 3]> {
-    let n = norm3(v);
-    if n < 1e-12 {
+    if !v.iter().all(|x| x.is_finite()) {
         None
     } else {
-        Some([v[0] / n, v[1] / n, v[2] / n])
+        let scale = v.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
+        if scale == 0.0 {
+            return None;
+        }
+        let scaled = v.map(|x| x / scale);
+        let scaled_norm =
+            (scaled[0] * scaled[0] + scaled[1] * scaled[1] + scaled[2] * scaled[2]).sqrt();
+        if scale < 1e-12 / scaled_norm {
+            None
+        } else {
+            Some(scaled.map(|x| x / scaled_norm))
+        }
     }
 }
 
@@ -410,6 +456,24 @@ mod tests {
         let c = a.compose(b);
         let back = c.compose(b.inverse());
         assert!(norm3(sub3(back.xyz, a.xyz)) < 1e-9);
+    }
+
+    #[test]
+    fn vector_and_quaternion_normalization_are_scale_safe() {
+        assert_eq!(normalize3([f64::MAX, 0.0, 0.0]), Some([1.0, 0.0, 0.0]));
+        assert_eq!(
+            Se3::try_new([0.0; 3], [f64::MAX, 0.0, 0.0, 0.0])
+                .unwrap()
+                .quat_wxyz,
+            [1.0, 0.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn vector_normalization_rejects_nonfinite_and_zero_inputs() {
+        assert_eq!(normalize3([0.0; 3]), None);
+        assert_eq!(normalize3([f64::NAN, 0.0, 0.0]), None);
+        assert_eq!(normalize3([f64::INFINITY, 0.0, 0.0]), None);
     }
 
     #[test]

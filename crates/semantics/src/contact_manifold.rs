@@ -75,6 +75,8 @@ pub enum ContactingBodyKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManifoldReject {
+    InvalidSupportPlane,
+    InvalidObjectPose,
     TangentUOutside,
     TangentVOutside,
     NormalSeparation,
@@ -110,7 +112,7 @@ fn box_half_along(half: [f64; 3], dir: [f64; 3]) -> f64 {
 
 fn tangent_basis(normal: [f64; 3], up: [f64; 3]) -> Option<([f64; 3], [f64; 3])> {
     let n = normalize3(normal)?;
-    let up_n = normalize3(up).unwrap_or([0.0, 0.0, 1.0]);
+    let up_n = normalize3(up)?;
     let mut u = cross3(n, up_n);
     if norm3(u) < 1e-9 {
         u = cross3(n, [1.0, 0.0, 0.0]);
@@ -131,7 +133,7 @@ pub fn box_push_face_manifold(
     push: [f64; 3],
     support_normal: [f64; 3],
     face_gap: f64,
-) -> Option<BoxFaceManifold> {
+) -> Result<Option<BoxFaceManifold>, ManifoldReject> {
     box_push_face_manifold_posed(
         crate::transform::Se3 {
             xyz: object_center,
@@ -152,8 +154,14 @@ pub fn box_push_face_manifold_posed(
     push_world: [f64; 3],
     support_normal: [f64; 3],
     face_gap: f64,
-) -> Option<BoxFaceManifold> {
-    let push = normalize3(push_world)?;
+) -> Result<Option<BoxFaceManifold>, ManifoldReject> {
+    let object_pose = object_pose
+        .validate()
+        .map_err(|_| ManifoldReject::InvalidObjectPose)?;
+    let support_normal = normalize3(support_normal).ok_or(ManifoldReject::InvalidSupportPlane)?;
+    let Some(push) = normalize3(push_world) else {
+        return Ok(None);
+    };
     let hx = half_extents[0].abs().max(1e-6);
     let hy = half_extents[1].abs().max(1e-6);
     let hz = half_extents[2].abs().max(1e-6);
@@ -195,7 +203,7 @@ pub fn box_push_face_manifold_posed(
             _ => {}
         }
     }
-    best.map(|(_, m)| m)
+    Ok(best.map(|(_, m)| m))
 }
 
 /// Vertical (non-support) faces of a posed box. Face ids are object-local.
@@ -204,8 +212,11 @@ pub fn box_vertical_face_manifolds_posed(
     half_extents: [f64; 3],
     support_normal: [f64; 3],
     face_gap: f64,
-) -> Vec<(String, BoxFaceManifold)> {
-    let n_s = normalize3(support_normal).unwrap_or([0.0, 0.0, 1.0]);
+) -> Result<Vec<(String, BoxFaceManifold)>, ManifoldReject> {
+    let object_pose = object_pose
+        .validate()
+        .map_err(|_| ManifoldReject::InvalidObjectPose)?;
+    let n_s = normalize3(support_normal).ok_or(ManifoldReject::InvalidSupportPlane)?;
     let hx = half_extents[0].abs().max(1e-6);
     let hy = half_extents[1].abs().max(1e-6);
     let hz = half_extents[2].abs().max(1e-6);
@@ -245,7 +256,7 @@ pub fn box_vertical_face_manifolds_posed(
             },
         ));
     }
-    out
+    Ok(out)
 }
 
 pub fn manifold_coords(manifold: &BoxFaceManifold, tool_point: [f64; 3]) -> ManifoldCoords {
@@ -261,9 +272,12 @@ fn support_signed_height(
     point: [f64; 3],
     support_origin: [f64; 3],
     support_normal: [f64; 3],
-) -> f64 {
-    let n = normalize3(support_normal).unwrap_or([0.0, 0.0, 1.0]);
-    dot3(sub3(point, support_origin), n)
+) -> Result<f64, ManifoldReject> {
+    if !support_origin.iter().all(|v| v.is_finite()) {
+        return Err(ManifoldReject::InvalidSupportPlane);
+    }
+    let n = normalize3(support_normal).ok_or(ManifoldReject::InvalidSupportPlane)?;
+    Ok(dot3(sub3(point, support_origin), n))
 }
 
 /// Object-frame membership. `tool_axis_world` is the declared tool approach axis.
@@ -283,8 +297,11 @@ pub fn evaluate_box_face_contact(
     if contacting != ContactingBodyKind::DeclaredTool {
         return Err(ManifoldReject::WrongContactingBody);
     }
+    if !support_origin.iter().all(|v| v.is_finite()) {
+        return Err(ManifoldReject::InvalidSupportPlane);
+    }
     let Some(manifold) =
-        box_push_face_manifold_posed(object_pose, half_extents, push, support_normal, face_gap)
+        box_push_face_manifold_posed(object_pose, half_extents, push, support_normal, face_gap)?
     else {
         return Err(ManifoldReject::NormalSeparation);
     };
@@ -294,7 +311,8 @@ pub fn evaluate_box_face_contact(
     if dot3(axis, manifold.push) + 1e-12 < min_axis_align {
         return Err(ManifoldReject::WrongOrientation);
     }
-    if support_signed_height(tool_point, support_origin, support_normal) < -geom_tol.tangent_slack_m
+    if support_signed_height(tool_point, support_origin, support_normal)?
+        < -geom_tol.tangent_slack_m
     {
         return Err(ManifoldReject::InsideSupport);
     }
@@ -483,7 +501,9 @@ mod tests {
         };
         let half = [0.03, 0.03, 0.03];
         let push = [1.0, 0.0, 0.0];
-        let m = box_push_face_manifold_posed(posed, half, push, [0.0, 0.0, 1.0], 0.015).unwrap();
+        let m = box_push_face_manifold_posed(posed, half, push, [0.0, 0.0, 1.0], 0.015)
+            .unwrap()
+            .unwrap();
         // Face origin must lie on an object face: local |coord| = half on one axis.
         let local = posed.inverse().transform_point(m.origin);
         let on_face = (local[0].abs() - 0.03).abs() < 1e-9
@@ -507,8 +527,9 @@ mod tests {
             ManifoldReject::WrongOrientation
         );
         let f = box_push_x();
-        let manifold =
-            box_push_face_manifold(f.center, f.half, f.push, f.support_n, 0.015).unwrap();
+        let manifold = box_push_face_manifold(f.center, f.half, f.push, f.support_n, 0.015)
+            .unwrap()
+            .unwrap();
         let (_n, _u, _v, axis_err) = contact_constraint_residual(tool, None, &manifold, 0.5);
         assert!(
             axis_err + 1e-12 >= 0.5,
@@ -577,7 +598,8 @@ mod tests {
             quat_wxyz: [1.0, 0.0, 0.0, 0.0],
         };
         let faces =
-            box_vertical_face_manifolds_posed(pose, [0.03, 0.04, 0.05], [0.0, 0.0, 1.0], 0.01);
+            box_vertical_face_manifolds_posed(pose, [0.03, 0.04, 0.05], [0.0, 0.0, 1.0], 0.01)
+                .unwrap();
         assert_eq!(faces.len(), 4);
         let ids: Vec<&str> = faces.iter().map(|(id, _)| id.as_str()).collect();
         assert!(ids.contains(&"+x") && ids.contains(&"-x"));
@@ -594,5 +616,85 @@ mod tests {
                 "push must be anti-aligned with outward normal"
             );
         }
+    }
+
+    #[test]
+    fn invalid_support_inputs_are_rejected() {
+        let pose = crate::transform::Se3::identity();
+        for normal in [[0.0; 3], [f64::NAN, 0.0, 1.0], [0.0, f64::INFINITY, 1.0]] {
+            assert!(
+                matches!(
+                    box_vertical_face_manifolds_posed(pose, [0.03; 3], normal, 0.01),
+                    Err(ManifoldReject::InvalidSupportPlane)
+                ),
+                "invalid support normal {normal:?} must not produce faces"
+            );
+        }
+        assert_eq!(
+            box_vertical_face_manifolds_posed(pose, [0.03; 3], [f64::MAX, 0.0, 0.0], 0.01,)
+                .unwrap()
+                .len(),
+            2,
+            "finite large support direction must normalize instead of collapsing to zero"
+        );
+
+        let mut support = [0.0, 0.0, 0.13];
+        support[0] = f64::NAN;
+        let err = evaluate_box_face_contact(
+            [0.255, 0.0, 0.16],
+            Some([1.0, 0.0, 0.0]),
+            ContactingBodyKind::DeclaredTool,
+            crate::transform::Se3::translation([0.30, 0.0, 0.16]).unwrap(),
+            [0.03; 3],
+            [1.0, 0.0, 0.0],
+            support,
+            [0.0, 0.0, 1.0],
+            0.015,
+            0.5,
+            tol(),
+        );
+        assert_eq!(err.unwrap_err(), ManifoldReject::InvalidSupportPlane);
+    }
+
+    #[test]
+    fn invalid_pose_is_not_used_for_contact() {
+        for malformed in [
+            crate::transform::Se3 {
+                xyz: [f64::NAN, 0.0, 0.16],
+                quat_wxyz: [1.0, 0.0, 0.0, 0.0],
+            },
+            crate::transform::Se3 {
+                xyz: [0.30, 0.0, 0.16],
+                quat_wxyz: [0.0; 4],
+            },
+            crate::transform::Se3 {
+                xyz: [0.30, 0.0, 0.16],
+                quat_wxyz: [f64::NAN, 0.0, 0.0, 0.0],
+            },
+        ] {
+            assert_eq!(
+                box_push_face_manifold_posed(
+                    malformed,
+                    [0.03; 3],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    0.015,
+                )
+                .unwrap_err(),
+                ManifoldReject::InvalidObjectPose,
+                "malformed pose {malformed:?} must not yield a contact face"
+            );
+        }
+    }
+
+    #[test]
+    fn valid_explicit_geometry_is_preserved() {
+        let non_unit = crate::transform::Se3 {
+            xyz: [0.30, 0.0, 0.16],
+            quat_wxyz: [2.0, 0.0, 0.0, 0.0],
+        };
+        let faces =
+            box_vertical_face_manifolds_posed(non_unit, [0.03; 3], [0.0, 0.0, 1.0], 0.01).unwrap();
+        assert_eq!(faces.len(), 4);
     }
 }

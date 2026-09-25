@@ -122,9 +122,8 @@ impl BoxObject {
         }
     }
 
-    pub fn pose(self) -> Se3 {
+    pub fn pose(self) -> Result<Se3, crate::transform::TransformError> {
         Se3::try_new(self.center, self.quat_wxyz)
-            .unwrap_or_else(|_| Se3::translation(self.center).unwrap_or_else(|_| Se3::identity()))
     }
 }
 
@@ -223,6 +222,8 @@ pub struct RankWhy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContactInfeasible {
+    InvalidSupportPlane,
+    InvalidObjectPose,
     NoFeasibleContactPose,
     NoIkSolution,
     InsufficientJointMargin,
@@ -239,6 +240,8 @@ pub enum ContactInfeasible {
 impl ContactInfeasible {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::InvalidSupportPlane => "INVALID_SUPPORT_PLANE",
+            Self::InvalidObjectPose => "INVALID_OBJECT_POSE",
             Self::NoFeasibleContactPose => "NO_FEASIBLE_CONTACT_POSE",
             Self::NoIkSolution => "NO_IK_SOLUTION",
             Self::InsufficientJointMargin => "INSUFFICIENT_JOINT_MARGIN",
@@ -361,6 +364,8 @@ fn record_phase_ik(phase: &str, residual_m: f64, accepted: bool) {
 
 fn manifold_to_infeasible(r: ManifoldReject) -> ContactInfeasible {
     match r {
+        ManifoldReject::InvalidSupportPlane => ContactInfeasible::InvalidSupportPlane,
+        ManifoldReject::InvalidObjectPose => ContactInfeasible::InvalidObjectPose,
         ManifoldReject::WrongOrientation => ContactInfeasible::OrientationInfeasible,
         ManifoldReject::InsideSupport => ContactInfeasible::SupportPlaneBlocksEe,
         ManifoldReject::WrongContactingBody
@@ -385,7 +390,9 @@ pub fn evaluate_contact_candidate(
         tool_point_world,
         tool_axis_world,
         contacting,
-        object.pose(),
+        object
+            .pose()
+            .map_err(|_| ContactInfeasible::InvalidObjectPose)?,
         object.half_extents,
         push,
         support.origin,
@@ -460,9 +467,16 @@ pub fn object_center_for_sample(
     Some(add3(tool, scale3(push, along)))
 }
 
-fn support_clearance_of(point: [f64; 3], support: SupportPlane, ee_radius: f64) -> f64 {
-    let n = normalize3(support.normal).unwrap_or([0.0, 0.0, 1.0]);
-    dot3(sub3(point, support.origin), n) - ee_radius
+fn support_clearance_of(
+    point: [f64; 3],
+    support: SupportPlane,
+    ee_radius: f64,
+) -> Result<f64, ContactInfeasible> {
+    if !support.origin.iter().all(|v| v.is_finite()) {
+        return Err(ContactInfeasible::InvalidSupportPlane);
+    }
+    let n = normalize3(support.normal).ok_or(ContactInfeasible::InvalidSupportPlane)?;
+    Ok(dot3(sub3(point, support.origin), n) - ee_radius)
 }
 
 fn joint_margin_of(sample: &SampledEePose, joints: &[Joint]) -> f64 {
@@ -525,7 +539,7 @@ pub fn evaluate_sampled_push(
         spec,
     )?;
 
-    let clearance = support_clearance_of(sample.xyz, support, spec.ee_radius);
+    let clearance = support_clearance_of(sample.xyz, support, spec.ee_radius)?;
     if clearance < spec.min_support_clearance {
         return Err(ContactInfeasible::SupportPlaneBlocksEe);
     }
@@ -538,7 +552,7 @@ pub fn evaluate_sampled_push(
         sample.xyz[1] - push[1] * standoff,
         sample.xyz[2],
     ];
-    let approach_clear = support_clearance_of(approach_xyz, support, spec.ee_radius);
+    let approach_clear = support_clearance_of(approach_xyz, support, spec.ee_radius)?;
     if approach_clear < spec.min_support_clearance {
         return Err(ContactInfeasible::ApproachCollidesBeforeContact);
     }
@@ -710,12 +724,16 @@ fn geometric_contact_ee(
     let _ = cloud;
     let push = plane_push(spec.push_direction).ok_or(ContactInfeasible::WrongContactGeometry)?;
     let Some(manifold) = crate::contact_manifold::box_push_face_manifold_posed(
-        object.pose(),
+        object
+            .pose()
+            .map_err(|_| ContactInfeasible::InvalidObjectPose)?,
         object.half_extents,
         push,
         support.normal,
         spec.face_gap,
-    ) else {
+    )
+    .map_err(manifold_to_infeasible)?
+    else {
         return Err(ContactInfeasible::WrongContactGeometry);
     };
     let tool_at_face = add3(manifold.origin, scale3(manifold.normal, manifold.face_gap));
@@ -826,12 +844,16 @@ fn prove_contact_manifold(
     let tool = add3(sample.xyz, tool_world_offset(sample, spec.tool_offset_ee));
     let push = plane_push(spec.push_direction).ok_or(ContactInfeasible::WrongContactGeometry)?;
     let Some(manifold) = crate::contact_manifold::box_push_face_manifold_posed(
-        object.pose(),
+        object
+            .pose()
+            .map_err(|_| ContactInfeasible::InvalidObjectPose)?,
         object.half_extents,
         push,
         support.normal,
         spec.face_gap,
-    ) else {
+    )
+    .map_err(manifold_to_infeasible)?
+    else {
         return Err(ContactInfeasible::WrongContactGeometry);
     };
     let designed = add3(manifold.origin, scale3(manifold.normal, manifold.face_gap));
@@ -856,7 +878,9 @@ fn prove_contact_manifold(
         tool,
         axis,
         ContactingBodyKind::DeclaredTool,
-        object.pose(),
+        object
+            .pose()
+            .map_err(|_| ContactInfeasible::InvalidObjectPose)?,
         object.half_extents,
         push,
         support.origin,
@@ -1543,6 +1567,8 @@ pub fn classify_pre_contact(ev: &PreContactEvidence) -> PreContactTaxonomy {
             | Some(ContactInfeasible::CollisionInadmissible) => {
                 PreContactTaxonomy::NoExecutableContactManeuver
             }
+            Some(ContactInfeasible::InvalidSupportPlane)
+            | Some(ContactInfeasible::InvalidObjectPose) => PreContactTaxonomy::Unknown,
             Some(ContactInfeasible::NoIkSolution)
             | Some(ContactInfeasible::NoFeasibleContactPose)
             | Some(ContactInfeasible::ContactPoseUnreachableFromApproach)
@@ -1624,12 +1650,13 @@ mod tests {
         };
         let spec = spec_at([0.20, 0.0, 0.16], [0.0, 0.0, 0.0]);
         let posed = crate::contact_manifold::box_push_face_manifold_posed(
-            object.pose(),
+            object.pose().unwrap(),
             object.half_extents,
             [1.0, 0.0, 0.0],
             support.normal,
             spec.face_gap,
         )
+        .unwrap()
         .unwrap();
         let posed_tool = add3(posed.origin, scale3(posed.normal, spec.face_gap));
         let aabb_tool = sub3(object.center, scale3([1.0, 0.0, 0.0], 0.03 + spec.face_gap));
@@ -1663,12 +1690,13 @@ mod tests {
         let seed = sample([0.20, 0.0, 0.16], identity_quat());
         let geo = geometric_contact_ee(object, &spec, &seed, support, &[]).unwrap();
         let posed = crate::contact_manifold::box_push_face_manifold_posed(
-            object.pose(),
+            object.pose().unwrap(),
             object.half_extents,
             geo.push,
             support.normal,
             spec.face_gap,
         )
+        .unwrap()
         .unwrap();
         let designed = add3(posed.origin, scale3(posed.normal, spec.face_gap));
         let d = norm3(sub3(geo.tool, designed));
@@ -1796,6 +1824,62 @@ mod tests {
         assert!(m.support_clearance + 1e-12 >= spec.min_support_clearance);
         assert!((m.contact_pose.xyz[0] - 0.25).abs() < 1e-12);
         assert!(m.push_direction[2].abs() < 1e-12);
+    }
+
+    #[test]
+    fn invalid_pose_is_not_used_for_contact() {
+        let seed = sample([0.20, 0.0, 0.16], identity_quat());
+        let spec = spec_at(seed.xyz, [0.0, 0.0, 0.0]);
+        let object = BoxObject {
+            center: [0.30, 0.0, 0.16],
+            half_extents: [0.03; 3],
+            quat_wxyz: [0.0; 4],
+        };
+        let support = support_under(object.center, object.half_extents[2]);
+        assert_eq!(
+            geometric_contact_ee(object, &spec, &seed, support, &[])
+                .err()
+                .expect("invalid object pose must be rejected"),
+            ContactInfeasible::InvalidObjectPose,
+            "invalid object quaternion must not be repaired into contact geometry"
+        );
+    }
+
+    #[test]
+    fn invalid_support_inputs_are_rejected() {
+        let contact = sample([0.25, 0.0, 0.16], identity_quat());
+        let ahead = sample([0.36, 0.0, 0.16], identity_quat());
+        let spec = spec_at([0.22, 0.0, 0.16], [0.04, 0.0, 0.0]);
+        let center = object_center_for_sample(
+            &contact,
+            spec.tool_offset_ee,
+            spec.push_direction,
+            [0.03; 3],
+            spec.face_gap,
+        )
+        .unwrap();
+        let object = BoxObject {
+            center,
+            half_extents: [0.03; 3],
+            quat_wxyz: identity_quat(),
+        };
+        let invalid_support = SupportPlane {
+            origin: [center[0], center[1], center[2] - 0.03],
+            normal: [0.0; 3],
+        };
+        assert_eq!(
+            evaluate_sampled_push(
+                &contact,
+                &[contact.clone(), ahead],
+                object,
+                invalid_support,
+                &spec,
+                &[],
+            )
+            .unwrap_err(),
+            ContactInfeasible::InvalidSupportPlane,
+            "invalid support normal must not yield positive clearance or a maneuver"
+        );
     }
 
     #[test]

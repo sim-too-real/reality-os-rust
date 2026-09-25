@@ -648,7 +648,8 @@ fn experience_informs_the_next_episode_and_cannot_authorize() {
         [0.0, 0.0, 1.0],
         0.01,
         0.02,
-    );
+    )
+    .expect("valid fixture support geometry");
     let ctx = EvaluationContext {
         goal: goal.clone(),
         object_xy: [0.0, 0.0],

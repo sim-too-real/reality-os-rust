@@ -295,7 +295,8 @@ mod tests {
             [0.0, 0.0, 1.0],
             0.01,
             0.02,
-        );
+        )
+        .expect("valid fixture support geometry");
         let mut mech = mechanics_template(0.05, 0.2, 20.0);
         mech.authority_ok = authority_ok;
         let ctx = EvaluationContext {
@@ -454,6 +455,9 @@ mod tests {
 
     fn flags_from_infeasible(e: ContactInfeasible) -> (Option<bool>, Option<bool>, Option<bool>) {
         match e {
+            ContactInfeasible::InvalidSupportPlane | ContactInfeasible::InvalidObjectPose => {
+                (None, None, None)
+            }
             ContactInfeasible::NoIkSolution
             | ContactInfeasible::ContactPoseUnreachableFromApproach
             | ContactInfeasible::NoFeasibleContactPose => (Some(false), None, None),
@@ -678,7 +682,8 @@ mod tests {
             [0.0, 0.0, 1.0],
             0.015,
             stroke,
-        );
+        )
+        .expect("valid fixture support geometry");
         let cloud = build_ee_cloud(model, ee, qpos, seed);
         let ee_xyz = cloud.first().map(|s| s.xyz).unwrap_or(ee_fallback);
         let object = BoxObject {
@@ -1238,7 +1243,8 @@ mod tests {
                 [0.0, 0.0, 1.0],
                 0.015,
                 stroke,
-            );
+            )
+            .expect("valid fixture support geometry");
             if belief_state.is_some() {
                 let mut short_cands = generate_planar_push_candidates(
                     "obj0",
@@ -1247,7 +1253,8 @@ mod tests {
                     [0.0, 0.0, 1.0],
                     0.015,
                     short_stroke,
-                );
+                )
+                .expect("valid fixture support geometry");
                 for cand in &mut short_cands {
                     cand.id = format!("qs:{short_stroke:.4}:{}", cand.id);
                 }
@@ -2408,7 +2415,8 @@ mod tests {
             [0.0, 0.0, 1.0],
             0.01,
             0.02,
-        );
+        )
+        .expect("valid fixture support geometry");
         let plus_x = cands
             .iter()
             .find(|c| c.face_id == "+x" && c.contact_offset_u.abs() < 1e-9)
@@ -2425,7 +2433,8 @@ mod tests {
             [0.0, 0.0, 1.0],
             0.01,
             0.02,
-        );
+        )
+        .expect("valid fixture support geometry");
         let ident_x = ident
             .iter()
             .find(|c| c.face_id == "+x" && c.contact_offset_u.abs() < 1e-9)
