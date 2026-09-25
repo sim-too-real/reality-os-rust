@@ -202,6 +202,93 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct PushScenarioPhysics {
+        simulator_mass_kg: f64,
+        simulator_support_friction: f64,
+        reasoner_mass_kg: Option<f64>,
+        reasoner_support_friction: Option<f64>,
+    }
+
+    const PUSH_SCENARIO_PHYSICS: PushScenarioPhysics = PushScenarioPhysics {
+        simulator_mass_kg: 0.05,
+        simulator_support_friction: 0.3,
+        reasoner_mass_kg: Some(0.05),
+        reasoner_support_friction: Some(0.3),
+    };
+
+    fn parameter_belief(
+        parameter: PhysicalParameter,
+        value: Option<f64>,
+        source: &str,
+    ) -> ParameterBelief {
+        match value {
+            Some(value) => ParameterBelief {
+                parameter,
+                status: BeliefEpistemicStatus::DeclaredFact,
+                declared: Provenanced::declared(value, source, 0.0),
+                empirical_interval: None,
+                lineage: Vec::new(),
+            },
+            None => ParameterBelief {
+                parameter,
+                status: BeliefEpistemicStatus::Unknown,
+                declared: Provenanced::unknown(source, 0.0),
+                empirical_interval: None,
+                lineage: Vec::new(),
+            },
+        }
+    }
+
+    fn fresh_belief_from_physics(physics: &PushScenarioPhysics) -> PhysicalParameterBelief {
+        let mut belief = match physics.reasoner_support_friction {
+            Some(mu) => PhysicalParameterBelief::declared_point(
+                PhysicalParameter::SupportFriction,
+                mu,
+                "reasoner.disclosure.support_friction",
+            ),
+            None => PhysicalParameterBelief {
+                parameters: Vec::new(),
+            }
+            .with_unknown(
+                PhysicalParameter::SupportFriction,
+                "reasoner.disclosure.support_friction",
+            ),
+        };
+        belief.parameters.push(parameter_belief(
+            PhysicalParameter::ObjectMassKg,
+            physics.reasoner_mass_kg,
+            "reasoner.disclosure.object_mass_kg",
+        ));
+        belief.parameters.push(parameter_belief(
+            PhysicalParameter::QuasiStaticApplicability,
+            Some(1.0),
+            "declared.quasi_static",
+        ));
+        belief
+    }
+
+    fn physics_from_belief(
+        base: PushScenarioPhysics,
+        belief: Option<&PhysicalParameterBelief>,
+    ) -> PushScenarioPhysics {
+        let Some(belief) = belief else {
+            return base;
+        };
+        PushScenarioPhysics {
+            reasoner_mass_kg: belief.declared_value(PhysicalParameter::ObjectMassKg),
+            reasoner_support_friction: belief.declared_value(PhysicalParameter::SupportFriction),
+            ..base
+        }
+    }
+
+    fn rationale_mu(value: Option<f64>) -> String {
+        match value.filter(|mu| mu.is_finite()) {
+            Some(mu) => format!("{mu:.3}"),
+            None => "UNKNOWN".into(),
+        }
+    }
+
     fn pose(xy: [f64; 2], z: f64) -> Se3 {
         pose_xy_yaw(xy, z, 0.0)
     }
@@ -317,6 +404,101 @@ mod tests {
     }
 
     #[test]
+    fn push_fixture_truth_and_disclosure_are_separate() {
+        let physics = PushScenarioPhysics {
+            reasoner_mass_kg: Some(0.08),
+            reasoner_support_friction: Some(0.24),
+            ..PUSH_SCENARIO_PHYSICS
+        };
+        let scenario = push_scenario([0.0, 0.0, 0.03], 0.03, physics, [1.0, 0.0, 0.0], 0.05, 7);
+        let object = &scenario.objects[1];
+        assert_eq!(object["mass"].as_f64(), Some(physics.simulator_mass_kg));
+        assert_eq!(
+            object["friction"].as_f64(),
+            Some(physics.simulator_support_friction)
+        );
+
+        let model = realityos_semantics::adapter::synth_planar_two_link();
+        let mechanics = fill_mechanics_from_q(&model, "ee", &[], [0.0, 0.0, 0.03], 0.0, &physics)
+            .expect("explicitly disclosed physics produces a mechanics template");
+        assert_eq!(mechanics.mass_kg.value, physics.reasoner_mass_kg);
+        assert_eq!(
+            mechanics.mass_kg.provenance,
+            realityos_semantics::provenance::Provenance::ModelDeclared
+        );
+        assert_eq!(
+            mechanics.object_support_friction.sliding_mu.value,
+            physics.reasoner_support_friction
+        );
+        assert_eq!(
+            mechanics.object_support_friction.sliding_mu.provenance,
+            realityos_semantics::provenance::Provenance::ModelDeclared
+        );
+
+        let belief = fresh_belief_from_physics(&physics);
+        assert_eq!(
+            belief.declared_value(PhysicalParameter::SupportFriction),
+            physics.reasoner_support_friction
+        );
+    }
+
+    #[test]
+    fn hidden_fixture_friction_refuses_unknown_mechanics() {
+        let physics = PushScenarioPhysics {
+            reasoner_support_friction: None,
+            ..PUSH_SCENARIO_PHYSICS
+        };
+        let belief = fresh_belief_from_physics(&physics);
+        assert_eq!(
+            belief
+                .entry(PhysicalParameter::SupportFriction)
+                .map(|entry| entry.status),
+            Some(BeliefEpistemicStatus::Unknown)
+        );
+        assert_eq!(
+            belief.declared_value(PhysicalParameter::SupportFriction),
+            None
+        );
+        assert_eq!(
+            rationale_mu(belief.declared_value(PhysicalParameter::SupportFriction)),
+            "UNKNOWN"
+        );
+
+        let model = realityos_semantics::adapter::synth_planar_two_link();
+        let mechanics = fill_mechanics_from_q(&model, "ee", &[], [0.0, 0.0, 0.03], 0.0, &physics);
+        assert!(mechanics.is_none());
+
+        let goal = trans_goal([0.20, 0.0], 0.01, 6);
+        let mut candidates = generate_planar_push_candidates(
+            "obj0",
+            pose([0.0, 0.0], 0.03),
+            [0.04, 0.03, 0.03],
+            [0.0, 0.0, 1.0],
+            0.01,
+            0.02,
+        )
+        .expect("valid fixture support geometry");
+        let context = EvaluationContext {
+            goal,
+            object_xy: [0.0, 0.0],
+            object_yaw: 0.0,
+            object_com_world: [0.0, 0.0, 0.03],
+            mechanics_template: mechanics,
+            authority_ok: true,
+            robot_provided: false,
+            robot_reachable: None,
+            collision_admissible: None,
+            executable_witness: None,
+            robot_reject_reason: None,
+        };
+        evaluate_all(&mut candidates, &context);
+        assert!(matches!(
+            select_interaction(&candidates, &[]),
+            SelectionOutcome::MechanicsUnknown { .. }
+        ));
+    }
+
+    #[test]
     fn analytic_selection_and_loop_twice() {
         let mut log = String::new();
         for pass in 1..=2 {
@@ -409,8 +591,7 @@ mod tests {
     fn push_scenario(
         obj: [f64; 3],
         size: f64,
-        mass: f64,
-        friction: f64,
+        physics: PushScenarioPhysics,
         push_dir: [f64; 3],
         push_dist: f64,
         seed: u64,
@@ -424,7 +605,8 @@ mod tests {
                 json!({"name":"table","type":"box","pos":[obj[0], obj[1], table_z],"size":[0.18,0.18,0.01],"mass":10.0,"movable":false}),
                 json!({
                     "name":"obj0","type":"box","pos":obj,"size":[size,size,size],
-                    "mass":mass,"friction":friction,"movable":true
+                    "mass":physics.simulator_mass_kg,
+                    "friction":physics.simulator_support_friction,"movable":true
                 }),
                 json!({"name":"obstacle","type":"box","pos":[8.0,8.0,-1.0],"size":[0.03,0.03,0.03],"mass":1.0,"movable":false}),
             ],
@@ -505,23 +687,30 @@ mod tests {
         qpos: &[f64],
         contact_world: [f64; 3],
         yaw: f64,
-        mass: f64,
-        mu: f64,
-    ) -> PlanarPushInitiation {
+        physics: &PushScenarioPhysics,
+    ) -> Option<PlanarPushInitiation> {
+        let mass = physics.reasoner_mass_kg?;
+        let mu = physics.reasoner_support_friction?;
         let mut p = mechanics_template(mass, mu, 20.0);
+        p.mass_kg = Provenanced::declared(mass, "reasoner.disclosure.object_mass_kg", 0.0);
+        p.object_support_friction = PairFriction::coulomb(
+            "object",
+            "support",
+            Provenanced::declared(mu, "reasoner.disclosure.support_friction", 0.0),
+        );
         p.object_yaw_rad = Provenanced::declared(yaw, "obs.yaw", 0.0);
         let Some(q) = chain_q_from_qpos(model, ee, qpos) else {
-            return p;
+            return Some(p);
         };
         let Some(chain) = model.ee_joint_chain(ee) else {
-            return p;
+            return Some(p);
         };
         let Ok(fk) = forward_kinematics(model, &chain, ee, &q) else {
-            return p;
+            return Some(p);
         };
         let contact_in_ee = tool_offset_in_ee(fk.ee.quat_wxyz, contact_world, fk.ee.xyz);
         let Ok(jac) = contact_jacobian_witness(model, &chain, ee, &q, contact_in_ee, 1e-6) else {
-            return p;
+            return Some(p);
         };
         p.joint_names = jac.joint_names.clone();
         p.translational_jacobian_3xn = jac.analytic_3xn.clone();
@@ -565,7 +754,7 @@ mod tests {
         {
             p.self_load_torque_nm = self_load_provenanced(&tau, "self_load.gravity");
         }
-        p
+        Some(p)
     }
 
     fn prove_face_funnel(
@@ -1333,19 +1522,17 @@ mod tests {
                 let regime = belief_state.as_ref().map(|belief| {
                     prediction_regime(belief, &live_hypotheses, c.stroke_m, quasi_limit_m)
                 });
-                let mut mech = fill_mechanics_from_q(
+                let mechanics_physics =
+                    physics_from_belief(PUSH_SCENARIO_PHYSICS, belief_state.as_ref());
+                let mut mechanics_template = fill_mechanics_from_q(
                     &model,
                     &ee_name,
                     &qpos,
                     c.contact_point_world,
                     yaw,
-                    0.05,
-                    regime
-                        .map(|r| r.support_friction)
-                        .filter(|mu| mu.is_finite())
-                        .unwrap_or(0.3),
+                    &mechanics_physics,
                 );
-                if let Some(regime) = regime {
+                if let (Some(mech), Some(regime)) = (mechanics_template.as_mut(), regime) {
                     mech.quasi_static = regime.quasi_static;
                 }
                 let ctx = EvaluationContext {
@@ -1353,7 +1540,7 @@ mod tests {
                     object_xy: xy,
                     object_yaw: yaw,
                     object_com_world: [xy[0], xy[1], z],
-                    mechanics_template: Some(mech),
+                    mechanics_template,
                     authority_ok: true,
                     robot_provided: true,
                     robot_reachable: reachable,
@@ -1499,11 +1686,11 @@ mod tests {
                                 step.record.selected_id = Some(cands[index].id.clone());
                                 step.record.selected_face = Some(cands[index].face_id.clone());
                                 step.record.selection_rationale = format!(
-                                    "ROBUST_STRICT_PROGRESS {} class={:?} stroke_m={:.4} declared_mu={:.3} friction_contradicted={} long_quasi_static={} stroke_quasi_static={}",
+                                    "ROBUST_STRICT_PROGRESS {} class={:?} stroke_m={:.4} declared_mu={} friction_contradicted={} long_quasi_static={} stroke_quasi_static={}",
                                     cands[index].id,
                                     recoverability_choices[index].class,
                                     cands[index].stroke_m,
-                                    long_regime.map(|r| r.support_friction).unwrap_or(0.3),
+                                    rationale_mu(long_regime.map(|r| r.support_friction)),
                                     true,
                                     long_regime.map(|r| r.quasi_static).unwrap_or(true),
                                     stroke_regime.map(|r| r.quasi_static).unwrap_or(true)
@@ -1541,8 +1728,8 @@ mod tests {
                         step.record.unauthorized_writes = 0;
                         step.record.first_divergence = Some(picked_reason.clone());
                         step.record.selection_rationale = format!(
-                            "BELIEF_SET_REFUSAL declared_mu={:.3} friction_status={:?} quasi_status={:?} long_quasi_static={} recoverable_pick={} robust_goal=false reason={}",
-                            long_regime.map(|r| r.support_friction).unwrap_or(f64::NAN),
+                            "BELIEF_SET_REFUSAL declared_mu={} friction_status={:?} quasi_status={:?} long_quasi_static={} recoverable_pick={} robust_goal=false reason={}",
+                            rationale_mu(long_regime.map(|r| r.support_friction)),
                             belief_state.as_ref().and_then(|belief| {
                                 belief
                                     .entry(PhysicalParameter::SupportFriction)
@@ -1625,11 +1812,11 @@ mod tests {
                             )
                         });
                         step.record.selection_rationale = format!(
-                            "RECOVERABLE_PROGRESS {} class={:?} stroke_m={:.4} declared_mu={:.3} friction_contradicted={} long_quasi_static={} stroke_quasi_static={}",
+                            "RECOVERABLE_PROGRESS {} class={:?} stroke_m={:.4} declared_mu={} friction_contradicted={} long_quasi_static={} stroke_quasi_static={}",
                             cands[index].id,
                             recoverability_choices[index].class,
                             cands[index].stroke_m,
-                            long_regime.map(|r| r.support_friction).unwrap_or(0.3),
+                            rationale_mu(long_regime.map(|r| r.support_friction)),
                             long_regime.map(|r| r.friction_contradicted).unwrap_or(false),
                             long_regime.map(|r| r.quasi_static).unwrap_or(true),
                             stroke_regime.map(|r| r.quasi_static).unwrap_or(true)
@@ -1673,18 +1860,27 @@ mod tests {
             let selected_regime = belief_state.as_ref().map(|belief| {
                 prediction_regime(belief, &live_hypotheses, sel.stroke_m, quasi_limit_m)
             });
-            let mut mech = fill_mechanics_from_q(
+            let selected_physics =
+                physics_from_belief(PUSH_SCENARIO_PHYSICS, belief_state.as_ref());
+            let Some(mut mech) = fill_mechanics_from_q(
                 &model,
                 &ee_name,
                 &qpos,
                 sel.contact_point_world,
                 yaw,
-                0.05,
-                selected_regime
-                    .map(|r| r.support_friction)
-                    .filter(|mu| mu.is_finite())
-                    .unwrap_or(0.3),
-            );
+                &selected_physics,
+            ) else {
+                let mut refusal = step.record.clone();
+                refusal.decision = LoopDecision::Refuse;
+                refusal.outcome = GoalLoopOutcome::InsufficientEvidence;
+                refusal.authority_decision = "REFUSE".into();
+                refusal.selection_rationale = format!(
+                    "MECHANICS_UNKNOWN declared_mu={}",
+                    rationale_mu(selected_physics.reasoner_support_friction)
+                );
+                record_action(&mut trace, &refusal, Some(&sel), None, None);
+                break;
+            };
             if let Some(regime) = selected_regime {
                 mech.quasi_static = regime.quasi_static;
             }
@@ -1728,8 +1924,7 @@ mod tests {
                 let mut sc = push_scenario(
                     [nxy[0], nxy[1], z],
                     size,
-                    0.05,
-                    0.3,
+                    PUSH_SCENARIO_PHYSICS,
                     sel.push_direction_world,
                     piece,
                     seed.wrapping_add(k as u64).wrapping_add(u64::from(step_i)),
@@ -1884,20 +2079,7 @@ mod tests {
                 let belief = if let Some(carried) = belief_state.clone() {
                     carried
                 } else {
-                    let mut fresh = PhysicalParameterBelief::declared_point(
-                        PhysicalParameter::SupportFriction,
-                        0.3,
-                        "declared.support_friction",
-                    )
-                    .with_unknown(PhysicalParameter::ObjectMassKg, "mass");
-                    fresh.parameters.push(ParameterBelief {
-                        parameter: PhysicalParameter::QuasiStaticApplicability,
-                        status: BeliefEpistemicStatus::DeclaredFact,
-                        declared: Provenanced::declared(1.0, "declared.quasi_static", 0.0),
-                        empirical_interval: None,
-                        lineage: Vec::new(),
-                    });
-                    fresh
+                    fresh_belief_from_physics(&PUSH_SCENARIO_PHYSICS)
                 };
                 let carried = belief_state.is_some();
                 let mut belief_after_text = if carried {
@@ -1981,8 +2163,7 @@ mod tests {
                             let mut probe_sc = push_scenario(
                                 [nxy[0], nxy[1], z],
                                 size,
-                                0.05,
-                                0.3,
+                                PUSH_SCENARIO_PHYSICS,
                                 maneuver.push_direction,
                                 probe_stroke,
                                 seed.wrapping_add(90_000),
