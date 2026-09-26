@@ -931,6 +931,61 @@ mod tests {
         realityos_semantics::push::effective_push_distance(maneuver.requested_stroke)
     }
 
+    fn proven_witness_stroke(maneuver: &ContactManeuver) -> Option<f64> {
+        let witness = maneuver.executable.as_ref()?;
+        let from = witness.contact.pose.xyz;
+        let to = witness.end_stroke.pose.xyz;
+        let d = ((to[0] - from[0]).powi(2) + (to[1] - from[1]).powi(2) + (to[2] - from[2]).powi(2))
+            .sqrt();
+        (d.is_finite() && d > 1e-6).then_some(d)
+    }
+
+    fn install_proven_maneuver(
+        candidate: &mut PhysicalInteractionCandidate,
+        maneuver: Option<ContactManeuver>,
+    ) -> bool {
+        if let Some(maneuver) = maneuver.as_ref() {
+            let Some(stroke_m) = proven_witness_stroke(maneuver) else {
+                candidate.maneuver = None;
+                return false;
+            };
+            candidate.stroke_m = stroke_m;
+        }
+        candidate.maneuver = maneuver;
+        true
+    }
+
+    fn selected_witness_stroke(candidate: &PhysicalInteractionCandidate) -> Option<f64> {
+        proven_witness_stroke(candidate.maneuver.as_ref()?)
+    }
+
+    fn execution_scenario_strokes(full_stroke: f64) -> Vec<(u32, f64)> {
+        // A scenario executes every phase of the selected witness. Until the executor can
+        // observe and abort within one witness, dispatch that frozen stroke exactly once.
+        vec![(0, full_stroke)]
+    }
+
+    fn candidate_stroke_plan(
+        belief_state: Option<&PhysicalParameterBelief>,
+        live_hypotheses: &[DiscrepancyKind],
+        remain: f64,
+        quasi_limit_m: f64,
+    ) -> (bool, f64, Option<f64>) {
+        let belief_short = belief_state.is_some_and(|belief| {
+            let long = prediction_regime(belief, live_hypotheses, 0.03, quasi_limit_m);
+            !long.quasi_static || long.friction_contradicted
+        });
+        let long_stroke = remain.clamp(0.02, 0.03);
+        let short_stroke = (quasi_limit_m * 0.5).max(0.004);
+        let primary = if belief_short {
+            short_stroke
+        } else {
+            long_stroke
+        };
+        let short_alternative = (belief_state.is_some() && !belief_short).then_some(short_stroke);
+        (belief_short, primary, short_alternative)
+    }
+
     fn midreach_aligned_seed(
         model: &realityos_semantics::embodiment::EmbodimentModel,
         ee: &str,
@@ -1275,11 +1330,9 @@ mod tests {
     struct ExecOptions {
         /// Stop the authorized stroke at the first envelope failure.
         guard: bool,
-        /// Extra object translation the development world adds along the push
-        /// after each increment. Decision code never reads this number.
+        /// Extra object translation the development world adds after the
+        /// selected witness executes. Decision code never reads this number.
         world_excess_m: f64,
-        /// How many executor increments make up the authorized stroke.
-        increments: u32,
     }
 
     impl ExecOptions {
@@ -1287,7 +1340,6 @@ mod tests {
             Self {
                 guard: false,
                 world_excess_m: 0.0,
-                increments: 1,
             }
         }
     }
@@ -1411,19 +1463,12 @@ mod tests {
                 break;
             }
             let remain = evaluate_goal_error(xy, yaw, &goal).translation_residual_m;
-            let belief_short = belief_state.as_ref().is_some_and(|belief| {
-                let long = prediction_regime(belief, &live_hypotheses, 0.03, quasi_limit_m);
-                !long.quasi_static || long.friction_contradicted
-            });
-            let long_stroke = remain.clamp(0.02, 0.03);
-            let short_stroke = (quasi_limit_m * 0.5).max(0.004);
-            let stroke = if belief_state.is_some() {
-                long_stroke
-            } else if belief_short {
-                short_stroke
-            } else {
-                long_stroke
-            };
+            let (_, stroke, short_candidate_stroke) = candidate_stroke_plan(
+                belief_state.as_ref(),
+                &live_hypotheses,
+                remain,
+                quasi_limit_m,
+            );
             let object_pose = pose_xy_yaw(xy, z, yaw);
             let mut cands = generate_planar_push_candidates(
                 "obj0",
@@ -1434,7 +1479,7 @@ mod tests {
                 stroke,
             )
             .expect("valid fixture support geometry");
-            if belief_state.is_some() {
+            if let Some(short_stroke) = short_candidate_stroke {
                 let mut short_cands = generate_planar_push_candidates(
                     "obj0",
                     object_pose,
@@ -1487,38 +1532,41 @@ mod tests {
             }
             for c in &mut cands {
                 let proof_key = format!("{}:{:.4}", c.face_id, c.stroke_m);
-                let (reachable, collision, executable, maneuver, why) = match proven.get(&proof_key)
-                {
-                    Some(Ok(m)) => {
-                        let close = {
-                            let d = [
-                                c.contact_point_world[0] - m.contact_point[0],
-                                c.contact_point_world[1] - m.contact_point[1],
-                            ];
-                            (d[0] * d[0] + d[1] * d[1]).sqrt() < 0.03
-                        };
-                        if close {
-                            c.contact_point_world = m.contact_point;
-                            c.contact_normal_world = m.contact_normal;
-                            c.push_direction_world = m.push_direction;
-                            (Some(true), Some(true), Some(true), Some(m.clone()), None)
-                        } else {
-                            (
-                                Some(true),
-                                Some(true),
-                                Some(false),
-                                None,
-                                Some("NON_EXECUTABLE".into()),
-                            )
+                let (reachable, collision, mut executable, maneuver, mut why) =
+                    match proven.get(&proof_key) {
+                        Some(Ok(m)) => {
+                            let close = {
+                                let d = [
+                                    c.contact_point_world[0] - m.contact_point[0],
+                                    c.contact_point_world[1] - m.contact_point[1],
+                                ];
+                                (d[0] * d[0] + d[1] * d[1]).sqrt() < 0.03
+                            };
+                            if close {
+                                c.contact_point_world = m.contact_point;
+                                c.contact_normal_world = m.contact_normal;
+                                c.push_direction_world = m.push_direction;
+                                (Some(true), Some(true), Some(true), Some(m.clone()), None)
+                            } else {
+                                (
+                                    Some(true),
+                                    Some(true),
+                                    Some(false),
+                                    None,
+                                    Some("NON_EXECUTABLE".into()),
+                                )
+                            }
                         }
-                    }
-                    Some(Err(e)) => {
-                        let (r, col, ex) = flags_from_infeasible(*e);
-                        (r, col, ex, None, Some(e.as_str().to_string()))
-                    }
-                    None => (Some(false), None, None, None, Some("NO_PROOF".into())),
-                };
-                c.maneuver = maneuver;
+                        Some(Err(e)) => {
+                            let (r, col, ex) = flags_from_infeasible(*e);
+                            (r, col, ex, None, Some(e.as_str().to_string()))
+                        }
+                        None => (Some(false), None, None, None, Some("NO_PROOF".into())),
+                    };
+                if !install_proven_maneuver(c, maneuver) {
+                    executable = Some(false);
+                    why = Some("INVALID_EXECUTABLE_WITNESS_STROKE".into());
+                }
                 let regime = belief_state.as_ref().map(|belief| {
                     prediction_regime(belief, &live_hypotheses, c.stroke_m, quasi_limit_m)
                 });
@@ -1895,21 +1943,9 @@ mod tests {
                 !frozen.contains_privileged_force(),
                 "privileged simulator force leaked into predictor"
             );
-            let pieces = if belief_short {
-                1
-            } else {
-                options.increments.max(1)
-            };
-            let full_stroke = if belief_short {
-                sel.stroke_m.max(0.004)
-            } else {
-                sel.stroke_m.max(0.02)
-            };
-            let piece = if pieces == 1 {
-                full_stroke
-            } else {
-                full_stroke / f64::from(pieces)
-            };
+            let full_stroke = selected_witness_stroke(&sel)
+                .expect("selected executable candidate has a finite witness stroke");
+            let scenario_strokes = execution_scenario_strokes(full_stroke);
             let action_xy = xy;
             let action_yaw = yaw;
             let mut nxy = xy;
@@ -1920,7 +1956,7 @@ mod tests {
             let mut guarded_displacement = 0.0;
             let mut prevention_impossible = false;
             let mut failed_guard = None;
-            for step_i in 0..pieces {
+            for (step_i, piece) in scenario_strokes {
                 let mut sc = push_scenario(
                     [nxy[0], nxy[1], z],
                     size,
@@ -2669,7 +2705,6 @@ mod tests {
             ExecOptions {
                 guard: false,
                 world_excess_m: 0.03,
-                increments: 2,
             },
         );
         let unguarded = match unguarded {
@@ -2699,7 +2734,6 @@ mod tests {
                 ExecOptions {
                     guard: true,
                     world_excess_m: 0.03,
-                    increments: 2,
                 },
             )
             .unwrap_or_else(|err| panic!("guarded pass {pass} failed: {err}"));
@@ -2974,6 +3008,126 @@ mod tests {
                 serde_json::to_string(&traces).unwrap_or_default()
             );
         }
+    }
+
+    #[test]
+    fn contradicted_belief_generates_short_candidates_first() {
+        let mut belief = fresh_belief_from_physics(&PUSH_SCENARIO_PHYSICS);
+        belief.contradict_declared(
+            PhysicalParameter::QuasiStaticApplicability,
+            "obs:quasi-static-contradiction",
+        );
+        let (belief_short, stroke, short_alternative) =
+            candidate_stroke_plan(Some(&belief), &[], 0.03, 0.015);
+        let candidates = generate_planar_push_candidates(
+            "obj0",
+            pose([0.0, 0.0], 0.03),
+            [0.025; 3],
+            [0.0, 0.0, 1.0],
+            0.015,
+            stroke,
+        )
+        .expect("valid fixture support geometry");
+
+        assert!(belief_short);
+        assert_eq!(stroke, 0.0075);
+        assert_eq!(candidates[0].stroke_m, 0.0075);
+        assert!(short_alternative.is_none());
+    }
+
+    #[test]
+    fn selected_short_witness_is_not_promoted_to_long_execution_stroke() {
+        use realityos_semantics::maneuver_witness::{
+            ExecutableContactManeuver, ManeuverPhase, PhaseTransition, TransitionKind,
+        };
+
+        let selected_stroke = 0.0075;
+        let pose_at = |x| pose_xy_yaw([x, 0.0], 0.03, 0.0);
+        let phase = |x| ManeuverPhase::positional(pose_at(x), vec![0.0], vec![0.0], 0.0, 0.0);
+        let transition = |kind| PhaseTransition::feasible(kind, 1, 0.5);
+        let mut candidates = generate_planar_push_candidates(
+            "obj0",
+            pose([0.0, 0.0], 0.03),
+            [0.025; 3],
+            [0.0, 0.0, 1.0],
+            0.015,
+            0.03,
+        )
+        .expect("valid fixture support geometry");
+        let mut selected = candidates.remove(0);
+        assert!(selected_witness_stroke(&selected).is_none());
+        let maneuver = ContactManeuver {
+            contact_pose: pose_at(0.0),
+            approach_pose: pose_at(-0.05),
+            contact_point: [0.0, 0.0, 0.03],
+            contact_normal: [-1.0, 0.0, 0.0],
+            push_direction: [1.0, 0.0, 0.0],
+            requested_stroke: selected_stroke,
+            available_stroke: 0.1,
+            support_clearance: 0.01,
+            joint_margin: 0.5,
+            orientation_error: 0.0,
+            object_center: [0.0, 0.0, 0.03],
+            support_top_z: 0.005,
+            sampled_q: vec![0.0],
+            executable: Some(ExecutableContactManeuver {
+                joint_names: vec!["joint".into()],
+                start_q: vec![0.0],
+                approach: phase(-0.05),
+                contact: phase(0.0),
+                mid_stroke: phase(selected_stroke * 0.5),
+                end_stroke: phase(selected_stroke),
+                current_to_approach: transition(TransitionKind::CurrentToApproach),
+                approach_to_contact: transition(TransitionKind::ApproachToContact),
+                contact_to_mid: transition(TransitionKind::ContactToMidStroke),
+                mid_to_end: transition(TransitionKind::MidToEndStroke),
+            }),
+        };
+        let mut missing = selected.clone();
+        let mut missing_witness = maneuver.clone();
+        missing_witness.executable = None;
+        assert!(!install_proven_maneuver(
+            &mut missing,
+            Some(missing_witness)
+        ));
+        assert!(missing.maneuver.is_none());
+
+        let mut zero_length = selected.clone();
+        let mut malformed_witness = maneuver.clone();
+        let contact_xyz = malformed_witness
+            .executable
+            .as_ref()
+            .unwrap()
+            .contact
+            .pose
+            .xyz;
+        malformed_witness
+            .executable
+            .as_mut()
+            .unwrap()
+            .end_stroke
+            .pose
+            .xyz = contact_xyz;
+        assert!(!install_proven_maneuver(
+            &mut zero_length,
+            Some(malformed_witness)
+        ));
+        assert!(zero_length.maneuver.is_none());
+
+        assert!(install_proven_maneuver(&mut selected, Some(maneuver)));
+        let witness_stroke = selected_witness_stroke(&selected).unwrap();
+
+        assert_eq!(selected.stroke_m, witness_stroke);
+        assert_eq!(witness_stroke, selected_stroke);
+    }
+
+    #[test]
+    fn selected_witness_is_not_split_across_replayed_scenarios() {
+        assert_eq!(
+            execution_scenario_strokes(0.03),
+            vec![(0, 0.03)],
+            "the runner executes every witness phase per scenario; splitting would replay the full witness"
+        );
     }
 
     #[test]
