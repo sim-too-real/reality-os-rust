@@ -152,8 +152,9 @@ mod tests {
         PhysicalExperienceRecord,
     };
     use realityos_semantics::physical_interaction::{
-        evaluate_all, evaluate_candidate, generate_planar_push_candidates,
-        initiation_from_candidate, select_interaction, EvaluationContext, SelectionOutcome,
+        action_key_is_forbidden, evaluate_all, evaluate_candidate, generate_planar_push_candidates,
+        initiation_from_candidate, select_interaction, EvaluationContext, FunnelStage,
+        SelectionOutcome,
     };
     use realityos_semantics::physical_quantity::PhysicalEffort;
     use realityos_semantics::planar_goal::{
@@ -1041,6 +1042,46 @@ mod tests {
         (belief_short, primary, short_alternative)
     }
 
+    fn admissible_override_indices(
+        candidates: &[realityos_semantics::physical_interaction::PhysicalInteractionCandidate],
+        forbidden_action_keys: &[String],
+    ) -> Vec<usize> {
+        candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(index, candidate)| {
+                let action_key = candidate.action_key();
+                let goal_useful = candidate.funnel.stage == FunnelStage::GoalUseful
+                    && candidate.goal_progress
+                        == Some(
+                            realityos_semantics::planar_goal::GoalProgressClass::StrictProgress,
+                        );
+                (goal_useful
+                    && candidate.authority_ok
+                    && candidate.executable_for_plant
+                    && !action_key_is_forbidden(&action_key, forbidden_action_keys))
+                .then_some(index)
+            })
+            .collect()
+    }
+
+    fn select_recoverable_override_index(
+        candidates: &[realityos_semantics::physical_interaction::PhysicalInteractionCandidate],
+        choices: &[RecoverabilityChoice],
+        forbidden_action_keys: &[String],
+    ) -> Option<usize> {
+        if candidates.len() != choices.len() {
+            return None;
+        }
+        let admissible_indices = admissible_override_indices(candidates, forbidden_action_keys);
+        let admissible_choices: Vec<_> = admissible_indices
+            .iter()
+            .map(|&index| choices[index].clone())
+            .collect();
+        select_recoverable_progress(&admissible_choices)
+            .and_then(|selected| admissible_indices.get(selected).copied())
+    }
+
     fn midreach_aligned_seed(
         model: &realityos_semantics::embodiment::EmbodimentModel,
         ee: &str,
@@ -1700,13 +1741,19 @@ mod tests {
                     }
                 })
                 .collect();
-            let recoverable_index = select_recoverable_progress(&recoverability_choices);
             let mut step = receding_horizon_step(
                 &obs,
                 &goal,
                 &cands,
                 state,
                 last_obs.as_ref().map(|o| (o, None)),
+            );
+            let override_indices =
+                admissible_override_indices(&cands, &step.state.forbidden_action_keys);
+            let recoverable_index = select_recoverable_override_index(
+                &cands,
+                &recoverability_choices,
+                &step.state.forbidden_action_keys,
             );
             if belief_state.is_some() {
                 let proved_pick = recoverable_index
@@ -1748,10 +1795,10 @@ mod tests {
                     if !kinds.contains(&DiscrepancyKind::SupportFrictionInconsistent) {
                         kinds.push(DiscrepancyKind::SupportFrictionInconsistent);
                     }
-                    let ranked_contacts: Vec<_> = cands
+                    let ranked_contacts: Vec<_> = override_indices
                         .iter()
-                        .enumerate()
-                        .map(|(index, cand)| {
+                        .map(|&index| {
+                            let cand = &cands[index];
                             let progress = cand.goal_progress.unwrap_or(
                                 realityos_semantics::planar_goal::GoalProgressClass::Neutral,
                             );
@@ -1773,7 +1820,11 @@ mod tests {
                         });
                     if robust_goal {
                         if let Some(id) = ranking.selected_id.clone() {
-                            if let Some(index) = cands.iter().position(|cand| cand.id == id) {
+                            if let Some(index) = override_indices
+                                .iter()
+                                .copied()
+                                .find(|&index| cands[index].id == id)
+                            {
                                 if step.selected.is_none() {
                                     step.state.attempts = step.state.attempts.saturating_add(1);
                                 }
@@ -1884,16 +1935,16 @@ mod tests {
                                 recoverability: Some("NO_ROBUST_STRICT_PROGRESS".into()),
                                 taxonomy: Some(picked_reason.clone()),
                                 admissible_contact_count: Some(
-                                    cands
+                                    override_indices
                                         .iter()
-                                        .filter(|cand| {
-                                            cand.executable_for_plant && cand.maneuver.is_some()
-                                        })
+                                        .filter(|&&index| cands[index].maneuver.is_some())
                                         .count() as u32,
                                 ),
-                                interactable_after_abort: Some(cands.iter().any(|cand| {
-                                    cand.executable_for_plant && cand.maneuver.is_some()
-                                })),
+                                interactable_after_abort: Some(
+                                    override_indices
+                                        .iter()
+                                        .any(|&index| cands[index].maneuver.is_some()),
+                                ),
                                 ..ReasoningNote::default()
                             });
                         }
@@ -3050,6 +3101,104 @@ mod tests {
         assert_eq!(stroke, 0.0075);
         assert_eq!(candidates[0].stroke_m, 0.0075);
         assert!(short_alternative.is_none());
+    }
+
+    #[test]
+    fn recoverability_override_does_not_resurrect_a_blacklisted_action() {
+        let goal = trans_goal([0.20, 0.0], 0.01, 6);
+        let mut candidates = eval_at([0.0, 0.0], &goal, true);
+        let SelectionOutcome::Selected {
+            index: forbidden_index,
+            ..
+        } = select_interaction(&candidates, &[])
+        else {
+            panic!("expected a canonical candidate");
+        };
+        let forbidden_key = candidates[forbidden_index].action_key();
+        for candidate in &mut candidates {
+            if candidate.funnel.stage == FunnelStage::GoalUseful
+                && candidate.goal_progress
+                    == Some(realityos_semantics::planar_goal::GoalProgressClass::StrictProgress)
+            {
+                candidate.executable_for_plant = true;
+            }
+        }
+        let admissible =
+            admissible_override_indices(&candidates, std::slice::from_ref(&forbidden_key));
+        assert!(
+            !admissible.contains(&forbidden_index),
+            "belief/recoverability overrides must use the canonical action-history exclusion"
+        );
+        assert!(
+            !admissible.is_empty(),
+            "another executable strict-progress candidate should remain available"
+        );
+        let choices: Vec<_> = candidates
+            .iter()
+            .enumerate()
+            .map(|(index, candidate)| RecoverabilityChoice {
+                id: candidate.id.clone(),
+                class: if candidate.goal_progress
+                    == Some(realityos_semantics::planar_goal::GoalProgressClass::StrictProgress)
+                {
+                    RecoverabilityClass::ProgressAndRecoverable
+                } else {
+                    RecoverabilityClass::NoProgress
+                },
+                progress: if index == forbidden_index { 1.0 } else { 0.5 },
+            })
+            .collect();
+
+        let override_index = select_recoverable_override_index(
+            &candidates,
+            &choices,
+            std::slice::from_ref(&forbidden_key),
+        )
+        .expect("recoverable choice");
+
+        assert_ne!(
+            candidates[override_index].action_key(),
+            forbidden_key,
+            "the verifier's recoverability override must not restore an action rejected by the canonical selector"
+        );
+    }
+
+    #[test]
+    fn belief_override_cannot_turn_authority_refusal_into_authorization() {
+        let goal = trans_goal([0.20, 0.0], 0.01, 6);
+        let mut candidates = eval_at([0.0, 0.0], &goal, false);
+        for candidate in &mut candidates {
+            if candidate.funnel.stage == FunnelStage::GoalUseful
+                && candidate.goal_progress
+                    == Some(realityos_semantics::planar_goal::GoalProgressClass::StrictProgress)
+            {
+                candidate.executable_for_plant = true;
+            }
+        }
+        assert!(matches!(
+            select_interaction(&candidates, &[]),
+            SelectionOutcome::AuthorityRefusal { .. }
+        ));
+        let choices: Vec<_> = candidates
+            .iter()
+            .map(|candidate| RecoverabilityChoice {
+                id: candidate.id.clone(),
+                class: if candidate.goal_progress
+                    == Some(realityos_semantics::planar_goal::GoalProgressClass::StrictProgress)
+                {
+                    RecoverabilityClass::ProgressAndRecoverable
+                } else {
+                    RecoverabilityClass::NoProgress
+                },
+                progress: 1.0,
+            })
+            .collect();
+
+        assert_eq!(
+            select_recoverable_override_index(&candidates, &choices, &[]),
+            None,
+            "belief and recoverability rankings may not turn an authority refusal into AUTHORIZE"
+        );
     }
 
     #[test]

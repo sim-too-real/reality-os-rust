@@ -478,6 +478,13 @@ fn rejected_at(c: &PhysicalInteractionCandidate, stage: FunnelStage) -> bool {
         .any(|t| t.stage == stage && !t.passed)
 }
 
+/// Return whether this physical action identity has already been refused after
+/// contradictory execution evidence. Keep this predicate shared by the
+/// canonical selector and any selector that narrows its candidate set.
+pub fn action_key_is_forbidden(action_key: &str, forbidden_keys: &[String]) -> bool {
+    forbidden_keys.iter().any(|key| key == action_key)
+}
+
 pub fn select_interaction(
     cands: &[PhysicalInteractionCandidate],
     forbidden_keys: &[String],
@@ -490,7 +497,8 @@ pub fn select_interaction(
     let mut best_auth: Option<(usize, (f64, f64, f64))> = None;
     let mut best_unauth: Option<(usize, (f64, f64, f64))> = None;
     for (i, c) in cands.iter().enumerate() {
-        if forbidden_keys.iter().any(|k| k == &c.action_key()) {
+        let action_key = c.action_key();
+        if action_key_is_forbidden(&action_key, forbidden_keys) {
             continue;
         }
         if !is_goal_useful(c) {
