@@ -15,7 +15,7 @@ use realityos_semantics::physical_consequence::{
 use realityos_semantics::physical_decision::{
     decide_physical_action, CandidateEvidence, CandidateRole, ContactTransitionPhase,
     DecisionContext, DecisionKind, LexicographicPreference, PredictedPhysicalEffect, ProbeEvidence,
-    ProbeRecoverabilityAssessment, SelectedPhysicalAction,
+    ProbeRecoverabilityAssessment, ScopedGrantBinding, SelectedPhysicalAction,
 };
 use realityos_semantics::planar_goal::GoalProgressClass;
 use realityos_semantics::probe_selection::BeliefRobustness;
@@ -30,6 +30,7 @@ fn candidate(id: &str, role: CandidateRole) -> CandidateEvidence {
         role,
         strict_goal_progress: role == CandidateRole::GoalAction,
         authority_ok: true,
+        scoped_grant: None,
         executable_witness_id: Some(format!("witness:{id}")),
         witness_digest: Some(format!("digest:{id}")),
         witness_contents: Some(format!("frozen-witness:{id}")),
@@ -92,11 +93,23 @@ fn abort_probe_observe_update_and_replan_stays_on_the_canonical_path() {
         observable_distinctions: 1,
         future_interaction: ProbeRecoverabilityAssessment::Preserved,
     };
+    probe.scoped_grant = Some(ScopedGrantBinding {
+        grant_id: "grant:probe-separating".into(),
+        scope_digest: "scope:probe-separating".into(),
+        action_key: probe.action_key.clone(),
+        candidate_id: probe.candidate_id.clone(),
+        witness_digest: probe.witness_digest.clone().unwrap_or_default(),
+        observation_epoch: "epoch:1".into(),
+        requested_stroke_m: probe.preference.stroke_m,
+        expires_at_s: 40.0,
+    });
 
     let before_context = DecisionContext {
         goal_id: "goal:box-to-region".into(),
         goal_reached: false,
         evidence_fresh: true,
+        now_s: 10.0,
+        observation_epoch: "epoch:1".into(),
         remaining_attempts: 2,
         current_contact_id: None,
         forbidden_action_keys: vec![old_goal.action_key.clone()],
@@ -253,6 +266,8 @@ fn abort_probe_observe_update_and_replan_stays_on_the_canonical_path() {
         goal_id: "goal:box-to-region".into(),
         goal_reached: false,
         evidence_fresh: true,
+        now_s: 10.0,
+        observation_epoch: "epoch:1".into(),
         remaining_attempts: 1,
         current_contact_id: None,
         forbidden_action_keys: vec!["action-key:failed-goal".into()],

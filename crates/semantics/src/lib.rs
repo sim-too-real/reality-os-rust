@@ -16,6 +16,7 @@ pub mod effort;
 pub mod embodiment;
 pub mod execution_envelope;
 pub mod failure;
+pub mod future_interaction;
 pub mod geometry;
 pub mod geometry_fk;
 pub mod geometry_query;
@@ -51,6 +52,7 @@ pub mod sensor;
 pub mod skill;
 pub mod transform;
 pub mod transition_validity;
+pub mod work_counters;
 pub mod workspace;
 pub mod world;
 

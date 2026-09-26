@@ -7,12 +7,17 @@ pub mod bridge;
 pub mod estimate;
 pub mod mode;
 pub mod packages;
+pub mod scoped_grant;
 pub mod session;
 
 pub use bridge::HardwareControlBridge;
 pub use estimate::HoldEstimator;
 pub use mode::{RuntimeMode, SessionStartError};
 pub use packages::{GovernorPackage, PackageReport, RealityOsPackage, SafetyEdge};
+pub use scoped_grant::{
+    evaluate_action_eligibility, grant_covers, issue_scoped_simulation_grant, scope_digest,
+    AuthorityEligibility, PhysicalActionScope, ScopeRefusal, ScopedSimulationGrant,
+};
 pub use session::{DispatchResult, RuntimeSession, StartArgs};
 
 pub const SCHEMA: &str = "realityos.session/1";

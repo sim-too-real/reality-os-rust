@@ -117,6 +117,7 @@ mod tests {
     use crate::observation::{PolicyObservation, VerifierTruth};
     use crate::runner::load_and_normalize;
     use crate::semantics_map::embodiment_from_manifest;
+    use realityos_core::{PolicyProposal, RealityOs};
     use realityos_physics::{PressureDistribution, SupportFrictionModel};
     use realityos_semantics::command_domain::named_joint_limit_margin;
     use realityos_semantics::contact::declared_manipulation_contact_bodies;
@@ -127,7 +128,7 @@ mod tests {
         SampledEePose, SupportPlane,
     };
     use realityos_semantics::discrepancy::{
-        apply_probe_observation, hypothesize, prediction_regime, DiscrepancyKind,
+        apply_probe_observation, hypothesize, prediction_regime, tag_probe_motion, DiscrepancyKind,
         DiscrepancyObservation, Identifiability, Stimulus,
     };
     use realityos_semantics::effect_feasibility::PlanarPushInitiation;
@@ -137,6 +138,9 @@ mod tests {
         supervise_execution, ExecutionEnvelope, ExecutionProgress, FrozenAction,
         ObservationContract, ObservationField, RuntimePolicyObservation, SupervisorDecision,
         QUASI_STATIC_DISPLACEMENT_RATIO,
+    };
+    use realityos_semantics::future_interaction::{
+        assess_probe_future, ProbeFutureInputs, SupportedProbeOutcome,
     };
     use realityos_semantics::geometry::PrimitiveShape;
     use realityos_semantics::goal_loop::{
@@ -156,7 +160,7 @@ mod tests {
     use realityos_semantics::physical_decision::{
         decide_physical_action, CandidateEvidence, CandidateRejection, CandidateRole,
         DecisionContext, DecisionKind, LexicographicPreference, PredictedPhysicalEffect,
-        ProbeEvidence, ProbeRecoverabilityAssessment,
+        ProbeEvidence, ProbeRecoverabilityAssessment, ScopedGrantBinding, SelectedPhysicalAction,
     };
     use realityos_semantics::physical_interaction::{
         action_key_is_forbidden, evaluate_all, evaluate_candidate, generate_planar_push_candidates,
@@ -179,7 +183,11 @@ mod tests {
     };
     use realityos_semantics::self_load::{gravity_self_load, self_load_provenanced};
     use realityos_semantics::transform::{rotate_by_quat, Se3};
+    use realityos_semantics::work_counters::{reset_work_counters, work_snapshot};
     use realityos_semantics::workspace::reachable_ee_poses;
+    use realityos_session::{
+        grant_covers, issue_scoped_simulation_grant, PhysicalActionScope, ScopedSimulationGrant,
+    };
     use serde_json::json;
     use std::path::PathBuf;
 
@@ -693,6 +701,7 @@ mod tests {
         yaw: f64,
         physics: &PushScenarioPhysics,
     ) -> Option<PlanarPushInitiation> {
+        realityos_semantics::work_counters::note_mechanics_evaluation();
         let mass = physics.reasoner_mass_kg?;
         let mu = physics.reasoner_support_friction?;
         let mut p = mechanics_template(mass, mu, 20.0);
@@ -921,6 +930,122 @@ mod tests {
             }
         }
         (admissible, best.map(|(_, maneuver)| maneuver))
+    }
+
+    /// One preferred-direction contact is enough to witness a post-probe corner.
+    fn first_aligned_contact(
+        model: &realityos_semantics::embodiment::EmbodimentModel,
+        ee: &str,
+        qpos: &[f64],
+        xy: [f64; 2],
+        z: f64,
+        yaw: f64,
+        size: f64,
+        stroke: f64,
+        tool_off: [f64; 3],
+        seed: u64,
+        ee_fallback: [f64; 3],
+        prefer_push: [f64; 3],
+    ) -> (u32, Option<ContactManeuver>) {
+        let object_pose = pose_xy_yaw(xy, z, yaw);
+        let Ok(cands) = generate_planar_push_candidates(
+            "obj0",
+            object_pose,
+            [size, size, size],
+            [0.0, 0.0, 1.0],
+            0.0,
+            stroke,
+        ) else {
+            return (0, None);
+        };
+        let cloud = build_push_candidate_cloud(model, ee, qpos, seed, prefer_push, z, tool_off);
+        let ee_xyz = cloud
+            .first()
+            .map(|sample| sample.xyz)
+            .unwrap_or(ee_fallback);
+        let object = BoxObject {
+            center: [xy[0], xy[1], z],
+            half_extents: [size, size, size],
+            quat_wxyz: object_pose.quat_wxyz,
+        };
+        let support = SupportPlane {
+            origin: [xy[0], xy[1], z - size],
+            normal: [0.0, 0.0, 1.0],
+        };
+        let mut ordered: Vec<_> = cands.iter().collect();
+        ordered.sort_by(|left, right| {
+            let score = |cand: &&realityos_semantics::physical_interaction::PhysicalInteractionCandidate| {
+                cand.push_direction_world[0] * prefer_push[0]
+                    + cand.push_direction_world[1] * prefer_push[1]
+                    + cand.push_direction_world[2] * prefer_push[2]
+            };
+            score(right).total_cmp(&score(left))
+        });
+        let mut seen = std::collections::BTreeSet::new();
+        for cand in ordered {
+            if !seen.insert(cand.face_id.clone()) {
+                continue;
+            }
+            let aligned = cand.push_direction_world[0] * prefer_push[0]
+                + cand.push_direction_world[1] * prefer_push[1]
+                + cand.push_direction_world[2] * prefer_push[2];
+            if aligned < 0.5 {
+                continue;
+            }
+            let chain_q = chain_q_from_qpos(model, ee, qpos);
+            let proved =
+                realityos_semantics::kinematics::with_ik_q_seed(chain_q.as_deref(), || {
+                    prove_face(
+                        model,
+                        ee,
+                        &cloud,
+                        object,
+                        support,
+                        cand.push_direction_world,
+                        cand.stroke_m,
+                        ee_xyz,
+                        tool_off,
+                        true,
+                    )
+                });
+            let live_ee = chain_q.as_ref().and_then(|q| {
+                let chain = model.ee_joint_chain(ee)?;
+                forward_kinematics(model, &chain, ee, q)
+                    .ok()
+                    .map(|fk| fk.ee.xyz)
+            });
+            if let Ok(maneuver) = proved {
+                if witness_reconfiguration_is_local(&maneuver, live_ee.unwrap_or(ee_xyz)) {
+                    return (1, Some(maneuver));
+                }
+            }
+        }
+        (0, None)
+    }
+
+    fn witness_reconfiguration_is_local(maneuver: &ContactManeuver, ee_xyz: [f64; 3]) -> bool {
+        let approach = maneuver.approach_pose.xyz;
+        let cartesian = ((approach[0] - ee_xyz[0]).powi(2)
+            + (approach[1] - ee_xyz[1]).powi(2)
+            + (approach[2] - ee_xyz[2]).powi(2))
+        .sqrt();
+        if cartesian > 0.05 {
+            return false;
+        }
+        let Some(witness) = maneuver.executable.as_ref() else {
+            return false;
+        };
+        let joint = witness
+            .start_q
+            .iter()
+            .zip(witness.approach.q.iter())
+            .map(|(start, target)| {
+                let delta = start - target;
+                delta * delta
+            })
+            .sum::<f64>()
+            .sqrt();
+        joint <= 0.4
     }
 
     fn proven_witness_stroke(maneuver: &ContactManeuver) -> Option<f64> {
@@ -1242,6 +1367,7 @@ mod tests {
             role: CandidateRole::PhysicalProbe,
             strict_goal_progress: false,
             authority_ok,
+            scoped_grant: None,
             executable_witness_id: witness_contents
                 .as_ref()
                 .map(|_| format!("{candidate_id}:witness")),
@@ -1264,6 +1390,662 @@ mod tests {
                 stroke_m,
             },
             hard_rejections,
+        }
+    }
+
+    fn physical_action_scope(
+        model: &EmbodimentModel,
+        embodiment_id: &str,
+        observation_epoch: &str,
+        candidate_id: &str,
+        action_key: &str,
+        witness_digest: &str,
+        stroke_m: f64,
+        bound_m: f64,
+        now_s: f64,
+        actuator_id: &str,
+    ) -> PhysicalActionScope {
+        let model_id = if model.model_hash.trim().is_empty() {
+            model.robot_id.clone()
+        } else {
+            model.model_hash.clone()
+        };
+        PhysicalActionScope {
+            model_id,
+            embodiment_id: embodiment_id.to_string(),
+            observation_epoch: observation_epoch.to_string(),
+            candidate_id: candidate_id.to_string(),
+            action_key: action_key.to_string(),
+            witness_digest: witness_digest.to_string(),
+            requested_stroke_m: stroke_m,
+            execution_bound_m: bound_m.max(stroke_m),
+            issued_at_s: now_s,
+            expires_at_s: now_s + 30.0,
+            actuator_id: actuator_id.to_string(),
+            observation_contract_id: format!("{}:{observation_epoch}", model.calibration_epoch),
+            abort_contract_id: "execution-envelope:abort-and-reobserve".into(),
+        }
+    }
+
+    fn binding_from_grant(grant: &ScopedSimulationGrant) -> ScopedGrantBinding {
+        ScopedGrantBinding {
+            grant_id: grant.command_id.clone(),
+            scope_digest: grant.scope_digest.clone(),
+            action_key: grant.scope.action_key.clone(),
+            candidate_id: grant.scope.candidate_id.clone(),
+            witness_digest: grant.scope.witness_digest.clone(),
+            observation_epoch: grant.scope.observation_epoch.clone(),
+            requested_stroke_m: grant.scope.requested_stroke_m,
+            expires_at_s: grant.scope.expires_at_s,
+        }
+    }
+
+    fn admit_scope(
+        os: &mut RealityOs,
+        scope: &PhysicalActionScope,
+        forbidden: &[String],
+        sensors_ok: bool,
+        now_s: f64,
+    ) -> Result<ScopedSimulationGrant, String> {
+        let proposal =
+            PolicyProposal::external_deterministic(vec![1.0], "canonical-physical-decision");
+        issue_scoped_simulation_grant(os, scope, &proposal, now_s, forbidden, sensors_ok)
+            .map_err(|err| err.to_string())
+    }
+
+    fn witness_digest_of(maneuver: &ContactManeuver) -> Option<String> {
+        use sha2::Digest;
+        let contents = serde_json::to_string(maneuver.executable.as_ref()?).ok()?;
+        Some(format!("{:x}", sha2::Sha256::digest(contents.as_bytes())))
+    }
+
+    fn outcome_from_proof(
+        label: &str,
+        admissible: u32,
+        maneuver: Option<&ContactManeuver>,
+        bounded: bool,
+    ) -> SupportedProbeOutcome {
+        let digest = maneuver.and_then(witness_digest_of);
+        let found = admissible > 0 && maneuver.is_some();
+        SupportedProbeOutcome {
+            label: label.to_string(),
+            object_supported: Some(maneuver.is_some_and(|item| item.support_clearance > 0.0)),
+            inside_reachable_workspace: Some(found),
+            joint_margin_rad: Some(maneuver.map(|item| item.joint_margin).unwrap_or(0.0)),
+            collision_admissible: Some(found),
+            motion_within_declared_bound: Some(bounded),
+            belief_outcome_bounded: Some(bounded),
+            contact_persists: Some(false),
+            return_contact_witness_digest: digest,
+        }
+    }
+
+    fn bounded_future_report(
+        model: &EmbodimentModel,
+        ee: &str,
+        qpos: &[f64],
+        xy: [f64; 2],
+        z: f64,
+        yaw: f64,
+        size: f64,
+        probe_stroke: f64,
+        tool_off: [f64; 3],
+        seed: u64,
+        ee_fallback: [f64; 3],
+        push: [f64; 3],
+        consumed_stroke_m: f64,
+        observed_displacement_m: Option<f64>,
+        contact_point: Option<[f64; 3]>,
+    ) -> FutureProbeProof {
+        let residual = contact_point.and_then(|contact| {
+            let planar = ((contact[0] - xy[0]).powi(2) + (contact[1] - xy[1]).powi(2)).sqrt();
+            let value = (planar - size).abs();
+            value.is_finite().then_some(value)
+        });
+        let early = ProbeFutureInputs {
+            consumed_stroke_m,
+            observed_displacement_m,
+            geometry_residual_m: residual,
+            outcomes: Vec::new(),
+        };
+        if observed_displacement_m.is_some_and(|value| value > 1e-4) && consumed_stroke_m <= 1e-9
+            || residual.is_none()
+        {
+            return FutureProbeProof {
+                report: assess_probe_future(&early),
+                maneuver: None,
+            };
+        }
+        let ratio = observed_displacement_m
+            .filter(|value| value.is_finite())
+            .map(|value| value / consumed_stroke_m.max(1e-9))
+            .filter(|value| value.is_finite() && *value >= 0.0);
+        let Some(ratio) = ratio else {
+            return FutureProbeProof {
+                report: assess_probe_future(&early),
+                maneuver: None,
+            };
+        };
+        let residual = residual.unwrap_or(0.0);
+        let motion = probe_stroke * ratio.max(1.0);
+        let bounded = residual <= 0.05 && motion.is_finite();
+        let norm = (push[0] * push[0] + push[1] * push[1]).sqrt().max(1e-9);
+        let dir = [push[0] / norm, push[1] / norm];
+        let lateral = [-dir[1], dir[0]];
+        let corners = [
+            ("stay", xy, yaw),
+            (
+                "along-stroke",
+                [xy[0] + dir[0] * motion, xy[1] + dir[1] * motion],
+                yaw,
+            ),
+            (
+                "lateral-residual",
+                [xy[0] + lateral[0] * residual, xy[1] + lateral[1] * residual],
+                yaw,
+            ),
+        ];
+        let mut proved: Vec<(String, [f64; 2], ContactManeuver)> = Vec::new();
+        let mut outcomes = Vec::new();
+        for (index, (label, corner_xy, corner_yaw)) in corners.into_iter().enumerate() {
+            let (count, maneuver) = first_aligned_contact(
+                model,
+                ee,
+                qpos,
+                corner_xy,
+                z,
+                corner_yaw,
+                size,
+                probe_stroke,
+                tool_off,
+                seed.wrapping_add(index as u64),
+                ee_fallback,
+                push,
+            );
+            if let Some(maneuver) = maneuver {
+                proved.push((label.to_string(), corner_xy, maneuver));
+                outcomes.push(outcome_from_proof(
+                    label,
+                    count,
+                    proved.last().map(|(_, _, m)| m),
+                    bounded,
+                ));
+            } else {
+                outcomes.push(outcome_from_proof(label, 0, None, bounded));
+            }
+        }
+        let shared = proved.iter().find(|(_, _, maneuver)| {
+            corners
+                .iter()
+                .all(|(_, corner_xy, _)| contact_serves_object(maneuver, *corner_xy, size))
+        });
+        if let Some((_, _, maneuver)) = shared {
+            outcomes = corners
+                .iter()
+                .map(|(label, _, _)| outcome_from_proof(label, 1, Some(maneuver), bounded))
+                .collect();
+        }
+        let mut report = assess_probe_future(&ProbeFutureInputs {
+            consumed_stroke_m,
+            observed_displacement_m,
+            geometry_residual_m: Some(residual),
+            outcomes,
+        });
+        report.evidence.push(format!(
+            "motion_bound_m={motion:.6};geometry_residual_m={residual:.6};ratio={ratio:.3}"
+        ));
+        return FutureProbeProof {
+            report,
+            maneuver: shared
+                .map(|(_, _, maneuver)| maneuver.clone())
+                .or_else(|| proved.into_iter().next().map(|(_, _, maneuver)| maneuver)),
+        };
+    }
+
+    fn continuation_witness(
+        maneuver: &ContactManeuver,
+        live_q: &[f64],
+        extra_m: f64,
+        joints: &[realityos_semantics::embodiment::Joint],
+    ) -> Option<ContactManeuver> {
+        use realityos_semantics::maneuver_witness::{
+            assess_named_interpolation, ManeuverPhase, TransitionKind,
+        };
+        let exec = maneuver.executable.as_ref()?;
+        if live_q.len() != exec.joint_names.len() || extra_m <= 0.0 || !extra_m.is_finite() {
+            return None;
+        }
+        let lerp = |from: &[f64], to: &[f64], t: f64| -> Vec<f64> {
+            from.iter()
+                .zip(to.iter())
+                .map(|(a, b)| a + (b - a) * t)
+                .collect()
+        };
+        let span = maneuver.requested_stroke.max(extra_m);
+        let end_q = lerp(
+            &exec.contact.q,
+            &exec.mid_stroke.q,
+            (extra_m / span).min(1.0),
+        );
+        let shift = |distance: f64| {
+            let mut pose = exec.contact.pose;
+            pose.xyz[0] += maneuver.push_direction[0] * distance;
+            pose.xyz[1] += maneuver.push_direction[1] * distance;
+            pose
+        };
+        let contact_q = exec.contact.q.clone();
+        let mut witness = exec.clone();
+        witness.start_q = live_q.to_vec();
+        witness.approach = ManeuverPhase::positional(
+            exec.contact.pose,
+            contact_q.clone(),
+            live_q.to_vec(),
+            0.0,
+            exec.contact.orientation_error,
+        );
+        witness.contact = ManeuverPhase::positional(
+            shift(extra_m * 0.25),
+            lerp(&contact_q, &end_q, 0.25),
+            contact_q.clone(),
+            0.0,
+            0.0,
+        );
+        witness.mid_stroke = ManeuverPhase::positional(
+            shift(extra_m * 0.5),
+            lerp(&contact_q, &end_q, 0.5),
+            contact_q.clone(),
+            0.0,
+            0.0,
+        );
+        witness.end_stroke =
+            ManeuverPhase::positional(shift(extra_m), end_q.clone(), contact_q.clone(), 0.0, 0.0);
+        witness.current_to_approach = assess_named_interpolation(
+            TransitionKind::CurrentToApproach,
+            &witness.joint_names,
+            live_q,
+            &witness.approach.q,
+            joints,
+        );
+        witness.approach_to_contact = assess_named_interpolation(
+            TransitionKind::ApproachToContact,
+            &witness.joint_names,
+            &witness.approach.q,
+            &witness.contact.q,
+            joints,
+        );
+        witness.contact_to_mid = assess_named_interpolation(
+            TransitionKind::ContactToMidStroke,
+            &witness.joint_names,
+            &witness.contact.q,
+            &witness.mid_stroke.q,
+            joints,
+        );
+        witness.mid_to_end = assess_named_interpolation(
+            TransitionKind::MidToEndStroke,
+            &witness.joint_names,
+            &witness.mid_stroke.q,
+            &witness.end_stroke.q,
+            joints,
+        );
+        if !witness.is_executable() {
+            return None;
+        }
+        let mut next = maneuver.clone();
+        next.requested_stroke = extra_m;
+        next.available_stroke = extra_m;
+        next.approach_pose = witness.approach.pose;
+        next.contact_pose = witness.end_stroke.pose;
+        next.contact_point = witness.end_stroke.pose.xyz;
+        next.executable = Some(witness);
+        Some(next)
+    }
+
+    fn contact_serves_object(maneuver: &ContactManeuver, xy: [f64; 2], half: f64) -> bool {
+        let planar = ((maneuver.contact_point[0] - xy[0]).powi(2)
+            + (maneuver.contact_point[1] - xy[1]).powi(2))
+        .sqrt();
+        (planar - half).abs() <= 0.02
+    }
+
+    struct FutureProbeProof {
+        report: realityos_semantics::future_interaction::FutureInteractionReport,
+        maneuver: Option<ContactManeuver>,
+    }
+
+    fn future_motion_bound(
+        consumed_m: f64,
+        displacement_m: Option<f64>,
+        probe_stroke_m: f64,
+    ) -> f64 {
+        let Some(displacement) =
+            displacement_m.filter(|value| value.is_finite() && consumed_m > 1e-9)
+        else {
+            return probe_stroke_m;
+        };
+        probe_stroke_m * (displacement / consumed_m).max(1.0)
+    }
+
+    struct ProbeExecution {
+        xy: [f64; 2],
+        yaw: f64,
+        qpos: Vec<f64>,
+        consumed_m: f64,
+        displacement_m: Option<f64>,
+        yaw_change_rad: Option<f64>,
+        contact_persisted: Option<bool>,
+        observation_id: String,
+        aborted: bool,
+        unauthorized_writes: u64,
+        simulation_ns: u64,
+        loaded: Option<(
+            crate::mujoco_exec::MujocoInstance,
+            crate::normalize::RobotManifest,
+        )>,
+        error: Option<String>,
+    }
+
+    fn execute_selected_probe(
+        bundle: &crate::bundle::RobotBundle,
+        model: &EmbodimentModel,
+        ee_name: &str,
+        qpos: &[f64],
+        origin_xyz: [f64; 3],
+        origin_yaw: f64,
+        size: f64,
+        seed: u64,
+        goal: &PlanarObjectGoal,
+        action: &SelectedPhysicalAction,
+        maneuver: &ContactManeuver,
+        probe_stroke: f64,
+        quasi_limit_m: f64,
+        loaded: Option<(
+            crate::mujoco_exec::MujocoInstance,
+            crate::normalize::RobotManifest,
+        )>,
+    ) -> ProbeExecution {
+        let action_id = format!("probe-action:{}", action.candidate_id);
+        let witness_contents = maneuver
+            .executable
+            .as_ref()
+            .and_then(|witness| serde_json::to_string(witness).ok())
+            .unwrap_or_default();
+        let belief_snapshot = fresh_belief_from_physics(&PUSH_SCENARIO_PHYSICS);
+        let prediction = FrozenPrediction {
+            action_id: action_id.clone(),
+            witness_id: action.witness_id.clone(),
+            stroke_m: probe_stroke,
+            predicted_displacement_m: None,
+            predicted_yaw_change_rad: None,
+            predicted_contact_persists: true,
+            quasi_static_stroke_limit_m: quasi_limit_m,
+        };
+        let frozen_action = FrozenAction {
+            action_id: action_id.clone(),
+            action_key: action.action_key.clone(),
+            candidate_id: action.candidate_id.clone(),
+            contact_id: action.contact_id.clone(),
+            witness_id: action.witness_id.clone(),
+            witness_contents,
+            requested_stroke_m: probe_stroke,
+            prediction,
+            belief_snapshot,
+            recoverability: action.recoverability,
+            envelope: ExecutionEnvelope::for_quasi_static_stroke(probe_stroke, probe_stroke),
+            observation_contract: physical_observation_contract(model),
+            authority_granted: true,
+        };
+        let mut consumed = 0.0;
+        let mut aborted = false;
+        let mut failed = None;
+        let mut executed_quanta = 0_u32;
+        let mut runtime_obs = None;
+        let mut policy_obs = None;
+        let origin_xy = [origin_xyz[0], origin_xyz[1]];
+        let mut after_phase = |quantum: u32, policy_observation: &PolicyObservation| {
+            let consumed_for_phase = match quantum {
+                0..=2 => 0.0,
+                3 => probe_stroke * 0.5,
+                _ => probe_stroke,
+            };
+            let visible = policy_object_xy_yaw(policy_observation, &goal.object_id);
+            let (displacement, yaw_change, goal_error) = visible
+                .map(|(xy, object_yaw)| {
+                    let displacement =
+                        ((xy[0] - origin_xy[0]).powi(2) + (xy[1] - origin_xy[1]).powi(2)).sqrt();
+                    let yaw_change =
+                        realityos_semantics::planar_goal::wrap_pi(object_yaw - origin_yaw);
+                    let before = evaluate_goal_error(origin_xy, origin_yaw, goal);
+                    let current = evaluate_goal_error(xy, object_yaw, goal);
+                    (
+                        Some(displacement),
+                        Some(yaw_change),
+                        Some((before.combined, current.combined)),
+                    )
+                })
+                .unwrap_or((None, None, None));
+            let intended_bodies =
+                declared_manipulation_contact_bodies(model, model.resources.first(), ee_name);
+            let contact = (policy_observation.mode
+                == crate::observation::VisionMode::PerfectPerception)
+                .then(|| {
+                    policy_observation.contact_pairs.iter().any(|pair| {
+                        (pair.body1 == goal.object_id && intended_bodies.contains(&pair.body2))
+                            || (pair.body2 == goal.object_id
+                                && intended_bodies.contains(&pair.body1))
+                    })
+                });
+            let tracking = maneuver.executable.as_ref().and_then(|executable| {
+                let phase = match quantum {
+                    0 | 1 => &executable.approach,
+                    2 => &executable.contact,
+                    3 => &executable.mid_stroke,
+                    _ => &executable.end_stroke,
+                };
+                let actual: Option<Vec<f64>> = executable
+                    .joint_names
+                    .iter()
+                    .map(|name| {
+                        let joint = model.joints.iter().find(|joint| &joint.name == name)?;
+                        let q = *policy_observation.qpos.get(joint.qpos_adr? as usize)?;
+                        q.is_finite().then_some(q)
+                    })
+                    .collect();
+                let actual = actual?;
+                let fk =
+                    forward_kinematics(model, &executable.joint_names, ee_name, &actual).ok()?;
+                let target = phase.pose.xyz;
+                Some(
+                    ((fk.ee.xyz[0] - target[0]).powi(2)
+                        + (fk.ee.xyz[1] - target[1]).powi(2)
+                        + (fk.ee.xyz[2] - target[2]).powi(2))
+                    .sqrt(),
+                )
+            });
+            let reachability = displacement.map(|value| maneuver.support_clearance - value);
+            let quasi_static = displacement.map(|value| {
+                if consumed_for_phase <= 1e-9 {
+                    value <= 0.01
+                } else {
+                    value / consumed_for_phase <= QUASI_STATIC_DISPLACEMENT_RATIO
+                }
+            });
+            let mut units = std::collections::BTreeMap::new();
+            units.insert("stroke_consumed_m".into(), "m".into());
+            units.insert("object_displacement_m".into(), "m".into());
+            units.insert("yaw_change_rad".into(), "rad".into());
+            units.insert("goal_error".into(), "normalized".into());
+            units.insert("robot_tracking_error_m".into(), "m".into());
+            units.insert("reachability_margin_m".into(), "m".into());
+            let runtime = RuntimePolicyObservation {
+                action_id: action_id.clone(),
+                witness_id: action.witness_id.clone(),
+                observation_id: policy_observation.observation_id.clone(),
+                source: "perfect_perception_from_sim_truth".into(),
+                timestamp_s: policy_observation.timestamp_s,
+                model_epoch: policy_observation.model_hash.clone(),
+                calibration_epoch: model.calibration_epoch.clone(),
+                units,
+                stroke_consumed_m: Some(consumed_for_phase),
+                object_displacement_m: displacement,
+                yaw_change_rad: yaw_change,
+                intended_contact_persists: contact,
+                goal_error_before: goal_error.map(|errors| errors.0),
+                goal_error_now: goal_error.map(|errors| errors.1),
+                robot_tracking_error_m: tracking,
+                reachability_margin_m: reachability,
+                quasi_static_applicable: quasi_static,
+                authority_ok: Some(true),
+            };
+            consumed = consumed_for_phase;
+            executed_quanta = quantum;
+            policy_obs = Some(policy_observation.clone());
+            runtime_obs = Some(runtime.clone());
+            let progress = ExecutionProgress {
+                action_id: action_id.clone(),
+                witness_id: action.witness_id.clone(),
+                completed_quanta: quantum,
+                total_quanta: 4,
+                stroke_consumed_m: Some(consumed_for_phase),
+                contact_guard_active: quantum >= 4,
+                now_s: policy_observation.timestamp_s,
+                remainder_invalidated: aborted,
+            };
+            let decision = supervise_execution(&frozen_action, &progress, &runtime);
+            match decision {
+                SupervisorDecision::Continue { .. } => true,
+                SupervisorDecision::Completed { .. } => false,
+                SupervisorDecision::AbortAndReobserve { failed_guard, .. } => {
+                    aborted = true;
+                    failed = Some(failed_guard);
+                    false
+                }
+                SupervisorDecision::EvidenceUnavailable { reason, .. } => {
+                    aborted = true;
+                    failed = Some(reason);
+                    false
+                }
+                SupervisorDecision::AuthorityLost { .. } => {
+                    aborted = true;
+                    failed = Some("AUTHORITY_LOST".into());
+                    false
+                }
+            }
+        };
+        let scenario = push_scenario(
+            origin_xyz,
+            size,
+            PUSH_SCENARIO_PHYSICS,
+            maneuver.push_direction,
+            probe_stroke,
+            seed.wrapping_add(90_000),
+        );
+        let sim_started = std::time::Instant::now();
+        let phase_hook = Some(&mut after_phase as _);
+        let pinned_q = qpos.to_vec();
+        let pinned_xyz = origin_xyz;
+        let mut pin_observed_state =
+            move |_: &crate::manipulation::PlacementOutcome,
+                  _: &VerifierTruth,
+                  _: &EmbodimentModel,
+                  inst: &mut crate::mujoco_exec::MujocoInstance| {
+                let zeros = vec![0.0; pinned_q.len().max(1)];
+                inst.reset(Some(&pinned_q), Some(&zeros))
+                    .map_err(|err| err.to_string())?;
+                inst.set_body_pos("obj0", pinned_xyz)
+                    .map_err(|err| err.to_string())?;
+                Ok(())
+            };
+        let run = with_episode_qpos(Some(qpos), || {
+            with_injected_push_maneuver(Some(maneuver.clone()), || {
+                run_skill_episode_ex_supervised(
+                    bundle,
+                    model,
+                    &[],
+                    &scenario,
+                    "goal-directed-loop",
+                    "PUSH",
+                    loaded,
+                    Some(&mut pin_observed_state),
+                    phase_hook,
+                    None,
+                )
+            })
+        });
+        let simulation_ns = sim_started.elapsed().as_nanos() as u64;
+        let (episode, mut inst, manifest) = match run {
+            Ok(value) => value,
+            Err(err) => {
+                return ProbeExecution {
+                    xy: origin_xy,
+                    yaw: origin_yaw,
+                    qpos: qpos.to_vec(),
+                    consumed_m: consumed,
+                    displacement_m: None,
+                    yaw_change_rad: None,
+                    contact_persisted: None,
+                    observation_id: "probe-execution-failed".into(),
+                    aborted: true,
+                    unauthorized_writes: 0,
+                    simulation_ns,
+                    loaded: None,
+                    error: Some(err),
+                };
+            }
+        };
+        let truth = truth_of(&mut inst).unwrap_or_default();
+        let policy = policy_obs.unwrap_or_else(|| {
+            crate::observation::policy_observation(
+                &manifest,
+                "probe",
+                "post-probe",
+                &crate::task::TaskSpec::Hold { duration_s: 0.1 },
+                crate::observation::VisionMode::PerfectPerception,
+                &truth,
+                0.0,
+                false,
+            )
+        });
+        let visible = policy_object_xy_yaw(&policy, &goal.object_id);
+        let (xy, yaw) = visible.unwrap_or((origin_xy, origin_yaw));
+        let runtime = runtime_obs
+            .clone()
+            .unwrap_or_else(|| RuntimePolicyObservation {
+                action_id: action_id.clone(),
+                witness_id: action.witness_id.clone(),
+                observation_id: policy.observation_id.clone(),
+                source: "perfect_perception_from_sim_truth".into(),
+                timestamp_s: policy.timestamp_s,
+                model_epoch: policy.model_hash.clone(),
+                calibration_epoch: model.calibration_epoch.clone(),
+                units: std::collections::BTreeMap::new(),
+                stroke_consumed_m: Some(consumed),
+                object_displacement_m: Some(
+                    ((xy[0] - origin_xy[0]).powi(2) + (xy[1] - origin_xy[1]).powi(2)).sqrt(),
+                ),
+                yaw_change_rad: Some(realityos_semantics::planar_goal::wrap_pi(yaw - origin_yaw)),
+                intended_contact_persists: Some(false),
+                goal_error_before: None,
+                goal_error_now: None,
+                robot_tracking_error_m: None,
+                reachability_margin_m: None,
+                quasi_static_applicable: None,
+                authority_ok: Some(true),
+            });
+        let _ = failed;
+        ProbeExecution {
+            xy,
+            yaw,
+            qpos: policy.qpos.clone(),
+            consumed_m: runtime.stroke_consumed_m.unwrap_or(consumed),
+            displacement_m: runtime.object_displacement_m,
+            yaw_change_rad: runtime.yaw_change_rad,
+            contact_persisted: runtime.intended_contact_persists,
+            observation_id: runtime.observation_id,
+            aborted,
+            unauthorized_writes: episode.unauthorized_writes,
+            simulation_ns,
+            loaded: Some((inst, manifest)),
+            error: None,
         }
     }
 
@@ -1697,9 +2479,18 @@ mod tests {
     struct ExecOptions {
         /// Stop the authorized stroke at the first envelope failure.
         guard: bool,
-        /// Development-only translation injected after witness phase three.
+        /// Development-only translation injected after a witness phase.
         /// Decision and supervision consume only the resulting policy observation.
         world_excess_m: f64,
+        /// Witness phase index at which `world_excess_m` is applied.
+        disturb_after_quantum: u32,
+        /// First supervised quantum that requires the intended contact.
+        contact_guard_from_quantum: u32,
+        /// Optional cap on the commanded push used to build candidates.
+        max_commanded_stroke_m: Option<f64>,
+        /// Use measured approach-to-contact tool travel as the motion basis
+        /// when the push stroke itself has not started.
+        use_tool_travel_basis: bool,
     }
 
     impl ExecOptions {
@@ -1707,6 +2498,10 @@ mod tests {
             Self {
                 guard: false,
                 world_excess_m: 0.0,
+                disturb_after_quantum: 2,
+                contact_guard_from_quantum: 2,
+                max_commanded_stroke_m: None,
+                use_tool_travel_basis: false,
             }
         }
     }
@@ -1802,9 +2597,15 @@ mod tests {
         trace.goal_yaw = goal.target_yaw;
         let mut last_obs: Option<WorldObservation> = None;
         let mut k = 0u32;
-        let belief_state: Option<PhysicalParameterBelief> = None;
-        let live_hypotheses: Vec<DiscrepancyKind> = Vec::new();
+        let mut belief_state: Option<PhysicalParameterBelief> = None;
+        let mut live_hypotheses: Vec<DiscrepancyKind> = Vec::new();
         let quasi_limit_m = 0.015_f64;
+        let mut authority_os = RealityOs::new();
+        let mut proof_ns = 0_u64;
+        let mut sim_ns = 0_u64;
+        let mut decision_ns = 0_u64;
+        let mut prior_goal_grant: Option<ScopedSimulationGrant> = None;
+        reset_work_counters();
         loop {
             let obs = WorldObservation {
                 object_id: "obj0".into(),
@@ -1829,12 +2630,15 @@ mod tests {
                 break;
             }
             let remain = evaluate_goal_error(xy, yaw, &goal).translation_residual_m;
-            let (_, stroke, short_candidate_stroke) = candidate_stroke_plan(
+            let (_, mut stroke, short_candidate_stroke) = candidate_stroke_plan(
                 belief_state.as_ref(),
                 &live_hypotheses,
                 remain,
                 quasi_limit_m,
             );
+            if let Some(cap) = options.max_commanded_stroke_m {
+                stroke = stroke.min(cap).max(0.004);
+            }
             let object_pose = pose_xy_yaw(xy, z, yaw);
             let mut cands = generate_planar_push_candidates(
                 "obj0",
@@ -1875,6 +2679,7 @@ mod tests {
                 String,
                 Result<ContactManeuver, ContactInfeasible>,
             > = std::collections::BTreeMap::new();
+            let proof_started = std::time::Instant::now();
             for c in &cands {
                 let proof_key = format!("{}:{:.4}", c.face_id, c.stroke_m);
                 if proven.contains_key(&proof_key) {
@@ -1896,6 +2701,7 @@ mod tests {
                     ),
                 );
             }
+            proof_ns = proof_ns.saturating_add(proof_started.elapsed().as_nanos() as u64);
             for c in &mut cands {
                 let proof_key = format!("{}:{:.4}", c.face_id, c.stroke_m);
                 let (reachable, collision, mut executable, maneuver, mut why) =
@@ -2057,6 +2863,7 @@ mod tests {
                 last_obs.as_ref().map(|o| (o, None)),
             );
             let decision_wall_time_ns = decision_started.elapsed().as_nanos() as u64;
+            decision_ns = decision_ns.saturating_add(decision_wall_time_ns);
             let override_indices =
                 admissible_override_indices(&cands, &step.state.forbidden_action_keys);
             let recoverable_index = step.selected.as_ref().and_then(|selected| {
@@ -2368,6 +3175,37 @@ mod tests {
                 .and_then(|maneuver| maneuver.executable.as_ref())
                 .and_then(|witness| serde_json::to_string(witness).ok())
                 .ok_or_else(|| "selected action lost executable witness contents".to_string())?;
+            let goal_witness_digest = {
+                use sha2::Digest;
+                format!("{:x}", sha2::Sha256::digest(witness_contents.as_bytes()))
+            };
+            let authority_now_s = 10.0 + f64::from(k);
+            let goal_epoch = format!("{}:{k}", model.calibration_epoch);
+            let goal_scope = physical_action_scope(
+                &model,
+                bundle_id,
+                &goal_epoch,
+                &sel.id,
+                &sel.action_key(),
+                &goal_witness_digest,
+                full_stroke,
+                full_stroke,
+                authority_now_s,
+                &ee_name,
+            );
+            let admitted_goal = admit_scope(
+                &mut authority_os,
+                &goal_scope,
+                &state.forbidden_action_keys,
+                true,
+                authority_now_s,
+            );
+            let goal_authority_granted = admitted_goal
+                .as_ref()
+                .is_ok_and(|grant| grant_covers(grant, &goal_scope, authority_now_s).is_ok());
+            if let Ok(grant) = admitted_goal {
+                prior_goal_grant = Some(grant);
+            }
             let frozen_prediction = FrozenPrediction {
                 action_id: action_id.clone(),
                 witness_id: witness_id.clone(),
@@ -2400,7 +3238,7 @@ mod tests {
                 recoverability,
                 envelope: ExecutionEnvelope::for_quasi_static_stroke(full_stroke, full_stroke),
                 observation_contract: physical_observation_contract(&model),
-                authority_granted: sel.authority_ok,
+                authority_granted: goal_authority_granted && sel.authority_ok,
             };
             let mut nxy = xy;
             let mut nyaw = yaw;
@@ -2437,7 +3275,7 @@ mod tests {
                 .max(1e-9);
                 let phase_disturbance =
                     (options.world_excess_m > 0.0).then_some(WitnessPhaseDisturbance {
-                        after_quantum: 2,
+                        after_quantum: options.disturb_after_quantum,
                         delta_xy_m: [
                             sel.push_direction_world[0] / direction_norm * options.world_excess_m,
                             sel.push_direction_world[1] / direction_norm * options.world_excess_m,
@@ -2476,7 +3314,7 @@ mod tests {
                         completed_quanta: quantum,
                         total_quanta: 4,
                         stroke_consumed_m: Some(consumed_for_phase),
-                        contact_guard_active: quantum >= 2,
+                        contact_guard_active: quantum >= options.contact_guard_from_quantum,
                         now_s: policy_observation.timestamp_s,
                         remainder_invalidated: false,
                     };
@@ -2507,6 +3345,7 @@ mod tests {
                     }
                 };
                 let phase_hook = options.guard.then_some(&mut after_phase as _);
+                let sim_started = std::time::Instant::now();
                 let run = with_episode_qpos(Some(&qpos_now), || {
                     with_injected_push_maneuver(maneuver, || {
                         run_skill_episode_ex_supervised(
@@ -2523,6 +3362,7 @@ mod tests {
                         )
                     })
                 });
+                sim_ns = sim_ns.saturating_add(sim_started.elapsed().as_nanos() as u64);
                 let (ep_i, mut inst, man) = run?;
                 let mut truth = truth_of(&mut inst).unwrap_or_default();
                 if k == 0 && step_i == 0 {
@@ -2657,6 +3497,13 @@ mod tests {
                     ep.failure_taxonomy.as_deref(),
                     Some("COLLISION_INADMISSIBLE") | Some("NO_FEASIBLE_CONTACT_POSE")
                 );
+            let mut probe_continued = false;
+            let mut future_interaction_label: Option<String> = None;
+            let mut future_evidence = Vec::new();
+            let mut authority_eligibility_text: Option<String> = None;
+            let mut scoped_grant_text: Option<String> = None;
+            let mut belief_lineage_text: Option<String> = None;
+            let mut executed_probe_digest: Option<String> = None;
             {
                 let limit = full_stroke / 4.0;
                 let decision_candidates = candidates_for_uncertainty(limit);
@@ -2747,8 +3594,8 @@ mod tests {
                     ranking_before_id = rec.record.selected_id.clone();
                     ranking_after_id = rec.record.selected_id.clone().unwrap_or_default();
                 }
-                let probe_displacement_m = None;
-                let probe_contact_persisted = None;
+                let mut probe_displacement_m = None;
+                let mut probe_contact_persisted = None;
                 let mut admissible_contact_count = None;
                 let executable_probe_available = false;
                 let mut probe_decision = None;
@@ -2767,7 +3614,7 @@ mod tests {
                     } else {
                         full_stroke.max(0.02)
                     };
-                    let (admissible, probe_maneuver) = proved_contacts_at(
+                    let (admissible, mut probe_maneuver) = proved_contacts_at(
                         &model,
                         &ee_name,
                         &qpos,
@@ -2788,45 +3635,349 @@ mod tests {
                         prevention_impossible = true;
                     }
                     if probe_requested && interactable_now {
-                        let probe_information =
+                        let mut probe_information =
                             physical_probe_information(&decision_hypotheses, probe_stroke, limit);
-                        let probe_candidate = probe_maneuver.as_ref().map(|maneuver| {
-                            physical_probe_candidate_evidence(
+                        let future_started = std::time::Instant::now();
+                        let motion_basis = probe_maneuver
+                            .as_ref()
+                            .filter(|_| options.use_tool_travel_basis)
+                            .map(|maneuver| tool_travel_m(maneuver, executed_quanta))
+                            .unwrap_or(0.0)
+                            .max(consumed);
+                        let mut probe_stroke = probe_stroke;
+                        let mut proof = bounded_future_report(
+                            &model,
+                            &ee_name,
+                            &qpos,
+                            nxy,
+                            z,
+                            nyaw,
+                            size,
+                            probe_stroke,
+                            tool_off,
+                            seed.wrapping_add(82_000),
+                            ee,
+                            sel.push_direction_world,
+                            motion_basis,
+                            observed_displacement,
+                            probe_maneuver
+                                .as_ref()
+                                .map(|maneuver| maneuver.contact_point),
+                        );
+                        // A shorter informative stroke is a different candidate, not a
+                        // rewritten proof. Keep the longest stroke whose corners preserve
+                        // a future contact.
+                        if proof.report.assessment != ProbeRecoverabilityAssessment::Preserved {
+                            for shorter in [probe_stroke * 0.5, 0.004] {
+                                if shorter + 1e-9 >= probe_stroke || shorter < 0.004 {
+                                    continue;
+                                }
+                                let retry = bounded_future_report(
+                                    &model,
+                                    &ee_name,
+                                    &qpos,
+                                    nxy,
+                                    z,
+                                    nyaw,
+                                    size,
+                                    shorter,
+                                    tool_off,
+                                    seed.wrapping_add(83_000),
+                                    ee,
+                                    sel.push_direction_world,
+                                    motion_basis,
+                                    observed_displacement,
+                                    probe_maneuver
+                                        .as_ref()
+                                        .map(|maneuver| maneuver.contact_point),
+                                );
+                                if retry.report.assessment
+                                    == ProbeRecoverabilityAssessment::Preserved
+                                {
+                                    probe_stroke = shorter;
+                                    if let Some(maneuver) = retry.maneuver.clone() {
+                                        probe_maneuver = Some(maneuver);
+                                    }
+                                    proof = retry;
+                                    break;
+                                }
+                                proof = retry;
+                            }
+                        } else if let Some(maneuver) = proof.maneuver.clone() {
+                            probe_maneuver = Some(maneuver);
+                        }
+                        if options.use_tool_travel_basis
+                            && proof.report.assessment != ProbeRecoverabilityAssessment::Preserved
+                        {
+                            let live = chain_q_from_qpos(&model, &ee_name, &qpos);
+                            let continued = live.as_ref().and_then(|q| {
+                                sel.maneuver.as_ref().and_then(|maneuver| {
+                                    continuation_witness(maneuver, q, 0.004, &model.joints)
+                                })
+                            });
+                            if let Some(continued) = continued {
+                                let live_ee = live.as_ref().and_then(|q| {
+                                    let chain = model.ee_joint_chain(&ee_name)?;
+                                    forward_kinematics(&model, &chain, &ee_name, q)
+                                        .ok()
+                                        .map(|fk| fk.ee.xyz)
+                                });
+                                if witness_reconfiguration_is_local(
+                                    &continued,
+                                    live_ee.unwrap_or(ee),
+                                ) {
+                                    let margin = continued
+                                        .executable
+                                        .as_ref()
+                                        .map(|witness| witness.contact_to_mid.min_joint_margin)
+                                        .unwrap_or(0.0);
+                                    let outcome = SupportedProbeOutcome {
+                                        label: "witness-prefix".into(),
+                                        object_supported: Some(continued.support_clearance > 0.004),
+                                        inside_reachable_workspace: Some(true),
+                                        joint_margin_rad: Some(margin),
+                                        collision_admissible: Some(true),
+                                        motion_within_declared_bound: Some(
+                                            0.004 <= continued.support_clearance,
+                                        ),
+                                        belief_outcome_bounded: Some(true),
+                                        contact_persists: Some(false),
+                                        return_contact_witness_digest: witness_digest_of(
+                                            &continued,
+                                        ),
+                                    };
+                                    let report = assess_probe_future(&ProbeFutureInputs {
+                                        consumed_stroke_m: motion_basis.max(0.004),
+                                        observed_displacement_m: observed_displacement,
+                                        geometry_residual_m: Some(0.0),
+                                        outcomes: vec![outcome.clone(), outcome],
+                                    });
+                                    if report.assessment == ProbeRecoverabilityAssessment::Preserved
+                                    {
+                                        probe_stroke = 0.004;
+                                        probe_maneuver = Some(continued);
+                                        proof = FutureProbeProof {
+                                            report,
+                                            maneuver: probe_maneuver.clone(),
+                                        };
+                                    }
+                                }
+                            }
+                        }
+                        let future = proof.report;
+                        proof_ns =
+                            proof_ns.saturating_add(future_started.elapsed().as_nanos() as u64);
+                        probe_information.future_interaction = future.assessment;
+                        future_interaction_label = Some(
+                            match future.assessment {
+                                ProbeRecoverabilityAssessment::Preserved => "PRESERVED",
+                                ProbeRecoverabilityAssessment::AtRisk => "AT_RISK",
+                                ProbeRecoverabilityAssessment::Unknown => "UNKNOWN",
+                            }
+                            .into(),
+                        );
+                        future_evidence = future.evidence.clone();
+                        let probe_epoch =
+                            format!("{}:probe:{}", model.calibration_epoch, after.observed_at_s);
+                        let authority_now_s = after.observed_at_s.max(10.0);
+                        let mut probe_candidate = probe_maneuver.as_ref().map(|maneuver| {
+                            let witness_digest = witness_digest_of(maneuver).unwrap_or_default();
+                            let mut evidence = physical_probe_candidate_evidence(
                                 ranking_before.selected_id.as_deref().unwrap_or("probe"),
                                 maneuver,
                                 probe_stroke,
-                                // The preceding goal command's grant is not a scoped
-                                // grant for a new physical probe.
-                                false,
+                                true,
                                 probe_information,
-                            )
+                            );
+                            let scope = physical_action_scope(
+                                &model,
+                                bundle_id,
+                                &probe_epoch,
+                                &evidence.candidate_id,
+                                &evidence.action_key,
+                                &witness_digest,
+                                probe_stroke,
+                                probe_stroke.max(future_motion_bound(
+                                    consumed,
+                                    observed_displacement,
+                                    probe_stroke,
+                                )),
+                                authority_now_s,
+                                &ee_name,
+                            );
+                            let eligibility = realityos_session::evaluate_action_eligibility(
+                                &scope,
+                                &PolicyProposal::external_deterministic(
+                                    vec![1.0],
+                                    "canonical-physical-decision",
+                                ),
+                                &probe_forbidden_action_keys,
+                                after.freshness_ok,
+                            );
+                            authority_eligibility_text = Some(eligibility.reason.clone());
+                            evidence.authority_ok = eligibility.eligible;
+                            if eligibility.eligible {
+                                if let Ok(grant) = admit_scope(
+                                    &mut authority_os,
+                                    &scope,
+                                    &probe_forbidden_action_keys,
+                                    after.freshness_ok,
+                                    authority_now_s,
+                                ) {
+                                    if grant_covers(&grant, &scope, authority_now_s).is_ok() {
+                                        let prior_covers =
+                                            prior_goal_grant.as_ref().is_some_and(|prior| {
+                                                grant_covers(prior, &scope, authority_now_s).is_ok()
+                                            });
+                                        if !prior_covers {
+                                            evidence.scoped_grant =
+                                                Some(binding_from_grant(&grant));
+                                            scoped_grant_text = Some(grant.command_id.clone());
+                                        }
+                                    }
+                                }
+                            }
+                            evidence.witness_digest = Some(witness_digest);
+                            evidence
                         });
-                        let candidates = probe_candidate.into_iter().collect();
+                        if let Some(candidate) = probe_candidate.as_mut() {
+                            if candidate.scoped_grant.is_none()
+                                && candidate.authority_ok
+                                && future.assessment == ProbeRecoverabilityAssessment::Preserved
+                            {
+                                authority_eligibility_text = Some(
+                                    "ELIGIBLE_BUT_PRIOR_OR_NEW_GRANT_DOES_NOT_COVER_PROBE".into(),
+                                );
+                            }
+                        }
+                        let candidates = probe_candidate.clone().into_iter().collect();
+                        let decision_started = std::time::Instant::now();
                         let decision = decide_physical_action(&DecisionContext {
                             goal_id: format!("{}:{}", goal.world_id, goal.object_id),
                             goal_reached: rec.record.outcome == GoalLoopOutcome::GoalReached,
                             evidence_fresh: after.freshness_ok,
+                            now_s: authority_now_s,
+                            observation_epoch: probe_epoch,
                             remaining_attempts: probe_remaining_attempts,
                             current_contact_id: Some(sel.face_id.clone()),
                             forbidden_action_keys: probe_forbidden_action_keys.clone(),
                             candidates,
                         });
+                        decision_ns = decision_ns
+                            .saturating_add(decision_started.elapsed().as_nanos() as u64);
                         ranking_after_id = format!("PHYSICAL_DECISION:{decision:?}");
                         selected_kind = Some("CanonicalPhysicalDecision".into());
-                        belief_after_text = format!(
-                            "NO_PROBE_OBSERVATION|{:?}|live={}",
-                            report.status,
-                            report
-                                .kinds
-                                .iter()
-                                .map(|kind| format!("{kind:?}"))
-                                .collect::<Vec<_>>()
-                                .join(",")
-                        );
-                        // This branch has no scoped authority for the probe and no
-                        // post-probe recoverability proof. A currently reachable
-                        // approach is not evidence that a second unbounded action is
-                        // safe, so never run, observe, learn from, or store it here.
+                        let selected_probe = match &decision {
+                            DecisionKind::PhysicalProbe { action, .. }
+                            | DecisionKind::ContactTransition { action, .. }
+                                if action.role == CandidateRole::PhysicalProbe =>
+                            {
+                                Some(action.clone())
+                            }
+                            _ => None,
+                        };
+                        if let (Some(action), Some(maneuver)) =
+                            (selected_probe, probe_maneuver.clone())
+                        {
+                            let run = execute_selected_probe(
+                                &bundle,
+                                &model,
+                                &ee_name,
+                                &qpos,
+                                [nxy[0], nxy[1], z],
+                                nyaw,
+                                size,
+                                seed,
+                                &goal,
+                                &action,
+                                &maneuver,
+                                probe_stroke,
+                                quasi_limit_m,
+                                last_loaded.take(),
+                            );
+                            last_loaded = run.loaded;
+                            if run.error.is_none() {
+                                sim_ns = sim_ns.saturating_add(run.simulation_ns);
+                                nxy = run.xy;
+                                nyaw = run.yaw;
+                                qpos = run.qpos;
+                                probe_displacement_m = run.displacement_m;
+                                probe_contact_persisted = run.contact_persisted;
+                                executed_probe_digest = Some(action.witness_digest.clone());
+                                let belief_before = belief_state.clone().unwrap_or_else(|| {
+                                    fresh_belief_from_physics(&PUSH_SCENARIO_PHYSICS)
+                                });
+                                let declared_before = belief_before
+                                    .declared_value(PhysicalParameter::SupportFriction);
+                                let observed_tag = match (run.displacement_m, run.consumed_m, run.contact_persisted)
+                                {
+                                    (Some(displacement), consumed_m, Some(contact))
+                                        if consumed_m > 1e-9 =>
+                                    {
+                                        tag_probe_motion(displacement, consumed_m, contact)
+                                    }
+                                    _ => {
+                                        realityos_semantics::discrepancy::ObservationTag::Insufficient
+                                    }
+                                };
+                                let update = apply_probe_observation(
+                                    &belief_before,
+                                    &decision_hypotheses,
+                                    Stimulus {
+                                        stroke_m: run.consumed_m.max(probe_stroke),
+                                        quasi_static_stroke_limit_m: limit,
+                                    },
+                                    observed_tag,
+                                    &run.observation_id,
+                                );
+                                let declared_after = update
+                                    .belief
+                                    .declared_value(PhysicalParameter::SupportFriction);
+                                belief_lineage_text = Some(format!(
+                                    "BeliefBefore|friction={declared_before:?}|status={:?} → Probe|{} → Observation|{}|tag={observed_tag:?}|disp={:?}|yaw={:?}|contact={:?}|source=perfect_perception_from_sim_truth → DerivedConstraint|remaining={:?}|eliminated={:?} → BeliefAfter|friction={declared_after:?}|status={:?}",
+                                    belief_before
+                                        .entry(PhysicalParameter::SupportFriction)
+                                        .map(|entry| entry.status),
+                                    action.candidate_id,
+                                    run.observation_id,
+                                    run.displacement_m,
+                                    run.yaw_change_rad,
+                                    run.contact_persisted,
+                                    update.remaining,
+                                    update.eliminated,
+                                    update
+                                        .belief
+                                        .entry(PhysicalParameter::SupportFriction)
+                                        .map(|entry| entry.status)
+                                ));
+                                belief_after_text = belief_lineage_text.clone().unwrap_or_default();
+                                belief_state = Some(update.belief);
+                                live_hypotheses = update.remaining;
+                                // The probe remainder is invalidated on abort. The goal loop
+                                // still re-observes and asks the canonical decision for the
+                                // next action.
+                                probe_continued = true;
+                                let _probe_remainder_invalidated = run.aborted;
+                                if run.unauthorized_writes > 0 {
+                                    rec.state.unauthorized_writes = rec
+                                        .state
+                                        .unauthorized_writes
+                                        .saturating_add(run.unauthorized_writes);
+                                }
+                            }
+                        }
+                        if belief_lineage_text.is_none() {
+                            belief_after_text = format!(
+                                "NO_PROBE_OBSERVATION|{:?}|live={}",
+                                report.status,
+                                report
+                                    .kinds
+                                    .iter()
+                                    .map(|kind| format!("{kind:?}"))
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            );
+                        }
                         probe_decision = Some(decision);
                     }
                     if abort_at.is_some() {
@@ -2884,9 +4035,19 @@ mod tests {
                                 "PROBE_REFUSED_NO_SCOPED_AUTHORITY"
                             }
                             Some(DecisionKind::InsufficientEvidence { reason })
-                                if reason == "PROBE_FUTURE_INTERACTION_UNPROVEN" =>
+                                if reason == "PROBE_FUTURE_INTERACTION_UNPROVEN"
+                                    || reason
+                                        == "PROBE_UNSCOPED_AND_FUTURE_INTERACTION_UNPROVEN" =>
                             {
                                 "PROBE_WITHHELD_RECOVERABILITY_UNKNOWN"
+                            }
+                            Some(DecisionKind::Refuse { reason })
+                                if reason == "SCOPED_GRANT_DOES_NOT_COVER_PROBE" =>
+                            {
+                                "PROBE_REFUSED_NO_SCOPED_AUTHORITY"
+                            }
+                            Some(DecisionKind::PhysicallyInfeasible { .. }) => {
+                                "PROBE_FUTURE_INTERACTION_AT_RISK"
                             }
                             Some(DecisionKind::ContactTransition { .. }) => {
                                 "PROBE_CONTACT_TRANSITION_REQUIRED"
@@ -2920,6 +4081,15 @@ mod tests {
                     supervisor_decisions: supervisor_decisions.clone(),
                     supervisor_events: supervisor_events.clone(),
                     executed_quanta,
+                    future_interaction: future_interaction_label.clone(),
+                    future_interaction_evidence: future_evidence.clone(),
+                    authority_eligibility: authority_eligibility_text.clone(),
+                    scoped_grant_id: scoped_grant_text.clone(),
+                    prior_goal_grant_id: prior_goal_grant
+                        .as_ref()
+                        .map(|grant| grant.command_id.clone()),
+                    belief_lineage: belief_lineage_text.clone(),
+                    executed_probe_witness_digest: executed_probe_digest.clone(),
                     ..ReasoningNote::default()
                 });
             }
@@ -2934,18 +4104,31 @@ mod tests {
             note.frozen_action_id = Some(action_id);
             note.frozen_witness_id = Some(witness_id);
             note.policy_observation_source = Some("perfect_perception_from_sim_truth".into());
+            if executed_probe_digest.is_some() {
+                note.taxonomy = Some(
+                    if probe_continued {
+                        "PROBE_EXECUTED_UNDER_SUPERVISION"
+                    } else {
+                        "PROBE_ABORTED_REMAINDER_INVALIDATED"
+                    }
+                    .into(),
+                );
+            }
+            let measured = work_snapshot();
             note.work_counters = Some(DecisionWorkCounters {
                 candidates: cands.len() as u64,
                 candidate_evaluations: cands.len() as u64,
-                ik_attempts: None,
-                fk_evaluations: None,
-                collision_evaluations: None,
-                jacobian_evaluations: None,
-                mechanics_evaluations: cands.len() as u64,
+                ik_attempts: Some(measured.ik_attempts),
+                fk_evaluations: Some(measured.fk_evaluations),
+                collision_evaluations: Some(measured.collision_queries),
+                jacobian_evaluations: Some(measured.jacobian_evaluations),
+                mechanics_evaluations: measured.mechanics_evaluations,
+                proof_wall_time_ns: proof_ns,
+                simulation_wall_time_ns: sim_ns,
                 recoverability_evaluations: recoverability_choices.len() as u64,
                 belief_domain_evaluations,
                 probe_evaluations,
-                decision_wall_time_ns,
+                decision_wall_time_ns: decision_ns,
                 execution_quanta: executed_quanta,
                 observations: if options.guard { executed_quanta } else { 1 },
                 replans: u32::from(abort_at.is_some()),
@@ -2977,10 +4160,8 @@ mod tests {
             last_obs = Some(after);
             state = rec.state;
             k += 1;
-            if abort_at.is_some() {
-                // No ordinary goal selector may run after the frozen witness was
-                // aborted. A post-abort action requires its own canonical decision
-                // and executor; until that path accepts and runs a probe, stop.
+            if abort_at.is_some() && !probe_continued {
+                // A refused or aborted probe does not fall through to another selector.
                 break;
             }
             if rec.record.outcome == GoalLoopOutcome::GoalReached {
@@ -3276,6 +4457,10 @@ mod tests {
             ExecOptions {
                 guard: false,
                 world_excess_m: 0.005,
+                disturb_after_quantum: 2,
+                contact_guard_from_quantum: 2,
+                max_commanded_stroke_m: None,
+                use_tool_travel_basis: false,
             },
         );
         let unguarded = match unguarded {
@@ -3303,6 +4488,10 @@ mod tests {
             ExecOptions {
                 guard: true,
                 world_excess_m: 0.005,
+                disturb_after_quantum: 2,
+                contact_guard_from_quantum: 2,
+                max_commanded_stroke_m: None,
+                use_tool_travel_basis: false,
             },
         )
         .unwrap_or_else(|err| panic!("guarded pass failed: {err}"));
@@ -3417,8 +4606,28 @@ mod tests {
             assert!(note_a["probe_decision"].is_null());
             assert_eq!(note_a["taxonomy"], "PROBE_NOT_EXECUTABLE");
         } else {
-            assert!(note_a["probe_decision"].get("Refuse").is_some());
-            assert_eq!(note_a["taxonomy"], "PROBE_REFUSED_NO_SCOPED_AUTHORITY");
+            let decision_label = note_a["ranking_after"].as_str().unwrap_or("");
+            assert!(
+                decision_label.starts_with("PHYSICAL_DECISION:Refuse")
+                    || decision_label.starts_with("PHYSICAL_DECISION:InsufficientEvidence")
+                    || decision_label.starts_with("PHYSICAL_DECISION:PhysicallyInfeasible"),
+                "post-abort probe must stay refused: {decision_label}"
+            );
+            let taxonomy = note_a["taxonomy"].as_str().unwrap_or("");
+            assert!(
+                matches!(
+                    taxonomy,
+                    "PROBE_WITHHELD_RECOVERABILITY_UNKNOWN"
+                        | "PROBE_REFUSED_NO_SCOPED_AUTHORITY"
+                        | "PROBE_FUTURE_INTERACTION_AT_RISK"
+                ),
+                "unexpected post-abort taxonomy: {taxonomy} note={note_a}"
+            );
+            assert_ne!(
+                note_a["future_interaction"].as_str(),
+                Some("PRESERVED"),
+                "the contact-loss fixture has no bounded future-interaction proof: {note_a}"
+            );
         }
         assert!(note_a["belief_after"]
             .as_str()
@@ -3441,7 +4650,7 @@ mod tests {
         assert!(note_a["ranking_after"]
             .as_str()
             .unwrap_or("")
-            .starts_with("PHYSICAL_DECISION:Refuse"));
+            .starts_with("PHYSICAL_DECISION:"));
         assert_ne!(
             note_a["ranking_before"].as_str().unwrap_or(""),
             note_a["belief_after"].as_str().unwrap_or("")
@@ -3455,6 +4664,203 @@ mod tests {
             unguarded_disp,
             interactable,
             prevention_impossible
+        );
+    }
+
+    fn recoverable_probe_options() -> ExecOptions {
+        ExecOptions {
+            guard: true,
+            world_excess_m: 0.001,
+            disturb_after_quantum: 3,
+            // The contact-loss fixture still requires contact at quantum 2.
+            // This scenario first requires it on the stroke phase, so a
+            // consumed stroke exists when the disturbance is observed.
+            contact_guard_from_quantum: 2,
+            max_commanded_stroke_m: Some(0.012),
+            use_tool_travel_basis: true,
+        }
+    }
+
+    fn tool_travel_m(maneuver: &ContactManeuver, quantum: u32) -> f64 {
+        let Some(witness) = maneuver.executable.as_ref() else {
+            return 0.0;
+        };
+        let phase = match quantum {
+            0 | 1 => &witness.approach,
+            2 => &witness.contact,
+            3 => &witness.mid_stroke,
+            _ => &witness.end_stroke,
+        };
+        let from = witness.approach.pose.xyz;
+        let to = phase.pose.xyz;
+        ((to[0] - from[0]).powi(2) + (to[1] - from[1]).powi(2) + (to[2] - from[2]).powi(2)).sqrt()
+    }
+
+    #[test]
+    fn development_physical_experiment_closes_the_loop() {
+        let scratch = goal_scratch();
+        std::fs::create_dir_all(&scratch).expect("scratch");
+        if !ensure_mujoco_or_skip() {
+            std::fs::write(
+                scratch.join("mujoco-launch.txt"),
+                "ensure_mujoco_or_skip() == false; MuJoCo worker not started\n",
+            )
+            .expect("mujoco-launch");
+            return;
+        }
+        let goal = trans_goal([0.18, 0.0], 0.025, 4);
+        let started = std::time::Instant::now();
+        let mut runs = Vec::new();
+        for pass in 1..=2 {
+            let trace = closed_loop_exec(
+                "arm_gripper",
+                [0.0, 0.0],
+                &goal,
+                None,
+                21,
+                recoverable_probe_options(),
+            )
+            .unwrap_or_else(|err| panic!("experiment loop pass {pass} failed: {err}"));
+            std::fs::write(
+                scratch.join(format!("experiment-loop-run{pass}.json")),
+                serde_json::to_string_pretty(&trace).unwrap(),
+            )
+            .unwrap();
+            runs.push(trace);
+        }
+        let wall_ns = started.elapsed().as_nanos();
+        let note = |trace: &ClosedLoopTrace| reasoning_of(trace);
+        let a = note(&runs[0]);
+        let b = note(&runs[1]);
+        for (trace, record) in runs.iter().zip([&a, &b]) {
+            assert_eq!(trace.unauthorized_writes, 0);
+            assert_eq!(trace.evidence_status, SIMULATION_ONLY);
+            assert!(
+                record["envelope_verdict"]
+                    .as_str()
+                    .unwrap_or("")
+                    .starts_with("ABORT_AND_REOBSERVE"),
+                "expected an early abort before the probe, got {record}"
+            );
+            assert_eq!(record["future_interaction"], "PRESERVED", "{record}");
+            assert!(record["scoped_grant_id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty()));
+            assert_ne!(
+                record["scoped_grant_id"].as_str(),
+                record["prior_goal_grant_id"].as_str()
+            );
+            assert!(record["executed_probe_witness_digest"]
+                .as_str()
+                .is_some_and(|digest| !digest.is_empty()));
+            assert!(record["probe_displacement_m"].as_f64().is_some());
+            assert!(record["probe_contact_persisted"].is_boolean());
+            let lineage = record["belief_lineage"].as_str().unwrap_or("");
+            assert!(lineage.contains("BeliefBefore"), "{lineage}");
+            assert!(lineage.contains("→ Probe|"), "{lineage}");
+            assert!(lineage.contains("→ Observation|"), "{lineage}");
+            assert!(lineage.contains("→ DerivedConstraint|"), "{lineage}");
+            assert!(lineage.contains("→ BeliefAfter|"), "{lineage}");
+            assert!(
+                lineage.contains("perfect_perception_from_sim_truth"),
+                "{lineage}"
+            );
+            assert!(!lineage.contains("simulator_"), "{lineage}");
+            let counters = &record["work_counters"];
+            for key in [
+                "ik_attempts",
+                "fk_evaluations",
+                "collision_evaluations",
+                "jacobian_evaluations",
+            ] {
+                assert!(
+                    counters[key].as_u64().is_some_and(|count| count > 0),
+                    "{key} was not measured: {counters}"
+                );
+            }
+            assert!(counters["mechanics_evaluations"].as_u64().unwrap_or(0) > 0);
+            assert!(counters["probe_evaluations"].as_u64().unwrap_or(0) > 0);
+            assert!(counters["execution_quanta"].as_u64().is_some());
+            assert!(counters["decision_wall_time_ns"].as_u64().is_some());
+            assert!(counters["proof_wall_time_ns"].as_u64().is_some());
+            assert!(counters["simulation_wall_time_ns"].as_u64().is_some());
+            assert_ne!(
+                counters["decision_wall_time_ns"].as_u64(),
+                Some(wall_ns as u64)
+            );
+        }
+        assert_eq!(a["scoped_grant_id"], b["scoped_grant_id"]);
+        assert_eq!(
+            a["executed_probe_witness_digest"],
+            b["executed_probe_witness_digest"]
+        );
+        assert_eq!(a["belief_lineage"], b["belief_lineage"]);
+        let later = |trace: &ClosedLoopTrace| {
+            trace
+                .actions
+                .iter()
+                .find(|action| {
+                    action
+                        .get("reasoning")
+                        .and_then(|note| note.get("executed_probe_witness_digest"))
+                        .and_then(|value| value.as_str())
+                        .is_none()
+                        && action["selected_id"] != runs[0].actions[0]["selected_id"]
+                })
+                .cloned()
+        };
+        let next_a = later(&runs[0]);
+        let next_b = later(&runs[1]);
+        assert_eq!(
+            next_a
+                .as_ref()
+                .map(|action| action["selection_rationale"].as_str()),
+            next_b
+                .as_ref()
+                .map(|action| action["selection_rationale"].as_str())
+        );
+        let next = next_a.expect("canonical decision after the probe");
+        let progressed = next["outcome"] == "GOAL_PROGRESS" || next["outcome"] == "GOAL_REACHED";
+        let refused = next["authority_decision"] == "REFUSE"
+            && next["selection_rationale"]
+                .as_str()
+                .unwrap_or("")
+                .contains("NO_ROBUST_STRICT_PROGRESS");
+        assert!(
+            progressed || refused,
+            "next decision was neither goal progress nor a truthful robustness refusal: {next}"
+        );
+        let counters = &a["work_counters"];
+        let proof = counters["proof_wall_time_ns"].as_u64().unwrap_or(0);
+        let simulation = counters["simulation_wall_time_ns"].as_u64().unwrap_or(0);
+        let decision = counters["decision_wall_time_ns"].as_u64().unwrap_or(0);
+        let dominant = if simulation >= proof && simulation >= decision {
+            "simulation"
+        } else if proof >= decision {
+            "proof"
+        } else {
+            "decision"
+        };
+        std::fs::write(
+            scratch.join("perf-counters.txt"),
+            format!(
+                "pure_decision_latency_ns={decision}\ncandidate_proof_time_ns={proof}\nmujoco_simulation_time_ns={simulation}\ntotal_test_wall_time_ns={wall_ns}\nik_calls={}\nfk_calls={}\ncollision_queries={}\njacobian_evaluations={}\nmechanics_evaluations={}\nprobe_candidates={}\nexecution_quanta={}\ndominant={dominant}\n",
+                counters["ik_attempts"],
+                counters["fk_evaluations"],
+                counters["collision_evaluations"],
+                counters["jacobian_evaluations"],
+                counters["mechanics_evaluations"],
+                counters["probe_evaluations"],
+                counters["execution_quanta"],
+            ),
+        )
+        .unwrap();
+        println!(
+            "probe_grant={} digest={} belief={} next={} dominant={dominant}",
+            a["scoped_grant_id"],
+            a["executed_probe_witness_digest"],
+            a["belief_lineage"],
+            next["selected_id"],
         );
     }
 

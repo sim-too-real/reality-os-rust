@@ -55,6 +55,42 @@ pub struct ProbeEvidence {
     pub future_interaction: ProbeRecoverabilityAssessment,
 }
 
+/// Binding copied from a grant the authority path already issued.
+/// The selector compares it. It does not create it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScopedGrantBinding {
+    pub grant_id: String,
+    pub scope_digest: String,
+    pub action_key: String,
+    pub candidate_id: String,
+    pub witness_digest: String,
+    pub observation_epoch: String,
+    pub requested_stroke_m: f64,
+    pub expires_at_s: f64,
+}
+
+impl ScopedGrantBinding {
+    pub fn matches_probe(
+        &self,
+        candidate: &CandidateEvidence,
+        now_s: f64,
+        observation_epoch: &str,
+    ) -> bool {
+        !self.grant_id.is_empty()
+            && !self.scope_digest.is_empty()
+            && !self.witness_digest.is_empty()
+            && !observation_epoch.is_empty()
+            && self.observation_epoch == observation_epoch
+            && self.action_key == candidate.action_key
+            && self.candidate_id == candidate.candidate_id
+            && candidate.witness_digest.as_deref() == Some(self.witness_digest.as_str())
+            && self.requested_stroke_m.is_finite()
+            && (self.requested_stroke_m - candidate.preference.stroke_m).abs() <= 1e-9
+            && now_s.is_finite()
+            && now_s < self.expires_at_s
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ProbeRecoverabilityAssessment {
@@ -83,7 +119,11 @@ pub struct CandidateEvidence {
     pub contact_id: String,
     pub role: CandidateRole,
     pub strict_goal_progress: bool,
+    /// Policy eligibility. This is not a scoped grant.
     pub authority_ok: bool,
+    /// Present only when an independent authority path issued a grant for this action.
+    #[serde(default)]
+    pub scoped_grant: Option<ScopedGrantBinding>,
     /// Stable identity of the independently-produced executable witness.
     pub executable_witness_id: Option<String>,
     /// Stable identity of the exact witness contents frozen for execution.
@@ -104,6 +144,8 @@ pub struct DecisionContext {
     pub goal_id: String,
     pub goal_reached: bool,
     pub evidence_fresh: bool,
+    pub now_s: f64,
+    pub observation_epoch: String,
     pub remaining_attempts: u32,
     pub current_contact_id: Option<String>,
     pub forbidden_action_keys: Vec<String>,
@@ -175,6 +217,8 @@ enum Eligibility {
     EvidenceUnavailable,
     Infeasible,
     ProbeRecoverabilityUnknown,
+    UnscopedGrant,
+    UnprovedAndUnscoped,
 }
 
 fn eligibility(candidate: &CandidateEvidence, context: &DecisionContext) -> Eligibility {
@@ -271,12 +315,21 @@ fn eligibility(candidate: &CandidateEvidence, context: &DecisionContext) -> Elig
             {
                 return Eligibility::Rejected;
             }
+            let grant_ok = candidate.scoped_grant.as_ref().is_some_and(|grant| {
+                grant.matches_probe(candidate, context.now_s, &context.observation_epoch)
+            });
             match candidate.probe.future_interaction {
-                ProbeRecoverabilityAssessment::Preserved => {}
                 ProbeRecoverabilityAssessment::AtRisk => return Eligibility::Infeasible,
+                ProbeRecoverabilityAssessment::Unknown if !grant_ok => {
+                    return Eligibility::UnprovedAndUnscoped;
+                }
                 ProbeRecoverabilityAssessment::Unknown => {
                     return Eligibility::ProbeRecoverabilityUnknown;
                 }
+                ProbeRecoverabilityAssessment::Preserved if !grant_ok => {
+                    return Eligibility::UnscopedGrant;
+                }
+                ProbeRecoverabilityAssessment::Preserved => {}
             }
         }
     }
@@ -366,6 +419,8 @@ pub fn decide_physical_action(context: &DecisionContext) -> DecisionKind {
     let mut evidence_unavailable = false;
     let mut infeasible = false;
     let mut probe_recoverability_unknown = false;
+    let mut unscoped_grant = false;
+    let mut unproved_and_unscoped = false;
     for (index, candidate) in context.candidates.iter().enumerate() {
         match eligibility(candidate, context) {
             Eligibility::Eligible => match candidate.role {
@@ -376,6 +431,8 @@ pub fn decide_physical_action(context: &DecisionContext) -> DecisionKind {
             Eligibility::EvidenceUnavailable => evidence_unavailable = true,
             Eligibility::Infeasible => infeasible = true,
             Eligibility::ProbeRecoverabilityUnknown => probe_recoverability_unknown = true,
+            Eligibility::UnscopedGrant => unscoped_grant = true,
+            Eligibility::UnprovedAndUnscoped => unproved_and_unscoped = true,
             Eligibility::Rejected => {}
         }
     }
@@ -448,9 +505,21 @@ pub fn decide_physical_action(context: &DecisionContext) -> DecisionKind {
         };
     }
 
+    if unproved_and_unscoped {
+        return DecisionKind::InsufficientEvidence {
+            reason: "PROBE_UNSCOPED_AND_FUTURE_INTERACTION_UNPROVEN".into(),
+        };
+    }
+
     if probe_recoverability_unknown {
         return DecisionKind::InsufficientEvidence {
             reason: "PROBE_FUTURE_INTERACTION_UNPROVEN".into(),
+        };
+    }
+
+    if unscoped_grant {
+        return DecisionKind::Refuse {
+            reason: "SCOPED_GRANT_DOES_NOT_COVER_PROBE".into(),
         };
     }
 

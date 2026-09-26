@@ -1,6 +1,7 @@
 use realityos_semantics::physical_decision::{
     decide_physical_action, CandidateEvidence, CandidateRole, DecisionContext, DecisionKind,
     LexicographicPreference, PredictedPhysicalEffect, ProbeEvidence, ProbeRecoverabilityAssessment,
+    ScopedGrantBinding,
 };
 use realityos_semantics::planar_goal::GoalProgressClass;
 use realityos_semantics::probe_selection::BeliefRobustness;
@@ -15,6 +16,7 @@ fn candidate(id: &str, role: CandidateRole) -> CandidateEvidence {
         role,
         strict_goal_progress: role == CandidateRole::GoalAction,
         authority_ok: true,
+        scoped_grant: None,
         executable_witness_id: Some(format!("witness:{id}")),
         witness_digest: Some(format!("digest:{id}")),
         witness_contents: Some(format!("witness-content:{id}")),
@@ -51,11 +53,27 @@ fn candidate(id: &str, role: CandidateRole) -> CandidateEvidence {
     }
 }
 
+fn with_matching_grant(mut candidate: CandidateEvidence) -> CandidateEvidence {
+    candidate.scoped_grant = Some(ScopedGrantBinding {
+        grant_id: format!("grant:{}", candidate.candidate_id),
+        scope_digest: format!("scope:{}", candidate.candidate_id),
+        action_key: candidate.action_key.clone(),
+        candidate_id: candidate.candidate_id.clone(),
+        witness_digest: candidate.witness_digest.clone().unwrap_or_default(),
+        observation_epoch: "epoch:1".into(),
+        requested_stroke_m: candidate.preference.stroke_m,
+        expires_at_s: 40.0,
+    });
+    candidate
+}
+
 fn context(candidates: Vec<CandidateEvidence>) -> DecisionContext {
     DecisionContext {
         goal_id: "goal:box-to-region".into(),
         goal_reached: false,
         evidence_fresh: true,
+        now_s: 10.0,
+        observation_epoch: "epoch:1".into(),
         remaining_attempts: 2,
         current_contact_id: Some("contact:old".into()),
         forbidden_action_keys: vec![],
@@ -135,7 +153,7 @@ fn probe_requires_positive_decision_relevant_observable_distinctions() {
 
 #[test]
 fn probe_requires_a_separate_future_interaction_safety_proof() {
-    let mut probe = candidate("probe", CandidateRole::PhysicalProbe);
+    let mut probe = with_matching_grant(candidate("probe", CandidateRole::PhysicalProbe));
     probe.probe = ProbeEvidence {
         decision_relevant_distinctions: 2,
         observable_distinctions: 2,
@@ -172,7 +190,8 @@ fn missing_scoped_authority_refuses_a_probe_before_safety_ranking() {
 
 #[test]
 fn canonical_decision_selects_a_safe_probe_when_no_robust_goal_action_exists() {
-    let mut probe = candidate("probe:separating", CandidateRole::PhysicalProbe);
+    let mut probe =
+        with_matching_grant(candidate("probe:separating", CandidateRole::PhysicalProbe));
     probe.strict_goal_progress = false;
     probe.robustness = BeliefRobustness::Ambiguous;
     probe.probe = ProbeEvidence {
@@ -194,6 +213,39 @@ fn canonical_decision_selects_a_safe_probe_when_no_robust_goal_action_exists() {
         }
         other => panic!("expected canonical physical probe, got {other:?}"),
     }
+}
+
+#[test]
+fn a_preserved_probe_without_a_matching_grant_is_refused() {
+    let mut probe = candidate("probe", CandidateRole::PhysicalProbe);
+    probe.probe = ProbeEvidence {
+        decision_relevant_distinctions: 2,
+        observable_distinctions: 2,
+        future_interaction: ProbeRecoverabilityAssessment::Preserved,
+    };
+    assert!(matches!(
+        decide_physical_action(&context(vec![probe.clone()])),
+        DecisionKind::Refuse { reason } if reason == "SCOPED_GRANT_DOES_NOT_COVER_PROBE"
+    ));
+    probe = with_matching_grant(probe);
+    probe.scoped_grant.as_mut().unwrap().witness_digest = "other-digest".into();
+    assert!(matches!(
+        decide_physical_action(&context(vec![probe])),
+        DecisionKind::Refuse { reason } if reason == "SCOPED_GRANT_DOES_NOT_COVER_PROBE"
+    ));
+}
+
+#[test]
+fn unknown_future_and_a_missing_grant_are_both_recorded() {
+    let mut probe = candidate("probe", CandidateRole::PhysicalProbe);
+    probe.probe.decision_relevant_distinctions = 1;
+    probe.probe.observable_distinctions = 1;
+    probe.probe.future_interaction = ProbeRecoverabilityAssessment::Unknown;
+    assert!(matches!(
+        decide_physical_action(&context(vec![probe])),
+        DecisionKind::InsufficientEvidence { reason }
+            if reason == "PROBE_UNSCOPED_AND_FUTURE_INTERACTION_UNPROVEN"
+    ));
 }
 
 #[test]

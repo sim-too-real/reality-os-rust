@@ -560,6 +560,7 @@ fn select_with_physical_decision(
                 strict_goal_progress: candidate.goal_progress
                     == Some(GoalProgressClass::StrictProgress),
                 authority_ok: candidate.authority_ok,
+                scoped_grant: None,
                 executable_witness_id: executable.then(|| format!("{}:witness", candidate.id)),
                 witness_digest,
                 witness_contents,
@@ -598,6 +599,8 @@ fn select_with_physical_decision(
             .unwrap_or_default(),
         goal_reached: false,
         evidence_fresh,
+        now_s: 10.0,
+        observation_epoch: "goal-selection".into(),
         remaining_attempts,
         current_contact_id: current_contact_id.map(str::to_string),
         forbidden_action_keys: forbidden_keys.to_vec(),

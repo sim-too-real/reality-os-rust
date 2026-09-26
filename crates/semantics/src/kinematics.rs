@@ -206,6 +206,7 @@ pub fn forward_kinematics(
     ee: &str,
     q: &[f64],
 ) -> Result<FkState, SkillRefuse> {
+    crate::work_counters::note_fk_evaluation();
     if chain.len() != q.len() {
         return Err(SkillRefuse::Unsupported);
     }
@@ -261,6 +262,7 @@ pub fn jacobian_translational(fk: &FkState) -> Vec<Vec<f64>> {
 
 /// Translational Jacobian of an arbitrary world point (contact offset from EE).
 pub fn jacobian_translational_at(fk: &FkState, point_world: [f64; 3]) -> Vec<Vec<f64>> {
+    crate::work_counters::note_jacobian_evaluation();
     let n = fk.axes_world.len();
     let mut j = vec![vec![0.0; n], vec![0.0; n], vec![0.0; n]];
     for (i, (kind, axis)) in fk.kinds.iter().zip(fk.axes_world.iter()).enumerate() {
@@ -500,6 +502,7 @@ pub fn solve_ik(
     target: [f64; 3],
     current_q: &[f64],
 ) -> Result<(Vec<f64>, IkTrace), SkillRefuse> {
+    crate::work_counters::note_ik_attempt();
     let joints = resolve_chain_joints(model, chain)?;
     if current_q.len() != joints.len() {
         return Err(SkillRefuse::MissingJointState);

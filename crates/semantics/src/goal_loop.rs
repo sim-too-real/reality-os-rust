@@ -145,6 +145,22 @@ pub struct ReasoningNote {
     pub policy_observation_source: Option<String>,
     #[serde(default)]
     pub work_counters: Option<DecisionWorkCounters>,
+    #[serde(default)]
+    pub future_interaction: Option<String>,
+    #[serde(default)]
+    pub future_interaction_evidence: Vec<String>,
+    #[serde(default)]
+    pub authority_eligibility: Option<String>,
+    #[serde(default)]
+    pub scoped_grant_id: Option<String>,
+    #[serde(default)]
+    pub prior_goal_grant_id: Option<String>,
+    #[serde(default)]
+    pub belief_lineage: Option<String>,
+    #[serde(default)]
+    pub executed_probe_witness_digest: Option<String>,
+    #[serde(default)]
+    pub selected_stroke_m: Option<f64>,
 }
 
 /// Typed development counters. `None` means the owning subsystem did not expose
@@ -158,6 +174,10 @@ pub struct DecisionWorkCounters {
     pub collision_evaluations: Option<u64>,
     pub jacobian_evaluations: Option<u64>,
     pub mechanics_evaluations: u64,
+    #[serde(default)]
+    pub proof_wall_time_ns: u64,
+    #[serde(default)]
+    pub simulation_wall_time_ns: u64,
     pub recoverability_evaluations: u64,
     pub belief_domain_evaluations: u64,
     pub probe_evaluations: u64,

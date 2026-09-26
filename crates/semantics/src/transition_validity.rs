@@ -507,6 +507,7 @@ pub fn validate_transition(
     policy: &AllowedContactPolicy,
     phase: ContactPhase,
 ) -> TransitionReport {
+    crate::work_counters::note_collision_query();
     let mut coverage = scene.coverage();
     if names.len() != qa.len() || names.len() != qb.len() || qa.is_empty() {
         coverage.missing.push("q_len".into());
