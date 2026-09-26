@@ -4,6 +4,12 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_frozen_holdouts:
+        description: Run the frozen MuJoCo holdout suite once after decisions are frozen.
+        required: true
+        default: false
+        type: boolean
 
 jobs:
   verify:
@@ -46,7 +52,9 @@ jobs:
           print("tier2 smoke ok", rec.get("n_instances"), rec.get("verdict"))
           PY
       - name: test
-        run: cargo test --workspace --all-targets --exclude realityos-metal
+        # Skip only tests that score/evaluate frozen holdout outcomes. Keep
+        # holdout/quarantine and freeze-gating safety tests in every routine run.
+        run: cargo test --workspace --all-targets --exclude realityos-metal -- --skip holdout_postfix_score_does_not_rewrite_first_score --skip v2_holdout_first_score_is_recorded_after_freeze --skip rules_majority_logistic_run_on_arm_gripper_holdout --skip held_out_first_evaluation_is_recorded
 
   verify-mujoco:
     runs-on: ubuntu-latest
@@ -75,6 +83,12 @@ jobs:
           python -m pip install -r crates/verify/python-requirements.txt
           python -c "import mujoco, numpy; print('mujoco', mujoco.__version__); print('numpy', numpy.__version__); assert mujoco.__version__ == '3.7.0'"
       - name: require-mujoco tests
+        env:
+          REALITYOS_REQUIRE_MUJOCO: "1"
+          MUJOCO_GL: disable
+        run: cargo test -p realityos-verify --all-targets -- --skip holdout_postfix_score_does_not_rewrite_first_score --skip v2_holdout_first_score_is_recorded_after_freeze --skip rules_majority_logistic_run_on_arm_gripper_holdout --skip held_out_first_evaluation_is_recorded
+      - name: frozen MuJoCo holdout suite (explicit dispatch only)
+        if: github.event_name == 'workflow_dispatch' && inputs.run_frozen_holdouts == true
         env:
           REALITYOS_REQUIRE_MUJOCO: "1"
           MUJOCO_GL: disable

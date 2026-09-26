@@ -56,7 +56,8 @@ pub struct RuntimeExecutionObservation {
     pub intended_contact_persists: bool,
     pub goal_error_before: f64,
     pub goal_error_now: f64,
-    pub robot_tracking_error_m: f64,
+    /// Missing tracking evidence is not evidence of zero error.
+    pub robot_tracking_error_m: Option<f64>,
     pub reachability_margin_m: f64,
     pub quasi_static_applicable: Option<bool>,
     pub authority_ok: bool,
@@ -119,8 +120,11 @@ pub fn check_execution_envelope(
         > observation.goal_error_before + envelope.max_goal_error_increase
     {
         Some("GOAL_ERROR_REGRESSION")
-    } else if observation.robot_tracking_error_m > envelope.max_tracking_error_m {
-        Some("ROBOT_TRACKING")
+    } else if let Some(reason) = tracking_error_failure(
+        observation.robot_tracking_error_m,
+        envelope.max_tracking_error_m,
+    ) {
+        Some(reason)
     } else if envelope.require_intended_contact && !observation.intended_contact_persists {
         Some("INTENDED_CONTACT")
     } else if observation.quasi_static_applicable == Some(false) {
@@ -142,6 +146,15 @@ pub fn check_execution_envelope(
     }
 }
 
+fn tracking_error_failure(error_m: Option<f64>, max_error_m: f64) -> Option<&'static str> {
+    match error_m {
+        None => Some("TRACKING_EVIDENCE_MISSING"),
+        Some(error) if !error.is_finite() || error < 0.0 => Some("TRACKING_EVIDENCE_INVALID"),
+        Some(error) if error > max_error_m => Some("ROBOT_TRACKING"),
+        Some(_) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,7 +168,7 @@ mod tests {
             intended_contact_persists: true,
             goal_error_before: 1.0,
             goal_error_now: 0.9,
-            robot_tracking_error_m: 0.0,
+            robot_tracking_error_m: Some(0.0),
             reachability_margin_m: 0.05,
             quasi_static_applicable: Some(true),
             authority_ok: true,
@@ -179,6 +192,38 @@ mod tests {
         assert!(mid.stroke_consumed_m < commanded);
         let unguarded_end = 0.16;
         assert!(abort.displacement_m < unguarded_end);
+    }
+
+    #[test]
+    fn malformed_tracking_evidence_aborts_closed() {
+        let commanded = 0.04;
+        let envelope = ExecutionEnvelope::for_quasi_static_stroke(commanded, commanded);
+        let mut observation = nominal(commanded * 0.25, commanded * 0.2, commanded);
+        observation.robot_tracking_error_m = Some(f64::NAN);
+
+        let check = check_execution_envelope(&envelope, &observation);
+
+        assert_eq!(check.verdict, EnvelopeVerdict::AbortAndReobserve);
+        assert_eq!(
+            check.failed_guard.as_deref(),
+            Some("TRACKING_EVIDENCE_INVALID")
+        );
+    }
+
+    #[test]
+    fn missing_tracking_evidence_aborts_closed() {
+        let commanded = 0.04;
+        let envelope = ExecutionEnvelope::for_quasi_static_stroke(commanded, commanded);
+        let mut observation = nominal(commanded * 0.25, commanded * 0.2, commanded);
+        observation.robot_tracking_error_m = None;
+
+        let check = check_execution_envelope(&envelope, &observation);
+
+        assert_eq!(check.verdict, EnvelopeVerdict::AbortAndReobserve);
+        assert_eq!(
+            check.failed_guard.as_deref(),
+            Some("TRACKING_EVIDENCE_MISSING")
+        );
     }
 
     #[test]

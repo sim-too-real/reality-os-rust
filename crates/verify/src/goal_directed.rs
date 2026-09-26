@@ -128,7 +128,7 @@ mod tests {
     };
     use realityos_semantics::discrepancy::{
         apply_probe_observation, hypothesize, prediction_regime, tag_probe_motion, DiscrepancyKind,
-        DiscrepancyObservation, Stimulus,
+        DiscrepancyObservation, Identifiability, Stimulus,
     };
     use realityos_semantics::effect_feasibility::PlanarPushInitiation;
     use realityos_semantics::effort::{any_link_com_known, chain_physical_effort_signed};
@@ -963,6 +963,61 @@ mod tests {
         // A scenario executes every phase of the selected witness. Until the executor can
         // observe and abort within one witness, dispatch that frozen stroke exactly once.
         vec![(0, full_stroke)]
+    }
+
+    fn observed_discrepancy_without_residuals(
+        displacement_ratio: f64,
+        yaw_change_rad: f64,
+        predicted_yaw_sign: Option<i8>,
+        contact_persisted: bool,
+        stroke_m: f64,
+        quasi_static_stroke_limit_m: f64,
+    ) -> DiscrepancyObservation {
+        DiscrepancyObservation {
+            displacement_ratio: Some(displacement_ratio),
+            yaw_change_rad: Some(yaw_change_rad),
+            predicted_yaw_sign,
+            observed_yaw_sign: yaw_change_rad.is_finite().then_some({
+                if yaw_change_rad > 0.0 {
+                    1
+                } else if yaw_change_rad < 0.0 {
+                    -1
+                } else {
+                    0
+                }
+            }),
+            contact_persisted: Some(contact_persisted),
+            tracking_error_m: None,
+            geometry_residual_m: None,
+            freshness_ok: true,
+            stroke_m,
+            quasi_static_stroke_limit_m,
+            contradictory: false,
+            reachable: true,
+        }
+    }
+
+    fn reasoning_taxonomy(
+        prevention_impossible: bool,
+        interactable: bool,
+        selected_probe: bool,
+        executable_probe_available: bool,
+        discrepancy_status: Identifiability,
+        abort_at: Option<u32>,
+    ) -> &'static str {
+        if prevention_impossible {
+            "STATE_ALREADY_UNRECOVERABLE"
+        } else if interactable && selected_probe && executable_probe_available {
+            "SAFE_PROBE_AVAILABLE"
+        } else if discrepancy_status == Identifiability::Unknown {
+            "INSUFFICIENT_DISCREPANCY_EVIDENCE"
+        } else if interactable {
+            "SAFE_INTERACTION_AVAILABLE"
+        } else if abort_at.is_some() {
+            "GOAL_CURRENTLY_UNACHIEVABLE"
+        } else {
+            "NOT_PROVED"
+        }
     }
 
     fn candidate_stroke_plan(
@@ -1943,6 +1998,13 @@ mod tests {
                 !frozen.contains_privileged_force(),
                 "privileged simulator force leaked into predictor"
             );
+            let predicted_yaw_sign = frozen.witness.rotation_sign.and_then(|sign| match sign {
+                realityos_physics::RotationSign::Clockwise => Some(-1),
+                realityos_physics::RotationSign::Counterclockwise => Some(1),
+                realityos_physics::RotationSign::TranslationOnly => Some(0),
+                realityos_physics::RotationSign::Ambiguous
+                | realityos_physics::RotationSign::Unknown => None,
+            });
             let full_stroke = selected_witness_stroke(&sel)
                 .expect("selected executable candidate has a finite witness stroke");
             let scenario_strokes = execution_scenario_strokes(full_stroke);
@@ -2020,15 +2082,12 @@ mod tests {
                         yaw_change_rad: realityos_semantics::planar_goal::wrap_pi(
                             nyaw - action_yaw,
                         ),
-                        intended_contact_persists: ep_last.as_ref().is_some_and(|ep| {
-                            ep.ctrl_writes > 0
-                                && (ep.intended_tool_contact
-                                    || ep.contact_pose_reached
-                                    || ep.had_feasible_contact_maneuver)
-                        }),
+                        intended_contact_persists: ep_last
+                            .as_ref()
+                            .is_some_and(|ep| ep.intended_tool_contact),
                         goal_error_before: err_before.combined,
                         goal_error_now: err_now.combined,
-                        robot_tracking_error_m: 0.0,
+                        robot_tracking_error_m: None,
                         reachability_margin_m: 0.25 - disp,
                         quasi_static_applicable: Some(
                             consumed <= 1e-9 || disp / consumed <= QUASI_STATIC_DISPLACEMENT_RATIO,
@@ -2050,10 +2109,7 @@ mod tests {
                 }
             }
             let ep = ep_last.ok_or_else(|| "stroke produced no episode".to_string())?;
-            let contact_established = ep.ctrl_writes > 0
-                && (ep.intended_tool_contact
-                    || ep.contact_pose_reached
-                    || ep.had_feasible_contact_maneuver);
+            let contact_established = ep.intended_tool_contact;
             let after = WorldObservation {
                 object_id: "obj0".into(),
                 xy: nxy,
@@ -2090,26 +2146,15 @@ mod tests {
                 } else {
                     0.0
                 };
-                let contact_persisted = ep.ctrl_writes > 0
-                    && (ep.intended_tool_contact
-                        || ep.contact_pose_reached
-                        || ep.had_feasible_contact_maneuver);
-                let slip_obs = DiscrepancyObservation {
-                    displacement_ratio: Some(ratio),
-                    yaw_change_rad: Some(realityos_semantics::planar_goal::wrap_pi(
-                        nyaw - action_yaw,
-                    )),
-                    predicted_yaw_sign: Some(0),
-                    observed_yaw_sign: Some(0),
-                    contact_persisted: Some(contact_persisted),
-                    tracking_error_m: Some(0.0),
-                    geometry_residual_m: Some(0.0),
-                    freshness_ok: true,
-                    stroke_m: consumed,
-                    quasi_static_stroke_limit_m: limit,
-                    contradictory: false,
-                    reachable: true,
-                };
+                let contact_persisted = ep.intended_tool_contact;
+                let slip_obs = observed_discrepancy_without_residuals(
+                    ratio,
+                    realityos_semantics::planar_goal::wrap_pi(nyaw - action_yaw),
+                    predicted_yaw_sign,
+                    contact_persisted,
+                    consumed,
+                    limit,
+                );
                 let report = hypothesize(&slip_obs);
                 let ranking_before = rank_goal_or_probe(&decision_candidates, &report.kinds, limit);
                 let belief = if let Some(carried) = belief_state.clone() {
@@ -2145,6 +2190,7 @@ mod tests {
                 let mut probe_displacement_m = None;
                 let mut probe_contact_persisted = None;
                 let mut admissible_contact_count = None;
+                let mut executable_probe_available = false;
                 if options.guard && abort_at.is_some() {
                     let (admissible, _) = proved_contacts_at(
                         &model,
@@ -2192,6 +2238,8 @@ mod tests {
                             true,
                         );
                         admissible_contact_count = Some(admissible.max(probe_admissible));
+                        executable_probe_available =
+                            probe_admissible > 0 && probe_maneuver.is_some();
                         let probe_origin = nxy;
                         let observed = if let Some(maneuver) = probe_maneuver {
                             let executed = executed_witness_stroke(&maneuver);
@@ -2231,10 +2279,7 @@ mod tests {
                             let probe_disp = ((probe_xy[0] - probe_origin[0]).powi(2)
                                 + (probe_xy[1] - probe_origin[1]).powi(2))
                             .sqrt();
-                            let contact = probe_ep.ctrl_writes > 0
-                                && (probe_ep.intended_tool_contact
-                                    || probe_ep.contact_pose_reached
-                                    || probe_ep.had_feasible_contact_maneuver);
+                            let contact = probe_ep.intended_tool_contact;
                             probe_displacement_m = Some(probe_disp);
                             probe_contact_persisted = Some(contact);
                             nxy = probe_xy;
@@ -2373,15 +2418,17 @@ mod tests {
                     selected_kind,
                     information_gain: Some(ranking_before.information_gain),
                     recoverability: Some(pose_label),
-                    taxonomy: Some(if prevention_impossible {
-                        "STATE_ALREADY_UNRECOVERABLE".into()
-                    } else if interactable {
-                        "SAFE_PROBE_AVAILABLE".into()
-                    } else if abort_at.is_some() {
-                        "GOAL_CURRENTLY_UNACHIEVABLE".into()
-                    } else {
-                        "NOT_PROVED".into()
-                    }),
+                    taxonomy: Some(
+                        reasoning_taxonomy(
+                            prevention_impossible,
+                            interactable,
+                            ranking_before.selected_class == Some(DecisionClass::PhysicalProbe),
+                            executable_probe_available,
+                            report.status,
+                            abort_at,
+                        )
+                        .into(),
+                    ),
                     displacement_m: Some(guarded_displacement),
                     interactable_after_abort: Some(interactable),
                     probe_displacement_m,
@@ -2664,7 +2711,9 @@ mod tests {
     }
 
     fn goal_scratch() -> PathBuf {
-        PathBuf::from(r"C:\Users\moram\AppData\Local\Temp\grok-goal-cfa27dcadf88\implementer")
+        std::env::var_os("REALITYOS_GOAL_SCRATCH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("realityos-goal-cfa27dcadf88/implementer"))
     }
 
     fn reasoning_of(trace: &ClosedLoopTrace) -> Value {
@@ -2684,7 +2733,7 @@ mod tests {
     }
 
     #[test]
-    fn development_slip_guard_agrees_twice() {
+    fn development_slip_guard_repeats_without_inventing_tracking_evidence() {
         let scratch = goal_scratch();
         std::fs::create_dir_all(&scratch).expect("scratch");
         if !ensure_mujoco_or_skip() {
@@ -2771,14 +2820,21 @@ mod tests {
         let guarded_disp = note_a["displacement_m"].as_f64().expect("disp");
         let unguarded_disp = note_u["displacement_m"].as_f64().expect("unguarded disp");
         assert!(
-            guarded_disp < unguarded_disp,
-            "guarded displacement {guarded_disp} is not smaller than unguarded {unguarded_disp}"
+            (guarded_disp - unguarded_disp).abs() <= 1e-9,
+            "this harness observes only after the selected witness completes; it must not claim an early stop: guarded={guarded_disp}, unguarded={unguarded_disp}"
         );
         let hypotheses = note_a["hypotheses"].as_array().expect("hypotheses");
-        assert!(
-            hypotheses.len() >= 2,
-            "expected competing hypotheses, got {hypotheses:?}"
+        assert_eq!(
+            hypotheses,
+            &vec![
+                json!("StaleOrInsufficientObservation"),
+                json!("ToolContactFrictionInconsistent")
+            ],
+            "missing tracking/geometry stay insufficient while measured contact loss remains usable"
         );
+        assert_eq!(note_a["hypothesis_status"], "Underdetermined");
+        assert_eq!(note_a["information_gain"], 1);
+        assert_eq!(note_a["taxonomy"], "SAFE_PROBE_AVAILABLE");
         let action = passes[0]
             .actions
             .iter()
@@ -2823,50 +2879,11 @@ mod tests {
                 "a missed probe must not identify a cause: {belief}"
             );
         }
-        if count > 0 {
-            let probe_belief = note_a["belief_after"].as_str().unwrap_or("");
-            assert!(
-                probe_belief.starts_with("Identified|"),
-                "probe below the quasi-static limit must apply the measured tag: {probe_belief}"
-            );
-            assert!(
-                !probe_belief.contains("Underdetermined"),
-                "nominal probe motion must not stay underdetermined: {probe_belief}"
-            );
-            let probe_rank = note_a["ranking_after"].as_str().unwrap_or("");
-            let proved_head = probe_rank.split('|').next().unwrap_or("");
-            assert!(
-                !proved_head.is_empty() && !proved_head.starts_with("goal_"),
-                "post-probe ranking_after is not select_recoverable_progress on a proved contact: {probe_rank}"
-            );
-            let follow = passes[0].actions.iter().find(|action| {
-                action["authority_decision"] == "AUTHORIZE"
-                    && action["selected_id"].as_str() == Some(proved_head)
-            });
-            assert!(
-                follow.is_some(),
-                "did not authorize the proved recoverable contact {proved_head}: {}",
-                serde_json::to_string(&passes[0].actions).unwrap_or_default()
-            );
-            let follow = follow.unwrap();
-            let follow_b = passes[1].actions.iter().find(|action| {
-                action["authority_decision"] == "AUTHORIZE"
-                    && action["selected_id"].as_str() == Some(proved_head)
-            });
-            assert_eq!(
-                follow["selection_rationale"],
-                follow_b.unwrap()["selection_rationale"]
-            );
-            assert_eq!(follow["unauthorized_writes"], 0);
-            assert!(follow["ctrl_writes"].as_u64().unwrap_or(0) > 0);
-            assert_ne!(follow["outcome"], "GOAL_REACHED");
-            assert_ne!(follow["decision"], "RECOVER");
-            let why = follow["selection_rationale"].as_str().unwrap_or("");
-            assert!(
-                why.contains("class=ProgressAndRecoverable"),
-                "authorized contact was not the recoverable class: {why}"
-            );
-        }
+        let probe_belief = note_a["belief_after"].as_str().unwrap_or("");
+        assert!(
+            probe_belief.starts_with("Underdetermined|") || probe_belief.starts_with("Unknown|"),
+            "this probe's observation does not distinguish the live causes, so it cannot identify one: {probe_belief}"
+        );
         assert_ne!(passes[0].final_outcome, "GoalReached");
         assert_ne!(passes[1].final_outcome, "GoalReached");
         assert!(passes[0]
@@ -3127,6 +3144,72 @@ mod tests {
             execution_scenario_strokes(0.03),
             vec![(0, 0.03)],
             "the runner executes every witness phase per scenario; splitting would replay the full witness"
+        );
+    }
+
+    #[test]
+    fn absent_tracking_and_geometry_residuals_cannot_identify_slip() {
+        let observation =
+            observed_discrepancy_without_residuals(3.0, 0.0, Some(0), true, 0.04, 0.015);
+
+        let report = hypothesize(&observation);
+
+        assert_eq!(report.status, Identifiability::Unknown);
+        assert_eq!(
+            report.kinds,
+            vec![DiscrepancyKind::StaleOrInsufficientObservation]
+        );
+    }
+
+    #[test]
+    fn successful_contact_probe_does_not_identify_a_cause_absent_from_its_predictions() {
+        let live = vec![
+            DiscrepancyKind::StaleOrInsufficientObservation,
+            DiscrepancyKind::ToolContactFrictionInconsistent,
+        ];
+        let update = apply_probe_observation(
+            &PhysicalParameterBelief::declared_point(
+                PhysicalParameter::SupportFriction,
+                0.3,
+                "scene.support_friction",
+            ),
+            &live,
+            Stimulus {
+                stroke_m: 0.008,
+                quasi_static_stroke_limit_m: 0.015,
+            },
+            realityos_semantics::discrepancy::ObservationTag::HighDisplacementRatio,
+            "probe-success",
+        );
+
+        assert_eq!(update.status, Identifiability::Unknown);
+        assert!(update.remaining.is_empty());
+        assert_eq!(update.eliminated, live);
+    }
+
+    #[test]
+    fn missing_executable_probe_witness_is_not_taxonomized_as_a_safe_probe() {
+        assert_eq!(
+            reasoning_taxonomy(
+                false,
+                true,
+                true,
+                false,
+                Identifiability::Underdetermined,
+                Some(0),
+            ),
+            "SAFE_INTERACTION_AVAILABLE"
+        );
+        assert_eq!(
+            reasoning_taxonomy(
+                false,
+                true,
+                true,
+                true,
+                Identifiability::Underdetermined,
+                Some(0),
+            ),
+            "SAFE_PROBE_AVAILABLE"
         );
     }
 

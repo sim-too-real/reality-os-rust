@@ -959,7 +959,7 @@ mod tests {
             intended_contact_persists: true,
             goal_error_before: 1.0,
             goal_error_now: 0.8,
-            robot_tracking_error_m: 0.0,
+            robot_tracking_error_m: Some(0.0),
             reachability_margin_m: 0.05,
             quasi_static_applicable: Some(true),
             authority_ok: true,
