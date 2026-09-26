@@ -300,7 +300,9 @@ pub fn candidates_for_uncertainty(quasi_static_limit_m: f64) -> Vec<DecisionCand
             GoalProgressClass::StrictProgress,
             GoalProgressClass::StrictProgress,
         ),
-        probe("probe_separating", limit * 0.4, 0.0, true),
+        // Use most of the still-sub-limit stroke so a contact witness has
+        // enough physical displacement to be observable and executable.
+        probe("probe_separating", limit * 0.8, 0.0, true),
         probe("probe_repeat", limit * 3.0, 0.05, true),
         probe("probe_unsafe", limit * 0.4, 0.0, false),
     ]
@@ -387,6 +389,12 @@ mod tests {
         assert_eq!(ranking.selected_class, Some(DecisionClass::PhysicalProbe));
         assert_eq!(ranking.selected_id.as_deref(), Some("probe_separating"));
         assert_eq!(ranking.information_gain, 1);
+        let separating = candidates
+            .iter()
+            .find(|candidate| candidate.id == "probe_separating")
+            .unwrap();
+        assert!(separating.stroke_m > LIMIT * 0.5);
+        assert!(separating.stroke_m < LIMIT);
         let goal_large = candidates.iter().find(|c| c.id == "goal_large").unwrap();
         let probe = candidates
             .iter()

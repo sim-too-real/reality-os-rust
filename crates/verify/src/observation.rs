@@ -18,6 +18,8 @@ pub enum VisionMode {
 pub struct Detection {
     pub name: String,
     pub pose: Vec<f64>,
+    #[serde(default)]
+    pub orientation_wxyz: Option<Vec<f64>>,
     pub source: String,
 }
 
@@ -35,12 +37,21 @@ pub struct PolicyObservation {
     pub qvel: Vec<f64>,
     pub action_dim: usize,
     pub detections: Vec<Detection>,
+    /// Contact-sensor pairs only; privileged force magnitudes are not exposed.
+    #[serde(default)]
+    pub contact_pairs: Vec<PolicyContactPair>,
     pub rgb: Option<Vec<u8>>,
     pub depth: Option<Vec<f32>>,
     #[serde(default)]
     pub camera_status: Option<String>,
     pub goal_xyz: Option<[f64; 3]>,
     pub goal_q: Option<Vec<f64>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyContactPair {
+    pub body1: String,
+    pub body2: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -194,6 +205,7 @@ pub fn policy_observation(
     let mut qpos = truth.qpos.clone();
     let mut qvel = truth.qvel.clone();
     let mut detections = Vec::new();
+    let mut contact_pairs = Vec::new();
     if dropout {
         qpos.clear();
         qvel.clear();
@@ -204,10 +216,21 @@ pub fn policy_observation(
                 detections.push(Detection {
                     name: name.clone(),
                     pose: pose.clone(),
+                    orientation_wxyz: truth.xquat.get(name).cloned(),
                     source: "perfect_perception_from_sim_truth".into(),
                 });
             }
         }
+        contact_pairs.extend(
+            truth
+                .contacts
+                .iter()
+                .filter(|contact| contact.dist.is_finite() && contact.dist <= 1e-3)
+                .map(|contact| PolicyContactPair {
+                    body1: contact.body1.clone(),
+                    body2: contact.body2.clone(),
+                }),
+        );
     }
     let camera_status = if mode == VisionMode::Camera {
         Some("NOT_IMPLEMENTED_IN_VERIFY_V1".into())
@@ -227,6 +250,7 @@ pub fn policy_observation(
         qvel,
         action_dim: manifest.nu.max(1) as usize,
         detections,
+        contact_pairs,
         rgb: None,
         depth: None,
         camera_status,

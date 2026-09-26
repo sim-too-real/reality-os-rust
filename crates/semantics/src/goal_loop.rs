@@ -3,8 +3,10 @@
 use realityos_physics::{PlanarTwist, RotationSign};
 use serde::{Deserialize, Serialize};
 
+use crate::execution_envelope::SupervisorDecision;
+use crate::physical_decision::ContactTransitionPhase;
 use crate::physical_interaction::{
-    select_interaction, FunnelStage, PhysicalInteractionCandidate, SelectionOutcome,
+    select_interaction_with_context, FunnelStage, PhysicalInteractionCandidate, SelectionOutcome,
 };
 use crate::planar_goal::{
     evaluate_goal_error, twist_in_world, wrap_pi, GoalError, GoalProgressClass, PlanarObjectGoal,
@@ -60,6 +62,7 @@ pub struct WorldObservation {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContactSwitch {
+    pub phases: Vec<ContactTransitionPhase>,
     pub leave_current: bool,
     pub reobserve_required: bool,
     pub new_approach_required: bool,
@@ -124,6 +127,45 @@ pub struct ReasoningNote {
     pub probe_contact_persisted: Option<bool>,
     #[serde(default)]
     pub admissible_contact_count: Option<u32>,
+    #[serde(default)]
+    pub consequence_assessment: Option<crate::physical_consequence::ConsequenceAssessment>,
+    #[serde(default)]
+    pub supervisor_decisions: Vec<String>,
+    #[serde(default)]
+    pub supervisor_events: Vec<SupervisorDecision>,
+    #[serde(default)]
+    pub probe_decision: Option<crate::physical_decision::DecisionKind>,
+    #[serde(default)]
+    pub executed_quanta: u32,
+    #[serde(default)]
+    pub frozen_action_id: Option<String>,
+    #[serde(default)]
+    pub frozen_witness_id: Option<String>,
+    #[serde(default)]
+    pub policy_observation_source: Option<String>,
+    #[serde(default)]
+    pub work_counters: Option<DecisionWorkCounters>,
+}
+
+/// Typed development counters. `None` means the owning subsystem did not expose
+/// a trustworthy count in this runtime slice.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct DecisionWorkCounters {
+    pub candidates: u64,
+    pub candidate_evaluations: u64,
+    pub ik_attempts: Option<u64>,
+    pub fk_evaluations: Option<u64>,
+    pub collision_evaluations: Option<u64>,
+    pub jacobian_evaluations: Option<u64>,
+    pub mechanics_evaluations: u64,
+    pub recoverability_evaluations: u64,
+    pub belief_domain_evaluations: u64,
+    pub probe_evaluations: u64,
+    pub decision_wall_time_ns: u64,
+    pub execution_quanta: u32,
+    pub observations: u32,
+    pub replans: u32,
+    pub aborts: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -148,6 +190,19 @@ impl Default for LoopState {
             unauthorized_writes: 0,
             last_predicted_pose: None,
         }
+    }
+}
+
+impl LoopState {
+    /// Blacklist one physical identity after contradiction or an aborted
+    /// witness. Idempotence keeps repeated reports from changing the state.
+    pub fn forbid_action_key(&mut self, action_key: impl Into<String>) -> bool {
+        let action_key = action_key.into();
+        if action_key.is_empty() || self.forbidden_action_keys.contains(&action_key) {
+            return false;
+        }
+        self.forbidden_action_keys.push(action_key);
+        true
     }
 }
 
@@ -281,9 +336,7 @@ pub fn receding_horizon_step(
                     .map(|c| c.action_key())
                     .or_else(|| prev.selected_id.clone())
                     .unwrap_or_default();
-                if !k.is_empty() && !state.forbidden_action_keys.contains(&k) {
-                    state.forbidden_action_keys.push(k);
-                }
+                state.forbid_action_key(k);
                 if let Some(rec) = state.last_record.as_mut() {
                     rec.first_divergence = Some("MODEL_DISAGREEMENT".into());
                 }
@@ -403,40 +456,46 @@ pub fn receding_horizon_step(
         // A contradicted model is not left authoritative: forbidden keys already set.
     }
 
-    let sel = select_interaction(candidates, &state.forbidden_action_keys);
+    let sel = select_interaction_with_context(
+        candidates,
+        &state.forbidden_action_keys,
+        observation.intended_contact_face.as_deref(),
+        observation.freshness_ok,
+        goal.max_bounded_attempts.saturating_sub(state.attempts),
+    );
     let (outcome, decision, authority, selected_idx, switch) = match &sel {
-        SelectionOutcome::Selected { index, .. } => {
-            let c = &candidates[*index];
-            let switch = if observation
-                .intended_contact_face
-                .as_ref()
-                .is_some_and(|f| f != &c.face_id)
-            {
-                state.contact_switches += 1;
-                Some(ContactSwitch {
-                    leave_current: true,
-                    reobserve_required: true,
-                    new_approach_required: true,
-                    collision_admissible_required: true,
-                    executable_witness_required: true,
-                    from_face: observation.intended_contact_face.clone(),
-                    to_face: c.face_id.clone(),
-                    assumed_object_pose: None,
-                })
-            } else {
-                None
-            };
-            let dec = if switch.is_some() {
-                LoopDecision::SwitchContact
-            } else {
-                LoopDecision::Continue
+        SelectionOutcome::Selected { index, .. } => (
+            GoalLoopOutcome::GoalProgress,
+            LoopDecision::Continue,
+            "AUTHORIZE".to_string(),
+            Some(*index),
+            None,
+        ),
+        SelectionOutcome::ContactTransition { index, phases, .. } => {
+            let candidate = &candidates[*index];
+            state.contact_switches += 1;
+            let contains = |phase| phases.contains(&phase);
+            let switch = ContactSwitch {
+                phases: phases.clone(),
+                leave_current: contains(ContactTransitionPhase::LeaveCurrentContact),
+                reobserve_required: contains(ContactTransitionPhase::Reobserve),
+                new_approach_required: contains(ContactTransitionPhase::ApproachNewContact),
+                collision_admissible_required: contains(
+                    ContactTransitionPhase::RecheckCollisionAndWitness,
+                ),
+                executable_witness_required: contains(
+                    ContactTransitionPhase::RecheckCollisionAndWitness,
+                ),
+                from_face: observation.intended_contact_face.clone(),
+                to_face: candidate.face_id.clone(),
+                assumed_object_pose: None,
             };
             (
                 GoalLoopOutcome::GoalProgress,
-                dec,
+                LoopDecision::SwitchContact,
                 "AUTHORIZE".to_string(),
                 Some(*index),
-                switch,
+                Some(switch),
             )
         }
         SelectionOutcome::AuthorityRefusal { .. } => (
@@ -447,6 +506,13 @@ pub fn receding_horizon_step(
             None,
         ),
         SelectionOutcome::MechanicsUnknown { .. } => (
+            GoalLoopOutcome::InsufficientEvidence,
+            LoopDecision::Refuse,
+            "REFUSE".into(),
+            None,
+            None,
+        ),
+        SelectionOutcome::InsufficientEvidence { .. } => (
             GoalLoopOutcome::InsufficientEvidence,
             LoopDecision::Refuse,
             "REFUSE".into(),
@@ -472,11 +538,13 @@ pub fn receding_horizon_step(
     let selected = selected_idx.map(|i| candidates[i].clone());
     let rationale = match &sel {
         SelectionOutcome::Selected { reason, .. } => reason.clone(),
+        SelectionOutcome::ContactTransition { reason, .. } => reason.clone(),
         SelectionOutcome::AuthorityRefusal { reason, .. } => reason.clone(),
         SelectionOutcome::NoUsefulPhysicalAction { reason }
         | SelectionOutcome::PlannerFailedToFind { reason }
         | SelectionOutcome::GeometricallyUsefulRobotCannotExecute { reason }
-        | SelectionOutcome::MechanicsUnknown { reason } => reason.clone(),
+        | SelectionOutcome::MechanicsUnknown { reason }
+        | SelectionOutcome::InsufficientEvidence { reason } => reason.clone(),
     };
 
     if selected.is_some() {
@@ -581,9 +649,7 @@ pub fn record_after_with_goal(
                     .as_ref()
                     .map(|c| c.action_key())
                     .unwrap_or(id);
-                if !result.state.forbidden_action_keys.contains(&key) {
-                    result.state.forbidden_action_keys.push(key);
-                }
+                result.state.forbid_action_key(key);
             }
         }
     }
@@ -751,7 +817,17 @@ mod tests {
             robot_reject_reason: None,
         };
         evaluate_all(&mut cands, &ctx);
+        crate::physical_interaction::test_support::attach_executable_witnesses(&mut cands);
         cands
+    }
+
+    #[test]
+    fn forbidden_action_keys_are_nonempty_and_idempotent() {
+        let mut state = LoopState::default();
+        assert!(!state.forbid_action_key(""));
+        assert!(state.forbid_action_key("face:+x:0.0"));
+        assert!(!state.forbid_action_key("face:+x:0.0"));
+        assert_eq!(state.forbidden_action_keys, vec!["face:+x:0.0"]);
     }
 
     #[test]
@@ -851,6 +927,10 @@ mod tests {
             .contact_switch
             .expect("expected a contact switch event");
         assert!(sw.leave_current);
+        assert_eq!(
+            sw.phases.first(),
+            Some(&ContactTransitionPhase::LeaveCurrentContact)
+        );
         assert!(sw.reobserve_required);
         assert!(sw.new_approach_required);
         assert!(sw.collision_admissible_required);
@@ -860,6 +940,31 @@ mod tests {
         assert!(sw.assumed_object_pose.is_none());
         assert!(step.state.last_predicted_pose.is_none());
         assert_eq!(step.record.decision, LoopDecision::SwitchContact);
+    }
+
+    #[test]
+    fn no_current_contact_preserves_reobserve_recheck_and_approach_phases() {
+        let g = goal_plus_x();
+        let start = obs([0.0, 0.0], None);
+        let cands = evaluated(start.xy, &g);
+        let step = receding_horizon_step(&start, &g, &cands, LoopState::default(), None);
+        let transition = step
+            .record
+            .contact_switch
+            .expect("new contact still needs a witnessed transition");
+
+        assert!(!transition.leave_current);
+        assert_eq!(
+            transition.phases,
+            vec![
+                ContactTransitionPhase::Reobserve,
+                ContactTransitionPhase::RecheckCollisionAndWitness,
+                ContactTransitionPhase::ApproachNewContact,
+            ]
+        );
+        assert_eq!(step.record.decision, LoopDecision::SwitchContact);
+        assert!(transition.from_face.is_none());
+        assert!(transition.assumed_object_pose.is_none());
     }
 
     #[test]

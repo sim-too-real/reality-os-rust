@@ -5,6 +5,11 @@
 //! margin, quasi-static applicability, and authority. No future state.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+use crate::physical_belief::PhysicalParameterBelief;
+use crate::physical_consequence::FrozenPrediction;
+use crate::recoverability::RecoverabilityClass;
 
 /// Displacement / consumed stroke above this is outside the quasi-static push.
 pub const QUASI_STATIC_DISPLACEMENT_RATIO: f64 = 1.75;
@@ -61,6 +66,281 @@ pub struct RuntimeExecutionObservation {
     pub reachability_margin_m: f64,
     pub quasi_static_applicable: Option<bool>,
     pub authority_ok: bool,
+}
+
+/// Fields the selected action requires from the policy-visible sensor contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ObservationField {
+    StrokeConsumed,
+    Displacement,
+    Yaw,
+    Contact,
+    GoalError,
+    Tracking,
+    Reachability,
+    QuasiStaticApplicability,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ObservationContract {
+    pub source: String,
+    pub model_epoch: String,
+    pub calibration_epoch: String,
+    pub max_age_s: f64,
+    pub required_units: BTreeMap<String, String>,
+    pub required_fields: Vec<ObservationField>,
+}
+
+/// Immutable execution contract for one selected and independently authorized action.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FrozenAction {
+    pub action_id: String,
+    pub action_key: String,
+    pub candidate_id: String,
+    pub contact_id: String,
+    pub witness_id: String,
+    /// Exact serialized witness contents used by the executor.
+    pub witness_contents: String,
+    pub requested_stroke_m: f64,
+    pub prediction: FrozenPrediction,
+    pub belief_snapshot: PhysicalParameterBelief,
+    pub recoverability: RecoverabilityClass,
+    pub envelope: ExecutionEnvelope,
+    pub observation_contract: ObservationContract,
+    pub authority_granted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RuntimePolicyObservation {
+    pub action_id: String,
+    pub witness_id: String,
+    pub observation_id: String,
+    pub source: String,
+    pub timestamp_s: f64,
+    pub model_epoch: String,
+    pub calibration_epoch: String,
+    pub units: BTreeMap<String, String>,
+    pub stroke_consumed_m: Option<f64>,
+    pub object_displacement_m: Option<f64>,
+    pub yaw_change_rad: Option<f64>,
+    pub intended_contact_persists: Option<bool>,
+    pub goal_error_before: Option<f64>,
+    pub goal_error_now: Option<f64>,
+    pub robot_tracking_error_m: Option<f64>,
+    pub reachability_margin_m: Option<f64>,
+    pub quasi_static_applicable: Option<bool>,
+    pub authority_ok: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionProgress {
+    pub action_id: String,
+    pub witness_id: String,
+    pub completed_quanta: u32,
+    pub total_quanta: u32,
+    pub stroke_consumed_m: Option<f64>,
+    /// Intended-contact guard activates after the witness reaches contact.
+    pub contact_guard_active: bool,
+    pub now_s: f64,
+    /// Once true, the frozen action's remainder can never be dispatched.
+    pub remainder_invalidated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SupervisorDecision {
+    Continue {
+        action_id: String,
+        witness_id: String,
+        next_quantum: u32,
+    },
+    AbortAndReobserve {
+        action_id: String,
+        witness_id: String,
+        failed_guard: String,
+        remainder_invalidated: bool,
+    },
+    Completed {
+        action_id: String,
+        witness_id: String,
+    },
+    EvidenceUnavailable {
+        action_id: String,
+        witness_id: String,
+        reason: String,
+    },
+    AuthorityLost {
+        action_id: String,
+        witness_id: String,
+    },
+}
+
+fn policy_field_present(field: ObservationField, observation: &RuntimePolicyObservation) -> bool {
+    match field {
+        ObservationField::StrokeConsumed => observation.stroke_consumed_m.is_some(),
+        ObservationField::Displacement => observation.object_displacement_m.is_some(),
+        ObservationField::Yaw => observation.yaw_change_rad.is_some(),
+        ObservationField::Contact => observation.intended_contact_persists.is_some(),
+        ObservationField::GoalError => {
+            observation.goal_error_before.is_some() && observation.goal_error_now.is_some()
+        }
+        ObservationField::Tracking => observation.robot_tracking_error_m.is_some(),
+        ObservationField::Reachability => observation.reachability_margin_m.is_some(),
+        ObservationField::QuasiStaticApplicability => observation.quasi_static_applicable.is_some(),
+    }
+}
+
+fn unavailable(action: &FrozenAction, reason: impl Into<String>) -> SupervisorDecision {
+    SupervisorDecision::EvidenceUnavailable {
+        action_id: action.action_id.clone(),
+        witness_id: action.witness_id.clone(),
+        reason: reason.into(),
+    }
+}
+
+/// Supervise continuation of one immutable action. This function reports only
+/// continue, abort, completion, unavailable evidence, or lost authority.
+pub fn supervise_execution(
+    action: &FrozenAction,
+    progress: &ExecutionProgress,
+    observation: &RuntimePolicyObservation,
+) -> SupervisorDecision {
+    if !action.authority_granted || observation.authority_ok == Some(false) {
+        return SupervisorDecision::AuthorityLost {
+            action_id: action.action_id.clone(),
+            witness_id: action.witness_id.clone(),
+        };
+    }
+    if observation.authority_ok.is_none() {
+        return unavailable(action, "AUTHORITY_STATE_UNOBSERVED");
+    }
+    if progress.action_id != action.action_id
+        || progress.witness_id != action.witness_id
+        || observation.action_id != action.action_id
+        || observation.witness_id != action.witness_id
+        || observation.observation_id.is_empty()
+    {
+        return unavailable(action, "ACTION_WITNESS_OR_OBSERVATION_ID_MISMATCH");
+    }
+    if progress.total_quanta == 0 || progress.completed_quanta > progress.total_quanta {
+        return unavailable(action, "INVALID_EXECUTION_QUANTUM_PROGRESS");
+    }
+    if progress.remainder_invalidated {
+        return SupervisorDecision::AbortAndReobserve {
+            action_id: action.action_id.clone(),
+            witness_id: action.witness_id.clone(),
+            failed_guard: "REMAINDER_ALREADY_INVALIDATED".into(),
+            remainder_invalidated: true,
+        };
+    }
+    let contract = &action.observation_contract;
+    if observation.source != contract.source
+        || observation.model_epoch != contract.model_epoch
+        || observation.calibration_epoch != contract.calibration_epoch
+        || !observation.timestamp_s.is_finite()
+        || !progress.now_s.is_finite()
+        || observation.timestamp_s > progress.now_s + 1e-9
+        || progress.now_s - observation.timestamp_s > contract.max_age_s
+    {
+        return unavailable(
+            action,
+            "POLICY_OBSERVATION_SOURCE_EPOCH_OR_FRESHNESS_MISMATCH",
+        );
+    }
+    if contract
+        .required_units
+        .iter()
+        .any(|(field, unit)| observation.units.get(field) != Some(unit))
+    {
+        return unavailable(action, "POLICY_OBSERVATION_UNIT_MISMATCH");
+    }
+    let envelope_fields = [
+        ObservationField::StrokeConsumed,
+        ObservationField::Displacement,
+        ObservationField::Yaw,
+        ObservationField::Contact,
+        ObservationField::GoalError,
+        ObservationField::Tracking,
+        ObservationField::Reachability,
+        ObservationField::QuasiStaticApplicability,
+    ];
+    if envelope_fields
+        .iter()
+        .chain(contract.required_fields.iter())
+        .any(|field| !policy_field_present(*field, observation))
+    {
+        return unavailable(action, "REQUIRED_POLICY_OBSERVATION_FIELD_MISSING");
+    }
+    let (Some(consumed), Some(progress_consumed)) =
+        (observation.stroke_consumed_m, progress.stroke_consumed_m)
+    else {
+        return unavailable(action, "STROKE_PROGRESS_UNKNOWN");
+    };
+    if !consumed.is_finite()
+        || consumed < 0.0
+        || !progress_consumed.is_finite()
+        || progress_consumed < 0.0
+        || (consumed - progress_consumed).abs() > 1e-6
+    {
+        return unavailable(action, "STROKE_PROGRESS_MISMATCH_OR_INVALID");
+    }
+
+    let runtime_observation = RuntimeExecutionObservation {
+        stroke_consumed_m: consumed,
+        commanded_stroke_m: action.requested_stroke_m,
+        object_displacement_m: observation
+            .object_displacement_m
+            .expect("required envelope field checked above"),
+        yaw_change_rad: observation
+            .yaw_change_rad
+            .expect("required envelope field checked above"),
+        intended_contact_persists: observation
+            .intended_contact_persists
+            .expect("required envelope field checked above"),
+        goal_error_before: observation
+            .goal_error_before
+            .expect("required envelope field checked above"),
+        goal_error_now: observation
+            .goal_error_now
+            .expect("required envelope field checked above"),
+        robot_tracking_error_m: Some(
+            observation
+                .robot_tracking_error_m
+                .expect("required envelope field checked above"),
+        ),
+        reachability_margin_m: observation
+            .reachability_margin_m
+            .expect("required envelope field checked above"),
+        quasi_static_applicable: observation.quasi_static_applicable,
+        authority_ok: true,
+    };
+    let mut active_envelope = action.envelope.clone();
+    if !progress.contact_guard_active {
+        active_envelope.require_intended_contact = false;
+    }
+    let check = check_execution_envelope(&active_envelope, &runtime_observation);
+    if check.verdict == EnvelopeVerdict::AbortAndReobserve {
+        return SupervisorDecision::AbortAndReobserve {
+            action_id: action.action_id.clone(),
+            witness_id: action.witness_id.clone(),
+            failed_guard: check
+                .failed_guard
+                .unwrap_or_else(|| "EXECUTION_ENVELOPE".into()),
+            remainder_invalidated: true,
+        };
+    }
+    if progress.completed_quanta == progress.total_quanta {
+        SupervisorDecision::Completed {
+            action_id: action.action_id.clone(),
+            witness_id: action.witness_id.clone(),
+        }
+    } else {
+        SupervisorDecision::Continue {
+            action_id: action.action_id.clone(),
+            witness_id: action.witness_id.clone(),
+            next_quantum: progress.completed_quanta + 1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

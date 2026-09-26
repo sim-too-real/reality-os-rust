@@ -272,7 +272,7 @@ pub fn hypothesize(observation: &DiscrepancyObservation) -> HypothesisReport {
             hypotheses: vec![h],
         };
     }
-    if !observation.freshness_ok || observation.displacement_ratio.is_none() {
+    if !observation.freshness_ok {
         let h = hypothesis(
             DiscrepancyKind::StaleOrInsufficientObservation,
             &["missing_or_stale_motion"],
@@ -285,8 +285,9 @@ pub fn hypothesize(observation: &DiscrepancyObservation) -> HypothesisReport {
             hypotheses: vec![h],
         };
     }
-    let ratio = observation.displacement_ratio.unwrap_or(1.0);
     let mut kinds = Vec::new();
+    let motion_ratio_available = observation.displacement_ratio.is_some();
+    let ratio = observation.displacement_ratio.unwrap_or(0.0);
     let tracking_low = observation
         .tracking_error_m
         .is_some_and(|v| v.is_finite() && v >= 0.0 && v <= 0.03);
@@ -299,7 +300,10 @@ pub fn hypothesize(observation: &DiscrepancyObservation) -> HypothesisReport {
     let geometry_bad = observation
         .geometry_residual_m
         .is_some_and(|v| v.is_finite() && v > 0.02);
-    if !(tracking_low || tracking_high) || !(geometry_low || geometry_bad) {
+    if !motion_ratio_available
+        || !(tracking_low || tracking_high)
+        || !(geometry_low || geometry_bad)
+    {
         kinds.push(DiscrepancyKind::StaleOrInsufficientObservation);
     }
     let yaw_flip = matches!(
@@ -319,7 +323,7 @@ pub fn hypothesize(observation: &DiscrepancyObservation) -> HypothesisReport {
     if contact_lost {
         kinds.push(DiscrepancyKind::ToolContactFrictionInconsistent);
     }
-    if high_ratio(ratio) && tracking_low && geometry_low {
+    if motion_ratio_available && high_ratio(ratio) && tracking_low && geometry_low {
         kinds.push(DiscrepancyKind::SupportFrictionInconsistent);
         if observation.stroke_m > observation.quasi_static_stroke_limit_m {
             kinds.push(DiscrepancyKind::QuasiStaticAssumptionBroken);
@@ -655,6 +659,36 @@ mod tests {
         assert_eq!(unreachable.status, Identifiability::Unknown);
         assert_ne!(insufficient.status, contradictory.status);
         assert_ne!(insufficient.kinds[0], contradictory.kinds[0]);
+    }
+
+    #[test]
+    fn missing_motion_ratio_does_not_erase_fresh_contact_loss_evidence() {
+        let observation = DiscrepancyObservation {
+            displacement_ratio: None,
+            yaw_change_rad: Some(0.0),
+            predicted_yaw_sign: Some(0),
+            observed_yaw_sign: Some(0),
+            contact_persisted: Some(false),
+            tracking_error_m: Some(0.0),
+            geometry_residual_m: None,
+            freshness_ok: true,
+            stroke_m: 0.0,
+            quasi_static_stroke_limit_m: 0.015,
+            contradictory: false,
+            reachable: true,
+        };
+
+        let report = hypothesize(&observation);
+        assert_eq!(report.status, Identifiability::Underdetermined);
+        assert!(report
+            .kinds
+            .contains(&DiscrepancyKind::StaleOrInsufficientObservation));
+        assert!(report
+            .kinds
+            .contains(&DiscrepancyKind::ToolContactFrictionInconsistent));
+        assert!(!report
+            .kinds
+            .contains(&DiscrepancyKind::SupportFrictionInconsistent));
     }
 
     #[test]

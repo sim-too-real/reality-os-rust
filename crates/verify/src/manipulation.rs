@@ -630,6 +630,8 @@ fn run_release_episode(
                 &initial,
                 now,
                 &PlacementOutcome::default(),
+                None,
+                None,
             )?;
             checkin_worker(inst);
             Ok(ep)
@@ -672,7 +674,49 @@ pub(crate) fn run_skill_episode_ex(
     sha: &str,
     skill: &str,
     loaded: Option<(crate::mujoco_exec::MujocoInstance, RobotManifest)>,
+    before_execute: Option<BeforeExecuteHook<'_>>,
+) -> Result<
+    (
+        ManipulationEpisode,
+        crate::mujoco_exec::MujocoInstance,
+        RobotManifest,
+    ),
+    String,
+> {
+    run_skill_episode_ex_supervised(
+        bundle,
+        model,
+        resources,
+        sc,
+        sha,
+        skill,
+        loaded,
+        before_execute,
+        None,
+        None,
+    )
+}
+
+pub(crate) type AfterWitnessPhaseHook<'a> = &'a mut dyn FnMut(u32, &PolicyObservation) -> bool;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WitnessPhaseDisturbance {
+    pub after_quantum: u32,
+    pub delta_xy_m: [f64; 2],
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_skill_episode_ex_supervised(
+    bundle: &RobotBundle,
+    model: &EmbodimentModel,
+    resources: &[ControlledResource],
+    sc: &ManipulationScenario,
+    sha: &str,
+    skill: &str,
+    loaded: Option<(crate::mujoco_exec::MujocoInstance, RobotManifest)>,
     mut before_execute: Option<BeforeExecuteHook<'_>>,
+    mut after_witness_phase: Option<AfterWitnessPhaseHook<'_>>,
+    phase_disturbance: Option<WitnessPhaseDisturbance>,
 ) -> Result<
     (
         ManipulationEpisode,
@@ -955,6 +999,8 @@ pub(crate) fn run_skill_episode_ex(
                 &initial,
                 now,
                 &placement,
+                after_witness_phase.take(),
+                phase_disturbance,
             )?;
             Ok((ep, inst, manifest))
         }
@@ -974,6 +1020,8 @@ fn execute_plan(
     initial: &VerifierTruth,
     now0: f64,
     placement: &PlacementOutcome,
+    mut after_witness_phase: Option<AfterWitnessPhaseHook<'_>>,
+    phase_disturbance: Option<WitnessPhaseDisturbance>,
 ) -> Result<(ManipulationEpisode, crate::mujoco_exec::MujocoInstance), String> {
     if sc.crash_controller {
         return Ok((
@@ -1154,6 +1202,39 @@ fn execute_plan(
                     "mid" => witness_exec.mid_q = reached.q_reached,
                     "end" => witness_exec.end_q = reached.q_reached,
                     _ => {}
+                }
+                if let Some(disturbance) = phase_disturbance
+                    .filter(|disturbance| disturbance.after_quantum == (pi + 1) as u32)
+                {
+                    let current = truth
+                        .xpos
+                        .get(&sc.object_id)
+                        .filter(|pose| pose.len() >= 3)
+                        .ok_or_else(|| {
+                            format!("phase disturbance lacks observed body {}", sc.object_id)
+                        })?;
+                    let mut world = shared
+                        .inst
+                        .lock()
+                        .map_err(|_| "phase disturbance world lock poisoned".to_string())?;
+                    world
+                        .set_body_pos(
+                            &sc.object_id,
+                            [
+                                current[0] + disturbance.delta_xy_m[0],
+                                current[1] + disturbance.delta_xy_m[1],
+                                current[2],
+                            ],
+                        )
+                        .map_err(|error| format!("apply phase disturbance: {error}"))?;
+                    truth = truth0(&mut world)?;
+                    drop(world);
+                }
+                if let Some(observer) = after_witness_phase.as_mut() {
+                    let observation = pol_obs(&manifest, &episode_id, 3000 + pi, &truth, now);
+                    if !observer((pi + 1) as u32, &observation) {
+                        break;
+                    }
                 }
                 if !reached.q_reached && reached.pose_err > radius {
                     break;
@@ -2989,8 +3070,6 @@ fn pol_obs(
         let h = *hi.get(i).unwrap_or(&1e6);
         if q.is_finite() {
             *q = q.clamp(l.min(h), l.max(h));
-        } else {
-            *q = 0.0;
         }
     }
     obs

@@ -43,6 +43,8 @@ pub mod scenario;
 mod self_correction;
 pub mod semantics_map;
 pub mod task;
+#[cfg(test)]
+mod test_support;
 pub mod validate;
 pub mod verifier;
 

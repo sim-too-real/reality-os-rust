@@ -664,6 +664,7 @@ fn experience_informs_the_next_episode_and_cannot_authorize() {
         robot_reject_reason: None,
     };
     evaluate_all(&mut cands, &ctx);
+    crate::test_support::attach_test_execution_proofs(&mut cands);
     let obs = realityos_semantics::goal_loop::WorldObservation {
         object_id: "obj0".into(),
         xy: [0.0, 0.0],

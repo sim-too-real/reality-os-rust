@@ -31,6 +31,8 @@ pub mod object;
 pub mod observation;
 pub mod pair_friction;
 pub mod physical_belief;
+pub mod physical_consequence;
+pub mod physical_decision;
 pub mod physical_experience;
 pub mod physical_interaction;
 pub mod physical_quantity;

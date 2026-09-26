@@ -10,12 +10,19 @@ use crate::effect_feasibility::{
     evaluate_planar_twist_direction, EffectFeasibility, EffectFeasibilityWitness,
     PlanarPushInitiation,
 };
+use crate::physical_decision::{
+    decide_physical_action, CandidateEvidence, CandidateRole, ContactTransitionPhase,
+    DecisionContext, DecisionKind, PredictedPhysicalEffect, ProbeEvidence,
+    ProbeRecoverabilityAssessment,
+};
 use crate::planar_goal::{
     classify_predicted_progress, evaluate_goal_error, predicted_error_derivative, GoalError,
     GoalProgressClass, PlanarObjectGoal,
 };
+use crate::probe_selection::BeliefRobustness;
 use crate::provenance::Provenanced;
 use crate::push::{push_approach_standoff_m, PushCandidate};
+use crate::recoverability::RecoverabilityClass;
 use crate::transform::{add3, scale3, Se3};
 
 const OFFSET_FRACTIONS: [f64; 3] = [-0.55, 0.0, 0.55];
@@ -95,6 +102,12 @@ pub struct PhysicalInteractionCandidate {
     pub witness: Option<EffectFeasibilityWitness>,
     pub authority_ok: bool,
     pub executable_for_plant: bool,
+    /// Set only when a caller supplies an explicit belief-domain assessment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_robustness: Option<BeliefRobustness>,
+    /// Set only when a caller supplies an explicit bounded-state assessment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_recoverability: Option<RecoverabilityClass>,
     /// Proven Mode B maneuver. Not serialized; execution-only.
     #[serde(skip)]
     pub maneuver: Option<ContactManeuver>,
@@ -148,12 +161,34 @@ pub struct EvaluationContext {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SelectionOutcome {
-    Selected { index: usize, reason: String },
-    NoUsefulPhysicalAction { reason: String },
-    PlannerFailedToFind { reason: String },
-    GeometricallyUsefulRobotCannotExecute { reason: String },
-    MechanicsUnknown { reason: String },
-    AuthorityRefusal { reason: String, best_index: usize },
+    Selected {
+        index: usize,
+        reason: String,
+    },
+    ContactTransition {
+        index: usize,
+        reason: String,
+        phases: Vec<ContactTransitionPhase>,
+    },
+    NoUsefulPhysicalAction {
+        reason: String,
+    },
+    InsufficientEvidence {
+        reason: String,
+    },
+    PlannerFailedToFind {
+        reason: String,
+    },
+    GeometricallyUsefulRobotCannotExecute {
+        reason: String,
+    },
+    MechanicsUnknown {
+        reason: String,
+    },
+    AuthorityRefusal {
+        reason: String,
+        best_index: usize,
+    },
 }
 
 pub fn generate_planar_push_candidates(
@@ -198,6 +233,8 @@ pub fn generate_planar_push_candidates(
                 witness: None,
                 authority_ok: true,
                 executable_for_plant: false,
+                decision_robustness: None,
+                decision_recoverability: None,
                 maneuver: None,
             });
         }
@@ -457,20 +494,6 @@ fn is_goal_useful(c: &PhysicalInteractionCandidate) -> bool {
         && c.goal_progress == Some(GoalProgressClass::StrictProgress)
 }
 
-/// Lower predicted error derivative wins. Equal derivative: less |ω|, then
-/// smaller |contact offset| — centered translation over an off-center spin.
-fn selection_rank_key(c: &PhysicalInteractionCandidate) -> (f64, f64, f64) {
-    let de = c.predicted_error_derivative.unwrap_or(0.0);
-    let omega = c.predicted_twist.map(|t| t.omega_z.abs()).unwrap_or(0.0);
-    (de, omega, c.contact_offset_u.abs())
-}
-
-fn rank_key_better(a: (f64, f64, f64), b: (f64, f64, f64)) -> bool {
-    a.0 < b.0 - 1e-9
-        || ((a.0 - b.0).abs() <= 1e-9 && a.1 < b.1 - 1e-12)
-        || ((a.0 - b.0).abs() <= 1e-9 && (a.1 - b.1).abs() <= 1e-12 && a.2 + 1e-12 < b.2)
-}
-
 fn rejected_at(c: &PhysicalInteractionCandidate, stage: FunnelStage) -> bool {
     c.funnel
         .transitions
@@ -485,97 +508,178 @@ pub fn action_key_is_forbidden(action_key: &str, forbidden_keys: &[String]) -> b
     forbidden_keys.iter().any(|key| key == action_key)
 }
 
+fn select_with_physical_decision(
+    cands: &[PhysicalInteractionCandidate],
+    forbidden_keys: &[String],
+    current_contact_id: Option<&str>,
+    evidence_fresh: bool,
+    remaining_attempts: u32,
+) -> SelectionOutcome {
+    let evidence: Vec<_> = cands
+        .iter()
+        .map(|candidate| {
+            let candidate_contents = serde_json::to_string(candidate).unwrap_or_default();
+            let witness_contents = candidate
+                .witness
+                .as_ref()
+                .zip(
+                    candidate
+                        .maneuver
+                        .as_ref()
+                        .and_then(|maneuver| maneuver.executable.as_ref()),
+                )
+                .and_then(|(mechanics, execution)| {
+                    serde_json::to_string(&(mechanics, execution)).ok()
+                });
+            let witness_digest = witness_contents.as_ref().map(|contents| {
+                use sha2::Digest;
+                format!("{:x}", sha2::Sha256::digest(contents.as_bytes()))
+            });
+            let executable = candidate.executable_for_plant
+                && candidate
+                    .maneuver
+                    .as_ref()
+                    .and_then(|maneuver| maneuver.executable.as_ref())
+                    .is_some_and(|witness| witness.is_executable());
+            let mut hard_rejections = Vec::new();
+            if !is_goal_useful(candidate) {
+                hard_rejections.push(crate::physical_decision::CandidateRejection::Other(
+                    "NOT_STRICT_GOAL_USEFUL".into(),
+                ));
+            }
+            if !executable {
+                hard_rejections
+                    .push(crate::physical_decision::CandidateRejection::WitnessUnavailable);
+            }
+            CandidateEvidence {
+                candidate_id: candidate.id.clone(),
+                candidate_contents,
+                action_key: candidate.action_key(),
+                contact_id: candidate.face_id.clone(),
+                role: CandidateRole::GoalAction,
+                strict_goal_progress: candidate.goal_progress
+                    == Some(GoalProgressClass::StrictProgress),
+                authority_ok: candidate.authority_ok,
+                executable_witness_id: executable.then(|| format!("{}:witness", candidate.id)),
+                witness_digest,
+                witness_contents,
+                robustness: candidate
+                    .decision_robustness
+                    .unwrap_or(BeliefRobustness::Ambiguous),
+                recoverability: candidate
+                    .decision_recoverability
+                    .unwrap_or(RecoverabilityClass::ProgressButRecoverabilityUnknown),
+                predicted_effect: PredictedPhysicalEffect {
+                    object_translation_world_m: None,
+                    yaw_change_rad: None,
+                    contact_persists: None,
+                    goal_error_derivative: candidate.predicted_error_derivative,
+                    goal_progress: candidate.goal_progress,
+                },
+                probe: ProbeEvidence {
+                    decision_relevant_distinctions: 0,
+                    observable_distinctions: 0,
+                    future_interaction: ProbeRecoverabilityAssessment::Unknown,
+                },
+                preference: crate::physical_decision::LexicographicPreference {
+                    error_derivative: candidate.predicted_error_derivative,
+                    angular_rate_abs: candidate.predicted_twist.map(|twist| twist.omega_z.abs()),
+                    contact_offset_abs_m: Some(candidate.contact_offset_u.abs()),
+                    stroke_m: candidate.stroke_m,
+                },
+                hard_rejections,
+            }
+        })
+        .collect();
+    let decision = decide_physical_action(&DecisionContext {
+        goal_id: cands
+            .first()
+            .map(|candidate| candidate.object_id.clone())
+            .unwrap_or_default(),
+        goal_reached: false,
+        evidence_fresh,
+        remaining_attempts,
+        current_contact_id: current_contact_id.map(str::to_string),
+        forbidden_action_keys: forbidden_keys.to_vec(),
+        candidates: evidence,
+    });
+    match decision {
+        DecisionKind::GoalInteraction { action } => {
+            let Some(index) = cands
+                .iter()
+                .position(|candidate| candidate.id == action.candidate_id)
+            else {
+                return SelectionOutcome::PlannerFailedToFind {
+                    reason: "CANONICAL_DECISION_ID_NOT_IN_CANDIDATE_SET".into(),
+                };
+            };
+            SelectionOutcome::Selected {
+                index,
+                reason: action.rationale,
+            }
+        }
+        DecisionKind::ContactTransition { action, phases } => {
+            let Some(index) = cands
+                .iter()
+                .position(|candidate| candidate.id == action.candidate_id)
+            else {
+                return SelectionOutcome::PlannerFailedToFind {
+                    reason: "CANONICAL_DECISION_ID_NOT_IN_CANDIDATE_SET".into(),
+                };
+            };
+            SelectionOutcome::ContactTransition {
+                index,
+                reason: action.rationale,
+                phases,
+            }
+        }
+        DecisionKind::Refuse { reason } => SelectionOutcome::AuthorityRefusal {
+            reason,
+            best_index: cands.iter().position(is_goal_useful).unwrap_or(0),
+        },
+        DecisionKind::InsufficientEvidence { reason } => {
+            SelectionOutcome::InsufficientEvidence { reason }
+        }
+        DecisionKind::PhysicallyInfeasible { reason }
+        | DecisionKind::CurrentlyUnachievable { reason } => {
+            SelectionOutcome::NoUsefulPhysicalAction { reason }
+        }
+        DecisionKind::PhysicalProbe { .. } | DecisionKind::GoalReached { .. } => {
+            SelectionOutcome::NoUsefulPhysicalAction {
+                reason: "UNEXPECTED_DECISION_CLASS_FOR_GOAL_INTERACTION".into(),
+            }
+        }
+    }
+}
+
 pub fn select_interaction(
     cands: &[PhysicalInteractionCandidate],
     forbidden_keys: &[String],
+) -> SelectionOutcome {
+    select_interaction_with_context(cands, forbidden_keys, None, true, 1)
+}
+
+/// Select with the live policy-contact identity and remaining decision budget.
+/// The canonical decision remains the only authority for ranking and gating.
+pub fn select_interaction_with_context(
+    cands: &[PhysicalInteractionCandidate],
+    forbidden_keys: &[String],
+    current_contact_id: Option<&str>,
+    evidence_fresh: bool,
+    remaining_attempts: u32,
 ) -> SelectionOutcome {
     if cands.is_empty() {
         return SelectionOutcome::PlannerFailedToFind {
             reason: "NO_CANDIDATES_GENERATED".into(),
         };
     }
-    let mut best_auth: Option<(usize, (f64, f64, f64))> = None;
-    let mut best_unauth: Option<(usize, (f64, f64, f64))> = None;
-    for (i, c) in cands.iter().enumerate() {
-        let action_key = c.action_key();
-        if action_key_is_forbidden(&action_key, forbidden_keys) {
-            continue;
-        }
-        if !is_goal_useful(c) {
-            continue;
-        }
-        let key = selection_rank_key(c);
-        if c.authority_ok {
-            let better = match best_auth {
-                None => true,
-                Some((_, k)) => rank_key_better(key, k),
-            };
-            if better {
-                best_auth = Some((i, key));
-            }
-        } else {
-            let better = match best_unauth {
-                None => true,
-                Some((_, k)) => rank_key_better(key, k),
-            };
-            if better {
-                best_unauth = Some((i, key));
-            }
-        }
-    }
-    if let Some((index, (de, _, _))) = best_auth {
-        return SelectionOutcome::Selected {
-            index,
-            reason: format!(
-                "STRICT_PROGRESS predicted_error_derivative={de:.6} face={} offset_u={:.4}",
-                cands[index].face_id, cands[index].contact_offset_u
-            ),
-        };
-    }
-    if let Some((best_index, _)) = best_unauth {
-        return SelectionOutcome::AuthorityRefusal {
-            reason: "BEST_PHYSICAL_ACTION_NOT_AUTHORIZED".into(),
-            best_index,
-        };
-    }
-    if cands.iter().any(|c| {
-        rejected_at(c, FunnelStage::RobotReachable)
-            || rejected_at(c, FunnelStage::CollisionAdmissible)
-            || rejected_at(c, FunnelStage::ExecutableWitness)
-    }) && cands.iter().any(|c| {
-        c.funnel
-            .transitions
-            .iter()
-            .any(|t| t.stage == FunnelStage::GeometryValid && t.passed)
-    }) {
-        let geom_goalish = cands.iter().any(|c| {
-            c.goal_progress == Some(GoalProgressClass::StrictProgress)
-                || c.funnel.stage >= FunnelStage::InstantaneousMotion
-        });
-        if geom_goalish
-            || cands.iter().any(|c| {
-                rejected_at(c, FunnelStage::RobotReachable)
-                    || rejected_at(c, FunnelStage::CollisionAdmissible)
-                    || rejected_at(c, FunnelStage::ExecutableWitness)
-            })
-        {
-            return SelectionOutcome::GeometricallyUsefulRobotCannotExecute {
-                reason: "GEOMETRICALLY_USEFUL_ROBOT_CANNOT_EXECUTE".into(),
-            };
-        }
-    }
-    if cands.iter().any(|c| {
-        c.funnel.reason.as_deref() == Some("MECHANICS_UNKNOWN")
-            || rejected_at(c, FunnelStage::InstantaneousMotion)
-                && c.funnel.reason.as_deref() == Some("MECHANICS_UNKNOWN")
-    }) {
-        return SelectionOutcome::MechanicsUnknown {
-            reason: "MECHANICS_UNKNOWN".into(),
-        };
-    }
-    SelectionOutcome::NoUsefulPhysicalAction {
-        reason: "NO_STRICT_PROGRESS_CANDIDATE".into(),
-    }
+    select_with_physical_decision(
+        cands,
+        forbidden_keys,
+        current_contact_id,
+        evidence_fresh,
+        remaining_attempts,
+    )
 }
 
 pub fn funnel_reject_counts(cands: &[PhysicalInteractionCandidate]) -> Vec<(FunnelStage, usize)> {
@@ -594,6 +698,81 @@ pub fn funnel_reject_counts(cands: &[PhysicalInteractionCandidate]) -> Vec<(Funn
         .iter()
         .map(|s| (*s, cands.iter().filter(|c| rejected_at(c, *s)).count()))
         .collect()
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use crate::maneuver_witness::{
+        ExecutableContactManeuver, ManeuverPhase, PhaseTransition, TransitionKind,
+    };
+
+    /// Explicit synthetic proof used only by selector and goal-loop unit tests.
+    pub(crate) fn attach_executable_witnesses(candidates: &mut [PhysicalInteractionCandidate]) {
+        for candidate in candidates {
+            let strict = is_goal_useful(candidate);
+            candidate.decision_robustness = Some(if strict {
+                BeliefRobustness::RobustStrictProgress
+            } else {
+                BeliefRobustness::Ambiguous
+            });
+            candidate.decision_recoverability = Some(if strict {
+                RecoverabilityClass::ProgressAndRecoverable
+            } else {
+                RecoverabilityClass::ProgressButRecoverabilityUnknown
+            });
+            if !strict {
+                continue;
+            }
+
+            let pose = |xyz| Se3 {
+                xyz,
+                quat_wxyz: [1.0, 0.0, 0.0, 0.0],
+            };
+            let contact = candidate.contact_point_world;
+            let approach = candidate.approach_point_world;
+            let mid_stroke = [
+                contact[0] + candidate.push_direction_world[0] * candidate.stroke_m * 0.5,
+                contact[1] + candidate.push_direction_world[1] * candidate.stroke_m * 0.5,
+                contact[2] + candidate.push_direction_world[2] * candidate.stroke_m * 0.5,
+            ];
+            let end_stroke = [
+                contact[0] + candidate.push_direction_world[0] * candidate.stroke_m,
+                contact[1] + candidate.push_direction_world[1] * candidate.stroke_m,
+                contact[2] + candidate.push_direction_world[2] * candidate.stroke_m,
+            ];
+            let phase = |xyz| ManeuverPhase::positional(pose(xyz), vec![0.0], vec![0.0], 0.0, 0.0);
+            let transition = |kind| PhaseTransition::feasible(kind, 1, 0.5);
+            candidate.executable_for_plant = true;
+            candidate.maneuver = Some(ContactManeuver {
+                contact_pose: pose(contact),
+                approach_pose: pose(approach),
+                contact_point: contact,
+                contact_normal: candidate.contact_normal_world,
+                push_direction: candidate.push_direction_world,
+                requested_stroke: candidate.stroke_m,
+                available_stroke: candidate.stroke_m,
+                support_clearance: 0.01,
+                joint_margin: 0.5,
+                orientation_error: 0.0,
+                object_center: [0.0, 0.0, 0.03],
+                support_top_z: 0.0,
+                sampled_q: vec![0.0],
+                executable: Some(ExecutableContactManeuver {
+                    joint_names: vec!["test_joint".into()],
+                    start_q: vec![0.0],
+                    approach: phase(approach),
+                    contact: phase(contact),
+                    mid_stroke: phase(mid_stroke),
+                    end_stroke: phase(end_stroke),
+                    current_to_approach: transition(TransitionKind::CurrentToApproach),
+                    approach_to_contact: transition(TransitionKind::ApproachToContact),
+                    contact_to_mid: transition(TransitionKind::ContactToMidStroke),
+                    mid_to_end: transition(TransitionKind::MidToEndStroke),
+                }),
+            });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -932,6 +1111,80 @@ mod tests {
     }
 
     #[test]
+    fn goal_usefulness_without_execution_proof_does_not_select_an_action() {
+        let goal = trans_goal([0.2, 0.0]);
+        let xy = [0.0, 0.0];
+        let mut candidates = generate_planar_push_candidates(
+            "obj0",
+            pose_at(xy),
+            [0.04, 0.03, 0.03],
+            [0.0, 0.0, 1.0],
+            0.01,
+            0.02,
+        )
+        .unwrap();
+        evaluate_all(
+            &mut candidates,
+            &ctx_for(
+                goal,
+                xy,
+                mechanics(0.1, 0.2, 20.0, true),
+                false,
+                None,
+                None,
+                None,
+            ),
+        );
+
+        assert!(candidates.iter().any(is_goal_useful));
+        assert!(matches!(
+            select_interaction(&candidates, &[]),
+            SelectionOutcome::InsufficientEvidence { .. }
+        ));
+    }
+
+    #[test]
+    fn executable_witness_without_belief_and_recoverability_assessments_is_not_selected() {
+        let goal = trans_goal([0.2, 0.0]);
+        let xy = [0.0, 0.0];
+        let mut candidates = generate_planar_push_candidates(
+            "obj0",
+            pose_at(xy),
+            [0.04, 0.03, 0.03],
+            [0.0, 0.0, 1.0],
+            0.01,
+            0.02,
+        )
+        .unwrap();
+        evaluate_all(
+            &mut candidates,
+            &ctx_for(
+                goal,
+                xy,
+                mechanics(0.1, 0.2, 20.0, true),
+                false,
+                None,
+                None,
+                None,
+            ),
+        );
+        test_support::attach_executable_witnesses(&mut candidates);
+        let mut executable: Vec<_> = candidates.into_iter().filter(is_goal_useful).collect();
+        assert!(executable
+            .iter()
+            .all(|candidate| candidate.executable_for_plant));
+        for candidate in &mut executable {
+            candidate.decision_robustness = None;
+            candidate.decision_recoverability = None;
+        }
+
+        assert!(matches!(
+            select_interaction(&executable, &[]),
+            SelectionOutcome::InsufficientEvidence { .. }
+        ));
+    }
+
+    #[test]
     fn counterfactual_prefers_progress_then_flips_with_target() {
         let xy = [0.0, 0.0];
         let mut toward = generate_planar_push_candidates(
@@ -954,13 +1207,12 @@ mod tests {
             None,
         );
         evaluate_all(&mut toward, &ctx_plus);
+        test_support::attach_executable_witnesses(&mut toward);
         let sel = select_interaction(&toward, &[]);
-        let SelectionOutcome::Selected {
-            index: ia,
-            reason: ra,
-        } = sel
-        else {
-            panic!("expected A selected, got {sel:?}");
+        let (ia, ra) = match sel {
+            SelectionOutcome::Selected { index, reason }
+            | SelectionOutcome::ContactTransition { index, reason, .. } => (index, reason),
+            other => panic!("expected A selected, got {other:?}"),
         };
         assert_eq!(
             toward[ia].goal_progress,
@@ -981,9 +1233,12 @@ mod tests {
         .unwrap();
         let ctx_minus = ctx_for(trans_goal([-0.2, 0.0]), xy, mech, false, None, None, None);
         evaluate_all(&mut away, &ctx_minus);
+        test_support::attach_executable_witnesses(&mut away);
         let sel_b = select_interaction(&away, &[]);
-        let SelectionOutcome::Selected { index: ib, .. } = sel_b else {
-            panic!("expected B selected after target flip, got {sel_b:?}");
+        let ib = match sel_b {
+            SelectionOutcome::Selected { index, .. }
+            | SelectionOutcome::ContactTransition { index, .. } => index,
+            other => panic!("expected B selected after target flip, got {other:?}"),
         };
         assert_eq!(
             away[ib].goal_progress,
@@ -996,7 +1251,11 @@ mod tests {
         assert_ne!(away[ib].action_key(), key_a);
 
         let still = select_interaction(&toward, &[]);
-        assert!(matches!(still, SelectionOutcome::Selected { index, .. } if index == ia));
+        assert!(matches!(
+            still,
+            SelectionOutcome::Selected { index, .. }
+                | SelectionOutcome::ContactTransition { index, .. } if index == ia
+        ));
 
         // A progress, B regression, C infeasible, D unknown — prefer A.
         let mut abcd = toward.clone();
@@ -1037,7 +1296,8 @@ mod tests {
         assert!(saw_b && saw_c && saw_d);
         let abcd_sel = select_interaction(&abcd, &[]);
         match abcd_sel {
-            SelectionOutcome::Selected { index, reason } => {
+            SelectionOutcome::Selected { index, reason }
+            | SelectionOutcome::ContactTransition { index, reason, .. } => {
                 assert_eq!(abcd[index].id, toward[ia].id);
                 assert!(reason.contains("STRICT_PROGRESS"));
             }

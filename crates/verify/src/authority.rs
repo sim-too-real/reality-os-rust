@@ -523,6 +523,7 @@ mod tests {
             qvel: vec![0.0],
             action_dim: 1,
             detections: vec![],
+            contact_pairs: vec![],
             rgb: None,
             depth: None,
             camera_status: None,
