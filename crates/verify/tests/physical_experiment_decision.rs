@@ -798,6 +798,18 @@ fn belief_update_changes_the_next_goal_and_records_progress() {
         realityos_semantics::goal_loop::LoopState::default(),
         None,
     );
+    let no_motion = realityos_semantics::goal_loop::record_after_measured_displacement(
+        planned.clone(),
+        [0.0, 0.0],
+        before_pose.yaw,
+        before_pose.observed_at_s + 0.1,
+        &goal,
+    );
+    assert_ne!(
+        no_motion.record.outcome,
+        realityos_semantics::goal_loop::GoalLoopOutcome::GoalProgress,
+        "a zero measured displacement is not goal progress"
+    );
     let target = goal.target_xy.expect("point goal");
     let target_norm = target[0].hypot(target[1]).max(1e-9);
     let measured_dxy = [

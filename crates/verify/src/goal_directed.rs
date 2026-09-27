@@ -5659,6 +5659,14 @@ mod tests {
         assert_eq!(next["authority_decision"], "AUTHORIZE", "{next}");
         assert_eq!(next_b["authority_decision"], "AUTHORIZE", "{next_b}");
         assert!(
+            next["ctrl_writes"].as_u64().unwrap_or(0) > 0,
+            "the post-probe action was not executed: {next}"
+        );
+        assert!(
+            next_b["ctrl_writes"].as_u64().unwrap_or(0) > 0,
+            "the post-probe action was not executed: {next_b}"
+        );
+        assert!(
             next["selected_id"]
                 .as_str()
                 .is_some_and(|id| !id.is_empty()),
