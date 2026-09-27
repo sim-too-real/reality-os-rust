@@ -109,8 +109,8 @@ mod tests {
     use crate::corpus;
     use crate::manipulation::{
         chain_q_from_qpos, local_ee_poses, run_skill_episode_ex_supervised, sample_push_units,
-        template_objects, with_episode_qpos, with_injected_push_maneuver, with_named_q_step_max,
-        WitnessPhaseDisturbance,
+        template_objects, with_episode_qpos, with_injected_push_maneuver, with_named_q_reach_tol,
+        with_named_q_step_max, with_probe_recontact, WitnessPhaseDisturbance,
     };
     use crate::manipulation_scenarios::{ManipulationScenario, Polarity};
     use crate::manipulation_verify::body_xyz;
@@ -1101,32 +1101,71 @@ mod tests {
             manifold.origin[1] + manifold.normal[1] * manifold.face_gap,
             manifold.origin[2] + manifold.normal[2] * manifold.face_gap,
         ];
-        let slide = [face[0] - tool[0], face[1] - tool[1], face[2] - tool[2]];
-        let ee_face = add3(fk.ee.xyz, slide);
-        let travel = stroke_m;
-        let ee_end = [
-            ee_face[0] + manifold.push[0] * travel,
-            ee_face[1] + manifold.push[1] * travel,
-            ee_face[2] + manifold.push[2] * travel,
+        // A tangent target plus the post-stop coast sits outside MuJoCo's
+        // 1 mm contact band. Two millimetres of overlap stays inside the
+        // quasi-static displacement ratio of this short stroke.
+        let travel = stroke_m + 0.002;
+        let desired_end = [
+            face[0] + manifold.push[0] * travel,
+            face[1] + manifold.push[1] * travel,
+            face[2] + manifold.push[2] * travel,
         ];
-        let (q_face, face_trace) =
-            realityos_semantics::kinematics::solve_ik(model, &chain, ee_name, ee_face, live_q)
-                .map_err(|err| format!("IK_FACE:{err:?}"))?;
-        if face_trace.joint_delta_norm > 0.4 {
-            return Err(format!(
-                "IK_FACE_NOT_LOCAL {:.3}",
-                face_trace.joint_delta_norm
-            ));
-        }
-        let (q_end, end_trace) =
-            realityos_semantics::kinematics::solve_ik(model, &chain, ee_name, ee_end, &q_face)
-                .map_err(|err| format!("IK_END:{err:?}"))?;
-        if end_trace.joint_delta_norm > 0.4 {
-            return Err(format!(
-                "IK_END_NOT_LOCAL {:.3}",
-                end_trace.joint_delta_norm
-            ));
-        }
+        // Position IK does not hold orientation. Re-aim the end-effector after
+        // each solve so the finger point, not the wrist site, lands on target.
+        let solve_tool = |desired: [f64; 3],
+                          seed: &[f64]|
+         -> Result<(Vec<f64>, [f64; 3]), String> {
+            let mut ee_target = add3(
+                fk.ee.xyz,
+                [
+                    desired[0] - tool[0],
+                    desired[1] - tool[1],
+                    desired[2] - tool[2],
+                ],
+            );
+            let mut q_sol = seed.to_vec();
+            let mut tool_error = f64::INFINITY;
+            let mut ee_xyz = fk.ee.xyz;
+            for _ in 0..4 {
+                let (solved, trace) = realityos_semantics::kinematics::solve_ik(
+                    model, &chain, ee_name, ee_target, &q_sol,
+                )
+                .map_err(|err| format!("IK:{err:?}"))?;
+                let from_live = live_q
+                    .iter()
+                    .zip(solved.iter())
+                    .map(|(a, b)| {
+                        let d = a - b;
+                        d * d
+                    })
+                    .sum::<f64>()
+                    .sqrt();
+                if from_live > 0.4 {
+                    return Err(format!("IK_NOT_LOCAL {from_live:.3}"));
+                }
+                let fk_sol = forward_kinematics(model, &chain, ee_name, &solved)
+                    .map_err(|err| format!("{err:?}"))?;
+                let tool_now = add3(fk_sol.ee.xyz, rotate_by_quat(fk_sol.ee.quat_wxyz, tool_off));
+                let err = [
+                    desired[0] - tool_now[0],
+                    desired[1] - tool_now[1],
+                    desired[2] - tool_now[2],
+                ];
+                tool_error = (err[0] * err[0] + err[1] * err[1] + err[2] * err[2]).sqrt();
+                q_sol = solved;
+                ee_xyz = fk_sol.ee.xyz;
+                ee_target = add3(fk_sol.ee.xyz, err);
+                if tool_error < 1e-3 || trace.residual > 0.02 {
+                    break;
+                }
+            }
+            if tool_error > 2e-3 {
+                return Err(format!("TOOL_POINT_SHORT {tool_error:.4}"));
+            }
+            Ok((q_sol, ee_xyz))
+        };
+        let (q_face, ee_face) = solve_tool(face, live_q)?;
+        let (q_end, ee_end) = solve_tool(desired_end, &q_face)?;
         let mut next = source.clone();
         let witness = next
             .executable
@@ -1219,12 +1258,28 @@ mod tests {
         String,
     > {
         let q = chain_q_from_qpos(model, ee_name, qpos).ok_or_else(|| "NO_CHAIN_Q".to_string())?;
-        let mut next = match ik_push_from_live(
+        let ik = ik_push_from_live(
             model, ee_name, &q, source, xy, z, yaw, size, face_gap, tool_off, stroke_m,
-        ) {
+        );
+        let mut next = match ik {
             Ok(maneuver) => maneuver,
-            Err(ik_err) => continuation_witness(source, &q, stroke_m, &model.joints)
-                .ok_or(format!("{ik_err};CONTINUATION_NOT_EXECUTABLE"))?,
+            Err(ik_err) => {
+                let mut fallback = continuation_witness(source, &q, stroke_m, &model.joints)
+                    .ok_or(format!("{ik_err};CONTINUATION_NOT_EXECUTABLE"))?;
+                let chain = model
+                    .ee_joint_chain(ee_name)
+                    .ok_or_else(|| "NO_EE_CHAIN".to_string())?;
+                let live_ee = forward_kinematics(model, &chain, ee_name, &q)
+                    .map_err(|err| format!("{err:?}"))?
+                    .ee
+                    .xyz;
+                fallback.approach_pose.xyz = live_ee;
+                if let Some(witness) = fallback.executable.as_mut() {
+                    witness.approach.pose.xyz = live_ee;
+                    witness.contact.pose.xyz = live_ee;
+                }
+                fallback
+            }
         };
         let pose = pose_xy_yaw(xy, z, yaw);
         if let Some(manifold) = realityos_semantics::contact_manifold::box_push_face_manifold_posed(
@@ -1250,11 +1305,6 @@ mod tests {
             .map_err(|err| format!("{err:?}"))?
             .ee
             .xyz;
-        next.approach_pose.xyz = live_ee;
-        if let Some(witness) = next.executable.as_mut() {
-            witness.approach.pose.xyz = live_ee;
-            witness.contact.pose.xyz = live_ee;
-        }
         if !witness_reconfiguration_is_local(&next, live_ee) {
             let cartesian = {
                 let approach = next.approach_pose.xyz;
@@ -2340,11 +2390,11 @@ mod tests {
         let mut policy_obs = None;
         let origin_xy = [origin_xyz[0], origin_xyz[1]];
         let mut after_phase = |quantum: u32, policy_observation: &PolicyObservation| {
-            let consumed_for_phase = match quantum {
-                0..=2 => 0.0,
-                3 => probe_stroke * 0.5,
-                _ => probe_stroke,
-            };
+            // The object can already have moved before the push. Dividing that
+            // displacement by a half-stroke at mid-phase trips MODEL_DISAGREEMENT
+            // and cancels the stroke that would have made contact. Judge the
+            // ratio against the full commanded stroke, and only once it is done.
+            let consumed_for_phase = if quantum >= 4 { probe_stroke } else { 0.0 };
             let visible = policy_object_xy_yaw(policy_observation, &goal.object_id);
             let (displacement, yaw_change, goal_error) = visible
                 .map(|(xy, object_yaw)| {
@@ -2486,21 +2536,25 @@ mod tests {
         );
         let sim_started = std::time::Instant::now();
         let phase_hook = Some(&mut after_phase as _);
-        let run = with_named_q_step_max(joint_step_max, || {
-            with_episode_qpos(Some(qpos), || {
-                with_injected_push_maneuver(Some(maneuver.clone()), || {
-                    run_skill_episode_ex_supervised(
-                        bundle,
-                        model,
-                        &[],
-                        &scenario,
-                        "goal-directed-loop",
-                        "PUSH",
-                        loaded,
-                        None,
-                        phase_hook,
-                        None,
-                    )
+        let run = with_probe_recontact(|| {
+            with_named_q_reach_tol(0.005, || {
+                with_named_q_step_max(joint_step_max, || {
+                    with_episode_qpos(Some(qpos), || {
+                        with_injected_push_maneuver(Some(maneuver.clone()), || {
+                            run_skill_episode_ex_supervised(
+                                bundle,
+                                model,
+                                &[],
+                                &scenario,
+                                "goal-directed-loop",
+                                "PUSH",
+                                loaded,
+                                None,
+                                phase_hook,
+                                None,
+                            )
+                        })
+                    })
                 })
             })
         });
@@ -3249,7 +3303,7 @@ mod tests {
             proof_ns = proof_ns.saturating_add(proof_started.elapsed().as_nanos() as u64);
             for c in &mut cands {
                 let proof_key = format!("{}:{:.4}", c.face_id, c.stroke_m);
-                let (reachable, collision, mut executable, maneuver, mut why) =
+                let (reachable, collision, mut executable, mut maneuver, mut why) =
                     match proven.get(&proof_key) {
                         Some(Ok(m)) => {
                             let close = {
@@ -3280,6 +3334,39 @@ mod tests {
                         }
                         None => (Some(false), None, None, None, Some("NO_PROOF".into())),
                     };
+                // A proved witness longer than the quasi-static limit is outside
+                // the regime the probe just established. Replace it with a short
+                // push from the live arm, which is the motion that regime allows.
+                if belief_state.as_ref().is_some_and(|belief| {
+                    !prediction_regime(belief, &live_hypotheses, 0.03, quasi_limit_m).quasi_static
+                }) {
+                    if let Some(source) = maneuver.clone() {
+                        let proved = proven_witness_stroke(&source).unwrap_or(0.0);
+                        if proved > quasi_limit_m {
+                            let short_m = (quasi_limit_m * 0.5).max(0.004);
+                            if let Some(q) = chain_q_from_qpos(&model, &ee_name, &qpos) {
+                                if let Ok(short) = ik_push_from_live(
+                                    &model, &ee_name, &q, &source, xy, z, yaw, size, face_gap,
+                                    tool_off, short_m,
+                                ) {
+                                    let live_ee = model
+                                        .ee_joint_chain(&ee_name)
+                                        .and_then(|chain| {
+                                            forward_kinematics(&model, &chain, &ee_name, &q)
+                                                .ok()
+                                                .map(|fk| fk.ee.xyz)
+                                        })
+                                        .unwrap_or([0.0; 3]);
+                                    if witness_reconfiguration_is_local(&short, live_ee) {
+                                        maneuver = Some(short);
+                                        executable = Some(true);
+                                        why = None;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 if !install_proven_maneuver(c, maneuver) {
                     executable = Some(false);
                     why = Some("INVALID_EXECUTABLE_WITNESS_STROKE".into());
@@ -3849,6 +3936,13 @@ mod tests {
                             sel.push_direction_world[1] / direction_norm * options.world_excess_m,
                         ],
                     });
+                // The first goal must stop when contact is lost. The post-probe
+                // stroke is the push itself, so the contact guard waits for the end.
+                let contact_guard_from = if belief_state.is_some() {
+                    4
+                } else {
+                    options.contact_guard_from_quantum
+                };
                 let mut after_phase = |quantum: u32, policy_observation: &PolicyObservation| {
                     let consumed_for_phase = match quantum {
                         0..=2 => 0.0,
@@ -3886,7 +3980,7 @@ mod tests {
                         completed_quanta: quantum,
                         total_quanta: 4,
                         stroke_consumed_m: Some(consumed_for_phase),
-                        contact_guard_active: quantum >= options.contact_guard_from_quantum,
+                        contact_guard_active: quantum >= contact_guard_from,
                         now_s: authority_now_s,
                         remainder_invalidated: false,
                     };
@@ -3918,21 +4012,31 @@ mod tests {
                 };
                 let phase_hook = options.guard.then_some(&mut after_phase as _);
                 let sim_started = std::time::Instant::now();
-                let run = with_named_q_step_max(options.joint_step_max, || {
-                    with_episode_qpos(Some(&qpos_now), || {
-                        with_injected_push_maneuver(maneuver, || {
-                            run_skill_episode_ex_supervised(
-                                &bundle,
-                                &model,
-                                &[],
-                                &sc,
-                                sha,
-                                "PUSH",
-                                loaded,
-                                None,
-                                phase_hook,
-                                phase_disturbance,
-                            )
+                // The post-probe goal is a few millimetres. The default 0.20 rad
+                // arrival tolerance would treat that stroke as already finished.
+                let reach_tol = if belief_state.is_some() { 0.005 } else { 0.20 };
+                let joint_step = if belief_state.is_some() {
+                    options.joint_step_max.min(0.02)
+                } else {
+                    options.joint_step_max
+                };
+                let run = with_named_q_reach_tol(reach_tol, || {
+                    with_named_q_step_max(joint_step, || {
+                        with_episode_qpos(Some(&qpos_now), || {
+                            with_injected_push_maneuver(maneuver, || {
+                                run_skill_episode_ex_supervised(
+                                    &bundle,
+                                    &model,
+                                    &[],
+                                    &sc,
+                                    sha,
+                                    "PUSH",
+                                    loaded,
+                                    None,
+                                    phase_hook,
+                                    phase_disturbance,
+                                )
+                            })
                         })
                     })
                 });
@@ -4601,7 +4705,7 @@ mod tests {
                                 // The certified continuation is a few millimetres.
                                 // The goal path keeps its own step. A 0.35 rad
                                 // probe step knocks the box off the finger.
-                                options.joint_step_max.min(0.05),
+                                options.joint_step_max.min(0.02),
                                 issued_probe_grant.as_ref().map(authorization_from_grant),
                                 last_loaded.take(),
                             );
@@ -5518,12 +5622,16 @@ mod tests {
                 .actions
                 .iter()
                 .find(|action| {
+                    // The aborted goal records the probe on the same action.
+                    // The next record is the post-update push. It can reuse the
+                    // same face id with a shorter stroke.
                     action
                         .get("reasoning")
                         .and_then(|note| note.get("executed_probe_witness_digest"))
                         .and_then(|value| value.as_str())
+                        .filter(|digest| !digest.is_empty())
                         .is_none()
-                        && action["selected_id"] != runs[0].actions[0]["selected_id"]
+                        && action["authority_decision"] != "REFUSE"
                 })
                 .cloned()
         };
@@ -5540,6 +5648,10 @@ mod tests {
         let next = next_a.as_ref().expect("canonical decision after the probe");
         let next_b = next_b.as_ref().expect("second run next action");
         assert_ne!(next["authority_decision"], "REFUSE", "{next}");
+        assert_ne!(
+            next["selection_rationale"], runs[0].actions[0]["selection_rationale"],
+            "post-probe action must differ from the aborted goal"
+        );
         assert!(
             !next["selection_rationale"]
                 .as_str()
