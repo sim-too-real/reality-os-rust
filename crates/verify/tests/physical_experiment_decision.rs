@@ -798,11 +798,19 @@ fn belief_update_changes_the_next_goal_and_records_progress() {
         realityos_semantics::goal_loop::LoopState::default(),
         None,
     );
-    let mut after_pose = before_pose.clone();
-    after_pose.xy = [stroke, 0.0];
-    after_pose.observed_at_s = 10.1;
-    let recorded =
-        realityos_semantics::goal_loop::record_after_with_goal(planned, &after_pose, &goal);
+    let target = goal.target_xy.expect("point goal");
+    let target_norm = target[0].hypot(target[1]).max(1e-9);
+    let measured_dxy = [
+        target[0] / target_norm * stroke,
+        target[1] / target_norm * stroke,
+    ];
+    let recorded = realityos_semantics::goal_loop::record_after_measured_displacement(
+        planned,
+        measured_dxy,
+        before_pose.yaw,
+        before_pose.observed_at_s + 0.1,
+        &goal,
+    );
     let before_err = recorded
         .record
         .goal_error_before

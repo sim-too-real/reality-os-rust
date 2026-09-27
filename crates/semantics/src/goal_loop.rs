@@ -625,6 +625,32 @@ pub fn goal_status_if_no_admissible_interaction(admissible: usize) -> GoalLoopOu
     }
 }
 
+/// Record progress from a measured planar displacement, not a pose the caller invents.
+/// The execution loop passes the displacement between the planned pose and the
+/// pose the policy observation reported.
+pub fn record_after_measured_displacement(
+    result: RecedingHorizonResult,
+    measured_dxy: [f64; 2],
+    yaw_after: f64,
+    observed_at_s: f64,
+    goal: &PlanarObjectGoal,
+) -> RecedingHorizonResult {
+    let after = WorldObservation {
+        object_id: result.record.goal_object_id.clone(),
+        xy: [
+            result.record.object_xy[0] + measured_dxy[0],
+            result.record.object_xy[1] + measured_dxy[1],
+        ],
+        yaw: yaw_after,
+        robot_q: result.record.robot_q.clone(),
+        freshness_ok: true,
+        intended_contact_face: result.record.selected_face.clone(),
+        authority_ok: true,
+        observed_at_s,
+    };
+    record_after_with_goal(result, &after, goal)
+}
+
 /// Record the observed consequence against the same goal used to plan.
 pub fn record_after_with_goal(
     mut result: RecedingHorizonResult,

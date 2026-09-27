@@ -145,9 +145,9 @@ mod tests {
     };
     use realityos_semantics::geometry::PrimitiveShape;
     use realityos_semantics::goal_loop::{
-        goal_status_if_no_admissible_interaction, receding_horizon_step, record_after_with_goal,
-        DecisionWorkCounters, GoalLoopOutcome, LoopDecision, LoopState, ReasoningNote,
-        WorldObservation,
+        goal_status_if_no_admissible_interaction, receding_horizon_step,
+        record_after_measured_displacement, record_after_with_goal, DecisionWorkCounters,
+        GoalLoopOutcome, LoopDecision, LoopState, ReasoningNote, WorldObservation,
     };
     use realityos_semantics::kinematics::{forward_kinematics, ik_residual_is_precise, solve_ik};
     use realityos_semantics::maneuver_witness::execution_block_reason;
@@ -4129,7 +4129,17 @@ mod tests {
                 .max_bounded_attempts
                 .saturating_sub(step.state.attempts);
             let probe_forbidden_action_keys = step.state.forbidden_action_keys.clone();
-            let mut rec = record_after_with_goal(step, &after, &goal);
+            let measured_dxy = [
+                after.xy[0] - step.record.object_xy[0],
+                after.xy[1] - step.record.object_xy[1],
+            ];
+            let mut rec = record_after_measured_displacement(
+                step,
+                measured_dxy,
+                after.yaw,
+                after.observed_at_s,
+                &goal,
+            );
             let runtime_consequence = last_runtime_observation.clone();
             let consequence = assess_consequence(
                 &frozen_prediction,
@@ -5583,6 +5593,14 @@ mod tests {
             assert!(lineage.contains("→ Observation|"), "{lineage}");
             assert!(lineage.contains("→ DerivedConstraint|"), "{lineage}");
             assert!(lineage.contains("→ BeliefAfter|"), "{lineage}");
+            assert!(
+                lineage.contains("NominalDisplacementRatio"),
+                "a non-nominal probe must not pass: {lineage}"
+            );
+            assert!(
+                lineage.contains("contact=Some(true)"),
+                "the probe must keep finger contact: {lineage}"
+            );
             assert!(
                 lineage.contains("perfect_perception_from_sim_truth"),
                 "{lineage}"
