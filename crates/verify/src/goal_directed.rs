@@ -135,9 +135,9 @@ mod tests {
     use realityos_semantics::effort::{any_link_com_known, chain_physical_effort_signed};
     use realityos_semantics::embodiment::EmbodimentModel;
     use realityos_semantics::execution_envelope::{
-        supervise_execution, ExecutionEnvelope, ExecutionProgress, FrozenAction,
-        ObservationContract, ObservationField, RuntimePolicyObservation, SupervisorDecision,
-        QUASI_STATIC_DISPLACEMENT_RATIO,
+        require_phase_measurement, supervise_execution, ExecutionAuthorization, ExecutionEnvelope,
+        ExecutionProgress, FrozenAction, ObservationContract, ObservationField, PhasePolicyFields,
+        RuntimePolicyObservation, SupervisorDecision, QUASI_STATIC_DISPLACEMENT_RATIO,
     };
     use realityos_semantics::future_interaction::{
         assess_probe_future, ProbeFutureInputs, SupportedProbeOutcome,
@@ -192,7 +192,13 @@ mod tests {
     use std::path::PathBuf;
 
     fn scratch_dir() -> PathBuf {
-        PathBuf::from(r"C:\Users\moram\AppData\Local\Temp\grok-goal-45646d0dc2cc\implementer")
+        std::env::var_os("REALITYOS_GOAL_SCRATCH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(
+                    r"C:\Users\moram\AppData\Local\Temp\grok-goal-45646d0dc2cc\implementer",
+                )
+            })
     }
 
     fn write_scratch(name: &str, body: &str) {
@@ -780,15 +786,16 @@ mod tests {
         stroke: f64,
         ee_xyz: [f64; 3],
         tool_off: [f64; 3],
+        face_gap: f64,
         short_witness: bool,
     ) -> (
         Result<ContactManeuver, ContactInfeasible>,
         ContactSelectFunnel,
     ) {
         let mut spec = ContactManeuverSpec::table_push(push, stroke, ee_xyz, tool_off);
-        // The development PUSH scenario must establish policy-visible contact;
-        // the old 15 mm stand-off was executable geometry but never touched.
-        spec.face_gap = 0.0;
+        // Match the gap used to place the observed object. A gap inside the
+        // 15 mm tool probe makes earlier approach samples a wrong-phase strike.
+        spec.face_gap = face_gap.max(0.0);
         if short_witness && stroke.is_finite() && stroke > 1e-4 && stroke < spec.min_stroke {
             // A discriminating probe must end below the quasi-static limit.
             // The table-push floor would otherwise drive at least 0.02 m.
@@ -846,6 +853,7 @@ mod tests {
         stroke: f64,
         ee_xyz: [f64; 3],
         tool_off: [f64; 3],
+        face_gap: f64,
         short_witness: bool,
     ) -> Result<ContactManeuver, ContactInfeasible> {
         prove_face_funnel(
@@ -858,6 +866,7 @@ mod tests {
             stroke,
             ee_xyz,
             tool_off,
+            face_gap,
             short_witness,
         )
         .0
@@ -877,6 +886,7 @@ mod tests {
         seed: u64,
         ee_fallback: [f64; 3],
         prefer_push: [f64; 3],
+        face_gap: f64,
         short_witness: bool,
     ) -> (u32, Option<ContactManeuver>) {
         let object_pose = pose_xy_yaw(xy, z, yaw);
@@ -885,7 +895,7 @@ mod tests {
             object_pose,
             [size, size, size],
             [0.0, 0.0, 1.0],
-            0.0,
+            face_gap,
             stroke,
         )
         .expect("valid fixture support geometry");
@@ -917,6 +927,7 @@ mod tests {
                 cand.stroke_m,
                 ee_xyz,
                 tool_off,
+                face_gap,
                 short_witness,
             ) {
                 admissible += 1;
@@ -946,6 +957,7 @@ mod tests {
         seed: u64,
         ee_fallback: [f64; 3],
         prefer_push: [f64; 3],
+        face_gap: f64,
     ) -> (u32, Option<ContactManeuver>) {
         let object_pose = pose_xy_yaw(xy, z, yaw);
         let Ok(cands) = generate_planar_push_candidates(
@@ -953,7 +965,7 @@ mod tests {
             object_pose,
             [size, size, size],
             [0.0, 0.0, 1.0],
-            0.0,
+            face_gap,
             stroke,
         ) else {
             return (0, None);
@@ -1005,6 +1017,7 @@ mod tests {
                         cand.stroke_m,
                         ee_xyz,
                         tool_off,
+                        face_gap,
                         true,
                     )
                 });
@@ -1427,6 +1440,26 @@ mod tests {
         }
     }
 
+    fn authorization_from_grant(grant: &ScopedSimulationGrant) -> ExecutionAuthorization {
+        ExecutionAuthorization {
+            grant_id: grant.command_id.clone(),
+            scope_digest: grant.scope_digest.clone(),
+            model_id: grant.scope.model_id.clone(),
+            embodiment_id: grant.scope.embodiment_id.clone(),
+            observation_epoch: grant.scope.observation_epoch.clone(),
+            candidate_id: grant.scope.candidate_id.clone(),
+            action_key: grant.scope.action_key.clone(),
+            witness_digest: grant.scope.witness_digest.clone(),
+            actuator_id: grant.scope.actuator_id.clone(),
+            requested_stroke_m: grant.scope.requested_stroke_m,
+            execution_bound_m: grant.scope.execution_bound_m,
+            issued_at_s: grant.scope.issued_at_s,
+            expires_at_s: grant.scope.expires_at_s,
+            observation_contract_id: grant.scope.observation_contract_id.clone(),
+            abort_contract_id: grant.scope.abort_contract_id.clone(),
+        }
+    }
+
     fn binding_from_grant(grant: &ScopedSimulationGrant) -> ScopedGrantBinding {
         ScopedGrantBinding {
             grant_id: grant.command_id.clone(),
@@ -1467,12 +1500,26 @@ mod tests {
     ) -> SupportedProbeOutcome {
         let digest = maneuver.and_then(witness_digest_of);
         let found = admissible > 0 && maneuver.is_some();
+        if !found {
+            return SupportedProbeOutcome {
+                label: label.to_string(),
+                object_supported: None,
+                inside_reachable_workspace: None,
+                joint_margin_rad: None,
+                collision_admissible: None,
+                motion_within_declared_bound: Some(bounded),
+                belief_outcome_bounded: Some(bounded),
+                contact_persists: None,
+                return_contact_witness_digest: None,
+            };
+        }
+        let item = maneuver.expect("found maneuver");
         SupportedProbeOutcome {
             label: label.to_string(),
-            object_supported: Some(maneuver.is_some_and(|item| item.support_clearance > 0.0)),
-            inside_reachable_workspace: Some(found),
-            joint_margin_rad: Some(maneuver.map(|item| item.joint_margin).unwrap_or(0.0)),
-            collision_admissible: Some(found),
+            object_supported: Some(item.support_clearance > 0.004),
+            inside_reachable_workspace: Some(true),
+            joint_margin_rad: Some(item.joint_margin),
+            collision_admissible: Some(true),
             motion_within_declared_bound: Some(bounded),
             belief_outcome_bounded: Some(bounded),
             contact_persists: Some(false),
@@ -1488,6 +1535,7 @@ mod tests {
         z: f64,
         yaw: f64,
         size: f64,
+        face_gap: f64,
         probe_stroke: f64,
         tool_off: [f64; 3],
         seed: u64,
@@ -1499,7 +1547,7 @@ mod tests {
     ) -> FutureProbeProof {
         let residual = contact_point.and_then(|contact| {
             let planar = ((contact[0] - xy[0]).powi(2) + (contact[1] - xy[1]).powi(2)).sqrt();
-            let value = (planar - size).abs();
+            let value = (planar - size - face_gap.max(0.0)).abs();
             value.is_finite().then_some(value)
         });
         let early = ProbeFutureInputs {
@@ -1507,6 +1555,7 @@ mod tests {
             observed_displacement_m,
             geometry_residual_m: residual,
             outcomes: Vec::new(),
+            domain: None,
         };
         if observed_displacement_m.is_some_and(|value| value > 1e-4) && consumed_stroke_m <= 1e-9
             || residual.is_none()
@@ -1561,6 +1610,7 @@ mod tests {
                 seed.wrapping_add(index as u64),
                 ee_fallback,
                 push,
+                face_gap,
             );
             if let Some(maneuver) = maneuver {
                 proved.push((label.to_string(), corner_xy, maneuver));
@@ -1574,32 +1624,154 @@ mod tests {
                 outcomes.push(outcome_from_proof(label, 0, None, bounded));
             }
         }
-        let shared = proved.iter().find(|(_, _, maneuver)| {
-            corners
-                .iter()
-                .all(|(_, corner_xy, _)| contact_serves_object(maneuver, *corner_xy, size))
-        });
-        if let Some((_, _, maneuver)) = shared {
-            outcomes = corners
-                .iter()
-                .map(|(label, _, _)| outcome_from_proof(label, 1, Some(maneuver), bounded))
-                .collect();
+        let nominal = proved.iter().find(|(label, _, _)| label == "stay");
+        let mut domain = None;
+        let failed = outcomes.iter().any(outcome_is_proved_failure);
+        if !failed {
+            if let Some((_, _, maneuver)) = nominal {
+                if let Ok(covered) = ball_domain_for_maneuver(
+                    model,
+                    ee,
+                    maneuver,
+                    xy,
+                    z,
+                    yaw,
+                    size,
+                    face_gap,
+                    tool_off,
+                    push,
+                    motion.max(residual),
+                    0.0,
+                    residual,
+                    "stay",
+                ) {
+                    outcomes = vec![covered.0];
+                    domain = Some(covered.1);
+                }
+            }
         }
         let mut report = assess_probe_future(&ProbeFutureInputs {
             consumed_stroke_m,
             observed_displacement_m,
             geometry_residual_m: Some(residual),
             outcomes,
+            domain,
         });
         report.evidence.push(format!(
             "motion_bound_m={motion:.6};geometry_residual_m={residual:.6};ratio={ratio:.3}"
         ));
-        return FutureProbeProof {
+        let nominal_maneuver = nominal.map(|(_, _, maneuver)| maneuver.clone());
+        FutureProbeProof {
             report,
-            maneuver: shared
-                .map(|(_, _, maneuver)| maneuver.clone())
+            maneuver: nominal_maneuver
                 .or_else(|| proved.into_iter().next().map(|(_, _, maneuver)| maneuver)),
+        }
+    }
+
+    fn outcome_is_proved_failure(
+        outcome: &realityos_semantics::future_interaction::SupportedProbeOutcome,
+    ) -> bool {
+        outcome.object_supported == Some(false)
+            || outcome.inside_reachable_workspace == Some(false)
+            || outcome.collision_admissible == Some(false)
+            || outcome.motion_within_declared_bound == Some(false)
+            || outcome.belief_outcome_bounded == Some(false)
+            || outcome.joint_margin_rad.is_some_and(|margin| margin <= 0.0)
+            || matches!(
+                (
+                    outcome.contact_persists,
+                    outcome.return_contact_witness_digest.as_deref()
+                ),
+                (Some(false), None) | (Some(false), Some(""))
+            )
+    }
+
+    fn ball_domain_for_maneuver(
+        model: &EmbodimentModel,
+        ee: &str,
+        maneuver: &ContactManeuver,
+        xy: [f64; 2],
+        z: f64,
+        yaw: f64,
+        size: f64,
+        scenario_face_gap: f64,
+        tool_off: [f64; 3],
+        push: [f64; 3],
+        radius_m: f64,
+        yaw_abs_rad: f64,
+        residual_m: f64,
+        label: &str,
+    ) -> Result<
+        (
+            realityos_semantics::future_interaction::SupportedProbeOutcome,
+            realityos_semantics::future_interaction::SupportedOutcomeDomain,
+        ),
+        String,
+    > {
+        use realityos_semantics::future_interaction::{
+            domain_from_common_witness, CommonWitnessCoverage,
         };
+        let digest =
+            witness_digest_of(maneuver).ok_or_else(|| "WITNESS_DIGEST_MISSING".to_string())?;
+        let object_pose = pose_xy_yaw(xy, z, yaw);
+        let object = BoxObject {
+            center: [xy[0], xy[1], z],
+            half_extents: [size, size, size],
+            quat_wxyz: object_pose.quat_wxyz,
+        };
+        let support = SupportPlane {
+            origin: [xy[0], xy[1], z - size],
+            normal: [0.0, 0.0, 1.0],
+        };
+        let mut spec = ContactManeuverSpec::table_push(
+            push,
+            maneuver.requested_stroke,
+            maneuver.contact_point,
+            tool_off,
+        );
+        spec.face_gap = scenario_face_gap.max(0.0);
+        spec.object_id = "obj0".into();
+        spec.intended_tool_bodies =
+            declared_manipulation_contact_bodies(model, model.resources.first(), ee);
+        if !realityos_semantics::contact_maneuver::witness_admissible_for_translation_ball(
+            model, ee, maneuver, object, support, &spec, radius_m,
+        ) {
+            return Err("GROWN_COLLISION_INADMISSIBLE".into());
+        }
+        let coverage = CommonWitnessCoverage {
+            label: label.into(),
+            witness_digest: digest.clone(),
+            contact_point: maneuver.contact_point,
+            object_center: object.center,
+            object_quat: object.quat_wxyz,
+            object_half: object.half_extents,
+            push_direction: maneuver.push_direction,
+            support_normal: support.normal,
+            face_gap_m: scenario_face_gap.max(0.0),
+            translation_radius_m: radius_m,
+            yaw_abs_rad,
+            geometry_residual_m: residual_m,
+            support_clearance_m: maneuver.support_clearance,
+            min_support_clearance_m: 0.004,
+            joint_margin_rad: maneuver.joint_margin,
+            collision_admissible_for_grown_object: true,
+            model_applicable: yaw_abs_rad <= 0.2,
+            model_applicability: "planar-push fixed witness over the proved translation ball"
+                .into(),
+        };
+        let domain = domain_from_common_witness(&coverage)?;
+        let outcome = realityos_semantics::future_interaction::SupportedProbeOutcome {
+            label: label.into(),
+            object_supported: Some(maneuver.support_clearance > 0.004),
+            inside_reachable_workspace: Some(true),
+            joint_margin_rad: Some(maneuver.joint_margin),
+            collision_admissible: Some(true),
+            motion_within_declared_bound: Some(radius_m.is_finite()),
+            belief_outcome_bounded: Some(radius_m.is_finite()),
+            contact_persists: Some(false),
+            return_contact_witness_digest: Some(digest),
+        };
+        Ok((outcome, domain))
     }
 
     fn continuation_witness(
@@ -1700,13 +1872,6 @@ mod tests {
         Some(next)
     }
 
-    fn contact_serves_object(maneuver: &ContactManeuver, xy: [f64; 2], half: f64) -> bool {
-        let planar = ((maneuver.contact_point[0] - xy[0]).powi(2)
-            + (maneuver.contact_point[1] - xy[1]).powi(2))
-        .sqrt();
-        (planar - half).abs() <= 0.02
-    }
-
     struct FutureProbeProof {
         report: realityos_semantics::future_interaction::FutureInteractionReport,
         maneuver: Option<ContactManeuver>,
@@ -1758,6 +1923,7 @@ mod tests {
         maneuver: &ContactManeuver,
         probe_stroke: f64,
         quasi_limit_m: f64,
+        authorization: Option<ExecutionAuthorization>,
         loaded: Option<(
             crate::mujoco_exec::MujocoInstance,
             crate::normalize::RobotManifest,
@@ -1779,6 +1945,10 @@ mod tests {
             predicted_contact_persists: true,
             quasi_static_stroke_limit_m: quasi_limit_m,
         };
+        let auth_now = authorization
+            .as_ref()
+            .map(|auth| auth.issued_at_s)
+            .unwrap_or(0.0);
         let frozen_action = FrozenAction {
             action_id: action_id.clone(),
             action_key: action.action_key.clone(),
@@ -1786,14 +1956,64 @@ mod tests {
             contact_id: action.contact_id.clone(),
             witness_id: action.witness_id.clone(),
             witness_contents,
+            witness_digest: authorization
+                .as_ref()
+                .map(|auth| auth.witness_digest.clone())
+                .unwrap_or_default(),
             requested_stroke_m: probe_stroke,
             prediction,
             belief_snapshot,
             recoverability: action.recoverability,
             envelope: ExecutionEnvelope::for_quasi_static_stroke(probe_stroke, probe_stroke),
             observation_contract: physical_observation_contract(model),
-            authority_granted: true,
+            model_id: authorization
+                .as_ref()
+                .map(|auth| auth.model_id.clone())
+                .unwrap_or_default(),
+            embodiment_id: authorization
+                .as_ref()
+                .map(|auth| auth.embodiment_id.clone())
+                .unwrap_or_default(),
+            observation_epoch: authorization
+                .as_ref()
+                .map(|auth| auth.observation_epoch.clone())
+                .unwrap_or_default(),
+            actuator_id: authorization
+                .as_ref()
+                .map(|auth| auth.actuator_id.clone())
+                .unwrap_or_default(),
+            observation_contract_id: authorization
+                .as_ref()
+                .map(|auth| auth.observation_contract_id.clone())
+                .unwrap_or_default(),
+            abort_contract_id: authorization
+                .as_ref()
+                .map(|auth| auth.abort_contract_id.clone())
+                .unwrap_or_default(),
+            authority_granted: authorization.is_some(),
+            execution_authorization: authorization,
         };
+        let grant_ok = frozen_action
+            .execution_authorization
+            .as_ref()
+            .is_some_and(|auth| auth.covers(&frozen_action, auth_now));
+        if !grant_ok {
+            return ProbeExecution {
+                xy: [origin_xyz[0], origin_xyz[1]],
+                yaw: origin_yaw,
+                qpos: qpos.to_vec(),
+                consumed_m: 0.0,
+                displacement_m: None,
+                yaw_change_rad: None,
+                contact_persisted: None,
+                observation_id: "SCOPED_GRANT_DOES_NOT_COVER".into(),
+                aborted: true,
+                unauthorized_writes: 0,
+                simulation_ns: 0,
+                loaded,
+                error: Some("SCOPED_GRANT_DOES_NOT_COVER".into()),
+            };
+        }
         let mut consumed = 0.0;
         let mut aborted = false;
         let mut failed = None;
@@ -1894,8 +2114,15 @@ mod tests {
                 robot_tracking_error_m: tracking,
                 reachability_margin_m: reachability,
                 quasi_static_applicable: quasi_static,
-                authority_ok: Some(true),
+                authority_ok: Some(
+                    frozen_action
+                        .execution_authorization
+                        .as_ref()
+                        .is_some_and(|auth| auth.covers(&frozen_action, auth_now)),
+                ),
             };
+            let mut runtime = runtime;
+            runtime.timestamp_s = auth_now;
             consumed = consumed_for_phase;
             executed_quanta = quantum;
             policy_obs = Some(policy_observation.clone());
@@ -1907,7 +2134,7 @@ mod tests {
                 total_quanta: 4,
                 stroke_consumed_m: Some(consumed_for_phase),
                 contact_guard_active: quantum >= 4,
-                now_s: policy_observation.timestamp_s,
+                now_s: auth_now,
                 remainder_invalidated: aborted,
             };
             let decision = supervise_execution(&frozen_action, &progress, &runtime);
@@ -1972,7 +2199,7 @@ mod tests {
             })
         });
         let simulation_ns = sim_started.elapsed().as_nanos() as u64;
-        let (episode, mut inst, manifest) = match run {
+        let (episode, inst, manifest) = match run {
             Ok(value) => value,
             Err(err) => {
                 return ProbeExecution {
@@ -1992,55 +2219,60 @@ mod tests {
                 };
             }
         };
-        let truth = truth_of(&mut inst).unwrap_or_default();
-        let policy = policy_obs.unwrap_or_else(|| {
-            crate::observation::policy_observation(
-                &manifest,
-                "probe",
-                "post-probe",
-                &crate::task::TaskSpec::Hold { duration_s: 0.1 },
-                crate::observation::VisionMode::PerfectPerception,
-                &truth,
-                0.0,
-                false,
-            )
-        });
-        let visible = policy_object_xy_yaw(&policy, &goal.object_id);
-        let (xy, yaw) = visible.unwrap_or((origin_xy, origin_yaw));
-        let runtime = runtime_obs
-            .clone()
-            .unwrap_or_else(|| RuntimePolicyObservation {
-                action_id: action_id.clone(),
-                witness_id: action.witness_id.clone(),
-                observation_id: policy.observation_id.clone(),
-                source: "perfect_perception_from_sim_truth".into(),
-                timestamp_s: policy.timestamp_s,
-                model_epoch: policy.model_hash.clone(),
-                calibration_epoch: model.calibration_epoch.clone(),
-                units: std::collections::BTreeMap::new(),
-                stroke_consumed_m: Some(consumed),
-                object_displacement_m: Some(
-                    ((xy[0] - origin_xy[0]).powi(2) + (xy[1] - origin_xy[1]).powi(2)).sqrt(),
-                ),
-                yaw_change_rad: Some(realityos_semantics::planar_goal::wrap_pi(yaw - origin_yaw)),
-                intended_contact_persists: Some(false),
-                goal_error_before: None,
-                goal_error_now: None,
-                robot_tracking_error_m: None,
-                reachability_margin_m: None,
-                quasi_static_applicable: None,
-                authority_ok: Some(true),
-            });
+        let measured = require_phase_measurement(runtime_obs.as_ref().map(|runtime| {
+            PhasePolicyFields {
+                displacement_m: runtime.object_displacement_m,
+                yaw_change_rad: runtime.yaw_change_rad,
+                contact_persists: runtime.intended_contact_persists,
+                pose_observed: policy_obs
+                    .as_ref()
+                    .and_then(|policy| policy_object_xy_yaw(policy, &goal.object_id))
+                    .is_some(),
+            }
+        }));
+        let Ok(fields) = measured else {
+            return ProbeExecution {
+                xy: origin_xy,
+                yaw: origin_yaw,
+                qpos: policy_obs
+                    .as_ref()
+                    .map(|policy| policy.qpos.clone())
+                    .unwrap_or_else(|| qpos.to_vec()),
+                consumed_m: consumed,
+                displacement_m: None,
+                yaw_change_rad: None,
+                contact_persisted: None,
+                observation_id: "EVIDENCE_UNAVAILABLE".into(),
+                aborted: true,
+                unauthorized_writes: episode.unauthorized_writes,
+                simulation_ns,
+                loaded: Some((inst, manifest)),
+                error: Some("EVIDENCE_UNAVAILABLE".into()),
+            };
+        };
+        let (xy, yaw) = policy_obs
+            .as_ref()
+            .and_then(|policy| policy_object_xy_yaw(policy, &goal.object_id))
+            .unwrap_or((origin_xy, origin_yaw));
         let _ = failed;
         ProbeExecution {
             xy,
             yaw,
-            qpos: policy.qpos.clone(),
-            consumed_m: runtime.stroke_consumed_m.unwrap_or(consumed),
-            displacement_m: runtime.object_displacement_m,
-            yaw_change_rad: runtime.yaw_change_rad,
-            contact_persisted: runtime.intended_contact_persists,
-            observation_id: runtime.observation_id,
+            qpos: policy_obs
+                .as_ref()
+                .map(|policy| policy.qpos.clone())
+                .unwrap_or_else(|| qpos.to_vec()),
+            consumed_m: runtime_obs
+                .as_ref()
+                .and_then(|runtime| runtime.stroke_consumed_m)
+                .unwrap_or(consumed),
+            displacement_m: fields.displacement_m,
+            yaw_change_rad: fields.yaw_change_rad,
+            contact_persisted: fields.contact_persists,
+            observation_id: runtime_obs
+                .as_ref()
+                .map(|runtime| runtime.observation_id.clone())
+                .unwrap_or_else(|| "EVIDENCE_UNAVAILABLE".into()),
             aborted,
             unauthorized_writes: episode.unauthorized_writes,
             simulation_ns,
@@ -2491,6 +2723,8 @@ mod tests {
         /// Use measured approach-to-contact tool travel as the motion basis
         /// when the push stroke itself has not started.
         use_tool_travel_basis: bool,
+        /// Distance from the box face to the tool point used for placement and proof.
+        face_gap: f64,
     }
 
     impl ExecOptions {
@@ -2502,6 +2736,7 @@ mod tests {
                 contact_guard_from_quantum: 2,
                 max_commanded_stroke_m: None,
                 use_tool_travel_basis: false,
+                face_gap: 0.0,
             }
         }
     }
@@ -2564,7 +2799,7 @@ mod tests {
         let sha = "goal-directed-loop";
         let size = 0.025;
         let half = [size, size, size];
-        let face_gap = 0.0;
+        let face_gap = options.face_gap;
         let _ = ee;
         let mut qpos = t0.qpos.clone();
         let desired = desired_planar_push(goal);
@@ -2697,6 +2932,7 @@ mod tests {
                         c.stroke_m,
                         ee_xyz,
                         tool_off,
+                        face_gap,
                         c.stroke_m + 1e-9 < 0.02,
                     ),
                 );
@@ -3203,6 +3439,7 @@ mod tests {
             let goal_authority_granted = admitted_goal
                 .as_ref()
                 .is_ok_and(|grant| grant_covers(grant, &goal_scope, authority_now_s).is_ok());
+            let goal_authorization = admitted_goal.as_ref().ok().map(authorization_from_grant);
             if let Ok(grant) = admitted_goal {
                 prior_goal_grant = Some(grant);
             }
@@ -3232,14 +3469,36 @@ mod tests {
                 contact_id: sel.face_id.clone(),
                 witness_id: witness_id.clone(),
                 witness_contents,
+                witness_digest: goal_scope.witness_digest.clone(),
                 requested_stroke_m: full_stroke,
                 prediction: frozen_prediction.clone(),
                 belief_snapshot,
                 recoverability,
                 envelope: ExecutionEnvelope::for_quasi_static_stroke(full_stroke, full_stroke),
                 observation_contract: physical_observation_contract(&model),
+                model_id: goal_scope.model_id.clone(),
+                embodiment_id: goal_scope.embodiment_id.clone(),
+                observation_epoch: goal_scope.observation_epoch.clone(),
+                actuator_id: goal_scope.actuator_id.clone(),
+                observation_contract_id: goal_scope.observation_contract_id.clone(),
+                abort_contract_id: goal_scope.abort_contract_id.clone(),
                 authority_granted: goal_authority_granted && sel.authority_ok,
+                execution_authorization: goal_authorization,
             };
+            let goal_covered = frozen_action
+                .execution_authorization
+                .as_ref()
+                .is_some_and(|authorization| authorization.covers(&frozen_action, authority_now_s));
+            if !goal_covered {
+                let mut refusal = step.record.clone();
+                refusal.decision = LoopDecision::Refuse;
+                refusal.outcome = GoalLoopOutcome::AuthorityRefusal;
+                refusal.authority_decision = "REFUSE".into();
+                refusal.selection_rationale = "SCOPED_GRANT_DOES_NOT_COVER_ACTION".into();
+                refusal.unauthorized_writes = 0;
+                record_action(&mut trace, &refusal, Some(&sel), None, None);
+                break;
+            }
             let mut nxy = xy;
             let mut nyaw = yaw;
             let mut ep_last = None;
@@ -3287,7 +3546,10 @@ mod tests {
                         3 => full_stroke * 0.5,
                         _ => full_stroke,
                     };
-                    let runtime = runtime_policy_observation(
+                    let grant_ok = frozen_action.execution_authorization.as_ref().is_some_and(
+                        |authorization| authorization.covers(&frozen_action, authority_now_s),
+                    );
+                    let mut runtime = runtime_policy_observation(
                         policy_observation,
                         &action_id,
                         &witness_id,
@@ -3299,8 +3561,9 @@ mod tests {
                         &sel,
                         &model,
                         &ee_name,
-                        true,
+                        grant_ok,
                     );
+                    runtime.timestamp_s = authority_now_s;
                     if let Some(displacement) = runtime.object_displacement_m {
                         guarded_displacement = displacement;
                     }
@@ -3315,7 +3578,7 @@ mod tests {
                         total_quanta: 4,
                         stroke_consumed_m: Some(consumed_for_phase),
                         contact_guard_active: quantum >= options.contact_guard_from_quantum,
-                        now_s: policy_observation.timestamp_s,
+                        now_s: authority_now_s,
                         remainder_invalidated: false,
                     };
                     let decision = supervise_execution(&frozen_action, &progress, &runtime);
@@ -3627,6 +3890,7 @@ mod tests {
                         seed.wrapping_add(if probe_requested { 81_000 } else { 80_000 }),
                         ee,
                         sel.push_direction_world,
+                        face_gap,
                         probe_requested,
                     );
                     admissible_contact_count = Some(admissible);
@@ -3653,6 +3917,7 @@ mod tests {
                             z,
                             nyaw,
                             size,
+                            face_gap,
                             probe_stroke,
                             tool_off,
                             seed.wrapping_add(82_000),
@@ -3680,6 +3945,7 @@ mod tests {
                                     z,
                                     nyaw,
                                     size,
+                                    face_gap,
                                     shorter,
                                     tool_off,
                                     seed.wrapping_add(83_000),
@@ -3706,6 +3972,74 @@ mod tests {
                         } else if let Some(maneuver) = proof.maneuver.clone() {
                             probe_maneuver = Some(maneuver);
                         }
+                        if proof.report.assessment == ProbeRecoverabilityAssessment::Unknown
+                            && motion_basis > 1e-9
+                        {
+                            if let Some(maneuver) = probe_maneuver.clone() {
+                                let planar = ((maneuver.contact_point[0] - nxy[0]).powi(2)
+                                    + (maneuver.contact_point[1] - nxy[1]).powi(2))
+                                .sqrt();
+                                let residual = (planar - size - face_gap.max(0.0)).abs();
+                                let ratio = observed_displacement
+                                    .filter(|_| motion_basis > 1e-9)
+                                    .map(|displacement| displacement / motion_basis)
+                                    .filter(|ratio| ratio.is_finite() && *ratio >= 0.0)
+                                    .unwrap_or(1.0);
+                                let radius = (probe_stroke * ratio.max(1.0)).max(residual);
+                                let yaw_abs =
+                                    observed_yaw_change.map(|yaw| yaw.abs()).unwrap_or(0.0);
+                                let mut covered = None;
+                                let mut cover_failure = String::new();
+                                for candidate in [radius, 0.004, 0.002, 0.001] {
+                                    if !candidate.is_finite() || candidate < 0.001 {
+                                        continue;
+                                    }
+                                    match ball_domain_for_maneuver(
+                                        &model,
+                                        &ee_name,
+                                        &maneuver,
+                                        nxy,
+                                        z,
+                                        nyaw,
+                                        size,
+                                        face_gap,
+                                        tool_off,
+                                        sel.push_direction_world,
+                                        candidate,
+                                        yaw_abs,
+                                        residual,
+                                        "proved-contact",
+                                    ) {
+                                        Ok(pair) => {
+                                            covered = Some((candidate, pair));
+                                            break;
+                                        }
+                                        Err(reason) => cover_failure = reason,
+                                    }
+                                }
+                                if let Some((candidate, (outcome, domain))) = covered {
+                                    let report = assess_probe_future(&ProbeFutureInputs {
+                                        consumed_stroke_m: motion_basis.max(candidate),
+                                        observed_displacement_m: observed_displacement,
+                                        geometry_residual_m: Some(residual),
+                                        outcomes: vec![outcome],
+                                        domain: Some(domain),
+                                    });
+                                    if report.assessment == ProbeRecoverabilityAssessment::Preserved
+                                    {
+                                        probe_stroke = candidate.min(probe_stroke).max(0.001);
+                                        proof = FutureProbeProof {
+                                            report,
+                                            maneuver: Some(maneuver),
+                                        };
+                                    } else {
+                                        proof.report.evidence.extend(report.evidence);
+                                    }
+                                } else if !cover_failure.is_empty() {
+                                    proof.report.evidence.push(cover_failure);
+                                }
+                            }
+                        }
                         if options.use_tool_travel_basis
                             && proof.report.assessment != ProbeRecoverabilityAssessment::Preserved
                         {
@@ -3726,40 +4060,46 @@ mod tests {
                                     &continued,
                                     live_ee.unwrap_or(ee),
                                 ) {
-                                    let margin = continued
-                                        .executable
-                                        .as_ref()
-                                        .map(|witness| witness.contact_to_mid.min_joint_margin)
-                                        .unwrap_or(0.0);
-                                    let outcome = SupportedProbeOutcome {
-                                        label: "witness-prefix".into(),
-                                        object_supported: Some(continued.support_clearance > 0.004),
-                                        inside_reachable_workspace: Some(true),
-                                        joint_margin_rad: Some(margin),
-                                        collision_admissible: Some(true),
-                                        motion_within_declared_bound: Some(
-                                            0.004 <= continued.support_clearance,
-                                        ),
-                                        belief_outcome_bounded: Some(true),
-                                        contact_persists: Some(false),
-                                        return_contact_witness_digest: witness_digest_of(
+                                    let planar = ((continued.contact_point[0] - nxy[0]).powi(2)
+                                        + (continued.contact_point[1] - nxy[1]).powi(2))
+                                    .sqrt();
+                                    let residual = (planar - size - face_gap.max(0.0)).abs();
+                                    let travel = observed_displacement.unwrap_or(0.0).max(0.004);
+                                    if residual.is_finite() {
+                                        if let Ok((outcome, domain)) = ball_domain_for_maneuver(
+                                            &model,
+                                            &ee_name,
                                             &continued,
-                                        ),
-                                    };
-                                    let report = assess_probe_future(&ProbeFutureInputs {
-                                        consumed_stroke_m: motion_basis.max(0.004),
-                                        observed_displacement_m: observed_displacement,
-                                        geometry_residual_m: Some(0.0),
-                                        outcomes: vec![outcome.clone(), outcome],
-                                    });
-                                    if report.assessment == ProbeRecoverabilityAssessment::Preserved
-                                    {
-                                        probe_stroke = 0.004;
-                                        probe_maneuver = Some(continued);
-                                        proof = FutureProbeProof {
-                                            report,
-                                            maneuver: probe_maneuver.clone(),
-                                        };
+                                            nxy,
+                                            z,
+                                            nyaw,
+                                            size,
+                                            face_gap,
+                                            tool_off,
+                                            sel.push_direction_world,
+                                            travel.max(residual),
+                                            0.0,
+                                            residual,
+                                            "witness-prefix",
+                                        ) {
+                                            let report = assess_probe_future(&ProbeFutureInputs {
+                                                consumed_stroke_m: motion_basis.max(0.004),
+                                                observed_displacement_m: observed_displacement,
+                                                geometry_residual_m: Some(residual),
+                                                outcomes: vec![outcome],
+                                                domain: Some(domain),
+                                            });
+                                            if report.assessment
+                                                == ProbeRecoverabilityAssessment::Preserved
+                                            {
+                                                probe_stroke = 0.004;
+                                                probe_maneuver = Some(continued);
+                                                proof = FutureProbeProof {
+                                                    report,
+                                                    maneuver: probe_maneuver.clone(),
+                                                };
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -3780,6 +4120,7 @@ mod tests {
                         let probe_epoch =
                             format!("{}:probe:{}", model.calibration_epoch, after.observed_at_s);
                         let authority_now_s = after.observed_at_s.max(10.0);
+                        let mut issued_probe_grant = None;
                         let mut probe_candidate = probe_maneuver.as_ref().map(|maneuver| {
                             let witness_digest = witness_digest_of(maneuver).unwrap_or_default();
                             let mut evidence = physical_probe_candidate_evidence(
@@ -3830,6 +4171,7 @@ mod tests {
                                                 grant_covers(prior, &scope, authority_now_s).is_ok()
                                             });
                                         if !prior_covers {
+                                            issued_probe_grant = Some(grant.clone());
                                             evidence.scoped_grant =
                                                 Some(binding_from_grant(&grant));
                                             scoped_grant_text = Some(grant.command_id.clone());
@@ -3893,6 +4235,7 @@ mod tests {
                                 &maneuver,
                                 probe_stroke,
                                 quasi_limit_m,
+                                issued_probe_grant.as_ref().map(authorization_from_grant),
                                 last_loaded.take(),
                             );
                             last_loaded = run.loaded;
@@ -4264,6 +4607,7 @@ mod tests {
             0.03,
             sample.xyz,
             tool_off,
+            0.015,
             false,
         );
         write_scratch(
@@ -4461,6 +4805,7 @@ mod tests {
                 contact_guard_from_quantum: 2,
                 max_commanded_stroke_m: None,
                 use_tool_travel_basis: false,
+                face_gap: 0.0,
             },
         );
         let unguarded = match unguarded {
@@ -4492,6 +4837,7 @@ mod tests {
                 contact_guard_from_quantum: 2,
                 max_commanded_stroke_m: None,
                 use_tool_travel_basis: false,
+                face_gap: 0.0,
             },
         )
         .unwrap_or_else(|err| panic!("guarded pass failed: {err}"));
@@ -4678,6 +5024,10 @@ mod tests {
             contact_guard_from_quantum: 2,
             max_commanded_stroke_m: Some(0.012),
             use_tool_travel_basis: true,
+            // Tool-probe radius is 15 mm. This gap keeps the approach samples
+            // outside that sphere so a few millimetres of post-probe growth
+            // still has a collision proof. Contact-loss stays at gap 0.
+            face_gap: 0.015,
         }
     }
 
@@ -4819,16 +5169,48 @@ mod tests {
                 .as_ref()
                 .map(|action| action["selection_rationale"].as_str())
         );
-        let next = next_a.expect("canonical decision after the probe");
-        let progressed = next["outcome"] == "GOAL_PROGRESS" || next["outcome"] == "GOAL_REACHED";
-        let refused = next["authority_decision"] == "REFUSE"
-            && next["selection_rationale"]
-                .as_str()
-                .unwrap_or("")
-                .contains("NO_ROBUST_STRICT_PROGRESS");
-        assert!(
-            progressed || refused,
-            "next decision was neither goal progress nor a truthful robustness refusal: {next}"
+        let next = next_a.as_ref().expect("canonical decision after the probe");
+        let lineage = a["belief_lineage"].as_str().unwrap_or("");
+        let nominal = lineage.contains("tag=NominalDisplacementRatio")
+            || lineage.contains("tag=HighDisplacementRatio");
+        if nominal {
+            let rationale = next["selection_rationale"].as_str().unwrap_or("");
+            assert!(
+                !rationale.contains("NO_ROBUST_STRICT_PROGRESS"),
+                "a nominal probe must not be followed by an unchanged robustness refusal: {next}"
+            );
+            assert!(
+                next["outcome"] == "GOAL_PROGRESS" || next["outcome"] == "GOAL_REACHED",
+                "the post-probe action must record goal progress: {next}"
+            );
+            let before_error = next
+                .get("goal_error_before")
+                .and_then(|error| error.get("translation_residual_m"))
+                .and_then(|value| value.as_f64());
+            let after_error = next
+                .get("goal_error_after")
+                .and_then(|error| error.get("translation_residual_m"))
+                .and_then(|value| value.as_f64());
+            if let (Some(before_error), Some(after_error)) = (before_error, after_error) {
+                assert!(
+                    after_error < before_error,
+                    "measured progress must reduce translation residual {before_error} -> {after_error}"
+                );
+            }
+        } else {
+            assert_eq!(next["authority_decision"], "REFUSE");
+            assert_eq!(next["ctrl_writes"], 0);
+            assert!(
+                next["selection_rationale"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("NO_ROBUST_STRICT_PROGRESS"),
+                "a non-nominal probe must not authorize a goal: {next}"
+            );
+        }
+        assert_eq!(
+            next_a.as_ref().map(|action| action["selected_id"].clone()),
+            next_b.as_ref().map(|action| action["selected_id"].clone())
         );
         let counters = &a["work_counters"];
         let proof = counters["proof_wall_time_ns"].as_u64().unwrap_or(0);

@@ -926,6 +926,33 @@ fn ik_sample_contact(
     Err(last_constraint)
 }
 
+/// Collision of this witness against the object grown by `radius_m` in the plane.
+/// Intended contact stays allowed. An early strike or an unintended body hit refuses.
+pub fn witness_admissible_for_translation_ball(
+    model: &EmbodimentModel,
+    ee: &str,
+    maneuver: &ContactManeuver,
+    mut object: BoxObject,
+    support: SupportPlane,
+    spec: &ContactManeuverSpec,
+    radius_m: f64,
+) -> bool {
+    if !radius_m.is_finite() || radius_m < 0.0 {
+        return false;
+    }
+    let Some(mut witness) = maneuver.executable.clone() else {
+        return false;
+    };
+    if execution_block_reason(&witness).is_some() {
+        return false;
+    }
+    object.half_extents[0] += radius_m;
+    object.half_extents[1] += radius_m;
+    let world = collision_world_of(model, ee, object, support, spec);
+    apply_collision_admissibility(&mut witness, model, ee, &world);
+    execution_block_reason(&witness).is_none()
+}
+
 fn collision_world_of(
     model: &EmbodimentModel,
     ee: &str,

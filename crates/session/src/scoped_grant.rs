@@ -405,7 +405,7 @@ mod tests {
                 &sample,
                 &ordinary,
                 10.0,
-                &[sample.action_key.clone()],
+                std::slice::from_ref(&sample.action_key),
                 true
             ),
             Err(ScopeRefusal::ActionBlacklisted)

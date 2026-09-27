@@ -16,6 +16,7 @@ fn frozen() -> FrozenAction {
         contact_id: "contact:1".into(),
         witness_id: "witness:1".into(),
         witness_contents: "frozen-witness-content".into(),
+        witness_digest: String::new(),
         requested_stroke_m: 0.02,
         prediction: FrozenPrediction {
             action_id: "action:1".into(),
@@ -45,8 +46,16 @@ fn frozen() -> FrozenAction {
                 ObservationField::QuasiStaticApplicability,
             ],
         },
+        model_id: String::new(),
+        embodiment_id: String::new(),
+        observation_epoch: String::new(),
+        actuator_id: String::new(),
+        observation_contract_id: String::new(),
+        abort_contract_id: String::new(),
         authority_granted: true,
+        execution_authorization: None,
     }
+    .with_matching_authorization(10.0, 40.0)
 }
 
 fn progress() -> ExecutionProgress {
@@ -107,6 +116,52 @@ fn missing_tracking_and_wrong_epoch_fail_closed() {
     assert!(matches!(
         supervise_execution(&frozen(), &progress(), &obs),
         SupervisorDecision::EvidenceUnavailable { .. }
+    ));
+}
+
+#[test]
+fn a_boolean_grant_flag_does_not_execute() {
+    let mut action = frozen();
+    action.authority_granted = true;
+    action.execution_authorization = None;
+    assert!(matches!(
+        supervise_execution(&action, &progress(), &observation()),
+        SupervisorDecision::AuthorityLost { .. }
+    ));
+    let mut expired = frozen();
+    if let Some(authorization) = expired.execution_authorization.as_mut() {
+        authorization.expires_at_s = 10.0;
+    }
+    assert!(matches!(
+        supervise_execution(&expired, &progress(), &observation()),
+        SupervisorDecision::AuthorityLost { .. }
+    ));
+    let mut other = frozen();
+    other.action_key = "face:other".into();
+    assert!(matches!(
+        supervise_execution(&other, &progress(), &observation()),
+        SupervisorDecision::AuthorityLost { .. }
+    ));
+    let mut changed_witness = frozen();
+    changed_witness.witness_contents = "rewritten-witness".into();
+    assert!(matches!(
+        supervise_execution(&changed_witness, &progress(), &observation()),
+        SupervisorDecision::AuthorityLost { .. }
+    ));
+    let mut changed_epoch = frozen();
+    changed_epoch.observation_epoch = "epoch:later".into();
+    assert!(matches!(
+        supervise_execution(&changed_epoch, &progress(), &observation()),
+        SupervisorDecision::AuthorityLost { .. }
+    ));
+    let mut aborted = progress();
+    aborted.remainder_invalidated = true;
+    assert!(matches!(
+        supervise_execution(&frozen(), &aborted, &observation()),
+        SupervisorDecision::AbortAndReobserve {
+            remainder_invalidated: true,
+            ..
+        }
     ));
 }
 

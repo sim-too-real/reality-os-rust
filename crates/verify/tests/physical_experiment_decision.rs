@@ -5,8 +5,9 @@ use realityos_semantics::discrepancy::{
     apply_probe_observation, DiscrepancyKind, Identifiability, ObservationTag, Stimulus,
 };
 use realityos_semantics::execution_envelope::{
-    supervise_execution, ExecutionEnvelope, ExecutionProgress, FrozenAction, ObservationContract,
-    ObservationField, RuntimePolicyObservation, SupervisorDecision,
+    contents_digest, require_phase_measurement, supervise_execution, ExecutionAuthorization,
+    ExecutionEnvelope, ExecutionProgress, FrozenAction, ObservationContract, ObservationField,
+    PhasePolicyFields, RuntimePolicyObservation, SupervisorDecision,
 };
 use realityos_semantics::future_interaction::{
     assess_probe_future, ProbeFutureInputs, SupportedProbeOutcome,
@@ -17,7 +18,9 @@ use realityos_semantics::physical_decision::{
     LexicographicPreference, PredictedPhysicalEffect, ProbeEvidence, ProbeRecoverabilityAssessment,
     ScopedGrantBinding,
 };
-use realityos_semantics::probe_selection::BeliefRobustness;
+use realityos_semantics::probe_selection::{
+    candidates_for_uncertainty, rank_goal_or_probe, BeliefRobustness, DecisionClass,
+};
 use realityos_semantics::recoverability::RecoverabilityClass;
 use realityos_session::{
     evaluate_action_eligibility, grant_covers, issue_scoped_simulation_grant, PhysicalActionScope,
@@ -166,6 +169,7 @@ fn shipped_decision_and_authority_matrix() {
         observed_displacement_m: Some(0.013),
         geometry_residual_m: Some(0.001),
         outcomes: vec![preserved_outcome("current")],
+        domain: None,
     });
     assert_eq!(
         future_unknown.assessment,
@@ -193,8 +197,10 @@ fn shipped_decision_and_authority_matrix() {
         observed_displacement_m: Some(0.008),
         geometry_residual_m: Some(0.002),
         outcomes: vec![preserved_outcome("stay"), preserved_outcome("stroke")],
+        domain: None,
     });
-    assert_eq!(proved.assessment, ProbeRecoverabilityAssessment::Preserved);
+    assert_eq!(proved.assessment, ProbeRecoverabilityAssessment::Unknown);
+    assert_ne!(proved.assessment, ProbeRecoverabilityAssessment::Preserved);
     let missing_grant = decide_physical_action(&context(
         probe(&probe_scope, None, ProbeRecoverabilityAssessment::Preserved),
         "epoch:1",
@@ -257,7 +263,7 @@ fn shipped_decision_and_authority_matrix() {
             &probe_scope,
             &proposal(),
             12.0,
-            &[probe_scope.action_key.clone()],
+            std::slice::from_ref(&probe_scope.action_key),
             true
         ),
         Err(ScopeRefusal::ActionBlacklisted)
@@ -305,6 +311,7 @@ fn shipped_decision_and_authority_matrix() {
         contact_id: action.contact_id.clone(),
         witness_id: action.witness_id.clone(),
         witness_contents: action.witness_contents.clone(),
+        witness_digest: String::new(),
         requested_stroke_m: 0.012,
         prediction: realityos_semantics::physical_consequence::FrozenPrediction {
             action_id: "probe-action".into(),
@@ -343,8 +350,16 @@ fn shipped_decision_and_authority_matrix() {
                 ObservationField::QuasiStaticApplicability,
             ],
         },
+        model_id: String::new(),
+        embodiment_id: String::new(),
+        observation_epoch: String::new(),
+        actuator_id: String::new(),
+        observation_contract_id: String::new(),
+        abort_contract_id: String::new(),
         authority_granted: true,
-    };
+        execution_authorization: None,
+    }
+    .with_matching_authorization(10.0, 40.0);
     let observation = RuntimePolicyObservation {
         action_id: frozen.action_id.clone(),
         witness_id: frozen.witness_id.clone(),
@@ -475,5 +490,316 @@ fn shipped_decision_and_authority_matrix() {
     println!(
         "matrix=pass grant={} future={:?}",
         probe_grant.command_id, proved.assessment
+    );
+}
+
+fn issued_authorization(
+    grant: &realityos_session::ScopedSimulationGrant,
+) -> ExecutionAuthorization {
+    ExecutionAuthorization {
+        grant_id: grant.command_id.clone(),
+        scope_digest: grant.scope_digest.clone(),
+        model_id: grant.scope.model_id.clone(),
+        embodiment_id: grant.scope.embodiment_id.clone(),
+        observation_epoch: grant.scope.observation_epoch.clone(),
+        candidate_id: grant.scope.candidate_id.clone(),
+        action_key: grant.scope.action_key.clone(),
+        witness_digest: grant.scope.witness_digest.clone(),
+        actuator_id: grant.scope.actuator_id.clone(),
+        requested_stroke_m: grant.scope.requested_stroke_m,
+        execution_bound_m: grant.scope.execution_bound_m,
+        issued_at_s: grant.scope.issued_at_s,
+        expires_at_s: grant.scope.expires_at_s,
+        observation_contract_id: grant.scope.observation_contract_id.clone(),
+        abort_contract_id: grant.scope.abort_contract_id.clone(),
+    }
+}
+
+fn authorized_frozen(
+    action_key: &str,
+    candidate_id: &str,
+    witness_contents: &str,
+    grant: &realityos_session::ScopedSimulationGrant,
+) -> FrozenAction {
+    let authorization = issued_authorization(grant);
+    FrozenAction {
+        action_id: format!("action:{candidate_id}"),
+        action_key: action_key.into(),
+        candidate_id: candidate_id.into(),
+        contact_id: "contact".into(),
+        witness_id: format!("witness:{candidate_id}"),
+        witness_contents: witness_contents.into(),
+        witness_digest: authorization.witness_digest.clone(),
+        requested_stroke_m: authorization.requested_stroke_m,
+        prediction: realityos_semantics::physical_consequence::FrozenPrediction {
+            action_id: format!("action:{candidate_id}"),
+            witness_id: format!("witness:{candidate_id}"),
+            stroke_m: authorization.requested_stroke_m,
+            predicted_displacement_m: Some(0.004),
+            predicted_yaw_change_rad: Some(0.0),
+            predicted_contact_persists: true,
+            quasi_static_stroke_limit_m: 0.015,
+        },
+        belief_snapshot: PhysicalParameterBelief::declared_point(
+            PhysicalParameter::SupportFriction,
+            0.3,
+            "reasoner.disclosure.support_friction",
+        ),
+        recoverability: RecoverabilityClass::ProgressAndRecoverable,
+        envelope: ExecutionEnvelope::for_quasi_static_stroke(
+            authorization.requested_stroke_m,
+            0.004,
+        ),
+        observation_contract: ObservationContract {
+            source: "policy-sensors".into(),
+            model_epoch: "epoch:1".into(),
+            calibration_epoch: "epoch:1".into(),
+            max_age_s: 1.0,
+            required_units: BTreeMap::new(),
+            required_fields: vec![ObservationField::Displacement, ObservationField::Contact],
+        },
+        model_id: authorization.model_id.clone(),
+        embodiment_id: authorization.embodiment_id.clone(),
+        observation_epoch: authorization.observation_epoch.clone(),
+        actuator_id: authorization.actuator_id.clone(),
+        observation_contract_id: authorization.observation_contract_id.clone(),
+        abort_contract_id: authorization.abort_contract_id.clone(),
+        authority_granted: true,
+        execution_authorization: Some(authorization),
+    }
+}
+
+fn phase_observation(error_before: f64, error_now: f64) -> RuntimePolicyObservation {
+    RuntimePolicyObservation {
+        action_id: String::new(),
+        witness_id: String::new(),
+        observation_id: "observation:measured".into(),
+        source: "policy-sensors".into(),
+        timestamp_s: 10.1,
+        model_epoch: "epoch:1".into(),
+        calibration_epoch: "epoch:1".into(),
+        units: BTreeMap::new(),
+        stroke_consumed_m: Some(0.006),
+        object_displacement_m: Some(0.004),
+        yaw_change_rad: Some(0.0),
+        intended_contact_persists: Some(true),
+        goal_error_before: Some(error_before),
+        goal_error_now: Some(error_now),
+        robot_tracking_error_m: Some(0.001),
+        reachability_margin_m: Some(0.02),
+        quasi_static_applicable: Some(true),
+        authority_ok: Some(true),
+    }
+}
+
+#[test]
+fn negative_experiment_conditions_refuse_without_execution() {
+    let mut os = RealityOs::new();
+    let probe_scope = scope("probe-action", "digest-probe", "epoch:1");
+    let grant = issue_scoped_simulation_grant(&mut os, &probe_scope, &proposal(), 10.0, &[], true)
+        .expect("probe grant");
+    let bound = binding(&probe_scope, &grant.command_id);
+
+    let at_risk = decide_physical_action(&context(
+        probe(
+            &probe_scope,
+            Some(bound.clone()),
+            ProbeRecoverabilityAssessment::AtRisk,
+        ),
+        "epoch:1",
+        vec![],
+        true,
+    ));
+    assert!(
+        matches!(at_risk, DecisionKind::PhysicallyInfeasible { .. }),
+        "informative but unrecoverable probe must be refused, got {at_risk:?}"
+    );
+
+    let unknown = decide_physical_action(&context(
+        probe(
+            &probe_scope,
+            Some(bound.clone()),
+            ProbeRecoverabilityAssessment::Unknown,
+        ),
+        "epoch:1",
+        vec![],
+        true,
+    ));
+    assert!(
+        matches!(unknown, DecisionKind::InsufficientEvidence { .. }),
+        "unknown future interaction must not execute, got {unknown:?}"
+    );
+
+    let missing_grant = decide_physical_action(&context(
+        probe(&probe_scope, None, ProbeRecoverabilityAssessment::Preserved),
+        "epoch:1",
+        vec![],
+        true,
+    ));
+    assert!(
+        matches!(missing_grant, DecisionKind::Refuse { .. }),
+        "missing scoped authority must not execute, got {missing_grant:?}"
+    );
+    let mut flagged = authorized_frozen(
+        &probe_scope.action_key,
+        &probe_scope.candidate_id,
+        "contents:digest-probe",
+        &grant,
+    );
+    flagged.authority_granted = true;
+    flagged.execution_authorization = None;
+    flagged.witness_contents = "contents:digest-probe".into();
+    let progress = ExecutionProgress {
+        action_id: flagged.action_id.clone(),
+        witness_id: flagged.witness_id.clone(),
+        completed_quanta: 0,
+        total_quanta: 4,
+        stroke_consumed_m: Some(0.0),
+        contact_guard_active: false,
+        now_s: 10.0,
+        remainder_invalidated: false,
+    };
+    let mut observation = phase_observation(0.2, 0.2);
+    observation.action_id = flagged.action_id.clone();
+    observation.witness_id = flagged.witness_id.clone();
+    observation.timestamp_s = 10.0;
+    assert!(
+        matches!(
+            supervise_execution(&flagged, &progress, &observation),
+            SupervisorDecision::AuthorityLost { .. }
+        ),
+        "a boolean authority flag must not start execution"
+    );
+
+    assert_eq!(
+        require_phase_measurement(None).unwrap_err(),
+        "EVIDENCE_UNAVAILABLE"
+    );
+    let missing_contact = require_phase_measurement(Some(PhasePolicyFields {
+        displacement_m: None,
+        yaw_change_rad: None,
+        contact_persists: None,
+        pose_observed: false,
+    }));
+    assert!(missing_contact.is_err());
+    assert!(missing_contact
+        .ok()
+        .and_then(|fields| fields.displacement_m)
+        .is_none());
+
+    let indistinguishable = candidates_for_uncertainty(0.015)
+        .into_iter()
+        .filter(|candidate| {
+            candidate.id == "probe_repeat" || candidate.class == DecisionClass::GoalAction
+        })
+        .collect::<Vec<_>>();
+    let live = [
+        DiscrepancyKind::SupportFrictionInconsistent,
+        DiscrepancyKind::QuasiStaticAssumptionBroken,
+    ];
+    let same_prediction = rank_goal_or_probe(&indistinguishable, &live, 0.015);
+    assert_eq!(
+        same_prediction.selected_id, None,
+        "indistinguishable hypotheses must not select an action: {same_prediction:?}"
+    );
+
+    let mut leaving = probe(
+        &probe_scope,
+        Some(bound),
+        ProbeRecoverabilityAssessment::Preserved,
+    );
+    leaving.recoverability = RecoverabilityClass::ProgressButCanEnterUnrecoverableState;
+    let regime = decide_physical_action(&context(leaving, "epoch:1", vec![], true));
+    assert!(
+        !matches!(
+            regime,
+            DecisionKind::PhysicalProbe { .. } | DecisionKind::GoalInteraction { .. }
+        ),
+        "leaving the model regime must not execute, got {regime:?}"
+    );
+}
+
+#[test]
+fn belief_update_changes_the_next_goal_and_records_progress() {
+    let limit = 0.015;
+    let candidates = candidates_for_uncertainty(limit);
+    let before_live = [
+        DiscrepancyKind::SupportFrictionInconsistent,
+        DiscrepancyKind::QuasiStaticAssumptionBroken,
+    ];
+    let before = rank_goal_or_probe(&candidates, &before_live, limit);
+    assert_eq!(before.selected_class, Some(DecisionClass::PhysicalProbe));
+    let before_id = before.selected_id.clone().expect("probe");
+
+    let belief = PhysicalParameterBelief::declared_point(
+        PhysicalParameter::SupportFriction,
+        0.3,
+        "reasoner.disclosure.support_friction",
+    );
+    let update = apply_probe_observation(
+        &belief,
+        &before_live,
+        Stimulus {
+            stroke_m: limit * 0.8,
+            quasi_static_stroke_limit_m: limit,
+        },
+        realityos_semantics::discrepancy::ObservationTag::NominalDisplacementRatio,
+        "observation:probe",
+    );
+    assert_ne!(update.belief, belief);
+    assert!(update
+        .eliminated
+        .contains(&DiscrepancyKind::SupportFrictionInconsistent));
+    let after = rank_goal_or_probe(&candidates, &update.remaining, limit);
+    assert_eq!(after.selected_class, Some(DecisionClass::GoalAction));
+    let after_id = after.selected_id.clone().expect("goal");
+    assert_ne!(after_id, before_id);
+    let counterfactual = rank_goal_or_probe(&candidates, &before_live, limit);
+    assert_eq!(
+        counterfactual.selected_id.as_deref(),
+        Some(before_id.as_str())
+    );
+
+    let mut os = RealityOs::new();
+    let witness_contents = "goal-witness-bytes";
+    let goal_scope = scope(&after_id, &contents_digest(witness_contents), "epoch:1");
+    let grant = issue_scoped_simulation_grant(&mut os, &goal_scope, &proposal(), 10.0, &[], true)
+        .expect("goal grant");
+    assert_eq!(grant.evidence_status, "SIMULATION_ONLY");
+    assert!(!grant.metal);
+    let action = authorized_frozen(
+        &after_id,
+        &goal_scope.candidate_id,
+        witness_contents,
+        &grant,
+    );
+    assert!(action
+        .execution_authorization
+        .as_ref()
+        .unwrap()
+        .covers(&action, 10.0));
+    let progress = ExecutionProgress {
+        action_id: action.action_id.clone(),
+        witness_id: action.witness_id.clone(),
+        completed_quanta: 1,
+        total_quanta: 4,
+        stroke_consumed_m: Some(0.006),
+        contact_guard_active: true,
+        now_s: 10.1,
+        remainder_invalidated: false,
+    };
+    let mut observation = phase_observation(0.18, 0.12);
+    observation.action_id = action.action_id.clone();
+    observation.witness_id = action.witness_id.clone();
+    let decision = supervise_execution(&action, &progress, &observation);
+    assert!(
+        matches!(decision, SupervisorDecision::Continue { .. }),
+        "authorized goal must execute, got {decision:?}"
+    );
+    let measured = observation.goal_error_before.unwrap() - observation.goal_error_now.unwrap();
+    assert!(measured > 0.0, "measured goal progress {measured}");
+    println!(
+        "counterfactual={before_id} next={after_id} progress_m={measured} grant={}",
+        grant.command_id
     );
 }

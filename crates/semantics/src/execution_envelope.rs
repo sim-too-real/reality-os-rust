@@ -5,11 +5,17 @@
 //! margin, quasi-static applicability, and authority. No future state.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 use crate::physical_belief::PhysicalParameterBelief;
 use crate::physical_consequence::FrozenPrediction;
 use crate::recoverability::RecoverabilityClass;
+
+/// Digest of the exact witness contents an execution grant has to name.
+pub fn contents_digest(contents: &str) -> String {
+    hex::encode(Sha256::digest(contents.as_bytes()))
+}
 
 /// Displacement / consumed stroke above this is outside the quasi-static push.
 pub const QUASI_STATIC_DISPLACEMENT_RATIO: f64 = 1.75;
@@ -92,6 +98,58 @@ pub struct ObservationContract {
     pub required_fields: Vec<ObservationField>,
 }
 
+/// Copy of an issued simulation grant. The executor checks it. It does not create it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionAuthorization {
+    pub grant_id: String,
+    pub scope_digest: String,
+    pub model_id: String,
+    pub embodiment_id: String,
+    pub observation_epoch: String,
+    pub candidate_id: String,
+    pub action_key: String,
+    pub witness_digest: String,
+    pub actuator_id: String,
+    pub requested_stroke_m: f64,
+    pub execution_bound_m: f64,
+    pub issued_at_s: f64,
+    pub expires_at_s: f64,
+    pub observation_contract_id: String,
+    pub abort_contract_id: String,
+}
+
+impl ExecutionAuthorization {
+    /// The grant covers this action at `now_s` only when every bound matches.
+    pub fn covers(&self, action: &FrozenAction, now_s: f64) -> bool {
+        let digest = contents_digest(&action.witness_contents);
+        !self.grant_id.is_empty()
+            && self.scope_digest.len() == 64
+            && self.scope_digest.chars().all(|ch| ch.is_ascii_hexdigit())
+            && self.grant_id.contains(&self.scope_digest)
+            && self.model_id == action.model_id
+            && self.embodiment_id == action.embodiment_id
+            && self.observation_epoch == action.observation_epoch
+            && self.candidate_id == action.candidate_id
+            && self.action_key == action.action_key
+            && self.witness_digest == digest
+            && self.witness_digest == action.witness_digest
+            && self.actuator_id == action.actuator_id
+            && !self.actuator_id.is_empty()
+            && self.observation_contract_id == action.observation_contract_id
+            && self.abort_contract_id == action.abort_contract_id
+            && !self.observation_contract_id.is_empty()
+            && !self.abort_contract_id.is_empty()
+            && self.requested_stroke_m.is_finite()
+            && (self.requested_stroke_m - action.requested_stroke_m).abs() <= 1e-9
+            && self.execution_bound_m + 1e-12 >= self.requested_stroke_m
+            && self.issued_at_s.is_finite()
+            && self.expires_at_s.is_finite()
+            && now_s.is_finite()
+            && now_s >= self.issued_at_s
+            && now_s < self.expires_at_s
+    }
+}
+
 /// Immutable execution contract for one selected and independently authorized action.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FrozenAction {
@@ -102,13 +160,71 @@ pub struct FrozenAction {
     pub witness_id: String,
     /// Exact serialized witness contents used by the executor.
     pub witness_contents: String,
+    pub witness_digest: String,
     pub requested_stroke_m: f64,
     pub prediction: FrozenPrediction,
     pub belief_snapshot: PhysicalParameterBelief,
     pub recoverability: RecoverabilityClass,
     pub envelope: ExecutionEnvelope,
     pub observation_contract: ObservationContract,
+    pub model_id: String,
+    pub embodiment_id: String,
+    pub observation_epoch: String,
+    pub actuator_id: String,
+    pub observation_contract_id: String,
+    pub abort_contract_id: String,
+    /// Policy flag. Execution still requires `execution_authorization` to cover.
     pub authority_granted: bool,
+    #[serde(default)]
+    pub execution_authorization: Option<ExecutionAuthorization>,
+}
+
+impl FrozenAction {
+    /// Attach an authorization whose fields match this action.
+    /// This does not issue a grant. Callers that execute must copy an issued grant.
+    pub fn with_matching_authorization(mut self, issued_at_s: f64, expires_at_s: f64) -> Self {
+        if self.witness_digest.is_empty() {
+            self.witness_digest = contents_digest(&self.witness_contents);
+        }
+        if self.model_id.is_empty() {
+            self.model_id = "model".into();
+        }
+        if self.embodiment_id.is_empty() {
+            self.embodiment_id = "embodiment".into();
+        }
+        if self.observation_epoch.is_empty() {
+            self.observation_epoch = "epoch".into();
+        }
+        if self.actuator_id.is_empty() {
+            self.actuator_id = "actuator".into();
+        }
+        if self.observation_contract_id.is_empty() {
+            self.observation_contract_id = format!("sensors:{}", self.observation_epoch);
+        }
+        if self.abort_contract_id.is_empty() {
+            self.abort_contract_id = "abort-and-reobserve".into();
+        }
+        let scope_digest = self.witness_digest.clone();
+        self.execution_authorization = Some(ExecutionAuthorization {
+            grant_id: format!("sim-scope:{scope_digest}"),
+            scope_digest,
+            model_id: self.model_id.clone(),
+            embodiment_id: self.embodiment_id.clone(),
+            observation_epoch: self.observation_epoch.clone(),
+            candidate_id: self.candidate_id.clone(),
+            action_key: self.action_key.clone(),
+            witness_digest: self.witness_digest.clone(),
+            actuator_id: self.actuator_id.clone(),
+            requested_stroke_m: self.requested_stroke_m,
+            execution_bound_m: self.requested_stroke_m,
+            issued_at_s,
+            expires_at_s,
+            observation_contract_id: self.observation_contract_id.clone(),
+            abort_contract_id: self.abort_contract_id.clone(),
+        });
+        self.authority_granted = true;
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -131,6 +247,32 @@ pub struct RuntimePolicyObservation {
     pub reachability_margin_m: Option<f64>,
     pub quasi_static_applicable: Option<bool>,
     pub authority_ok: Option<bool>,
+}
+
+/// Policy-visible phase fields. Simulator truth is not a member of this struct.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhasePolicyFields {
+    pub displacement_m: Option<f64>,
+    pub yaw_change_rad: Option<f64>,
+    pub contact_persists: Option<bool>,
+    pub pose_observed: bool,
+}
+
+/// Missing phase evidence is a typed refusal. It does not reconstruct a success.
+pub fn require_phase_measurement(
+    phase: Option<PhasePolicyFields>,
+) -> Result<PhasePolicyFields, &'static str> {
+    let Some(fields) = phase else {
+        return Err("EVIDENCE_UNAVAILABLE");
+    };
+    if !fields.pose_observed
+        || fields.displacement_m.is_none()
+        || fields.yaw_change_rad.is_none()
+        || fields.contact_persists.is_none()
+    {
+        return Err("EVIDENCE_UNAVAILABLE");
+    }
+    Ok(fields)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -205,7 +347,11 @@ pub fn supervise_execution(
     progress: &ExecutionProgress,
     observation: &RuntimePolicyObservation,
 ) -> SupervisorDecision {
-    if !action.authority_granted || observation.authority_ok == Some(false) {
+    let grant_covers = action
+        .execution_authorization
+        .as_ref()
+        .is_some_and(|authorization| authorization.covers(action, progress.now_s));
+    if !action.authority_granted || !grant_covers || observation.authority_ok == Some(false) {
         return SupervisorDecision::AuthorityLost {
             action_id: action.action_id.clone(),
             witness_id: action.witness_id.clone(),

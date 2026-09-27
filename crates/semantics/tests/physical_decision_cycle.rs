@@ -137,6 +137,7 @@ fn abort_probe_observe_update_and_replan_stays_on_the_canonical_path() {
         contact_id: probe_action.contact_id.clone(),
         witness_id: probe_action.witness_id.clone(),
         witness_contents: probe_action.witness_contents.clone(),
+        witness_digest: String::new(),
         requested_stroke_m: probe_prediction.stroke_m,
         prediction: probe_prediction.clone(),
         belief_snapshot: PhysicalParameterBelief::declared_point(
@@ -164,8 +165,16 @@ fn abort_probe_observe_update_and_replan_stays_on_the_canonical_path() {
                 ObservationField::QuasiStaticApplicability,
             ],
         },
+        model_id: String::new(),
+        embodiment_id: String::new(),
+        observation_epoch: String::new(),
+        actuator_id: String::new(),
+        observation_contract_id: String::new(),
+        abort_contract_id: String::new(),
         authority_granted: true,
-    };
+        execution_authorization: None,
+    }
+    .with_matching_authorization(10.0, 40.0);
     let progress = ExecutionProgress {
         action_id: frozen_probe.action_id.clone(),
         witness_id: frozen_probe.witness_id.clone(),
