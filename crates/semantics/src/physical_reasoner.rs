@@ -68,6 +68,8 @@ pub struct TableScene {
     pub tool_radius_m: f64,
     pub observation_epoch: String,
     pub held: bool,
+    pub finger_names: Vec<String>,
+    pub finger_q: Vec<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -123,15 +125,34 @@ pub struct PlanStep {
 pub struct PhysicalPlan {
     pub steps: Vec<PlanStep>,
     pub greedy_failed: bool,
+    /// A plan predicts later actions. It does not authorize them.
+    pub conditional: bool,
+    pub expansions: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReasoningReport {
     pub candidates: Vec<CandidateSummary>,
     pub decision: DecisionKind,
+    /// Conditional prediction. Later steps are not executable yet.
     pub plan: Option<PhysicalPlan>,
+    /// The single next action justified by the current observation.
+    pub executable: Option<PlanStep>,
     pub families: Vec<String>,
     pub evidence_status: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ProofCacheStats {
+    pub executable_hits: u64,
+    pub executable_misses: u64,
+    pub geometric_hits: u64,
+    pub geometric_misses: u64,
+    pub ik_avoided: u64,
+    pub fk_avoided: u64,
+    pub collision_avoided: u64,
+    pub proof_latency_avoided_ns: u64,
+    pub last_proof_latency_ns: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -174,6 +195,10 @@ pub struct BenchmarkReport {
     pub tasks_correctly_refused: u32,
     pub greedy_failed_on_solved_task: bool,
     pub parallel_evaluation: bool,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub ik_avoided: u64,
+    pub collision_avoided: u64,
     pub notes: Vec<String>,
 }
 
@@ -186,17 +211,60 @@ struct ProvedAction {
     successor_held: bool,
 }
 
+struct CachedProof {
+    action: ProvedAction,
+    ik: u64,
+    fk: u64,
+    collision: u64,
+    latency_ns: u64,
+}
+
 pub struct PhysicalReasoner {
     model: EmbodimentModel,
-    cache: BTreeMap<String, ProvedAction>,
+    proofs: BTreeMap<String, CachedProof>,
+    geometric: BTreeMap<String, String>,
+    stats: ProofCacheStats,
+    aborted_grants: std::collections::BTreeSet<String>,
 }
 
 impl PhysicalReasoner {
     pub fn new(model: EmbodimentModel) -> Self {
         Self {
             model,
-            cache: BTreeMap::new(),
+            proofs: BTreeMap::new(),
+            geometric: BTreeMap::new(),
+            stats: ProofCacheStats::default(),
+            aborted_grants: std::collections::BTreeSet::new(),
         }
+    }
+
+    pub fn cache_stats(&self) -> ProofCacheStats {
+        self.stats
+    }
+
+    pub fn model_hash(&self) -> &str {
+        &self.model.model_hash
+    }
+
+    pub fn robot_id(&self) -> &str {
+        &self.model.robot_id
+    }
+
+    /// An aborted grant cannot be resumed. A later action needs a new proof and a new grant.
+    pub fn abort_grant(&mut self, action: &AuthorizedAction) {
+        if let Some(grant) = action.frozen().execution_authorization.as_ref() {
+            self.aborted_grants.insert(grant.grant_id.clone());
+        }
+    }
+
+    pub fn resume_aborted(&self, action: &AuthorizedAction) -> Result<(), &'static str> {
+        let Some(grant) = action.frozen().execution_authorization.as_ref() else {
+            return Err("NO_GRANT");
+        };
+        if self.aborted_grants.contains(&grant.grant_id) {
+            return Err("ABORTED_GRANT_CANNOT_RESUME");
+        }
+        Ok(())
     }
 
     pub fn families(&self) -> [&'static str; 2] {
@@ -207,7 +275,8 @@ impl PhysicalReasoner {
         let proved = self.actions_at(request);
         let summaries = proved.iter().map(|action| action.summary.clone()).collect();
         let decision = decide_physical_action(&decision_context(request, &proved));
-        let plan = bounded_plan(self, request, 2);
+        self.note_geometric_fact();
+        let plan = search_plan(self, request);
         let greedy_key = decision_action_key(&decision);
         let greedy_failed = plan.as_ref().is_some_and(|plan| {
             plan.steps.first().is_some_and(|step| {
@@ -216,26 +285,101 @@ impl PhysicalReasoner {
         });
         let plan = plan.map(|mut plan| {
             plan.greedy_failed = greedy_failed;
+            plan.conditional = true;
             plan
         });
+        let executable = match &decision {
+            DecisionKind::GoalInteraction { action }
+            | DecisionKind::PhysicalProbe { action, .. }
+            | DecisionKind::ContactTransition { action, .. } => self
+                .proofs
+                .values()
+                .find(|proof| {
+                    proof.action.summary.action_key == action.action_key
+                        && proof.action.summary.status == "PROVED"
+                        && proof.action.summary.witness_digest.as_deref()
+                            == Some(action.witness_digest.as_str())
+                })
+                .and_then(|proof| proof.action.step.clone()),
+            _ => None,
+        };
         ReasoningReport {
             candidates: summaries,
             decision,
             plan,
+            executable,
             families: self.families().map(str::to_string).to_vec(),
             evidence_status: EVIDENCE_STATUS,
         }
     }
 
     pub fn authorize_step(
-        &self,
+        &mut self,
         request: &ReasoningRequest,
         step: &PlanStep,
         authorization: ExecutionAuthorization,
     ) -> Result<AuthorizedAction, &'static str> {
+        if self.aborted_grants.contains(&authorization.grant_id) {
+            return Err("ABORTED_GRANT_CANNOT_RESUME");
+        }
+        let fresh = self.prove_action_key(request, &step.action_key);
+        if fresh.summary.status != "PROVED" {
+            return Err("NOT_PROVED");
+        }
+        let digest = fresh.summary.witness_digest.as_deref().unwrap_or("");
+        let contents = fresh.summary.witness_contents.as_deref().unwrap_or("");
+        if digest != step.witness_digest || contents != step.witness_contents {
+            return Err("STALE_OR_UNPROVED_WITNESS");
+        }
+        if !initial_configuration_matches(request, contents) {
+            return Err("INITIAL_CONFIGURATION_MISMATCH");
+        }
         let frozen = frozen_from_step(&self.model, request, step);
         let frozen = frozen.bind_issued_authorization(authorization, request.now_s)?;
         Ok(AuthorizedAction { frozen })
+    }
+
+    fn note_geometric_fact(&mut self) {
+        let key = geometric_key(&self.model);
+        if self.geometric.contains_key(&key) {
+            self.stats.geometric_hits = self.stats.geometric_hits.saturating_add(1);
+        } else {
+            self.stats.geometric_misses = self.stats.geometric_misses.saturating_add(1);
+            self.geometric.insert(
+                key,
+                format!(
+                    "joints={};version={PROOF_ALGORITHM}",
+                    self.model.joints.len()
+                ),
+            );
+        }
+    }
+
+    fn prove_action_key(&mut self, request: &ReasoningRequest, action_key: &str) -> ProvedAction {
+        if let Some(candidate) = push_candidates(request)
+            .into_iter()
+            .find(|candidate| candidate.action_key == action_key)
+        {
+            return self.prove_cached(PUSH_FAMILY, request, &candidate, true);
+        }
+        if let Some(candidate) = grasp_candidates(request)
+            .into_iter()
+            .find(|candidate| candidate.action_key == action_key)
+        {
+            return self.prove_cached(GRASP_FAMILY, request, &candidate, false);
+        }
+        rejected(
+            "unknown",
+            &RawCandidate {
+                action_key: action_key.into(),
+                direction: [0.0, 0.0, 0.0],
+                stroke_m: 0.0,
+                target_xyz: [0.0, 0.0, 0.0],
+                probe: false,
+            },
+            "UNKNOWN_ACTION",
+            MechanicsStatus::Unknown,
+        )
     }
 
     fn actions_at(&mut self, request: &ReasoningRequest) -> Vec<ProvedAction> {
@@ -256,16 +400,42 @@ impl PhysicalReasoner {
         candidate: &RawCandidate,
         is_push: bool,
     ) -> ProvedAction {
-        let key = cache_key(family, request, candidate);
-        if let Some(hit) = self.cache.get(&key) {
-            return hit.clone();
+        let key = proof_dependency_digest(family, &self.model, request, candidate);
+        if let Some(hit) = self.proofs.get(&key) {
+            self.stats.executable_hits = self.stats.executable_hits.saturating_add(1);
+            self.stats.ik_avoided = self.stats.ik_avoided.saturating_add(hit.ik);
+            self.stats.fk_avoided = self.stats.fk_avoided.saturating_add(hit.fk);
+            self.stats.collision_avoided =
+                self.stats.collision_avoided.saturating_add(hit.collision);
+            self.stats.proof_latency_avoided_ns = self
+                .stats
+                .proof_latency_avoided_ns
+                .saturating_add(hit.latency_ns);
+            return hit.action.clone();
         }
+        self.stats.executable_misses = self.stats.executable_misses.saturating_add(1);
+        let before = work_counters::work_snapshot();
+        let started = std::time::Instant::now();
         let proved = if is_push {
             prove_push(&self.model, request, candidate)
         } else {
             prove_grasp(&self.model, request, candidate)
         };
-        self.cache.insert(key, proved.clone());
+        let latency_ns = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.stats.last_proof_latency_ns = latency_ns;
+        let after = work_counters::work_snapshot();
+        self.proofs.insert(
+            key,
+            CachedProof {
+                action: proved.clone(),
+                ik: after.ik_attempts.saturating_sub(before.ik_attempts),
+                fk: after.fk_evaluations.saturating_sub(before.fk_evaluations),
+                collision: after
+                    .collision_queries
+                    .saturating_sub(before.collision_queries),
+                latency_ns,
+            },
+        );
         proved
     }
 }
@@ -363,6 +533,10 @@ pub fn development_benchmark() -> BenchmarkReport {
         tasks_correctly_refused: u32::from(correctly_refused),
         greedy_failed_on_solved_task: solved,
         parallel_evaluation: false,
+        cache_hits: reasoner.cache_stats().executable_hits,
+        cache_misses: reasoner.cache_stats().executable_misses,
+        ik_avoided: reasoner.cache_stats().ik_avoided,
+        collision_avoided: reasoner.cache_stats().collision_avoided,
         notes: vec![
             "population: one blocked planar translation and one acquire task with missing mass".into(),
             "warm counts are a second identical consider() served from the proof cache".into(),
@@ -381,6 +555,7 @@ pub fn benchmark_scene() -> (EmbodimentModel, ReasoningRequest) {
         joint.q_min = Provenanced::declared(-3.0, "bench.limits", 0.0);
         joint.q_max = Provenanced::declared(3.0, "bench.limits", 0.0);
     }
+    add_bench_fingers(&mut model);
     let chain = model.ee_joint_chain("ee").expect("planar chain");
     let (home, _) = with_ik_q_seed(Some(&[0.4, -0.6]), || {
         solve_ik(&model, &chain, "ee", [0.146, 0.0, 0.0], &[0.4, -0.6])
@@ -416,6 +591,8 @@ pub fn benchmark_scene() -> (EmbodimentModel, ReasoningRequest) {
             tool_radius_m: 0.004,
             observation_epoch: "epoch:table".into(),
             held: false,
+            finger_names: vec!["finger_l".into(), "finger_r".into()],
+            finger_q: vec![0.02, 0.02],
         },
         belief,
         objective: PhysicalObjective::PlanarTranslation {
@@ -432,6 +609,41 @@ pub fn benchmark_scene() -> (EmbodimentModel, ReasoningRequest) {
         gravity_m_s2: [0.0, 0.0, -9.81],
     };
     (model, request)
+}
+
+fn add_bench_fingers(model: &mut EmbodimentModel) {
+    for (name, axis) in [
+        ("finger_l", [0.0, 1.0, 0.0]),
+        ("finger_r", [0.0, -1.0, 0.0]),
+    ] {
+        model.joints.push(crate::embodiment::Joint {
+            name: name.into(),
+            kind: crate::embodiment::JointKind::Slide,
+            axis: Provenanced::declared(axis, "bench.finger", 0.0),
+            qpos_dim: 1,
+            dof_dim: 1,
+            parent_body: "link2".into(),
+            child_body: name.into(),
+            q_min: Provenanced::declared(0.0, "bench.finger", 0.0),
+            q_max: Provenanced::declared(0.04, "bench.finger", 0.0),
+            dq_max: Provenanced::unknown("bench.finger", 0.0),
+            effort_max: Provenanced::declared(2.0, "bench.finger", 0.0),
+            origin_in_child: Provenanced::declared([0.0, 0.0, 0.0], "bench.finger", 0.0),
+            parent_to_joint: crate::embodiment::unknown_se3("bench.finger"),
+            joint_to_child: crate::embodiment::unknown_se3("bench.finger"),
+            qpos_adr: None,
+            dof_adr: None,
+        });
+        model.actuators.push(crate::embodiment::Actuator {
+            name: format!("act-{name}"),
+            target_joint: name.into(),
+            control_mode: "position".into(),
+            transmission_kind: "joint".into(),
+            ctrlrange: Provenanced::unknown("bench.finger", 0.0),
+            forcerange: Provenanced::unknown("bench.finger", 0.0),
+            gear: Provenanced::unknown("bench.finger", 0.0),
+        });
+    }
 }
 
 struct RawCandidate {
@@ -537,26 +749,10 @@ fn prove_push(
         friction_interval(&request.belief, PhysicalParameter::SupportFriction),
         request.mu_required,
     );
-    let standoff_xyz = sub3(candidate.target_xyz, scale3(candidate.direction, 0.02));
-    let standoff = match solve_precise(model, &request.scene, standoff_xyz) {
+    let solved = match prove_arm_path(model, request, candidate, false) {
         Ok(solved) => solved,
         Err(reason) => return rejected(PUSH_FAMILY, candidate, reason, mechanics),
     };
-    let mut contact_scene = request.scene.clone();
-    contact_scene.arm_q = standoff.q.clone();
-    let solved = match solve_precise(model, &contact_scene, candidate.target_xyz) {
-        Ok(solved) => solved,
-        Err(reason) => return rejected(PUSH_FAMILY, candidate, reason, mechanics),
-    };
-    if let Err(reason) = arm_motion_clear(
-        model,
-        request,
-        &standoff.q,
-        &solved.q,
-        ContactPhase::ApproachToContact,
-    ) {
-        return rejected(PUSH_FAMILY, candidate, reason, mechanics);
-    }
     let end = add3(
         request.scene.object_center,
         scale3(candidate.direction, candidate.stroke_m),
@@ -587,6 +783,7 @@ fn prove_push(
     }
     let recoverable = !aabb_hits_obstacle(end, request.scene.object_half, &request.scene.obstacles);
     finish_action(
+        model,
         request,
         candidate,
         PUSH_FAMILY,
@@ -616,7 +813,7 @@ fn finish_probe(
     mechanics: MechanicsStatus,
     error_before: f64,
 ) -> ProvedAction {
-    let margin = joint_margin(model, &request.scene.joint_names, &solved.q);
+    let margin = joint_margin(model, &request.scene.joint_names, &solved.q_contact);
     let gap = sweep_gap(
         request.scene.object_center,
         request.scene.object_half,
@@ -635,7 +832,7 @@ fn finish_probe(
             mechanics,
         );
     }
-    let contents = witness_text(PUSH_FAMILY, candidate, solved);
+    let contents = witness_text(PUSH_FAMILY, model, request, candidate, solved);
     let digest = contents_digest(&contents);
     let coverage = CommonWitnessCoverage {
         label: candidate.action_key.clone(),
@@ -658,7 +855,7 @@ fn finish_probe(
         model_applicability: "axis-aligned tool-driven sweep of at most the probe stroke".into(),
         observation_epoch: request.scene.observation_epoch.clone(),
     };
-    let Ok(domain) = domain_from_exact_axis_sweep(&coverage, gap) else {
+    let Ok(domain) = domain_from_exact_axis_sweep(&coverage, &request.scene.obstacles, gap) else {
         return rejected(PUSH_FAMILY, candidate, "PROBE_DOMAIN_UNPROVED", mechanics);
     };
     let outcome = SupportedProbeOutcome {
@@ -683,6 +880,7 @@ fn finish_probe(
         return rejected(PUSH_FAMILY, candidate, "PROBE_FUTURE_UNPROVED", mechanics);
     }
     let mut action = finish_action(
+        model,
         request,
         candidate,
         PUSH_FAMILY,
@@ -724,26 +922,10 @@ fn prove_grasp(
         );
     }
     let mechanics = grasp_mechanics(request);
-    let standoff_xyz = add3(candidate.target_xyz, scale3([0.0, 1.0, 0.0], 0.02));
-    let standoff = match solve_precise(model, &request.scene, standoff_xyz) {
+    let solved = match prove_arm_path(model, request, candidate, true) {
         Ok(solved) => solved,
         Err(reason) => return rejected(GRASP_FAMILY, candidate, reason, mechanics),
     };
-    let mut contact_scene = request.scene.clone();
-    contact_scene.arm_q = standoff.q.clone();
-    let solved = match solve_precise(model, &contact_scene, candidate.target_xyz) {
-        Ok(solved) => solved,
-        Err(reason) => return rejected(GRASP_FAMILY, candidate, reason, mechanics),
-    };
-    if let Err(reason) = arm_motion_clear(
-        model,
-        request,
-        &standoff.q,
-        &solved.q,
-        ContactPhase::GraspApproach,
-    ) {
-        return rejected(GRASP_FAMILY, candidate, reason, mechanics);
-    }
     let acquire = matches!(request.objective, PhysicalObjective::AcquireObject { .. });
     if mechanics != MechanicsStatus::Feasible {
         return rejected(GRASP_FAMILY, candidate, "HOLD_MECHANICS_UNKNOWN", mechanics);
@@ -760,6 +942,7 @@ fn prove_grasp(
         return rejected(GRASP_FAMILY, candidate, "ALREADY_HELD", mechanics);
     }
     finish_action(
+        model,
         request,
         candidate,
         GRASP_FAMILY,
@@ -811,10 +994,115 @@ fn grasp_mechanics(request: &ReasoningRequest) -> MechanicsStatus {
 }
 
 struct SolvedPose {
-    q: Vec<f64>,
+    q0: Vec<f64>,
+    q_transit: Vec<f64>,
+    q_contact: Vec<f64>,
+    q_end: Vec<f64>,
+    finger_q: Vec<f64>,
+}
+
+fn prove_arm_path(
+    model: &EmbodimentModel,
+    request: &ReasoningRequest,
+    candidate: &RawCandidate,
+    grasp: bool,
+) -> Result<SolvedPose, &'static str> {
+    let standoff_xyz = if grasp {
+        add3(candidate.target_xyz, scale3([0.0, 1.0, 0.0], 0.02))
+    } else {
+        sub3(candidate.target_xyz, scale3(candidate.direction, 0.02))
+    };
+    let q_transit = solve_precise(model, &request.scene, standoff_xyz)?;
+    let transit_phase = ContactPhase::CurrentToApproach;
+    arm_motion_clear(
+        model,
+        request,
+        &request.scene.arm_q,
+        &q_transit,
+        transit_phase,
+    )?;
+    let mut contact_scene = request.scene.clone();
+    contact_scene.arm_q = q_transit.clone();
+    let q_contact = solve_precise(model, &contact_scene, candidate.target_xyz)?;
+    let approach_phase = if grasp {
+        ContactPhase::GraspApproach
+    } else {
+        ContactPhase::ApproachToContact
+    };
+    arm_motion_clear(model, request, &q_transit, &q_contact, approach_phase)?;
+    let mut q_end = q_contact.clone();
+    if !grasp && candidate.stroke_m > 1e-9 {
+        let end_xyz = add3(
+            candidate.target_xyz,
+            scale3(candidate.direction, candidate.stroke_m),
+        );
+        let mut stroke_scene = contact_scene;
+        stroke_scene.arm_q = q_contact.clone();
+        q_end = solve_precise(model, &stroke_scene, end_xyz)?;
+        arm_motion_clear(
+            model,
+            request,
+            &q_contact,
+            &q_end,
+            ContactPhase::ContactStroke,
+        )?;
+    }
+    let finger_q = if grasp {
+        close_fingers(model, request)?
+    } else {
+        request.scene.finger_q.clone()
+    };
+    Ok(SolvedPose {
+        q0: request.scene.arm_q.clone(),
+        q_transit,
+        q_contact,
+        q_end,
+        finger_q,
+    })
+}
+
+fn close_fingers(
+    model: &EmbodimentModel,
+    request: &ReasoningRequest,
+) -> Result<Vec<f64>, &'static str> {
+    if request.scene.finger_names.len() < 2
+        || request.scene.finger_q.len() != request.scene.finger_names.len()
+    {
+        return Err("FINGERS_UNDECLARED");
+    }
+    let mut closed = Vec::new();
+    for (name, open) in request
+        .scene
+        .finger_names
+        .iter()
+        .zip(request.scene.finger_q.iter())
+    {
+        let Some(joint) = model.joints.iter().find(|joint| joint.name == *name) else {
+            return Err("FINGERS_UNDECLARED");
+        };
+        if joint.kind != crate::embodiment::JointKind::Slide {
+            return Err("FINGER_IS_NOT_A_SLIDE");
+        }
+        let (Some(lo), Some(hi)) = (joint.q_min.value, joint.q_max.value) else {
+            return Err("FINGER_LIMITS_UNKNOWN");
+        };
+        // Positive slide ranges in the supported grippers open outward. The
+        // closed stop is the lower limit. A command already at that stop has
+        // no close travel to prove.
+        let commanded = lo;
+        if !commanded.is_finite() || commanded < lo - 1e-9 || commanded > hi + 1e-9 {
+            return Err("FINGER_CLOSE_OUTSIDE_LIMITS");
+        }
+        if (commanded - open).abs() <= 1e-6 {
+            return Err("FINGER_CLOSE_HAS_NO_TRAVEL");
+        }
+        closed.push(commanded);
+    }
+    Ok(closed)
 }
 
 fn finish_action(
+    model: &EmbodimentModel,
     request: &ReasoningRequest,
     candidate: &RawCandidate,
     family: &str,
@@ -829,7 +1117,7 @@ fn finish_action(
     error_before: f64,
 ) -> ProvedAction {
     let _ = error_before;
-    let contents = witness_text(family, candidate, solved);
+    let contents = witness_text(family, model, request, candidate, solved);
     let digest = contents_digest(&contents);
     let robust = if immediate && mechanics == MechanicsStatus::Feasible {
         BeliefRobustness::RobustStrictProgress
@@ -982,17 +1270,50 @@ fn decision_context(request: &ReasoningRequest, actions: &[ProvedAction]) -> Dec
     }
 }
 
+fn search_plan(
+    reasoner: &mut PhysicalReasoner,
+    request: &ReasoningRequest,
+) -> Option<PhysicalPlan> {
+    let root_error = translation_errors(request, request.scene.object_center).0;
+    let mut budget = 48u32;
+    for depth in 1..=3 {
+        if budget == 0 {
+            break;
+        }
+        if let Some(plan) = bounded_plan(reasoner, request, depth, root_error, &mut budget) {
+            let improved = plan
+                .steps
+                .last()
+                .is_some_and(|step| step.error_after + 1e-4 < root_error);
+            if improved {
+                return Some(plan);
+            }
+        }
+    }
+    None
+}
+
 fn bounded_plan(
     reasoner: &mut PhysicalReasoner,
     request: &ReasoningRequest,
     depth: u32,
+    root_error: f64,
+    budget: &mut u32,
 ) -> Option<PhysicalPlan> {
+    if *budget == 0 {
+        return None;
+    }
+    *budget = budget.saturating_sub(1);
     let actions = reasoner.actions_at(request);
     let goal = actions
         .iter()
         .filter(|action| {
             action.summary.immediate_progress
                 && action.summary.mechanics == MechanicsStatus::Feasible
+                && action
+                    .step
+                    .as_ref()
+                    .is_some_and(|step| step.error_after + 1e-4 < root_error)
         })
         .min_by(|left, right| {
             left.summary
@@ -1005,6 +1326,8 @@ fn bounded_plan(
         return goal.step.clone().map(|step| PhysicalPlan {
             steps: vec![step],
             greedy_failed: false,
+            conditional: true,
+            expansions: 0,
         });
     }
     if depth == 0 {
@@ -1028,9 +1351,11 @@ fn bounded_plan(
         next.scene.held = action.successor_held;
         next.scene.arm_q =
             q_from_contents(action.summary.witness_contents.as_deref().unwrap_or(""));
-        if let Some(mut rest) = bounded_plan(reasoner, &next, depth - 1) {
+        if let Some(mut rest) = bounded_plan(reasoner, &next, depth - 1, root_error, budget) {
             if let Some(step) = action.step.clone() {
                 rest.steps.insert(0, step);
+                rest.expansions = rest.expansions.saturating_add(1);
+                rest.conditional = true;
                 return Some(rest);
             }
         }
@@ -1104,7 +1429,7 @@ fn solve_precise(
     model: &EmbodimentModel,
     scene: &TableScene,
     target: [f64; 3],
-) -> Result<SolvedPose, &'static str> {
+) -> Result<Vec<f64>, &'static str> {
     let chain = model.ee_joint_chain(&scene.ee).ok_or("NO_CHAIN")?;
     if scene.arm_q.len() != chain.len() {
         return Err("Q_LENGTH");
@@ -1118,7 +1443,7 @@ fn solve_precise(
     if !ik_residual_is_precise(residual) {
         return Err("IK_RESIDUAL");
     }
-    Ok(SolvedPose { q })
+    Ok(q)
 }
 
 fn arm_motion_clear(
@@ -1300,53 +1625,197 @@ fn joint_margin(model: &EmbodimentModel, names: &[String], q: &[f64]) -> f64 {
     }
 }
 
-fn witness_text(family: &str, candidate: &RawCandidate, solved: &SolvedPose) -> String {
+const PROOF_ALGORITHM: &str = "physical-proof/3";
+
+fn witness_text(
+    family: &str,
+    model: &EmbodimentModel,
+    request: &ReasoningRequest,
+    candidate: &RawCandidate,
+    solved: &SolvedPose,
+) -> String {
+    let dependency = proof_dependency_digest(family, model, request, candidate);
     format!(
-        "family={family}\nkey={}\npush={:.6},{:.6},{:.6}\nstroke={:.6}\nq={}\n",
+        "algorithm={PROOF_ALGORITHM}\nfamily={family}\nkey={}\npush_bits={}\nstroke_bits={}\nq0_bits={}\nq_transit_bits={}\nq_contact_bits={}\nq_end_bits={}\nfinger_bits={}\ndependency={dependency}\nsegments=transit,approach,contact,interaction\ncontact_observed=false\n",
         candidate.action_key,
-        candidate.direction[0],
-        candidate.direction[1],
-        candidate.direction[2],
-        candidate.stroke_m,
-        solved
-            .q
-            .iter()
-            .map(|value| format!("{value:.6}"))
-            .collect::<Vec<_>>()
-            .join(",")
+        bits3(candidate.direction),
+        candidate.stroke_m.to_bits(),
+        bits_q(&solved.q0),
+        bits_q(&solved.q_transit),
+        bits_q(&solved.q_contact),
+        bits_q(&solved.q_end),
+        bits_q(&solved.finger_q),
     )
 }
 
-fn q_from_contents(contents: &str) -> Vec<f64> {
+fn bits3(value: [f64; 3]) -> String {
+    format!(
+        "{},{},{}",
+        value[0].to_bits(),
+        value[1].to_bits(),
+        value[2].to_bits()
+    )
+}
+
+fn bits_q(q: &[f64]) -> String {
+    q.iter()
+        .map(|value| value.to_bits().to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn q_from_bit_line(contents: &str, prefix: &str) -> Vec<f64> {
     contents
         .lines()
-        .find_map(|line| line.strip_prefix("q="))
+        .find_map(|line| line.strip_prefix(prefix))
         .map(|text| {
             text.split(',')
-                .filter_map(|value| value.parse::<f64>().ok())
+                .filter_map(|value| value.parse::<u64>().ok())
+                .map(f64::from_bits)
                 .collect()
         })
         .unwrap_or_default()
 }
 
-fn cache_key(family: &str, request: &ReasoningRequest, candidate: &RawCandidate) -> String {
-    let interval = friction_interval(&request.belief, PhysicalParameter::SupportFriction)
-        .map(|value| format!("{:.4}:{:.4}", value[0], value[1]))
-        .unwrap_or_else(|| "none".into());
-    let finger = friction_interval(&request.belief, PhysicalParameter::ToolObjectFriction)
-        .map(|value| format!("{:.4}:{:.4}", value[0], value[1]))
-        .unwrap_or_else(|| "none".into());
-    format!(
-        "{family}|{}|{:.4},{:.4},{:.4}|{}|{}|{}|{}",
-        candidate.action_key,
-        request.scene.object_center[0],
-        request.scene.object_center[1],
-        request.scene.object_center[2],
-        interval,
-        finger,
-        request.scene.held,
-        candidate.stroke_m
-    )
+fn q_from_contents(contents: &str) -> Vec<f64> {
+    q_from_bit_line(contents, "q_end_bits=")
+}
+
+fn initial_configuration_matches(request: &ReasoningRequest, contents: &str) -> bool {
+    let q0 = q_from_bit_line(contents, "q0_bits=");
+    q0.len() == request.scene.arm_q.len()
+        && q0
+            .iter()
+            .zip(request.scene.arm_q.iter())
+            .all(|(left, right)| left.to_bits() == right.to_bits())
+}
+
+fn geometric_key(model: &EmbodimentModel) -> String {
+    let mut bytes = Vec::new();
+    push_str(&mut bytes, PROOF_ALGORITHM);
+    push_str(&mut bytes, &model.model_hash);
+    push_str(&mut bytes, &model.calibration_epoch);
+    push_str(&mut bytes, &model.robot_id);
+    for joint in &model.joints {
+        push_str(&mut bytes, &joint.name);
+        push_opt_f64(&mut bytes, joint.q_min.value);
+        push_opt_f64(&mut bytes, joint.q_max.value);
+    }
+    digest_bytes(&bytes)
+}
+
+fn proof_dependency_digest(
+    family: &str,
+    model: &EmbodimentModel,
+    request: &ReasoningRequest,
+    candidate: &RawCandidate,
+) -> String {
+    let mut bytes = Vec::new();
+    push_str(&mut bytes, PROOF_ALGORITHM);
+    push_str(&mut bytes, family);
+    push_str(&mut bytes, &candidate.action_key);
+    push_str(&mut bytes, &model.model_hash);
+    push_str(&mut bytes, &model.calibration_epoch);
+    push_str(&mut bytes, &model.robot_id);
+    push_str(&mut bytes, &request.scene.observation_epoch);
+    for name in &request.scene.joint_names {
+        push_str(&mut bytes, name);
+    }
+    push_q(&mut bytes, &request.scene.arm_q);
+    for name in &request.scene.finger_names {
+        push_str(&mut bytes, name);
+    }
+    push_q(&mut bytes, &request.scene.finger_q);
+    push_str(&mut bytes, &request.scene.object_id);
+    push_q(&mut bytes, &request.scene.object_center);
+    push_q(&mut bytes, &request.scene.object_half);
+    push_q(&mut bytes, &request.scene.object_quat);
+    push_q(&mut bytes, &request.scene.support_origin);
+    push_q(&mut bytes, &request.scene.support_normal);
+    let mut obstacles = request.scene.obstacles.clone();
+    obstacles.sort_by(|left, right| left.name.cmp(&right.name));
+    for obstacle in obstacles {
+        push_str(&mut bytes, &obstacle.name);
+        push_q(&mut bytes, &obstacle.center);
+        push_q(&mut bytes, &obstacle.half_extents);
+        push_q(&mut bytes, &obstacle.quat_wxyz);
+    }
+    push_f64(&mut bytes, request.scene.tool_radius_m);
+    push_str(&mut bytes, &request.scene.ee);
+    bytes.push(u8::from(request.scene.held));
+    push_q(&mut bytes, &candidate.direction);
+    push_f64(&mut bytes, candidate.stroke_m);
+    push_q(&mut bytes, &candidate.target_xyz);
+    bytes.push(u8::from(candidate.probe));
+    push_f64(&mut bytes, request.mu_required);
+    push_f64(&mut bytes, request.goal_stroke_m);
+    push_f64(&mut bytes, request.probe_stroke_m);
+    push_opt_f64(&mut bytes, request.mass_kg);
+    push_opt_f64(&mut bytes, request.gripper_force_n);
+    push_q(&mut bytes, &request.gravity_m_s2);
+    match request.objective {
+        PhysicalObjective::PlanarTranslation { target_xy } => {
+            bytes.push(1);
+            push_f64(&mut bytes, target_xy[0]);
+            push_f64(&mut bytes, target_xy[1]);
+        }
+        PhysicalObjective::AcquireObject { ref object_id } => {
+            bytes.push(2);
+            push_str(&mut bytes, object_id);
+        }
+    }
+    let mut belief = request.belief.parameters.clone();
+    belief.sort_by_key(|entry| format!("{:?}", entry.parameter));
+    for entry in belief {
+        push_str(
+            &mut bytes,
+            &format!("{:?}:{:?}", entry.parameter, entry.status),
+        );
+        push_opt_f64(&mut bytes, entry.declared.value);
+        match entry.empirical_interval {
+            Some(interval) => {
+                push_f64(&mut bytes, interval[0]);
+                push_f64(&mut bytes, interval[1]);
+            }
+            None => bytes.push(0),
+        }
+    }
+    push_str(
+        &mut bytes,
+        "applicability:declared-quasi-static-contact-model",
+    );
+    digest_bytes(&bytes)
+}
+
+fn digest_bytes(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn push_str(bytes: &mut Vec<u8>, text: &str) {
+    bytes.extend_from_slice(&(text.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(text.as_bytes());
+}
+
+fn push_f64(bytes: &mut Vec<u8>, value: f64) {
+    bytes.extend_from_slice(&value.to_bits().to_le_bytes());
+}
+
+fn push_opt_f64(bytes: &mut Vec<u8>, value: Option<f64>) {
+    match value {
+        Some(value) => {
+            bytes.push(1);
+            push_f64(bytes, value);
+        }
+        None => bytes.push(0),
+    }
+}
+
+fn push_q(bytes: &mut Vec<u8>, values: &[f64]) {
+    bytes.extend_from_slice(&(values.len() as u64).to_le_bytes());
+    for value in values {
+        push_f64(bytes, *value);
+    }
 }
 
 fn attach_grant(request: &ReasoningRequest, evidence: &mut CandidateEvidence) {
@@ -1565,6 +2034,7 @@ mod tests {
                 .collect();
             panic!("no plan\n{}", lines.join("\n"));
         });
+        assert!(plan.conditional);
         assert!(plan.greedy_failed);
         assert!(!plan.steps[0].immediate_progress);
         assert!(plan.steps[1].immediate_progress);
@@ -1582,10 +2052,78 @@ mod tests {
             .authorize_step(&request, &plan.steps[1], lateral_grant)
             .is_err());
         let moved = env.apply(&lateral).unwrap();
+        let stale_second = plan.steps[1].clone();
+        request.scene.arm_q = q_from_contents(&lateral.frozen().witness_contents);
+        let mut disagreed = request.clone();
+        disagreed.scene.object_center = moved.center;
+        disagreed.scene.object_center[1] += 0.004;
+        assert!(
+            reasoner
+                .authorize_step(
+                    &disagreed,
+                    &stale_second,
+                    covering_authorization(&reasoner, &disagreed, &stale_second)
+                )
+                .is_err(),
+            "a predicted second step is stale when the object is not where the plan assumed"
+        );
+        let mut lost = request.clone();
+        lost.scene.object_center = moved.center;
+        lost.scene.held = true;
+        assert!(reasoner
+            .authorize_step(
+                &lost,
+                &stale_second,
+                covering_authorization(&reasoner, &lost, &stale_second)
+            )
+            .is_err());
+        let mut blocked = request.clone();
+        blocked.scene.object_center = moved.center;
+        blocked.scene.obstacles.push(NamedBox::aabb(
+            "surprise",
+            blocked.scene.object_center,
+            [0.05, 0.05, 0.05],
+        ));
+        assert!(reasoner
+            .authorize_step(
+                &blocked,
+                &stale_second,
+                covering_authorization(&reasoner, &blocked, &stale_second)
+            )
+            .is_err());
         request.scene.object_center = moved.center;
-        let goal_grant = covering_authorization(&reasoner, &request, &plan.steps[1]);
+        let mut shifted = request.clone();
+        shifted.scene.observation_epoch = "epoch:other".into();
+        assert!(reasoner
+            .authorize_step(
+                &shifted,
+                &plan.steps[0],
+                covering_authorization(&reasoner, &shifted, &plan.steps[0])
+            )
+            .is_err());
+        let mut joints = request.clone();
+        joints.scene.arm_q[0] += 0.05;
+        assert!(reasoner
+            .authorize_step(
+                &joints,
+                &plan.steps[0],
+                covering_authorization(&reasoner, &joints, &plan.steps[0])
+            )
+            .is_err());
+        let replanned = reasoner.consider(&request);
+        let next = replanned
+            .executable
+            .clone()
+            .or_else(|| {
+                replanned
+                    .plan
+                    .as_ref()
+                    .and_then(|plan| plan.steps.first().cloned())
+            })
+            .expect("fresh action from the observed state");
+        let goal_grant = covering_authorization(&reasoner, &request, &next);
         let goal = reasoner
-            .authorize_step(&request, &plan.steps[1], goal_grant)
+            .authorize_step(&request, &next, goal_grant)
             .unwrap();
         let finished = env.apply(&goal).unwrap();
         let start_error = 0.10;
@@ -1609,6 +2147,18 @@ mod tests {
             supervise_execution(&goal.frozen, &progress(&goal), &divergent),
             SupervisorDecision::AbortAndReobserve { .. }
         ));
+        reasoner.abort_grant(&goal);
+        assert_eq!(
+            reasoner.resume_aborted(&goal),
+            Err("ABORTED_GRANT_CANNOT_RESUME")
+        );
+        assert!(reasoner
+            .authorize_step(
+                &request,
+                &next,
+                goal.frozen().execution_authorization.clone().unwrap()
+            )
+            .is_err());
         request.belief = belief_with_finger(request.belief.clone());
         request.objective = PhysicalObjective::AcquireObject {
             object_id: "block".into(),
@@ -1618,7 +2168,22 @@ mod tests {
             .candidates
             .iter()
             .find(|candidate| candidate.family == GRASP_FAMILY && candidate.status == "PROVED")
-            .expect("grasp proved after finger friction is declared");
+            .unwrap_or_else(|| {
+                let lines: Vec<String> = acquired
+                    .candidates
+                    .iter()
+                    .map(|candidate| {
+                        format!(
+                            "{} {} {}",
+                            candidate.family, candidate.action_key, candidate.status
+                        )
+                    })
+                    .collect();
+                panic!(
+                    "grasp proved after finger friction is declared\n{}",
+                    lines.join("\n")
+                );
+            });
         assert_eq!(grasp.mechanics, MechanicsStatus::Feasible);
         let mut missing = request.clone();
         missing.belief = PhysicalParameterBelief { parameters: vec![] };
@@ -1665,6 +2230,119 @@ mod tests {
             report.tasks_solved,
             report.tasks_correctly_refused
         );
+        assert!(report.cache_hits > 0, "{report:?}");
+        assert!(report.ik_avoided > 0, "{report:?}");
+    }
+
+    #[test]
+    fn one_dependency_change_misses_the_proof_cache() {
+        let (model, request) = benchmark_scene();
+        let mut reasoner = PhysicalReasoner::new(model);
+        let _ = reasoner.consider(&request);
+        let cold = reasoner.cache_stats();
+        assert!(cold.executable_misses > 0);
+        let _ = reasoner.consider(&request);
+        let warm = reasoner.cache_stats();
+        assert!(warm.executable_hits > cold.executable_hits);
+        assert!(warm.geometric_hits > 0);
+        assert!(warm.ik_avoided > 0);
+        for index in 0..8 {
+            let mut changed = request.clone();
+            let before = reasoner.cache_stats().executable_misses;
+            match index {
+                0 => {
+                    changed.scene.object_center[0] =
+                        f64::from_bits(changed.scene.object_center[0].to_bits() + 1);
+                }
+                1 => changed.scene.object_quat = [0.98, 0.0, 0.0, 0.199],
+                2 => changed.scene.observation_epoch = "epoch:next".into(),
+                3 => changed.scene.arm_q[0] += 0.01,
+                4 => changed.scene.obstacles[0].center[1] += 0.001,
+                5 => changed.mass_kg = Some(0.07),
+                6 => changed.gravity_m_s2[2] = -9.80,
+                _ => changed.belief.narrow_interval(
+                    PhysicalParameter::SupportFriction,
+                    [0.06, 0.8],
+                    "shift",
+                ),
+            }
+            let _ = reasoner.consider(&changed);
+            assert!(
+                reasoner.cache_stats().executable_misses > before,
+                "dependency change reused a proof"
+            );
+        }
+        let mut granted = request.clone();
+        granted.grants = vec![fixture_binding(
+            &reasoner.consider(&request).candidates[0],
+            &request,
+        )];
+        let hits = reasoner.cache_stats().executable_hits;
+        let _ = reasoner.consider(&granted);
+        assert!(
+            reasoner.cache_stats().executable_hits > hits,
+            "a grant must not change proof identity"
+        );
+    }
+
+    #[test]
+    fn three_laterals_need_more_than_the_original_two_expansion_search() {
+        let (model, mut request) = benchmark_scene();
+        request.goal_stroke_m = 0.015;
+        request.scene.object_center[0] = 0.18;
+        request.objective = PhysicalObjective::PlanarTranslation {
+            target_xy: [0.18, 0.10],
+        };
+        request.scene.obstacles = vec![NamedBox::aabb(
+            "long-wall",
+            [0.165, -0.030, 0.0],
+            [0.045, 0.008, 0.02],
+        )];
+        request
+            .belief
+            .narrow_interval(PhysicalParameter::SupportFriction, [0.4, 0.8], "known");
+        let mut shallow = PhysicalReasoner::new(model.clone());
+        let root_error = translation_errors(&request, request.scene.object_center).0;
+        let mut budget = 48u32;
+        let depth_two = bounded_plan(&mut shallow, &request, 2, root_error, &mut budget);
+        let solved_in_two = depth_two.as_ref().is_some_and(|plan| {
+            plan.steps
+                .last()
+                .is_some_and(|step| step.error_after + 1e-4 < root_error)
+        });
+        assert!(
+            !solved_in_two,
+            "this wall must survive a two-expansion search, got {:?}",
+            depth_two.as_ref().map(|plan| plan
+                .steps
+                .iter()
+                .map(|step| step.action_key.clone())
+                .collect::<Vec<_>>())
+        );
+        let mut reasoner = PhysicalReasoner::new(model);
+        let report = reasoner.consider(&request);
+        let plan = report.plan.unwrap_or_else(|| {
+            let lines: Vec<String> = report
+                .candidates
+                .iter()
+                .map(|candidate| {
+                    format!(
+                        "{} {} mech={:?}",
+                        candidate.action_key, candidate.status, candidate.mechanics
+                    )
+                })
+                .collect();
+            panic!(
+                "depth-three search clears the long wall\n{}",
+                lines.join("\n")
+            );
+        });
+        assert!(plan.expansions >= 3, "{plan:?}");
+        assert!(plan
+            .steps
+            .last()
+            .is_some_and(|step| step.immediate_progress));
+        assert!(plan.conditional);
     }
 
     struct HiddenTable {
@@ -1722,10 +2400,11 @@ mod tests {
     fn parse_push(contents: &str) -> Option<[f64; 3]> {
         let text = contents
             .lines()
-            .find_map(|line| line.strip_prefix("push="))?;
+            .find_map(|line| line.strip_prefix("push_bits="))?;
         let mut values = text
             .split(',')
-            .filter_map(|value| value.parse::<f64>().ok());
+            .filter_map(|value| value.parse::<u64>().ok())
+            .map(f64::from_bits);
         Some([values.next()?, values.next()?, values.next()?])
     }
 

@@ -15,7 +15,7 @@ use crate::maneuver_witness::{
     TransitionKind, TransitionVerdict,
 };
 use crate::provenance::Provenance;
-use crate::transform::{add3, norm3, rotate_by_quat, scale3, sub3, Se3};
+use crate::transform::{add3, norm3, quat_conj, rotate_by_quat, scale3, sub3, Se3};
 use crate::transition_validity::validate_transition;
 
 pub const BLOCK_SELF_COLLISION: &str = "SELF_COLLISION";
@@ -649,16 +649,21 @@ pub fn prove_coupled_sticking_stroke(
             reason: "PUSH_DIRECTION_INVALID",
         };
     };
-    if !axis_aligned_quat(world.object_quat)
+    if !orientation_is_usable(world.object_quat)
         || world
             .obstacles
             .iter()
-            .any(|obstacle| !axis_aligned_quat(obstacle.quat_wxyz))
+            .any(|obstacle| !orientation_is_usable(obstacle.quat_wxyz))
     {
         return StickingStrokeAssessment::Unknown {
-            reason: "ROTATED_BOX_HAS_NO_AABB_CLEARANCE_PROOF",
+            reason: "BOX_ORIENTATION_INVALID",
         };
     }
+    let axis_aligned = axis_aligned_quat(world.object_quat)
+        && world
+            .obstacles
+            .iter()
+            .all(|obstacle| axis_aligned_quat(obstacle.quat_wxyz));
     let chain = model.ee_joint_chain(ee).unwrap_or_default();
     if chain.is_empty() || names != chain.as_slice() {
         return StickingStrokeAssessment::Unknown {
@@ -712,7 +717,11 @@ pub fn prove_coupled_sticking_stroke(
     };
     let mut assumptions = vec![
         "REVOLUTE_OR_PRISMATIC_LIPSCHITZ_FROM_DECLARED_LINK_LENGTHS".into(),
-        "OBJECT_AND_OBSTACLES_ARE_AXIS_ALIGNED".into(),
+        if axis_aligned {
+            "OBJECT_AND_OBSTACLES_ARE_AXIS_ALIGNED".into()
+        } else {
+            "ORIENTED_BOX_CLEARANCE_IS_NOT_AN_AABB_PROOF".into()
+        },
         "INTENDED_TOOL_OBJECT_CONTACT_IS_ALLOWED_DURING_THE_STROKE".into(),
         "DECLARED_TOOL_AND_ROBOT_SPHERES_ONLY".into(),
     ];
@@ -752,6 +761,11 @@ pub fn prove_coupled_sticking_stroke(
     }
     if !min_clearance.is_finite() {
         min_clearance = stroke_m;
+    }
+    if min_clearance <= 1e-9 {
+        return StickingStrokeAssessment::Unknown {
+            reason: "BOUNDARY_OR_ZERO_CLEARANCE_IS_NOT_A_CLEARANCE_PROOF",
+        };
     }
     StickingStrokeAssessment::Continuous(CoupledStrokeProof {
         subdivisions,
@@ -858,14 +872,13 @@ fn forbidden_clearance(
     for (name, sphere, tool) in &spheres {
         if *tool {
             // Intended tool/object overlap is allowed. Other bodies are not.
-        } else if sphere_aabb_clearance(*sphere, object_center, world.object_half) < -1e-9 {
-            return Err(SegmentGap::Forbidden(BLOCK_UNINTENDED_CONTACT));
         } else {
-            min_clearance = min_clearance.min(sphere_aabb_clearance(
-                *sphere,
-                object_center,
-                world.object_half,
-            ));
+            let clearance =
+                sphere_box_clearance(*sphere, object_center, world.object_half, world.object_quat)?;
+            if clearance < -1e-9 {
+                return Err(SegmentGap::Forbidden(BLOCK_UNINTENDED_CONTACT));
+            }
+            min_clearance = min_clearance.min(clearance);
         }
         let plane = sphere_plane_clearance(*sphere, world.support_origin, support_normal);
         if plane < -1e-9 {
@@ -873,7 +886,12 @@ fn forbidden_clearance(
         }
         min_clearance = min_clearance.min(plane);
         for obstacle in &world.obstacles {
-            let clearance = sphere_aabb_clearance(*sphere, obstacle.center, obstacle.half_extents);
+            let clearance = sphere_box_clearance(
+                *sphere,
+                obstacle.center,
+                obstacle.half_extents,
+                obstacle.quat_wxyz,
+            )?;
             if clearance < -1e-9 {
                 return Err(SegmentGap::Forbidden(BLOCK_OBSTACLE_COLLISION));
             }
@@ -928,16 +946,149 @@ fn posed_spheres(
     Ok(spheres)
 }
 
-fn axis_aligned_quat(quat: [f64; 4]) -> bool {
+pub(crate) fn axis_aligned_quat(quat: [f64; 4]) -> bool {
+    let Some(unit) = unit_quat(quat) else {
+        return false;
+    };
+    unit[0].abs() > 1.0 - 1e-6
+        && unit[1].abs() < 1e-6
+        && unit[2].abs() < 1e-6
+        && unit[3].abs() < 1e-6
+}
+
+fn orientation_is_usable(quat: [f64; 4]) -> bool {
+    unit_quat(quat).is_some()
+}
+
+fn unit_quat(quat: [f64; 4]) -> Option<[f64; 4]> {
+    if !quat.iter().all(|value| value.is_finite()) {
+        return None;
+    }
     let norm = quat.iter().map(|value| value * value).sum::<f64>().sqrt();
     if !(norm.is_finite() && norm > 1e-9) {
-        return false;
+        return None;
     }
-    let w = quat[0] / norm;
-    let xyz = quat[1] / norm;
-    let y = quat[2] / norm;
-    let z = quat[3] / norm;
-    w.abs() > 1.0 - 1e-6 && xyz.abs() < 1e-6 && y.abs() < 1e-6 && z.abs() < 1e-6
+    Some([
+        quat[0] / norm,
+        quat[1] / norm,
+        quat[2] / norm,
+        quat[3] / norm,
+    ])
+}
+
+fn sphere_box_clearance(
+    sphere: Sphere,
+    center: [f64; 3],
+    half: [f64; 3],
+    quat: [f64; 4],
+) -> Result<f64, SegmentGap> {
+    if !half.iter().all(|value| value.is_finite() && *value >= 0.0) {
+        return Err(SegmentGap::Unknown("BOX_EXTENT_INVALID"));
+    }
+    let unit = unit_quat(quat).ok_or(SegmentGap::Unknown("BOX_ORIENTATION_INVALID"))?;
+    let local = rotate_by_quat(quat_conj(unit), sub3(sphere.center, center));
+    Ok(sphere_aabb_clearance(
+        Sphere {
+            center: local,
+            radius: sphere.radius,
+        },
+        [0.0, 0.0, 0.0],
+        half,
+    ))
+}
+
+/// Occupied-set class of one axis-aligned box sweep. A rotated box is not
+/// admitted by renaming the world axis-aligned.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AxisSweepClass {
+    Clear { gap_m: f64 },
+    BoundaryContact,
+    Penetration,
+    NotAnAxisSweep,
+    RotatedBox,
+    Invalid,
+}
+
+pub fn classify_axis_aligned_sweep(
+    object_center: [f64; 3],
+    object_half: [f64; 3],
+    object_quat: [f64; 4],
+    direction: [f64; 3],
+    distance: f64,
+    obstacles: &[NamedBox],
+) -> AxisSweepClass {
+    if !object_center.iter().all(|value| value.is_finite())
+        || !object_half
+            .iter()
+            .all(|value| value.is_finite() && *value >= 0.0)
+        || !distance.is_finite()
+        || distance < 0.0
+        || !direction.iter().all(|value| value.is_finite())
+    {
+        return AxisSweepClass::Invalid;
+    }
+    if !axis_aligned_quat(object_quat)
+        || obstacles
+            .iter()
+            .any(|obstacle| !axis_aligned_quat(obstacle.quat_wxyz))
+    {
+        return AxisSweepClass::RotatedBox;
+    }
+    if direction.iter().filter(|value| value.abs() > 1e-9).count() != 1 {
+        return AxisSweepClass::NotAnAxisSweep;
+    }
+    let mut swept_center = object_center;
+    let mut swept_half = object_half;
+    for axis in 0..3 {
+        let delta = direction[axis] * distance;
+        swept_center[axis] += 0.5 * delta;
+        swept_half[axis] += 0.5 * delta.abs();
+    }
+    let mut gap = f64::INFINITY;
+    for obstacle in obstacles {
+        if !obstacle
+            .half_extents
+            .iter()
+            .all(|value| value.is_finite() && *value >= 0.0)
+            || !obstacle.center.iter().all(|value| value.is_finite())
+        {
+            return AxisSweepClass::Invalid;
+        }
+        let separated = (0..3).any(|axis| {
+            (swept_center[axis] - obstacle.center[axis]).abs()
+                > swept_half[axis] + obstacle.half_extents[axis] + 1e-9
+        });
+        if !separated {
+            let penetration = (0..3)
+                .map(|axis| {
+                    swept_half[axis] + obstacle.half_extents[axis]
+                        - (swept_center[axis] - obstacle.center[axis]).abs()
+                })
+                .fold(f64::INFINITY, f64::min);
+            if penetration > 1e-9 {
+                return AxisSweepClass::Penetration;
+            }
+            return AxisSweepClass::BoundaryContact;
+        }
+        for axis in 0..3 {
+            let separation = (swept_center[axis] - obstacle.center[axis]).abs()
+                - swept_half[axis]
+                - obstacle.half_extents[axis];
+            if separation >= 0.0 {
+                gap = gap.min(separation);
+            }
+        }
+    }
+    if !gap.is_finite() {
+        return AxisSweepClass::Clear {
+            gap_m: distance.max(1.0),
+        };
+    }
+    if gap <= 1e-9 {
+        AxisSweepClass::BoundaryContact
+    } else {
+        AxisSweepClass::Clear { gap_m: gap }
+    }
 }
 
 fn sphere_aabb_clearance(sphere: Sphere, center: [f64; 3], half: [f64; 3]) -> f64 {

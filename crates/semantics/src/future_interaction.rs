@@ -88,6 +88,9 @@ pub struct SupportedOutcomeDomain {
     /// True only when the coverage method is an actual cover and `unresolved` is empty.
     #[serde(default)]
     pub proof_valid: bool,
+    /// Content digest. Ordinary consumers cannot mint a matching seal.
+    #[serde(skip)]
+    pub(crate) content_seal: u64,
 }
 
 /// Geometry and collision facts for one fixed witness over a translation ball.
@@ -225,7 +228,7 @@ pub fn domain_from_common_witness(
         "MOTION_WITHIN_DECLARED_BOUND".into(),
         "MODEL_APPLICABLE".into(),
     ];
-    Ok(SupportedOutcomeDomain {
+    Ok(seal_domain(SupportedOutcomeDomain {
         derivation: format!(
             "fixed witness {} covers an L2 translation ball of radius {:.6} m because the contact point stays inside the convex face by {:.6} m and collision was proved on the object grown by that radius",
             input.witness_digest, input.translation_radius_m, tangent_clearance
@@ -255,7 +258,8 @@ pub fn domain_from_common_witness(
         ],
         mechanical_assumptions: vec!["NONE_ASSERTED_BY_THIS_GEOMETRIC_COVER".into()],
         proof_valid: true,
-    })
+        content_seal: 0,
+    }))
 }
 
 /// Sampled stroke checks are not a continuous cover. This function refuses
@@ -309,7 +313,7 @@ pub fn domain_from_coupled_stroke(
     if geometric.is_empty() {
         geometric.push("UNIFORM_TRANSLATIONAL_LIPSCHITZ".into());
     }
-    Ok(SupportedOutcomeDomain {
+    Ok(seal_domain(SupportedOutcomeDomain {
         derivation: format!(
             "witness {} covers the coupled stroke of {:.6} m because subdivision terminated with forbidden clearance {:.6} m above the Lipschitz motion bound",
             input.witness_digest, input.translation_radius_m, min_clearance_m
@@ -347,14 +351,20 @@ pub fn domain_from_coupled_stroke(
             "QUASI_STATIC_TOOL_DRIVEN_TRANSLATION_AT_MOST_THE_COMMANDED_STROKE".into(),
         ],
         proof_valid: true,
-    })
+        content_seal: 0,
+    }))
 }
 
 /// Exact occupied set of an axis-aligned box translated along one world axis.
+/// Object and obstacle orientations are checked here. A caller-supplied yaw of
+/// zero does not make a rotated box axis-aligned. Zero clearance is contact,
+/// not a clearance proof.
 pub fn domain_from_exact_axis_sweep(
     input: &CommonWitnessCoverage,
+    obstacles: &[crate::contact_collision::NamedBox],
     sweep_clearance_m: f64,
 ) -> Result<SupportedOutcomeDomain, String> {
+    use crate::contact_collision::{classify_axis_aligned_sweep, AxisSweepClass};
     if input.label.is_empty() || input.witness_digest.is_empty() {
         return Err("WITNESS_IDENTITY_MISSING".into());
     }
@@ -364,24 +374,50 @@ pub fn domain_from_exact_axis_sweep(
     if !input.model_applicable || input.model_applicability.trim().is_empty() {
         return Err("MODEL_NOT_APPLICABLE".into());
     }
-    if !(sweep_clearance_m.is_finite() && sweep_clearance_m >= -1e-9) {
-        return Err("OBJECT_SWEEP_HITS_AN_OBSTACLE".into());
-    }
-    let axis = input
-        .push_direction
-        .iter()
-        .filter(|value| value.abs() > 1e-9)
-        .count();
-    if axis != 1 {
-        return Err("SWEEP_IS_NOT_AXIS_ALIGNED".into());
-    }
     if input.yaw_abs_rad > 0.02 || input.joint_margin_rad <= 0.0 {
         return Err("COVERAGE_BOUNDS_INVALID".into());
     }
-    Ok(SupportedOutcomeDomain {
+    if !finite_nonnegative(input.translation_radius_m)
+        || !finite_nonnegative(input.geometry_residual_m)
+    {
+        return Err("COVERAGE_BOUNDS_INVALID".into());
+    }
+    let proved = classify_axis_aligned_sweep(
+        input.object_center,
+        input.object_half,
+        input.object_quat,
+        input.push_direction,
+        input.translation_radius_m,
+        obstacles,
+    );
+    let gap = match proved {
+        AxisSweepClass::Clear { gap_m } => gap_m,
+        AxisSweepClass::BoundaryContact => {
+            return Err("BOUNDARY_CONTACT_IS_NOT_CLEARANCE".into());
+        }
+        AxisSweepClass::Penetration => return Err("OBJECT_SWEEP_HITS_AN_OBSTACLE".into()),
+        AxisSweepClass::RotatedBox => {
+            return Err("ROTATED_OBJECT_HAS_NO_AABB_CLEARANCE_PROOF".into());
+        }
+        AxisSweepClass::NotAnAxisSweep => return Err("SWEEP_IS_NOT_AXIS_ALIGNED".into()),
+        AxisSweepClass::Invalid => return Err("SWEEP_GEOMETRY_INVALID".into()),
+    };
+    let claimed = if !sweep_clearance_m.is_finite() {
+        return Err("SWEEP_CLEARANCE_INVALID".into());
+    } else if sweep_clearance_m < -1e-9 {
+        "penetration"
+    } else if sweep_clearance_m <= 1e-9 {
+        "boundary"
+    } else {
+        "clear"
+    };
+    if claimed != "clear" {
+        return Err("CALLER_CLEARANCE_DISAGREES_WITH_GEOMETRY".into());
+    }
+    Ok(seal_domain(SupportedOutcomeDomain {
         derivation: format!(
-            "witness {} covers an axis-aligned object sweep of {:.6} m; the occupied set is the exact expanded AABB and its obstacle clearance is {:.6} m",
-            input.witness_digest, input.translation_radius_m, sweep_clearance_m
+            "witness {} covers an axis-aligned object sweep of {:.6} m; recomputed obstacle clearance is {:.6} m",
+            input.witness_digest, input.translation_radius_m, gap
         ),
         bounds: UncertaintyBounds {
             translation_radius_m: input.translation_radius_m,
@@ -396,11 +432,12 @@ pub fn domain_from_exact_axis_sweep(
             "MOTION_WITHIN_COMMANDED_STROKE".into(),
             "MODEL_APPLICABLE".into(),
             "AXIS_ALIGNED_TRANSLATION".into(),
+            "OBJECT_AND_OBSTACLE_ORIENTATIONS_CHECKED".into(),
         ],
         witnesses: vec![FutureInteractionWitnessRecord {
             label: input.label.clone(),
             digest: input.witness_digest.clone(),
-            clearance_m: Some(input.translation_radius_m.max(sweep_clearance_m)),
+            clearance_m: Some(gap),
             obligations_met: true,
         }],
         model_applicable: true,
@@ -411,12 +448,14 @@ pub fn domain_from_exact_axis_sweep(
         geometric_assumptions: vec![
             "OBJECT_AND_OBSTACLES_ARE_AXIS_ALIGNED_BOXES".into(),
             "SWEEP_ALONG_ONE_WORLD_AXIS".into(),
+            "ORIENTATION_CHECKED_FROM_QUATERNIONS".into(),
         ],
         mechanical_assumptions: vec![
             "OBJECT_TRAVEL_CANNOT_EXCEED_THE_COMMANDED_TOOL_TRAVEL".into(),
         ],
         proof_valid: true,
-    })
+        content_seal: 0,
+    }))
 }
 
 /// Assess whether every supported post-probe outcome still has a safe,
@@ -494,6 +533,92 @@ fn duplicated_single_witness(outcomes: &[SupportedProbeOutcome]) -> bool {
         })
 }
 
+fn seal_domain(mut domain: SupportedOutcomeDomain) -> SupportedOutcomeDomain {
+    domain.content_seal = 0;
+    domain.content_seal = domain_seal(&domain);
+    domain
+}
+
+fn domain_seal_matches(domain: &SupportedOutcomeDomain) -> bool {
+    let seal = domain.content_seal;
+    let mut bare = domain.clone();
+    bare.content_seal = 0;
+    seal != 0 && seal == domain_seal(&bare)
+}
+
+fn domain_seal(domain: &SupportedOutcomeDomain) -> u64 {
+    use sha2::{Digest, Sha256};
+    let mut buf = Vec::new();
+    push_seal_str(&mut buf, &domain.derivation);
+    push_seal_f64(&mut buf, domain.bounds.translation_radius_m);
+    push_seal_f64(&mut buf, domain.bounds.yaw_abs_rad);
+    push_seal_f64(&mut buf, domain.bounds.residual_high_m);
+    match &domain.coverage {
+        CoverageMethod::Uncovered => buf.push(0),
+        CoverageMethod::SampledStates {
+            count,
+            sufficiency_property,
+        } => {
+            buf.push(1);
+            buf.extend_from_slice(&count.to_le_bytes());
+            push_seal_str(&mut buf, sufficiency_property.as_deref().unwrap_or(""));
+        }
+        CoverageMethod::UncertaintyBallInsideWitnessClearance => buf.push(2),
+        CoverageMethod::StickingIntervalOfProvedStroke => buf.push(3),
+        CoverageMethod::CoupledStrokeUnderUniformLipschitz {
+            lipschitz_milli,
+            subdivisions,
+        } => {
+            buf.push(4);
+            buf.extend_from_slice(&lipschitz_milli.to_le_bytes());
+            buf.extend_from_slice(&subdivisions.to_le_bytes());
+        }
+        CoverageMethod::ExactAxisAlignedObjectSweep => buf.push(5),
+    }
+    for item in &domain.obligations {
+        push_seal_str(&mut buf, item);
+    }
+    for witness in &domain.witnesses {
+        push_seal_str(&mut buf, &witness.label);
+        push_seal_str(&mut buf, &witness.digest);
+        match witness.clearance_m {
+            Some(value) => {
+                buf.push(1);
+                push_seal_f64(&mut buf, value);
+            }
+            None => buf.push(0),
+        }
+        buf.push(u8::from(witness.obligations_met));
+    }
+    buf.push(u8::from(domain.model_applicable));
+    push_seal_str(&mut buf, &domain.model_applicability);
+    for item in &domain.unresolved {
+        push_seal_str(&mut buf, item);
+    }
+    for item in &domain.failure_reasons {
+        push_seal_str(&mut buf, item);
+    }
+    push_seal_str(&mut buf, &domain.observation_epoch);
+    for item in &domain.geometric_assumptions {
+        push_seal_str(&mut buf, item);
+    }
+    for item in &domain.mechanical_assumptions {
+        push_seal_str(&mut buf, item);
+    }
+    buf.push(u8::from(domain.proof_valid));
+    let digest = Sha256::digest(&buf);
+    u64::from_le_bytes(digest[..8].try_into().expect("sha prefix"))
+}
+
+fn push_seal_str(buf: &mut Vec<u8>, text: &str) {
+    buf.extend_from_slice(&(text.len() as u64).to_le_bytes());
+    buf.extend_from_slice(text.as_bytes());
+}
+
+fn push_seal_f64(buf: &mut Vec<u8>, value: f64) {
+    buf.extend_from_slice(&value.to_bits().to_le_bytes());
+}
+
 fn coverage_failure(inputs: &ProbeFutureInputs) -> Option<String> {
     if duplicated_single_witness(&inputs.outcomes) {
         return Some("DUPLICATED_SINGLE_WITNESS_IS_NOT_A_DOMAIN".into());
@@ -521,6 +646,9 @@ fn coverage_failure(inputs: &ProbeFutureInputs) -> Option<String> {
     }
     if !domain.proof_valid {
         return Some("PROOF_NOT_VALID".into());
+    }
+    if !domain_seal_matches(domain) {
+        return Some("DOMAIN_SEAL_DOES_NOT_MATCH_CONTENTS".into());
     }
     if domain.obligations.is_empty() || domain.witnesses.is_empty() {
         return Some("OBLIGATIONS_OR_WITNESSES_ABSENT".into());
@@ -611,7 +739,7 @@ fn coverage_failure(inputs: &ProbeFutureInputs) -> Option<String> {
                 "MODEL_APPLICABLE",
                 "AXIS_ALIGNED_TRANSLATION",
             ],
-            true,
+            false,
         ),
     }
 }
@@ -897,6 +1025,7 @@ mod tests {
             geometric_assumptions: Vec::new(),
             mechanical_assumptions: Vec::new(),
             proof_valid: false,
+            content_seal: 0,
         });
         let sampled = assess_probe_future(&sampled);
         assert_eq!(sampled.assessment, ProbeRecoverabilityAssessment::Unknown);
@@ -932,6 +1061,59 @@ mod tests {
         assert_eq!(
             assess_probe_future(&bare).assessment,
             ProbeRecoverabilityAssessment::Unknown
+        );
+    }
+
+    #[test]
+    fn axis_sweep_rejects_rotated_boxes_and_boundary_contact() {
+        use crate::contact_collision::NamedBox;
+        use crate::transform::Se3;
+        let mut coverage = centered_coverage(0.004, true);
+        coverage.model_applicability = "axis sweep".into();
+        coverage.yaw_abs_rad = 0.0;
+        let rotated = Se3::from_axis_angle([0.0, 0.0, 1.0], 0.4).expect("yaw");
+        coverage.object_quat = rotated.quat_wxyz;
+        let err = domain_from_exact_axis_sweep(&coverage, &[], 0.01).unwrap_err();
+        assert!(
+            err.contains("ROTATED_OBJECT"),
+            "a zero yaw claim must not admit a rotated object: {err}"
+        );
+        coverage.object_quat = [1.0, 0.0, 0.0, 0.0];
+        let mut obstacle = NamedBox::aabb("wall", [0.2, 0.0, 0.0], [0.01, 0.01, 0.01]);
+        obstacle.quat_wxyz = rotated.quat_wxyz;
+        let err = domain_from_exact_axis_sweep(&coverage, &[obstacle], 0.01).unwrap_err();
+        assert!(err.contains("ROTATED_OBJECT"), "{err}");
+        let touching = NamedBox::aabb(
+            "touch",
+            [
+                coverage.object_center[0]
+                    + coverage.object_half[0]
+                    + 0.01
+                    + coverage.translation_radius_m,
+                coverage.object_center[1],
+                coverage.object_center[2],
+            ],
+            [0.01, coverage.object_half[1], coverage.object_half[2]],
+        );
+        let err = domain_from_exact_axis_sweep(&coverage, &[touching], 0.0).unwrap_err();
+        assert!(
+            err.contains("BOUNDARY_CONTACT")
+                || err.contains("CALLER_CLEARANCE")
+                || err.contains("HITS"),
+            "{err}"
+        );
+        let clear =
+            domain_from_exact_axis_sweep(&coverage, &[], 0.02).expect("empty world is clear");
+        assert!(clear.proof_valid);
+        assert!(domain_seal_matches(&clear));
+        let mut forged = clear.clone();
+        forged.proof_valid = true;
+        forged.derivation = "forged".into();
+        let mut inputs = inputs(vec![preserved_outcome("stay")]);
+        inputs.domain = Some(forged);
+        assert_ne!(
+            assess_probe_future(&inputs).assessment,
+            ProbeRecoverabilityAssessment::Preserved
         );
     }
 }
