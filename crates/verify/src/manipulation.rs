@@ -74,6 +74,22 @@ const NAMED_Q_STEP_MAX: f64 = 0.35;
 thread_local! {
     static EXECUTE_STORED_WITNESS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     static EPISODE_QPOS: std::cell::RefCell<Option<Vec<f64>>> = const { std::cell::RefCell::new(None) };
+    static NAMED_Q_STEP_OVERRIDE: std::cell::Cell<f64> = const { std::cell::Cell::new(NAMED_Q_STEP_MAX) };
+}
+
+/// Smaller joint steps keep a proved approach from striking a movable box.
+#[cfg(test)]
+pub(crate) fn with_named_q_step_max<R>(step_max: f64, f: impl FnOnce() -> R) -> R {
+    NAMED_Q_STEP_OVERRIDE.with(|cell| {
+        let prev = cell.replace(step_max.clamp(0.02, NAMED_Q_STEP_MAX));
+        let out = f();
+        cell.set(prev);
+        out
+    })
+}
+
+fn named_q_step_max() -> f64 {
+    NAMED_Q_STEP_OVERRIDE.with(|cell| cell.get())
 }
 
 #[cfg(test)]
@@ -2556,12 +2572,11 @@ fn drive_named_phase(
     label: &str,
     interpolate_from_live: bool,
 ) -> Result<NamedPhaseResult, SkillRefuse> {
+    let step_max = named_q_step_max();
     let steps: usize = if interpolate_from_live {
-        if label == "approach" {
-            16
-        } else {
-            8
-        }
+        let base: usize = if label == "approach" { 16 } else { 8 };
+        let scale = (NAMED_Q_STEP_MAX / step_max).ceil().max(1.0) as usize;
+        base.saturating_mul(scale).min(240)
     } else {
         REACH_ATTEMPTS as usize
     };
@@ -2580,8 +2595,9 @@ fn drive_named_phase(
         let mujoco_before = privileged_ee_xyz(truth, bundle);
         let cmd = if interpolate_from_live {
             match live.as_ref() {
-                Some(q0) => step_toward_named_q(q0, &phase.q, NAMED_Q_STEP_MAX)
-                    .unwrap_or_else(|_| phase.q.clone()),
+                Some(q0) => {
+                    step_toward_named_q(q0, &phase.q, step_max).unwrap_or_else(|_| phase.q.clone())
+                }
                 None => phase.q.clone(),
             }
         } else {
@@ -2648,7 +2664,7 @@ fn drive_named_phase(
                         phase_target_q: phase.q.clone(),
                         commanded_q: cmd.clone(),
                         interpolate: interpolate_from_live,
-                        max_delta: NAMED_Q_STEP_MAX,
+                        max_delta: step_max,
                         lowering_ok,
                         lowering_reason,
                         actuator_names,
@@ -2697,7 +2713,7 @@ fn drive_named_phase(
                 phase_target_q: phase.q.clone(),
                 commanded_q: cmd.clone(),
                 interpolate: interpolate_from_live,
-                max_delta: NAMED_Q_STEP_MAX,
+                max_delta: step_max,
                 lowering_ok,
                 lowering_reason,
                 actuator_names,
@@ -2768,7 +2784,7 @@ fn drive_named_phase(
             phase_target_q: phase.q.clone(),
             commanded_q: cmd,
             interpolate: interpolate_from_live,
-            max_delta: NAMED_Q_STEP_MAX,
+            max_delta: step_max,
             lowering_ok,
             lowering_reason,
             actuator_names,

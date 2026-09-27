@@ -759,6 +759,75 @@ fn belief_update_changes_the_next_goal_and_records_progress() {
         counterfactual.selected_id.as_deref(),
         Some(before_id.as_str())
     );
+    let selected = candidates
+        .iter()
+        .find(|candidate| candidate.id == after_id)
+        .expect("selected goal candidate");
+    let stroke = selected.stroke_m;
+    assert!(stroke.is_finite() && stroke > 0.0 && stroke <= limit);
+
+    let goal = realityos_semantics::planar_goal::PlanarObjectGoal {
+        object_id: "obj0".into(),
+        world_id: "sim".into(),
+        model_id: "sim".into(),
+        target_xy: Some([stroke * 4.0, 0.0]),
+        target_xy_region: None,
+        target_yaw: None,
+        target_yaw_interval: None,
+        translation_tolerance_m: stroke * 0.25,
+        orientation_tolerance_rad: 0.2,
+        freshness_s: 1.0,
+        allowed_interaction_family: realityos_semantics::planar_goal::InteractionFamily::PlanarPush,
+        safety: realityos_semantics::planar_goal::SafetyConstraints::default(),
+        max_bounded_attempts: 4,
+    };
+    let before_pose = realityos_semantics::goal_loop::WorldObservation {
+        object_id: "obj0".into(),
+        xy: [0.0, 0.0],
+        yaw: 0.0,
+        robot_q: Vec::new(),
+        freshness_ok: true,
+        intended_contact_face: None,
+        authority_ok: true,
+        observed_at_s: 10.0,
+    };
+    let planned = realityos_semantics::goal_loop::receding_horizon_step(
+        &before_pose,
+        &goal,
+        &[],
+        realityos_semantics::goal_loop::LoopState::default(),
+        None,
+    );
+    let mut after_pose = before_pose.clone();
+    after_pose.xy = [stroke, 0.0];
+    after_pose.observed_at_s = 10.1;
+    let recorded =
+        realityos_semantics::goal_loop::record_after_with_goal(planned, &after_pose, &goal);
+    let before_err = recorded
+        .record
+        .goal_error_before
+        .as_ref()
+        .expect("shipped path writes goal_error_before");
+    let after_err = recorded
+        .record
+        .goal_error_after
+        .as_ref()
+        .expect("shipped path writes goal_error_after");
+    assert_eq!(
+        recorded.record.outcome,
+        realityos_semantics::goal_loop::GoalLoopOutcome::GoalProgress
+    );
+    assert!(
+        after_err.translation_residual_m < before_err.translation_residual_m,
+        "recorded residual {} -> {}",
+        before_err.translation_residual_m,
+        after_err.translation_residual_m
+    );
+    let measured = before_err.translation_residual_m - after_err.translation_residual_m;
+    assert!(
+        (measured - stroke).abs() < 1e-9,
+        "recorded progress {measured} is the selected stroke {stroke}"
+    );
 
     let mut os = RealityOs::new();
     let witness_contents = "goal-witness-bytes";
@@ -783,23 +852,29 @@ fn belief_update_changes_the_next_goal_and_records_progress() {
         witness_id: action.witness_id.clone(),
         completed_quanta: 1,
         total_quanta: 4,
-        stroke_consumed_m: Some(0.006),
+        stroke_consumed_m: Some(stroke),
         contact_guard_active: true,
         now_s: 10.1,
         remainder_invalidated: false,
     };
-    let mut observation = phase_observation(0.18, 0.12);
+    let mut observation = phase_observation(
+        before_err.translation_residual_m,
+        after_err.translation_residual_m,
+    );
     observation.action_id = action.action_id.clone();
     observation.witness_id = action.witness_id.clone();
+    observation.stroke_consumed_m = Some(stroke);
+    observation.object_displacement_m = Some(stroke);
     let decision = supervise_execution(&action, &progress, &observation);
     assert!(
         matches!(decision, SupervisorDecision::Continue { .. }),
         "authorized goal must execute, got {decision:?}"
     );
-    let measured = observation.goal_error_before.unwrap() - observation.goal_error_now.unwrap();
-    assert!(measured > 0.0, "measured goal progress {measured}");
     println!(
-        "counterfactual={before_id} next={after_id} progress_m={measured} grant={}",
+        "counterfactual={before_id} next={after_id} outcome={:?} residual_before_m={} residual_after_m={} progress_m={measured} grant={}",
+        recorded.record.outcome,
+        before_err.translation_residual_m,
+        after_err.translation_residual_m,
         grant.command_id
     );
 }

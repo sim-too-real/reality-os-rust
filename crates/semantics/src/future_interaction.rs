@@ -43,6 +43,9 @@ pub enum CoverageMethod {
     /// A fixed return-contact witness whose face margin contains the ball,
     /// with collision proved on the body grown by that ball.
     UncertaintyBallInsideWitnessClearance,
+    /// Contact, mid-stroke, and end configurations checked against the object
+    /// translated along the push by 0, half, and all of the proved stroke.
+    StickingIntervalOfProvedStroke,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -224,6 +227,89 @@ pub fn domain_from_common_witness(
     })
 }
 
+/// Cover object motion along the push by the stroke samples already in the witness.
+pub fn domain_from_sticking_stroke(
+    input: &CommonWitnessCoverage,
+    samples_admissible: bool,
+) -> Result<SupportedOutcomeDomain, String> {
+    if input.label.is_empty() || input.witness_digest.is_empty() {
+        return Err("WITNESS_IDENTITY_MISSING".into());
+    }
+    if !input.model_applicable || input.model_applicability.trim().is_empty() {
+        return Err("MODEL_NOT_APPLICABLE".into());
+    }
+    if !samples_admissible {
+        return Err("STICKING_STROKE_SAMPLES_INADMISSIBLE".into());
+    }
+    if input.yaw_abs_rad > 0.02 {
+        return Err("YAW_UNCERTAINTY_NOT_IN_THE_STROKE_SAMPLES".into());
+    }
+    if !finite_nonnegative(input.translation_radius_m)
+        || !finite_nonnegative(input.geometry_residual_m)
+        || !input.support_clearance_m.is_finite()
+        || !input.joint_margin_rad.is_finite()
+    {
+        return Err("COVERAGE_BOUNDS_INVALID".into());
+    }
+    if input.support_clearance_m <= input.min_support_clearance_m {
+        return Err("SUPPORT_CLEARANCE_DOES_NOT_COVER".into());
+    }
+    if input.joint_margin_rad <= 0.0 {
+        return Err("JOINT_MARGIN_DOES_NOT_COVER".into());
+    }
+    if input.geometry_residual_m > input.translation_radius_m + 1e-12 {
+        return Err("RESIDUAL_EXCEEDS_PROVED_BALL".into());
+    }
+    let pose = Se3::try_new(input.object_center, input.object_quat)
+        .map_err(|_| "OBJECT_POSE_INVALID".to_string())?;
+    let Some(manifold) = box_push_face_manifold_posed(
+        pose,
+        input.object_half,
+        input.push_direction,
+        input.support_normal,
+        input.face_gap_m,
+    )
+    .map_err(|_| "FACE_MANIFOLD_REJECTED".to_string())?
+    else {
+        return Err("FACE_MANIFOLD_MISSING".into());
+    };
+    let coords = manifold_coords(&manifold, input.contact_point);
+    if (coords.normal - input.face_gap_m).abs() > 1e-3 {
+        return Err("CONTACT_POINT_IS_NOT_ON_THE_DECLARED_FACE".into());
+    }
+    let obligations = vec![
+        "OBJECT_SUPPORTED".into(),
+        "FIXED_WITNESS_JOINT_MARGIN".into(),
+        "STICKING_STROKE_SAMPLES_ADMISSIBLE".into(),
+        "MOTION_ALONG_PUSH_ONLY".into(),
+        "MOTION_WITHIN_DECLARED_BOUND".into(),
+        "MODEL_APPLICABLE".into(),
+    ];
+    Ok(SupportedOutcomeDomain {
+        derivation: format!(
+            "witness {} covers sticking motion of {:.6} m along the push: contact, mid, and end were collision-admissible against the object translated by 0, half, and all of that stroke",
+            input.witness_digest, input.translation_radius_m
+        ),
+        bounds: UncertaintyBounds {
+            translation_radius_m: input.translation_radius_m,
+            yaw_abs_rad: input.yaw_abs_rad,
+            residual_high_m: input.geometry_residual_m,
+        },
+        coverage: CoverageMethod::StickingIntervalOfProvedStroke,
+        obligations,
+        witnesses: vec![FutureInteractionWitnessRecord {
+            label: input.label.clone(),
+            digest: input.witness_digest.clone(),
+            clearance_m: Some(input.translation_radius_m),
+            obligations_met: true,
+        }],
+        model_applicable: true,
+        model_applicability: input.model_applicability.clone(),
+        unresolved: Vec::new(),
+        failure_reasons: Vec::new(),
+    })
+}
+
 /// Assess whether every supported post-probe outcome still has a safe,
 /// executable future interaction. Incomplete inputs stay `Unknown`.
 /// `Preserved` is returned only when `inputs.domain` covers the outcomes.
@@ -364,6 +450,43 @@ fn coverage_failure(inputs: &ProbeFutureInputs) -> Option<String> {
                 "FIXED_WITNESS_JOINT_MARGIN",
                 "COLLISION_ADMISSIBLE_ON_GROWN_BODY",
                 "FACE_MARGIN_CONTAINS_TRANSLATION_BALL",
+                "MOTION_WITHIN_DECLARED_BOUND",
+                "MODEL_APPLICABLE",
+            ];
+            if required
+                .iter()
+                .any(|obligation| !domain.obligations.iter().any(|have| have == obligation))
+            {
+                return Some("PROOF_OBLIGATION_MISSING".into());
+            }
+            None
+        }
+        CoverageMethod::StickingIntervalOfProvedStroke => {
+            if domain.witnesses.len() != 1 || inputs.outcomes.len() != 1 {
+                return Some("STICKING_COVER_IS_ONE_WITNESS".into());
+            }
+            if domain.bounds.yaw_abs_rad > 0.02 {
+                return Some("YAW_UNCERTAINTY_NOT_IN_THE_STROKE_SAMPLES".into());
+            }
+            let witness = &domain.witnesses[0];
+            let outcome = &inputs.outcomes[0];
+            if !witness.obligations_met
+                || outcome.return_contact_witness_digest.as_deref() != Some(witness.digest.as_str())
+                || outcome.label != witness.label
+            {
+                return Some("WITNESS_DOES_NOT_MATCH_OUTCOME".into());
+            }
+            let Some(clearance) = witness.clearance_m.filter(|value| value.is_finite()) else {
+                return Some("WITNESS_CLEARANCE_UNMEASURED".into());
+            };
+            if clearance + 1e-12 < domain.bounds.translation_radius_m {
+                return Some("CLEARANCE_DOES_NOT_CONTAIN_STROKE".into());
+            }
+            let required = [
+                "OBJECT_SUPPORTED",
+                "FIXED_WITNESS_JOINT_MARGIN",
+                "STICKING_STROKE_SAMPLES_ADMISSIBLE",
+                "MOTION_ALONG_PUSH_ONLY",
                 "MOTION_WITHIN_DECLARED_BOUND",
                 "MODEL_APPLICABLE",
             ];

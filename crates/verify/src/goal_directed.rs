@@ -109,7 +109,8 @@ mod tests {
     use crate::corpus;
     use crate::manipulation::{
         chain_q_from_qpos, local_ee_poses, run_skill_episode_ex_supervised, sample_push_units,
-        template_objects, with_episode_qpos, with_injected_push_maneuver, WitnessPhaseDisturbance,
+        template_objects, with_episode_qpos, with_injected_push_maneuver, with_named_q_step_max,
+        WitnessPhaseDisturbance,
     };
     use crate::manipulation_scenarios::{ManipulationScenario, Polarity};
     use crate::manipulation_verify::body_xyz;
@@ -1733,9 +1734,53 @@ mod tests {
         spec.object_id = "obj0".into();
         spec.intended_tool_bodies =
             declared_manipulation_contact_bodies(model, model.resources.first(), ee);
-        if !realityos_semantics::contact_maneuver::witness_admissible_for_translation_ball(
+        let grown = realityos_semantics::contact_maneuver::witness_admissible_for_translation_ball(
             model, ee, maneuver, object, support, &spec, radius_m,
-        ) {
+        );
+        if !grown {
+            let sticking =
+                realityos_semantics::contact_maneuver::sticking_stroke_samples_admissible(
+                    model, ee, maneuver, object, support, &spec, radius_m,
+                );
+            if sticking {
+                let coverage = CommonWitnessCoverage {
+                    label: label.into(),
+                    witness_digest: digest.clone(),
+                    contact_point: maneuver.contact_point,
+                    object_center: object.center,
+                    object_quat: object.quat_wxyz,
+                    object_half: object.half_extents,
+                    push_direction: maneuver.push_direction,
+                    support_normal: support.normal,
+                    face_gap_m: scenario_face_gap.max(0.0),
+                    translation_radius_m: radius_m,
+                    yaw_abs_rad,
+                    geometry_residual_m: residual_m,
+                    support_clearance_m: maneuver.support_clearance,
+                    min_support_clearance_m: 0.004,
+                    joint_margin_rad: maneuver.joint_margin,
+                    collision_admissible_for_grown_object: false,
+                    model_applicable: yaw_abs_rad <= 0.02,
+                    model_applicability:
+                        "sticking interval of the proved stroke, yaw bound within the samples"
+                            .into(),
+                };
+                let domain = realityos_semantics::future_interaction::domain_from_sticking_stroke(
+                    &coverage, true,
+                )?;
+                let outcome = realityos_semantics::future_interaction::SupportedProbeOutcome {
+                    label: label.into(),
+                    object_supported: Some(maneuver.support_clearance > 0.004),
+                    inside_reachable_workspace: Some(true),
+                    joint_margin_rad: Some(maneuver.joint_margin),
+                    collision_admissible: Some(true),
+                    motion_within_declared_bound: Some(radius_m.is_finite()),
+                    belief_outcome_bounded: Some(radius_m.is_finite()),
+                    contact_persists: Some(false),
+                    return_contact_witness_digest: Some(digest),
+                };
+                return Ok((outcome, domain));
+            }
             return Err("GROWN_COLLISION_INADMISSIBLE".into());
         }
         let coverage = CommonWitnessCoverage {
@@ -1806,8 +1851,11 @@ mod tests {
             pose
         };
         let contact_q = exec.contact.q.clone();
+        let mid_q = lerp(&contact_q, &end_q, 0.5);
         let mut witness = exec.clone();
         witness.start_q = live_q.to_vec();
+        // Stay on the proved contact. A fresh 5 cm approach is a different
+        // motion from the stroke the sticking samples checked.
         witness.approach = ManeuverPhase::positional(
             exec.contact.pose,
             contact_q.clone(),
@@ -1815,20 +1863,10 @@ mod tests {
             0.0,
             exec.contact.orientation_error,
         );
-        witness.contact = ManeuverPhase::positional(
-            shift(extra_m * 0.25),
-            lerp(&contact_q, &end_q, 0.25),
-            contact_q.clone(),
-            0.0,
-            0.0,
-        );
-        witness.mid_stroke = ManeuverPhase::positional(
-            shift(extra_m * 0.5),
-            lerp(&contact_q, &end_q, 0.5),
-            contact_q.clone(),
-            0.0,
-            0.0,
-        );
+        witness.contact =
+            ManeuverPhase::positional(shift(0.0), contact_q.clone(), contact_q.clone(), 0.0, 0.0);
+        witness.mid_stroke =
+            ManeuverPhase::positional(shift(extra_m * 0.5), mid_q, contact_q.clone(), 0.0, 0.0);
         witness.end_stroke =
             ManeuverPhase::positional(shift(extra_m), end_q.clone(), contact_q.clone(), 0.0, 0.0);
         witness.current_to_approach = assess_named_interpolation(
@@ -1838,8 +1876,10 @@ mod tests {
             &witness.approach.q,
             joints,
         );
+        // Approach and contact are the same configuration, so this segment
+        // stays in the contact stroke instead of a new approach.
         witness.approach_to_contact = assess_named_interpolation(
-            TransitionKind::ApproachToContact,
+            TransitionKind::ContactToMidStroke,
             &witness.joint_names,
             &witness.approach.q,
             &witness.contact.q,
@@ -1866,8 +1906,10 @@ mod tests {
         next.requested_stroke = extra_m;
         next.available_stroke = extra_m;
         next.approach_pose = witness.approach.pose;
-        next.contact_pose = witness.end_stroke.pose;
-        next.contact_point = witness.end_stroke.pose.xyz;
+        next.contact_pose = witness.contact.pose;
+        // Keep the face contact that the stroke certificate checks. The phase
+        // pose is the end-effector frame, which is not that point.
+        next.contact_point = maneuver.contact_point;
         next.executable = Some(witness);
         Some(next)
     }
@@ -1923,6 +1965,7 @@ mod tests {
         maneuver: &ContactManeuver,
         probe_stroke: f64,
         quasi_limit_m: f64,
+        joint_step_max: f64,
         authorization: Option<ExecutionAuthorization>,
         loaded: Option<(
             crate::mujoco_exec::MujocoInstance,
@@ -2168,34 +2211,22 @@ mod tests {
         );
         let sim_started = std::time::Instant::now();
         let phase_hook = Some(&mut after_phase as _);
-        let pinned_q = qpos.to_vec();
-        let pinned_xyz = origin_xyz;
-        let mut pin_observed_state =
-            move |_: &crate::manipulation::PlacementOutcome,
-                  _: &VerifierTruth,
-                  _: &EmbodimentModel,
-                  inst: &mut crate::mujoco_exec::MujocoInstance| {
-                let zeros = vec![0.0; pinned_q.len().max(1)];
-                inst.reset(Some(&pinned_q), Some(&zeros))
-                    .map_err(|err| err.to_string())?;
-                inst.set_body_pos("obj0", pinned_xyz)
-                    .map_err(|err| err.to_string())?;
-                Ok(())
-            };
-        let run = with_episode_qpos(Some(qpos), || {
-            with_injected_push_maneuver(Some(maneuver.clone()), || {
-                run_skill_episode_ex_supervised(
-                    bundle,
-                    model,
-                    &[],
-                    &scenario,
-                    "goal-directed-loop",
-                    "PUSH",
-                    loaded,
-                    Some(&mut pin_observed_state),
-                    phase_hook,
-                    None,
-                )
+        let run = with_named_q_step_max(joint_step_max, || {
+            with_episode_qpos(Some(qpos), || {
+                with_injected_push_maneuver(Some(maneuver.clone()), || {
+                    run_skill_episode_ex_supervised(
+                        bundle,
+                        model,
+                        &[],
+                        &scenario,
+                        "goal-directed-loop",
+                        "PUSH",
+                        loaded,
+                        None,
+                        phase_hook,
+                        None,
+                    )
+                })
             })
         });
         let simulation_ns = sim_started.elapsed().as_nanos() as u64;
@@ -2725,6 +2756,8 @@ mod tests {
         use_tool_travel_basis: bool,
         /// Distance from the box face to the tool point used for placement and proof.
         face_gap: f64,
+        /// Max joint step while playing a proved witness. Smaller keeps contact.
+        joint_step_max: f64,
     }
 
     impl ExecOptions {
@@ -2737,6 +2770,7 @@ mod tests {
                 max_commanded_stroke_m: None,
                 use_tool_travel_basis: false,
                 face_gap: 0.0,
+                joint_step_max: 0.35,
             }
         }
     }
@@ -3609,20 +3643,22 @@ mod tests {
                 };
                 let phase_hook = options.guard.then_some(&mut after_phase as _);
                 let sim_started = std::time::Instant::now();
-                let run = with_episode_qpos(Some(&qpos_now), || {
-                    with_injected_push_maneuver(maneuver, || {
-                        run_skill_episode_ex_supervised(
-                            &bundle,
-                            &model,
-                            &[],
-                            &sc,
-                            sha,
-                            "PUSH",
-                            loaded,
-                            None,
-                            phase_hook,
-                            phase_disturbance,
-                        )
+                let run = with_named_q_step_max(options.joint_step_max, || {
+                    with_episode_qpos(Some(&qpos_now), || {
+                        with_injected_push_maneuver(maneuver, || {
+                            run_skill_episode_ex_supervised(
+                                &bundle,
+                                &model,
+                                &[],
+                                &sc,
+                                sha,
+                                "PUSH",
+                                loaded,
+                                None,
+                                phase_hook,
+                                phase_disturbance,
+                            )
+                        })
                     })
                 });
                 sim_ns = sim_ns.saturating_add(sim_started.elapsed().as_nanos() as u64);
@@ -3986,8 +4022,10 @@ mod tests {
                                     .filter(|ratio| ratio.is_finite() && *ratio >= 0.0)
                                     .unwrap_or(1.0);
                                 let radius = (probe_stroke * ratio.max(1.0)).max(residual);
-                                let yaw_abs =
-                                    observed_yaw_change.map(|yaw| yaw.abs()).unwrap_or(0.0);
+                                // Samples are taken at the measured pose (`nyaw`). The
+                                // domain yaw is additional rotation around that pose.
+                                // None was checked, so the certificate does not claim any.
+                                let yaw_abs = 0.0;
                                 let mut covered = None;
                                 let mut cover_failure = String::new();
                                 for candidate in [radius, 0.004, 0.002, 0.001] {
@@ -4028,10 +4066,72 @@ mod tests {
                                     if report.assessment == ProbeRecoverabilityAssessment::Preserved
                                     {
                                         probe_stroke = candidate.min(probe_stroke).max(0.001);
-                                        proof = FutureProbeProof {
-                                            report,
-                                            maneuver: Some(maneuver),
-                                        };
+                                        let certified = (|| -> Result<_, String> {
+                                            let q = chain_q_from_qpos(&model, &ee_name, &qpos)
+                                                .ok_or_else(|| "NO_CHAIN_Q".to_string())?;
+                                            let next = continuation_witness(
+                                                &maneuver,
+                                                &q,
+                                                probe_stroke,
+                                                &model.joints,
+                                            )
+                                            .ok_or_else(|| {
+                                                "CONTINUATION_NOT_EXECUTABLE".to_string()
+                                            })?;
+                                            let chain = model
+                                                .ee_joint_chain(&ee_name)
+                                                .ok_or_else(|| "NO_EE_CHAIN".to_string())?;
+                                            let live_ee =
+                                                forward_kinematics(&model, &chain, &ee_name, &q)
+                                                    .map_err(|err| format!("{err:?}"))?
+                                                    .ee
+                                                    .xyz;
+                                            if !witness_reconfiguration_is_local(&next, live_ee) {
+                                                return Err("NOT_LOCAL_TO_LIVE_ARM".to_string());
+                                            }
+                                            let (outcome, domain) = ball_domain_for_maneuver(
+                                                &model,
+                                                &ee_name,
+                                                &next,
+                                                nxy,
+                                                z,
+                                                nyaw,
+                                                size,
+                                                face_gap,
+                                                tool_off,
+                                                next.push_direction,
+                                                probe_stroke,
+                                                0.0,
+                                                residual,
+                                                "local-stroke",
+                                            )?;
+                                            let again = assess_probe_future(&ProbeFutureInputs {
+                                                consumed_stroke_m: motion_basis.max(probe_stroke),
+                                                observed_displacement_m: observed_displacement,
+                                                geometry_residual_m: Some(residual),
+                                                outcomes: vec![outcome],
+                                                domain: Some(domain),
+                                            });
+                                            if again.assessment
+                                                != ProbeRecoverabilityAssessment::Preserved
+                                            {
+                                                return Err(format!(
+                                                    "LOCAL_STROKE_NOT_PRESERVED:{}",
+                                                    again.evidence.join(",")
+                                                ));
+                                            }
+                                            Ok((next, again))
+                                        })(
+                                        );
+                                        match certified {
+                                            Ok((next, again)) => {
+                                                proof = FutureProbeProof {
+                                                    report: again,
+                                                    maneuver: Some(next),
+                                                };
+                                            }
+                                            Err(reason) => proof.report.evidence.push(reason),
+                                        }
                                     } else {
                                         proof.report.evidence.extend(report.evidence);
                                     }
@@ -4235,6 +4335,7 @@ mod tests {
                                 &maneuver,
                                 probe_stroke,
                                 quasi_limit_m,
+                                options.joint_step_max,
                                 issued_probe_grant.as_ref().map(authorization_from_grant),
                                 last_loaded.take(),
                             );
@@ -4806,6 +4907,7 @@ mod tests {
                 max_commanded_stroke_m: None,
                 use_tool_travel_basis: false,
                 face_gap: 0.0,
+                joint_step_max: 0.35,
             },
         );
         let unguarded = match unguarded {
@@ -4838,6 +4940,7 @@ mod tests {
                 max_commanded_stroke_m: None,
                 use_tool_travel_basis: false,
                 face_gap: 0.0,
+                joint_step_max: 0.35,
             },
         )
         .unwrap_or_else(|err| panic!("guarded pass failed: {err}"));
@@ -5018,16 +5121,15 @@ mod tests {
             guard: true,
             world_excess_m: 0.001,
             disturb_after_quantum: 3,
-            // The contact-loss fixture still requires contact at quantum 2.
-            // This scenario first requires it on the stroke phase, so a
-            // consumed stroke exists when the disturbance is observed.
+            // Require contact at the contact phase. A later reachability abort
+            // leaves the box where this arm no longer has an executable face.
             contact_guard_from_quantum: 2,
             max_commanded_stroke_m: Some(0.012),
             use_tool_travel_basis: true,
-            // Tool-probe radius is 15 mm. This gap keeps the approach samples
-            // outside that sphere so a few millimetres of post-probe growth
-            // still has a collision proof. Contact-loss stays at gap 0.
-            face_gap: 0.015,
+            // The tool point is the finger surface. Gap 0 is where MuJoCo can touch.
+            // Contact-loss uses the same gap and stays the refusal control.
+            face_gap: 0.0,
+            joint_step_max: 0.35,
         }
     }
 
@@ -5170,48 +5272,38 @@ mod tests {
                 .map(|action| action["selection_rationale"].as_str())
         );
         let next = next_a.as_ref().expect("canonical decision after the probe");
-        let lineage = a["belief_lineage"].as_str().unwrap_or("");
-        let nominal = lineage.contains("tag=NominalDisplacementRatio")
-            || lineage.contains("tag=HighDisplacementRatio");
-        if nominal {
-            let rationale = next["selection_rationale"].as_str().unwrap_or("");
-            assert!(
-                !rationale.contains("NO_ROBUST_STRICT_PROGRESS"),
-                "a nominal probe must not be followed by an unchanged robustness refusal: {next}"
-            );
-            assert!(
-                next["outcome"] == "GOAL_PROGRESS" || next["outcome"] == "GOAL_REACHED",
-                "the post-probe action must record goal progress: {next}"
-            );
-            let before_error = next
-                .get("goal_error_before")
-                .and_then(|error| error.get("translation_residual_m"))
-                .and_then(|value| value.as_f64());
-            let after_error = next
-                .get("goal_error_after")
-                .and_then(|error| error.get("translation_residual_m"))
-                .and_then(|value| value.as_f64());
-            if let (Some(before_error), Some(after_error)) = (before_error, after_error) {
-                assert!(
-                    after_error < before_error,
-                    "measured progress must reduce translation residual {before_error} -> {after_error}"
-                );
-            }
-        } else {
-            assert_eq!(next["authority_decision"], "REFUSE");
-            assert_eq!(next["ctrl_writes"], 0);
-            assert!(
-                next["selection_rationale"]
-                    .as_str()
-                    .unwrap_or("")
-                    .contains("NO_ROBUST_STRICT_PROGRESS"),
-                "a non-nominal probe must not authorize a goal: {next}"
-            );
-        }
-        assert_eq!(
-            next_a.as_ref().map(|action| action["selected_id"].clone()),
-            next_b.as_ref().map(|action| action["selected_id"].clone())
+        let next_b = next_b.as_ref().expect("second run next action");
+        assert_ne!(next["authority_decision"], "REFUSE", "{next}");
+        assert!(
+            !next["selection_rationale"]
+                .as_str()
+                .unwrap_or("")
+                .contains("NO_ROBUST_STRICT_PROGRESS"),
+            "{next}"
         );
+        assert!(
+            next["outcome"] == "GOAL_PROGRESS" || next["outcome"] == "GOAL_REACHED",
+            "{next}"
+        );
+        let residual = |action: &serde_json::Value, key: &str| {
+            action
+                .get(key)
+                .and_then(|error| error.get("translation_residual_m"))
+                .and_then(|value| value.as_f64())
+                .expect(key)
+        };
+        let before_a = residual(next, "goal_error_before");
+        let after_a = residual(next, "goal_error_after");
+        let before_b = residual(next_b, "goal_error_before");
+        let after_b = residual(next_b, "goal_error_after");
+        assert!(
+            after_a < before_a,
+            "measured residual {before_a} -> {after_a}"
+        );
+        assert_eq!(before_a, before_b);
+        assert_eq!(after_a, after_b);
+        assert_eq!(next["selected_id"], next_b["selected_id"]);
+        assert_eq!(next["selection_rationale"], next_b["selection_rationale"]);
         let counters = &a["work_counters"];
         let proof = counters["proof_wall_time_ns"].as_u64().unwrap_or(0);
         let simulation = counters["simulation_wall_time_ns"].as_u64().unwrap_or(0);
