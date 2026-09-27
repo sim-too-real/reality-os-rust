@@ -109,8 +109,8 @@ mod tests {
     use crate::corpus;
     use crate::manipulation::{
         chain_q_from_qpos, local_ee_poses, run_skill_episode_ex_supervised, sample_push_units,
-        template_objects, with_episode_qpos, with_injected_push_maneuver, with_named_q_reach_tol,
-        with_named_q_step_max, with_probe_recontact, WitnessPhaseDisturbance,
+        template_objects, with_commanded_span_tracking, with_episode_qpos,
+        with_injected_push_maneuver, with_named_q_step_max, WitnessPhaseDisturbance,
     };
     use crate::manipulation_scenarios::{ManipulationScenario, Polarity};
     use crate::manipulation_verify::body_xyz;
@@ -1405,6 +1405,26 @@ mod tests {
         proven_witness_stroke(candidate.maneuver.as_ref()?)
     }
 
+    fn contact_guard_from_witness(maneuver: Option<&ContactManeuver>, configured: u32) -> u32 {
+        let already_on_face = maneuver
+            .and_then(|item| item.executable.as_ref())
+            .is_some_and(|witness| {
+                witness.approach.q.len() == witness.contact.q.len()
+                    && !witness.approach.q.is_empty()
+                    && witness
+                        .approach
+                        .q
+                        .iter()
+                        .zip(witness.contact.q.iter())
+                        .all(|(approach, contact)| (approach - contact).abs() <= 1e-3)
+            });
+        if already_on_face {
+            4
+        } else {
+            configured
+        }
+    }
+
     fn execution_scenario_strokes(full_stroke: f64) -> Vec<(u32, f64)> {
         // The executor supervises one frozen witness internally at its four meaningful phases.
         vec![(0, full_stroke)]
@@ -2536,24 +2556,22 @@ mod tests {
         );
         let sim_started = std::time::Instant::now();
         let phase_hook = Some(&mut after_phase as _);
-        let run = with_probe_recontact(|| {
-            with_named_q_reach_tol(0.005, || {
-                with_named_q_step_max(joint_step_max, || {
-                    with_episode_qpos(Some(qpos), || {
-                        with_injected_push_maneuver(Some(maneuver.clone()), || {
-                            run_skill_episode_ex_supervised(
-                                bundle,
-                                model,
-                                &[],
-                                &scenario,
-                                "goal-directed-loop",
-                                "PUSH",
-                                loaded,
-                                None,
-                                phase_hook,
-                                None,
-                            )
-                        })
+        let run = with_commanded_span_tracking(|| {
+            with_named_q_step_max(joint_step_max, || {
+                with_episode_qpos(Some(qpos), || {
+                    with_injected_push_maneuver(Some(maneuver.clone()), || {
+                        run_skill_episode_ex_supervised(
+                            bundle,
+                            model,
+                            &[],
+                            &scenario,
+                            "goal-directed-loop",
+                            "PUSH",
+                            loaded,
+                            None,
+                            phase_hook,
+                            None,
+                        )
                     })
                 })
             })
@@ -3936,13 +3954,13 @@ mod tests {
                             sel.push_direction_world[1] / direction_norm * options.world_excess_m,
                         ],
                     });
-                // The first goal must stop when contact is lost. The post-probe
-                // stroke is the push itself, so the contact guard waits for the end.
-                let contact_guard_from = if belief_state.is_some() {
-                    4
-                } else {
-                    options.contact_guard_from_quantum
-                };
+                // A witness that is already on the face has no separate arrival.
+                // The contact guard applies to the stroke's end sample. An earlier
+                // guard aborts that stroke on the scenario disturbance.
+                let contact_guard_from = contact_guard_from_witness(
+                    sel.maneuver.as_ref(),
+                    options.contact_guard_from_quantum,
+                );
                 let mut after_phase = |quantum: u32, policy_observation: &PolicyObservation| {
                     let consumed_for_phase = match quantum {
                         0..=2 => 0.0,
@@ -4012,31 +4030,21 @@ mod tests {
                 };
                 let phase_hook = options.guard.then_some(&mut after_phase as _);
                 let sim_started = std::time::Instant::now();
-                // The post-probe goal is a few millimetres. The default 0.20 rad
-                // arrival tolerance would treat that stroke as already finished.
-                let reach_tol = if belief_state.is_some() { 0.005 } else { 0.20 };
-                let joint_step = if belief_state.is_some() {
-                    options.joint_step_max.min(0.02)
-                } else {
-                    options.joint_step_max
-                };
-                let run = with_named_q_reach_tol(reach_tol, || {
-                    with_named_q_step_max(joint_step, || {
-                        with_episode_qpos(Some(&qpos_now), || {
-                            with_injected_push_maneuver(maneuver, || {
-                                run_skill_episode_ex_supervised(
-                                    &bundle,
-                                    &model,
-                                    &[],
-                                    &sc,
-                                    sha,
-                                    "PUSH",
-                                    loaded,
-                                    None,
-                                    phase_hook,
-                                    phase_disturbance,
-                                )
-                            })
+                let run = with_commanded_span_tracking(|| {
+                    with_episode_qpos(Some(&qpos_now), || {
+                        with_injected_push_maneuver(maneuver, || {
+                            run_skill_episode_ex_supervised(
+                                &bundle,
+                                &model,
+                                &[],
+                                &sc,
+                                sha,
+                                "PUSH",
+                                loaded,
+                                None,
+                                phase_hook,
+                                phase_disturbance,
+                            )
                         })
                     })
                 });

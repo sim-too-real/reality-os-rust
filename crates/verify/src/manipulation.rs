@@ -42,7 +42,7 @@ use realityos_semantics::failure::ManipulationFailure;
 use realityos_semantics::grasp::{compile_grasp, GraspCandidate};
 use realityos_semantics::gripper_state::{derive_gripper_state, GripperStateEvidence};
 use realityos_semantics::interaction::{insert_interaction_frame, InteractionFrameKind};
-use realityos_semantics::kinematics::{forward_kinematics, jacobian_translational, with_ik_q_seed};
+use realityos_semantics::kinematics::{forward_kinematics, with_ik_q_seed};
 use realityos_semantics::maneuver_witness::{
     classify_blocked_interpolation, classify_first_divergence, classify_named_q_progress,
     error_reduction_ratio, execution_block_reason, named_q_max_abs_error, named_q_reached,
@@ -76,33 +76,22 @@ thread_local! {
     static EPISODE_QPOS: std::cell::RefCell<Option<Vec<f64>>> = const { std::cell::RefCell::new(None) };
     static NAMED_Q_STEP_OVERRIDE: std::cell::Cell<f64> = const { std::cell::Cell::new(NAMED_Q_STEP_MAX) };
     static NAMED_Q_REACH_OVERRIDE: std::cell::Cell<f64> = const { std::cell::Cell::new(NAMED_Q_REACH_TOL) };
-    static PROBE_RECONTACT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Tighter joint arrival so a short push actually reaches the finger target.
-#[cfg(test)]
-pub(crate) fn with_named_q_reach_tol<R>(tol: f64, f: impl FnOnce() -> R) -> R {
-    NAMED_Q_REACH_OVERRIDE.with(|cell| {
-        let prev = cell.replace(tol.clamp(1e-3, NAMED_Q_REACH_TOL));
-        let out = f();
-        cell.set(prev);
-        out
-    })
+    static TRACK_COMMANDED_SPAN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn named_q_reach_tol() -> f64 {
     NAMED_Q_REACH_OVERRIDE.with(|cell| cell.get())
 }
 
-fn probe_recontact_enabled() -> bool {
-    PROBE_RECONTACT.with(|cell| cell.get())
+fn track_commanded_span() -> bool {
+    TRACK_COMMANDED_SPAN.with(|cell| cell.get())
 }
 
-/// After the proved stroke, close a millimetre-scale gap so the final sample
-/// still contains the finger contact the witness aimed at.
+/// Arrive at a commanded span that is shorter than the default 0.20 rad stop.
+/// The stop would otherwise report that span as already finished.
 #[cfg(test)]
-pub(crate) fn with_probe_recontact<R>(f: impl FnOnce() -> R) -> R {
-    PROBE_RECONTACT.with(|cell| {
+pub(crate) fn with_commanded_span_tracking<R>(f: impl FnOnce() -> R) -> R {
+    TRACK_COMMANDED_SPAN.with(|cell| {
         let prev = cell.replace(true);
         let out = f();
         cell.set(prev);
@@ -1286,13 +1275,7 @@ fn execute_plan(
                     }
                 }
                 if !reached.q_reached && reached.pose_err > radius {
-                    // A tight arrival tolerance can leave q_reached false while the
-                    // privileged site is still on the local witness. Skipping the
-                    // stroke there never reaches the proved contact.
-                    let probe_continues = probe_recontact_enabled() && reached.pose_err <= 0.05;
-                    if !probe_continues {
-                        break;
-                    }
+                    break;
                 }
             }
         }
@@ -2578,193 +2561,6 @@ fn named_q_from_qpos_names(
     Some(q)
 }
 
-fn intended_object_touching(
-    truth: &VerifierTruth,
-    model: &EmbodimentModel,
-    ee: &str,
-    object_id: &str,
-) -> bool {
-    let intended = declared_manipulation_contact_bodies(model, model.resources.first(), ee);
-    truth.contacts.iter().any(|contact| {
-        if !contact.dist.is_finite() || contact.dist > 1e-3 {
-            return false;
-        }
-        let on_left =
-            contact.body1 == object_id && intended.iter().any(|name| name == &contact.body2);
-        let on_right =
-            contact.body2 == object_id && intended.iter().any(|name| name == &contact.body1);
-        on_left || on_right
-    })
-}
-
-/// Joint step whose end-effector translation is `err`, damped so a short push
-/// cannot flip the wrist into another configuration.
-#[allow(clippy::needless_range_loop)]
-fn damped_translation_delta(j: &[Vec<f64>], err: [f64; 3], damp: f64) -> Option<Vec<f64>> {
-    if j.len() != 3 || j[0].is_empty() || j[1].len() != j[0].len() || j[2].len() != j[0].len() {
-        return None;
-    }
-    let n = j[0].len();
-    let mut a = vec![vec![0.0; n]; n];
-    let mut b = vec![0.0; n];
-    for i in 0..n {
-        b[i] = j[0][i] * err[0] + j[1][i] * err[1] + j[2][i] * err[2];
-        for k in 0..n {
-            a[i][k] = j[0][i] * j[0][k] + j[1][i] * j[1][k] + j[2][i] * j[2][k];
-        }
-        a[i][i] += damp * damp;
-    }
-    for i in 0..n {
-        let mut piv = i;
-        let mut best = a[i][i].abs();
-        for r in (i + 1)..n {
-            let v = a[r][i].abs();
-            if v > best {
-                best = v;
-                piv = r;
-            }
-        }
-        if best < 1e-12 {
-            return None;
-        }
-        if piv != i {
-            a.swap(i, piv);
-            b.swap(i, piv);
-        }
-        let diag = a[i][i];
-        for r in (i + 1)..n {
-            let f = a[r][i] / diag;
-            for c in i..n {
-                a[r][c] -= f * a[i][c];
-            }
-            b[r] -= f * b[i];
-        }
-    }
-    let mut x = vec![0.0; n];
-    for i in (0..n).rev() {
-        let mut sum = b[i];
-        for c in (i + 1)..n {
-            sum -= a[i][c] * x[c];
-        }
-        x[i] = sum / a[i][i];
-    }
-    Some(x)
-}
-
-/// The proved pose can still leave the finger geom a millimetre short of the
-/// box, or the box can coast off after the finger stops. Walk the live tool a
-/// few millimetres along the push and stop on the first real contact sample.
-#[allow(clippy::too_many_arguments)]
-fn finish_probe_contact(
-    auth: &mut SimAuthority<crate::driver::SharedSimPort>,
-    shared: &Arc<SharedMujoco>,
-    manifest: &RobotManifest,
-    model: &EmbodimentModel,
-    bundle: &RobotBundle,
-    sc: &ManipulationScenario,
-    episode_id: &str,
-    si_base: usize,
-    now: &mut f64,
-    truth: &mut VerifierTruth,
-    w: &ExecutableContactManeuver,
-) -> Result<(), SkillRefuse> {
-    let ee = semantic_ee(bundle);
-    if intended_object_touching(truth, model, &ee, &sc.object_id) {
-        return Ok(());
-    }
-    let push_n = (sc.push_dir[0] * sc.push_dir[0]
-        + sc.push_dir[1] * sc.push_dir[1]
-        + sc.push_dir[2] * sc.push_dir[2])
-        .sqrt();
-    if push_n < 1e-6 {
-        return Ok(());
-    }
-    let push = [
-        sc.push_dir[0] / push_n,
-        sc.push_dir[1] / push_n,
-        sc.push_dir[2] / push_n,
-    ];
-    let ee_at_stop = privileged_ee_xyz(truth, bundle);
-    for attempt in 0..4 {
-        if intended_object_touching(truth, model, &ee, &sc.object_id) {
-            return Ok(());
-        }
-        let Some(live) = named_q_from_qpos_names(model, &w.joint_names, &truth.qpos) else {
-            return Ok(());
-        };
-        let Ok(fk) = forward_kinematics(model, &w.joint_names, &ee, &live) else {
-            return Ok(());
-        };
-        let jac = jacobian_translational(&fk);
-        let Some(mut dq) = damped_translation_delta(
-            &jac,
-            [push[0] * 0.0015, push[1] * 0.0015, push[2] * 0.0015],
-            1e-3,
-        ) else {
-            return Ok(());
-        };
-        if dq.len() != live.len() {
-            return Ok(());
-        }
-        let max_abs = dq.iter().fold(0.0_f64, |acc, v| acc.max(v.abs()));
-        if max_abs > 0.03 {
-            let scale = 0.03 / max_abs;
-            for value in &mut dq {
-                *value *= scale;
-            }
-        }
-        let mut cmd = live.clone();
-        for (value, delta) in cmd.iter_mut().zip(dq.iter()) {
-            *value += delta;
-        }
-        for (name, value) in w.joint_names.iter().zip(cmd.iter_mut()) {
-            if let Some(joint) = model.joints.iter().find(|joint| joint.name == *name) {
-                if let Some(min) = joint.q_min.value {
-                    *value = (*value).max(min);
-                }
-                if let Some(max) = joint.q_max.value {
-                    *value = (*value).min(max);
-                }
-            }
-        }
-        let compiled = compile_named_joint_q(model, &w.joint_names, &cmd, "skill.push")?;
-        let rec = write_ctrl(
-            auth,
-            manifest,
-            model,
-            truth,
-            &compiled,
-            episode_id,
-            si_base + 800 + attempt,
-            *now,
-            "drive",
-            [
-                fk.ee.xyz[0] + push[0] * 0.0015,
-                fk.ee.xyz[1] + push[1] * 0.0015,
-                fk.ee.xyz[2] + push[2] * 0.0015,
-            ],
-        )?;
-        if !rec.executed {
-            break;
-        }
-        for _ in 0..8 {
-            let (next, t) = step_sim_cycles(shared, manifest, auth, *now, Some(1))
-                .map_err(|_| SkillRefuse::Refuse)?;
-            *truth = next;
-            *now = t;
-            if intended_object_touching(truth, model, &ee, &sc.object_id) {
-                return Ok(());
-            }
-        }
-        if let (Some(start), Some(now_ee)) = (ee_at_stop, privileged_ee_xyz(truth, bundle)) {
-            if xyz_residual(start, now_ee) > 0.004 {
-                break;
-            }
-        }
-    }
-    Ok(())
-}
-
 fn ee_distance_to(truth: &VerifierTruth, bundle: &RobotBundle, xyz: [f64; 3]) -> f64 {
     let ee = privileged_ee(bundle);
     truth
@@ -2785,7 +2581,7 @@ fn drive_named_phase(
     manifest: &RobotManifest,
     model: &EmbodimentModel,
     bundle: &RobotBundle,
-    sc: &ManipulationScenario,
+    _sc: &ManipulationScenario,
     episode_id: &str,
     si_base: usize,
     now: &mut f64,
@@ -2798,11 +2594,35 @@ fn drive_named_phase(
     label: &str,
     interpolate_from_live: bool,
 ) -> Result<NamedPhaseResult, SkillRefuse> {
-    let step_max = named_q_step_max();
+    let live_span = named_q_from_qpos_names(model, &w.joint_names, &truth.qpos).unwrap_or_default();
+    let commanded_span = named_q_max_abs_error(&live_span, &phase.q);
+    let reach_cap = named_q_reach_tol();
+    let step_cap = named_q_step_max();
+    // A span inside the default stop would be reported as already finished.
+    // Arrive within a quarter of that span, and no looser than 5 mrad, so the
+    // sample is the commanded pose rather than the stop ball around it.
+    let short_command = track_commanded_span()
+        && commanded_span.is_finite()
+        && commanded_span > 1e-9
+        && commanded_span < reach_cap;
+    let reach_tol = if short_command {
+        (commanded_span * 0.25).clamp(1e-3, 0.005)
+    } else {
+        reach_cap
+    };
+    let step_max = if short_command {
+        commanded_span.clamp(0.02, NAMED_Q_STEP_MAX)
+    } else {
+        step_cap
+    };
     let steps: usize = if interpolate_from_live {
-        let base: usize = if label == "approach" { 16 } else { 8 };
-        let scale = (NAMED_Q_STEP_MAX / step_max).ceil().max(1.0) as usize;
-        base.saturating_mul(scale).min(240)
+        if short_command {
+            4
+        } else {
+            let base: usize = if label == "approach" { 16 } else { 8 };
+            let scale = (NAMED_Q_STEP_MAX / step_max).ceil().max(1.0) as usize;
+            base.saturating_mul(scale).min(240)
+        }
     } else {
         REACH_ATTEMPTS as usize
     };
@@ -2925,7 +2745,7 @@ fn drive_named_phase(
                         progress: classify_named_q_progress(
                             joint_error_before,
                             joint_error_before,
-                            named_q_reach_tol(),
+                            reach_tol,
                         ),
                     });
                     return Err(e);
@@ -2988,7 +2808,18 @@ fn drive_named_phase(
             *last_spent_command_id = Some(spent);
         }
         let now0 = *now;
-        let (t, n) = step_sim(shared, manifest, auth, *now).map_err(|_| SkillRefuse::Refuse)?;
+        let (t, n) = step_named_horizon(
+            shared,
+            manifest,
+            auth,
+            *now,
+            model,
+            &w.joint_names,
+            &phase.q,
+            reach_tol,
+            short_command,
+        )
+        .map_err(|_| SkillRefuse::Refuse)?;
         *truth = t;
         *now = n;
         let duration_s = *now - now0;
@@ -3001,8 +2832,7 @@ fn drive_named_phase(
         let cart_after = fk_got
             .map(|p| xyz_residual(p, phase.pose.xyz))
             .unwrap_or(f64::INFINITY);
-        let progress =
-            classify_named_q_progress(joint_error_before, joint_error_after, named_q_reach_tol());
+        let progress = classify_named_q_progress(joint_error_before, joint_error_after, reach_tol);
         traces.push(NamedQStepTrace {
             phase: label.into(),
             joint_names: w.joint_names.clone(),
@@ -3038,15 +2868,10 @@ fn drive_named_phase(
             },
             progress,
         });
-        if named_q_reached(&got, &phase.q, named_q_reach_tol()) {
+        if named_q_reached(&got, &phase.q, reach_tol) {
             q_reached = true;
             break;
         }
-    }
-    if probe_recontact_enabled() && label == "end" {
-        finish_probe_contact(
-            auth, shared, manifest, model, bundle, sc, episode_id, si_base, now, truth, w,
-        )?;
     }
     Ok(NamedPhaseResult {
         q_reached,
@@ -3117,6 +2942,38 @@ fn step_sim(
     now: f64,
 ) -> Result<(VerifierTruth, f64), String> {
     step_sim_cycles(shared, manifest, auth, now, None)
+}
+
+/// Hold a position command only until the named joints arrive.
+/// A fixed 12-24 cycle horizon continues after arrival and lets a light object coast off the finger.
+#[allow(clippy::too_many_arguments)]
+fn step_named_horizon(
+    shared: &Arc<SharedMujoco>,
+    manifest: &RobotManifest,
+    auth: &mut SimAuthority<crate::driver::SharedSimPort>,
+    now: f64,
+    model: &EmbodimentModel,
+    joint_names: &[String],
+    target_q: &[f64],
+    reach: f64,
+    stop_when_arrived: bool,
+) -> Result<(VerifierTruth, f64), String> {
+    if !stop_when_arrived {
+        return step_sim(shared, manifest, auth, now);
+    }
+    let max_cycles = ((HORIZON_S * CONTROL_HZ).round() as u32).clamp(12, 24);
+    let mut truth = VerifierTruth::default();
+    let mut cursor = now;
+    for _ in 0..max_cycles {
+        let (next, t) = step_sim_cycles(shared, manifest, auth, cursor, Some(1))?;
+        truth = next;
+        cursor = t;
+        let got = named_q_from_qpos_names(model, joint_names, &truth.qpos).unwrap_or_default();
+        if named_q_reached(&got, target_q, reach) {
+            break;
+        }
+    }
+    Ok((truth, cursor))
 }
 
 fn step_sim_cycles(
