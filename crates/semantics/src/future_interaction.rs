@@ -43,9 +43,18 @@ pub enum CoverageMethod {
     /// A fixed return-contact witness whose face margin contains the ball,
     /// with collision proved on the body grown by that ball.
     UncertaintyBallInsideWitnessClearance,
-    /// Contact, mid-stroke, and end configurations checked against the object
-    /// translated along the push by 0, half, and all of the proved stroke.
+    /// Historical name. Three stroke samples are not a continuous interval.
+    /// Preserved assessment rejects this variant.
     StickingIntervalOfProvedStroke,
+    /// Adaptive subdivision terminated only when the uniform translational
+    /// Lipschitz bound fit inside the clearance to every forbidden body.
+    CoupledStrokeUnderUniformLipschitz {
+        lipschitz_milli: u32,
+        subdivisions: u32,
+    },
+    /// Axis-aligned box translated along one axis. The occupied set is an
+    /// exact larger AABB, not a sample.
+    ExactAxisAlignedObjectSweep,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -69,6 +78,16 @@ pub struct SupportedOutcomeDomain {
     pub model_applicability: String,
     pub unresolved: Vec<String>,
     pub failure_reasons: Vec<String>,
+    /// Policy observation epoch this certificate is bound to.
+    #[serde(default)]
+    pub observation_epoch: String,
+    #[serde(default)]
+    pub geometric_assumptions: Vec<String>,
+    #[serde(default)]
+    pub mechanical_assumptions: Vec<String>,
+    /// True only when the coverage method is an actual cover and `unresolved` is empty.
+    #[serde(default)]
+    pub proof_valid: bool,
 }
 
 /// Geometry and collision facts for one fixed witness over a translation ball.
@@ -93,6 +112,7 @@ pub struct CommonWitnessCoverage {
     pub collision_admissible_for_grown_object: bool,
     pub model_applicable: bool,
     pub model_applicability: String,
+    pub observation_epoch: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -136,6 +156,9 @@ pub fn domain_from_common_witness(
 ) -> Result<SupportedOutcomeDomain, String> {
     if input.label.is_empty() || input.witness_digest.is_empty() {
         return Err("WITNESS_IDENTITY_MISSING".into());
+    }
+    if input.observation_epoch.trim().is_empty() {
+        return Err("OBSERVATION_EPOCH_MISSING".into());
     }
     if !input.model_applicable || input.model_applicability.trim().is_empty() {
         return Err("MODEL_NOT_APPLICABLE".into());
@@ -224,89 +247,175 @@ pub fn domain_from_common_witness(
         model_applicability: input.model_applicability.clone(),
         unresolved: Vec::new(),
         failure_reasons: Vec::new(),
+        observation_epoch: input.observation_epoch.clone(),
+        geometric_assumptions: vec![
+            "FIXED_WITNESS".into(),
+            "CONVEX_FACE_MARGIN".into(),
+            "OBJECT_GROWN_BY_THE_TRANSLATION_BALL".into(),
+        ],
+        mechanical_assumptions: vec!["NONE_ASSERTED_BY_THIS_GEOMETRIC_COVER".into()],
+        proof_valid: true,
     })
 }
 
-/// Cover object motion along the push by the stroke samples already in the witness.
+/// Sampled stroke checks are not a continuous cover. This function refuses
+/// rather than minting a preserved domain.
 pub fn domain_from_sticking_stroke(
     input: &CommonWitnessCoverage,
     samples_admissible: bool,
 ) -> Result<SupportedOutcomeDomain, String> {
+    let _ = (input.witness_digest.as_str(), samples_admissible);
+    Err("SAMPLED_STROKE_IS_NOT_CONTINUOUS_COVERAGE".into())
+}
+
+/// Lipschitz cover of one coupled sticking stroke. The caller supplies the
+/// proof produced by `prove_coupled_sticking_stroke`.
+pub fn domain_from_coupled_stroke(
+    input: &CommonWitnessCoverage,
+    subdivisions: u32,
+    lipschitz_m_per_unit: f64,
+    min_clearance_m: f64,
+    assumptions: &[String],
+) -> Result<SupportedOutcomeDomain, String> {
     if input.label.is_empty() || input.witness_digest.is_empty() {
         return Err("WITNESS_IDENTITY_MISSING".into());
+    }
+    if input.observation_epoch.trim().is_empty() {
+        return Err("OBSERVATION_EPOCH_MISSING".into());
     }
     if !input.model_applicable || input.model_applicability.trim().is_empty() {
         return Err("MODEL_NOT_APPLICABLE".into());
     }
-    if !samples_admissible {
-        return Err("STICKING_STROKE_SAMPLES_INADMISSIBLE".into());
+    if subdivisions == 0 && min_clearance_m + 1e-12 < input.translation_radius_m {
+        return Err("COUPLED_STROKE_DID_NOT_TERMINATE".into());
+    }
+    if !(lipschitz_m_per_unit.is_finite() && lipschitz_m_per_unit > 0.0) {
+        return Err("LIPSCHITZ_INVALID".into());
+    }
+    if !(min_clearance_m.is_finite() && min_clearance_m >= 0.0) {
+        return Err("CLEARANCE_INVALID".into());
     }
     if input.yaw_abs_rad > 0.02 {
-        return Err("YAW_UNCERTAINTY_NOT_IN_THE_STROKE_SAMPLES".into());
+        return Err("YAW_UNCERTAINTY_NOT_IN_THE_COUPLED_STROKE".into());
     }
     if !finite_nonnegative(input.translation_radius_m)
         || !finite_nonnegative(input.geometry_residual_m)
-        || !input.support_clearance_m.is_finite()
-        || !input.joint_margin_rad.is_finite()
+        || input.joint_margin_rad <= 0.0
     {
         return Err("COVERAGE_BOUNDS_INVALID".into());
     }
-    if input.support_clearance_m <= input.min_support_clearance_m {
-        return Err("SUPPORT_CLEARANCE_DOES_NOT_COVER".into());
+    let lipschitz_milli = (lipschitz_m_per_unit * 1000.0).round().clamp(1.0, 1.0e9) as u32;
+    let mut geometric = assumptions.to_vec();
+    if geometric.is_empty() {
+        geometric.push("UNIFORM_TRANSLATIONAL_LIPSCHITZ".into());
     }
-    if input.joint_margin_rad <= 0.0 {
-        return Err("JOINT_MARGIN_DOES_NOT_COVER".into());
-    }
-    if input.geometry_residual_m > input.translation_radius_m + 1e-12 {
-        return Err("RESIDUAL_EXCEEDS_PROVED_BALL".into());
-    }
-    let pose = Se3::try_new(input.object_center, input.object_quat)
-        .map_err(|_| "OBJECT_POSE_INVALID".to_string())?;
-    let Some(manifold) = box_push_face_manifold_posed(
-        pose,
-        input.object_half,
-        input.push_direction,
-        input.support_normal,
-        input.face_gap_m,
-    )
-    .map_err(|_| "FACE_MANIFOLD_REJECTED".to_string())?
-    else {
-        return Err("FACE_MANIFOLD_MISSING".into());
-    };
-    let coords = manifold_coords(&manifold, input.contact_point);
-    if (coords.normal - input.face_gap_m).abs() > 1e-3 {
-        return Err("CONTACT_POINT_IS_NOT_ON_THE_DECLARED_FACE".into());
-    }
-    let obligations = vec![
-        "OBJECT_SUPPORTED".into(),
-        "FIXED_WITNESS_JOINT_MARGIN".into(),
-        "STICKING_STROKE_SAMPLES_ADMISSIBLE".into(),
-        "MOTION_ALONG_PUSH_ONLY".into(),
-        "MOTION_WITHIN_DECLARED_BOUND".into(),
-        "MODEL_APPLICABLE".into(),
-    ];
     Ok(SupportedOutcomeDomain {
         derivation: format!(
-            "witness {} covers sticking motion of {:.6} m along the push: contact, mid, and end were collision-admissible against the object translated by 0, half, and all of that stroke",
-            input.witness_digest, input.translation_radius_m
+            "witness {} covers the coupled stroke of {:.6} m because subdivision terminated with forbidden clearance {:.6} m above the Lipschitz motion bound",
+            input.witness_digest, input.translation_radius_m, min_clearance_m
         ),
         bounds: UncertaintyBounds {
             translation_radius_m: input.translation_radius_m,
             yaw_abs_rad: input.yaw_abs_rad,
             residual_high_m: input.geometry_residual_m,
         },
-        coverage: CoverageMethod::StickingIntervalOfProvedStroke,
-        obligations,
+        coverage: CoverageMethod::CoupledStrokeUnderUniformLipschitz {
+            lipschitz_milli,
+            subdivisions,
+        },
+        obligations: vec![
+            "OBJECT_SUPPORTED".into(),
+            "FIXED_WITNESS_JOINT_MARGIN".into(),
+            "COUPLED_STROKE_LIPSCHITZ_TERMINATED".into(),
+            "MOTION_ALONG_PUSH_ONLY".into(),
+            "MOTION_WITHIN_DECLARED_BOUND".into(),
+            "MODEL_APPLICABLE".into(),
+        ],
         witnesses: vec![FutureInteractionWitnessRecord {
             label: input.label.clone(),
             digest: input.witness_digest.clone(),
-            clearance_m: Some(input.translation_radius_m),
+            clearance_m: Some(min_clearance_m),
             obligations_met: true,
         }],
         model_applicable: true,
         model_applicability: input.model_applicability.clone(),
         unresolved: Vec::new(),
         failure_reasons: Vec::new(),
+        observation_epoch: input.observation_epoch.clone(),
+        geometric_assumptions: geometric,
+        mechanical_assumptions: vec![
+            "QUASI_STATIC_TOOL_DRIVEN_TRANSLATION_AT_MOST_THE_COMMANDED_STROKE".into(),
+        ],
+        proof_valid: true,
+    })
+}
+
+/// Exact occupied set of an axis-aligned box translated along one world axis.
+pub fn domain_from_exact_axis_sweep(
+    input: &CommonWitnessCoverage,
+    sweep_clearance_m: f64,
+) -> Result<SupportedOutcomeDomain, String> {
+    if input.label.is_empty() || input.witness_digest.is_empty() {
+        return Err("WITNESS_IDENTITY_MISSING".into());
+    }
+    if input.observation_epoch.trim().is_empty() {
+        return Err("OBSERVATION_EPOCH_MISSING".into());
+    }
+    if !input.model_applicable || input.model_applicability.trim().is_empty() {
+        return Err("MODEL_NOT_APPLICABLE".into());
+    }
+    if !(sweep_clearance_m.is_finite() && sweep_clearance_m >= -1e-9) {
+        return Err("OBJECT_SWEEP_HITS_AN_OBSTACLE".into());
+    }
+    let axis = input
+        .push_direction
+        .iter()
+        .filter(|value| value.abs() > 1e-9)
+        .count();
+    if axis != 1 {
+        return Err("SWEEP_IS_NOT_AXIS_ALIGNED".into());
+    }
+    if input.yaw_abs_rad > 0.02 || input.joint_margin_rad <= 0.0 {
+        return Err("COVERAGE_BOUNDS_INVALID".into());
+    }
+    Ok(SupportedOutcomeDomain {
+        derivation: format!(
+            "witness {} covers an axis-aligned object sweep of {:.6} m; the occupied set is the exact expanded AABB and its obstacle clearance is {:.6} m",
+            input.witness_digest, input.translation_radius_m, sweep_clearance_m
+        ),
+        bounds: UncertaintyBounds {
+            translation_radius_m: input.translation_radius_m,
+            yaw_abs_rad: input.yaw_abs_rad,
+            residual_high_m: input.geometry_residual_m,
+        },
+        coverage: CoverageMethod::ExactAxisAlignedObjectSweep,
+        obligations: vec![
+            "OBJECT_SUPPORTED".into(),
+            "ARM_CONFIGURATION_CLEAR_OF_OBSTACLES_AND_SUPPORT".into(),
+            "OBJECT_SWEEP_EXACT_AABB_CLEAR".into(),
+            "MOTION_WITHIN_COMMANDED_STROKE".into(),
+            "MODEL_APPLICABLE".into(),
+            "AXIS_ALIGNED_TRANSLATION".into(),
+        ],
+        witnesses: vec![FutureInteractionWitnessRecord {
+            label: input.label.clone(),
+            digest: input.witness_digest.clone(),
+            clearance_m: Some(input.translation_radius_m.max(sweep_clearance_m)),
+            obligations_met: true,
+        }],
+        model_applicable: true,
+        model_applicability: input.model_applicability.clone(),
+        unresolved: Vec::new(),
+        failure_reasons: Vec::new(),
+        observation_epoch: input.observation_epoch.clone(),
+        geometric_assumptions: vec![
+            "OBJECT_AND_OBSTACLES_ARE_AXIS_ALIGNED_BOXES".into(),
+            "SWEEP_ALONG_ONE_WORLD_AXIS".into(),
+        ],
+        mechanical_assumptions: vec![
+            "OBJECT_TRAVEL_CANNOT_EXCEED_THE_COMMANDED_TOOL_TRAVEL".into(),
+        ],
+        proof_valid: true,
     })
 }
 
@@ -407,6 +516,12 @@ fn coverage_failure(inputs: &ProbeFutureInputs) -> Option<String> {
     if !domain.model_applicable || domain.model_applicability.trim().is_empty() {
         return Some("MODEL_NOT_APPLICABLE".into());
     }
+    if domain.observation_epoch.trim().is_empty() {
+        return Some("OBSERVATION_EPOCH_MISSING".into());
+    }
+    if !domain.proof_valid {
+        return Some("PROOF_NOT_VALID".into());
+    }
     if domain.obligations.is_empty() || domain.witnesses.is_empty() {
         return Some("OBLIGATIONS_OR_WITNESSES_ABSENT".into());
     }
@@ -462,43 +577,78 @@ fn coverage_failure(inputs: &ProbeFutureInputs) -> Option<String> {
             None
         }
         CoverageMethod::StickingIntervalOfProvedStroke => {
-            if domain.witnesses.len() != 1 || inputs.outcomes.len() != 1 {
-                return Some("STICKING_COVER_IS_ONE_WITNESS".into());
-            }
-            if domain.bounds.yaw_abs_rad > 0.02 {
-                return Some("YAW_UNCERTAINTY_NOT_IN_THE_STROKE_SAMPLES".into());
-            }
-            let witness = &domain.witnesses[0];
-            let outcome = &inputs.outcomes[0];
-            if !witness.obligations_met
-                || outcome.return_contact_witness_digest.as_deref() != Some(witness.digest.as_str())
-                || outcome.label != witness.label
-            {
-                return Some("WITNESS_DOES_NOT_MATCH_OUTCOME".into());
-            }
-            let Some(clearance) = witness.clearance_m.filter(|value| value.is_finite()) else {
-                return Some("WITNESS_CLEARANCE_UNMEASURED".into());
-            };
-            if clearance + 1e-12 < domain.bounds.translation_radius_m {
-                return Some("CLEARANCE_DOES_NOT_CONTAIN_STROKE".into());
-            }
-            let required = [
-                "OBJECT_SUPPORTED",
-                "FIXED_WITNESS_JOINT_MARGIN",
-                "STICKING_STROKE_SAMPLES_ADMISSIBLE",
-                "MOTION_ALONG_PUSH_ONLY",
-                "MOTION_WITHIN_DECLARED_BOUND",
-                "MODEL_APPLICABLE",
-            ];
-            if required
-                .iter()
-                .any(|obligation| !domain.obligations.iter().any(|have| have == obligation))
-            {
-                return Some("PROOF_OBLIGATION_MISSING".into());
-            }
-            None
+            Some("SAMPLED_STROKE_IS_NOT_A_CONTINUOUS_COVER".into())
         }
+        CoverageMethod::CoupledStrokeUnderUniformLipschitz {
+            lipschitz_milli,
+            subdivisions: _,
+        } => {
+            if *lipschitz_milli == 0 {
+                return Some("LIPSCHITZ_INVALID".into());
+            }
+            witness_obligations(
+                domain,
+                inputs,
+                &[
+                    "OBJECT_SUPPORTED",
+                    "FIXED_WITNESS_JOINT_MARGIN",
+                    "COUPLED_STROKE_LIPSCHITZ_TERMINATED",
+                    "MOTION_ALONG_PUSH_ONLY",
+                    "MOTION_WITHIN_DECLARED_BOUND",
+                    "MODEL_APPLICABLE",
+                ],
+                false,
+            )
+        }
+        CoverageMethod::ExactAxisAlignedObjectSweep => witness_obligations(
+            domain,
+            inputs,
+            &[
+                "OBJECT_SUPPORTED",
+                "ARM_CONFIGURATION_CLEAR_OF_OBSTACLES_AND_SUPPORT",
+                "OBJECT_SWEEP_EXACT_AABB_CLEAR",
+                "MOTION_WITHIN_COMMANDED_STROKE",
+                "MODEL_APPLICABLE",
+                "AXIS_ALIGNED_TRANSLATION",
+            ],
+            true,
+        ),
     }
+}
+
+fn witness_obligations(
+    domain: &SupportedOutcomeDomain,
+    inputs: &ProbeFutureInputs,
+    required: &[&str],
+    clearance_must_contain_radius: bool,
+) -> Option<String> {
+    if domain.witnesses.len() != 1 || inputs.outcomes.len() != 1 {
+        return Some("COVER_IS_ONE_WITNESS".into());
+    }
+    if domain.bounds.yaw_abs_rad > 0.02 {
+        return Some("YAW_UNCERTAINTY_EXCEEDS_COVER".into());
+    }
+    let witness = &domain.witnesses[0];
+    let outcome = &inputs.outcomes[0];
+    if !witness.obligations_met
+        || outcome.return_contact_witness_digest.as_deref() != Some(witness.digest.as_str())
+        || outcome.label != witness.label
+    {
+        return Some("WITNESS_DOES_NOT_MATCH_OUTCOME".into());
+    }
+    let Some(clearance) = witness.clearance_m.filter(|value| value.is_finite()) else {
+        return Some("WITNESS_CLEARANCE_UNMEASURED".into());
+    };
+    if clearance_must_contain_radius && clearance + 1e-12 < domain.bounds.translation_radius_m {
+        return Some("CLEARANCE_DOES_NOT_CONTAIN_DOMAIN".into());
+    }
+    if required
+        .iter()
+        .any(|obligation| !domain.obligations.iter().any(|have| have == obligation))
+    {
+        return Some("PROOF_OBLIGATION_MISSING".into());
+    }
+    None
 }
 
 pub fn assess_future_interaction(outcomes: &[SupportedProbeOutcome]) -> FutureInteractionReport {
@@ -642,6 +792,7 @@ mod tests {
             collision_admissible_for_grown_object: collision,
             model_applicable: true,
             model_applicability: "planar push, fixed witness, yaw bound 0".into(),
+            observation_epoch: "epoch:test".into(),
         }
     }
 
@@ -742,6 +893,10 @@ mod tests {
             model_applicability: "sampled".into(),
             unresolved: vec!["interior".into()],
             failure_reasons: Vec::new(),
+            observation_epoch: "epoch:test".into(),
+            geometric_assumptions: Vec::new(),
+            mechanical_assumptions: Vec::new(),
+            proof_valid: false,
         });
         let sampled = assess_probe_future(&sampled);
         assert_eq!(sampled.assessment, ProbeRecoverabilityAssessment::Unknown);

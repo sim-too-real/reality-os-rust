@@ -9,13 +9,13 @@ use crate::embodiment::EmbodimentModel;
 use crate::geometry::{
     ApproximationClass, CollisionRole, CollisionScene, PrimitiveShape, RigidGeometry, SemanticRole,
 };
-use crate::kinematics::forward_kinematics;
+use crate::kinematics::{forward_kinematics, uniform_translational_lipschitz};
 use crate::maneuver_witness::{
     interpolate_named_q, interpolation_count, ExecutableContactManeuver, PhaseTransition,
     TransitionKind, TransitionVerdict,
 };
 use crate::provenance::Provenance;
-use crate::transform::{add3, norm3, rotate_by_quat, sub3, Se3};
+use crate::transform::{add3, norm3, rotate_by_quat, scale3, sub3, Se3};
 use crate::transition_validity::validate_transition;
 
 pub const BLOCK_SELF_COLLISION: &str = "SELF_COLLISION";
@@ -24,6 +24,7 @@ pub const BLOCK_OBSTACLE_COLLISION: &str = "OBSTACLE_COLLISION";
 pub const BLOCK_UNINTENDED_CONTACT: &str = "UNINTENDED_ROBOT_OBJECT_CONTACT";
 pub const BLOCK_WRONG_PHASE_CONTACT: &str = "WRONG_PHASE_OBJECT_CONTACT";
 pub const BLOCK_INVALID_COLLISION_WORLD: &str = "INVALID_COLLISION_WORLD";
+pub const BLOCK_COLLISION_PROOF_INCOMPLETE: &str = "COLLISION_PROOF_INCOMPLETE";
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CollisionWorldError {
@@ -33,6 +34,10 @@ pub enum CollisionWorldError {
     InvalidObstaclePose { name: String },
     #[error("invalid support plane in collision world")]
     InvalidSupportPlane,
+    #[error("joint interpolation is unavailable")]
+    InterpolationUnavailable,
+    #[error("forward kinematics is unavailable")]
+    ForwardKinematicsUnavailable,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -485,16 +490,14 @@ pub fn forbidden_class_on_interpolation(
 ) -> Result<Option<(&'static str, ContactEvidenceClass)>, CollisionWorldError> {
     let (_, support_normal, _) = validate_world_geometry(world)?;
     let n = interpolation_count(qa, qb);
-    let Ok(samples) = interpolate_named_q(qa, qb, n) else {
-        return Ok(None);
-    };
+    let samples = interpolate_named_q(qa, qb, n)
+        .map_err(|_| CollisionWorldError::InterpolationUnavailable)?;
     let mut robot_names: Vec<String> = world.robot_volumes.iter().map(|v| v.body.clone()).collect();
     robot_names.push("tool".into());
     for (i, q) in samples.iter().enumerate() {
         let intended_ok = intended_ok_for(kind, i, samples.len());
-        let Some(tool) = tool_sphere(model, ee, names, q, world) else {
-            continue;
-        };
+        let tool = tool_sphere(model, ee, names, q, world)
+            .ok_or(CollisionWorldError::ForwardKinematicsUnavailable)?;
         let object_probe = Sphere {
             center: tool.center,
             radius: world.object_probe_radius.max(1e-4),
@@ -523,10 +526,13 @@ pub fn forbidden_class_on_interpolation(
         }
         let mut vol_spheres: Vec<(String, Sphere)> = Vec::new();
         for vol in &world.robot_volumes {
-            if let Some(s) = volume_sphere(model, ee, names, q, vol, tool) {
-                if s.radius <= 0.0 {
-                    continue;
-                }
+            let Some(s) = volume_sphere(model, ee, names, q, vol, tool) else {
+                return Err(CollisionWorldError::ForwardKinematicsUnavailable);
+            };
+            if s.radius <= 0.0 {
+                continue;
+            }
+            {
                 let name = if vol.body.is_empty() {
                     "tool".into()
                 } else {
@@ -587,7 +593,371 @@ pub fn is_collision_block_reason(reason: &str) -> bool {
             | BLOCK_UNINTENDED_CONTACT
             | BLOCK_WRONG_PHASE_CONTACT
             | BLOCK_INVALID_COLLISION_WORLD
+            | BLOCK_COLLISION_PROOF_INCOMPLETE
     )
+}
+
+/// Uniform-Lipschitz proof that a coupled arm/object stroke stays clear of
+/// forbidden contact. Sample counts are not a proof.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoupledStrokeProof {
+    pub subdivisions: u32,
+    pub lipschitz_m_per_unit: f64,
+    pub min_forbidden_clearance_m: f64,
+    pub stroke_m: f64,
+    pub assumptions: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StickingStrokeAssessment {
+    /// Forbidden contact was absent at the named samples only.
+    ClearAtSamples {
+        sample_count: u32,
+    },
+    Continuous(CoupledStrokeProof),
+    Forbidden {
+        reason: &'static str,
+    },
+    Unknown {
+        reason: &'static str,
+    },
+}
+
+const MAX_COUPLED_DEPTH: u32 = 10;
+
+/// Assess the witness contact, mid-stroke, and end configurations against the
+/// object translated along `push_direction`, then attempt a Lipschitz cover of
+/// the segments between them.
+pub fn prove_coupled_sticking_stroke(
+    model: &EmbodimentModel,
+    ee: &str,
+    names: &[String],
+    contact_q: &[f64],
+    mid_q: &[f64],
+    end_q: &[f64],
+    world: &CollisionWorld,
+    push_direction: [f64; 3],
+    stroke_m: f64,
+) -> StickingStrokeAssessment {
+    if !stroke_m.is_finite() || stroke_m < 0.0 {
+        return StickingStrokeAssessment::Unknown {
+            reason: "STROKE_INVALID",
+        };
+    }
+    let Some(push) = crate::transform::normalize3(push_direction) else {
+        return StickingStrokeAssessment::Unknown {
+            reason: "PUSH_DIRECTION_INVALID",
+        };
+    };
+    if !axis_aligned_quat(world.object_quat)
+        || world
+            .obstacles
+            .iter()
+            .any(|obstacle| !axis_aligned_quat(obstacle.quat_wxyz))
+    {
+        return StickingStrokeAssessment::Unknown {
+            reason: "ROTATED_BOX_HAS_NO_AABB_CLEARANCE_PROOF",
+        };
+    }
+    let chain = model.ee_joint_chain(ee).unwrap_or_default();
+    if chain.is_empty() || names != chain.as_slice() {
+        return StickingStrokeAssessment::Unknown {
+            reason: "JOINT_CHAIN_MISMATCH",
+        };
+    }
+    let samples = [(0.0, contact_q), (0.5 * stroke_m, mid_q), (stroke_m, end_q)];
+    for (distance, q) in samples {
+        if q.len() != names.len() {
+            return StickingStrokeAssessment::Unknown {
+                reason: "Q_LENGTH_MISMATCH",
+            };
+        }
+        let mut shifted = world.clone();
+        shifted.object_center = add3(world.object_center, scale3(push, distance));
+        match forbidden_class_on_interpolation(
+            model,
+            ee,
+            names,
+            q,
+            q,
+            &shifted,
+            TransitionKind::ContactToMidStroke,
+        ) {
+            Ok(Some((reason, _))) => {
+                return StickingStrokeAssessment::Forbidden { reason };
+            }
+            Ok(None) => {}
+            Err(CollisionWorldError::InterpolationUnavailable) => {
+                return StickingStrokeAssessment::Unknown {
+                    reason: "INTERPOLATION_UNAVAILABLE",
+                };
+            }
+            Err(CollisionWorldError::ForwardKinematicsUnavailable) => {
+                return StickingStrokeAssessment::Unknown {
+                    reason: "FORWARD_KINEMATICS_UNAVAILABLE",
+                };
+            }
+            Err(_) => {
+                return StickingStrokeAssessment::Unknown {
+                    reason: "COLLISION_WORLD_INVALID",
+                };
+            }
+        }
+    }
+    let lipschitz = match uniform_translational_lipschitz(model, &chain, ee) {
+        Ok(value) => value,
+        Err(_) => {
+            return StickingStrokeAssessment::ClearAtSamples { sample_count: 3 };
+        }
+    };
+    let mut assumptions = vec![
+        "REVOLUTE_OR_PRISMATIC_LIPSCHITZ_FROM_DECLARED_LINK_LENGTHS".into(),
+        "OBJECT_AND_OBSTACLES_ARE_AXIS_ALIGNED".into(),
+        "INTENDED_TOOL_OBJECT_CONTACT_IS_ALLOWED_DURING_THE_STROKE".into(),
+        "DECLARED_TOOL_AND_ROBOT_SPHERES_ONLY".into(),
+    ];
+    if world.robot_volumes.is_empty() {
+        assumptions.push("NO_ADDITIONAL_ROBOT_VOLUMES_DECLARED".into());
+    }
+    let mut min_clearance = f64::INFINITY;
+    let mut subdivisions = 0u32;
+    let segments = [
+        (contact_q, mid_q, 0.0, 0.5 * stroke_m),
+        (mid_q, end_q, 0.5 * stroke_m, stroke_m),
+    ];
+    for (qa, qb, s0, s1) in segments {
+        match cover_coupled_segment(
+            model,
+            ee,
+            names,
+            qa,
+            qb,
+            world,
+            push,
+            s0,
+            s1,
+            lipschitz,
+            0,
+            &mut subdivisions,
+            &mut min_clearance,
+        ) {
+            Ok(()) => {}
+            Err(SegmentGap::Forbidden(reason)) => {
+                return StickingStrokeAssessment::Forbidden { reason };
+            }
+            Err(SegmentGap::Unknown(reason)) => {
+                return StickingStrokeAssessment::Unknown { reason };
+            }
+        }
+    }
+    if !min_clearance.is_finite() {
+        min_clearance = stroke_m;
+    }
+    StickingStrokeAssessment::Continuous(CoupledStrokeProof {
+        subdivisions,
+        lipschitz_m_per_unit: lipschitz,
+        min_forbidden_clearance_m: min_clearance,
+        stroke_m,
+        assumptions,
+    })
+}
+
+enum SegmentGap {
+    Forbidden(&'static str),
+    Unknown(&'static str),
+}
+
+fn cover_coupled_segment(
+    model: &EmbodimentModel,
+    ee: &str,
+    names: &[String],
+    qa: &[f64],
+    qb: &[f64],
+    world: &CollisionWorld,
+    push: [f64; 3],
+    s0: f64,
+    s1: f64,
+    lipschitz: f64,
+    depth: u32,
+    subdivisions: &mut u32,
+    min_clearance: &mut f64,
+) -> Result<(), SegmentGap> {
+    let clear0 = forbidden_clearance(model, ee, names, qa, world, push, s0)?;
+    let clear1 = forbidden_clearance(model, ee, names, qb, world, push, s1)?;
+    *min_clearance = min_clearance.min(clear0).min(clear1);
+    let q_step = qa
+        .iter()
+        .zip(qb.iter())
+        .map(|(a, b)| {
+            let delta = a - b;
+            delta * delta
+        })
+        .sum::<f64>()
+        .sqrt();
+    let motion = lipschitz * q_step + (s1 - s0).abs();
+    if clear0 > motion + 1e-6 && clear1 > motion + 1e-6 {
+        return Ok(());
+    }
+    if depth >= MAX_COUPLED_DEPTH {
+        return Err(SegmentGap::Unknown("SUBDIVISION_BUDGET_EXHAUSTED"));
+    }
+    *subdivisions = subdivisions.saturating_add(1);
+    let qm: Vec<f64> = qa
+        .iter()
+        .zip(qb.iter())
+        .map(|(a, b)| 0.5 * (a + b))
+        .collect();
+    let sm = 0.5 * (s0 + s1);
+    cover_coupled_segment(
+        model,
+        ee,
+        names,
+        qa,
+        &qm,
+        world,
+        push,
+        s0,
+        sm,
+        lipschitz,
+        depth + 1,
+        subdivisions,
+        min_clearance,
+    )?;
+    cover_coupled_segment(
+        model,
+        ee,
+        names,
+        &qm,
+        qb,
+        world,
+        push,
+        sm,
+        s1,
+        lipschitz,
+        depth + 1,
+        subdivisions,
+        min_clearance,
+    )
+}
+
+fn forbidden_clearance(
+    model: &EmbodimentModel,
+    ee: &str,
+    names: &[String],
+    q: &[f64],
+    world: &CollisionWorld,
+    push: [f64; 3],
+    distance: f64,
+) -> Result<f64, SegmentGap> {
+    crate::work_counters::note_collision_query();
+    let object_center = add3(world.object_center, scale3(push, distance));
+    let spheres = posed_spheres(model, ee, names, q, world)?;
+    let support_normal = crate::transform::normalize3(world.support_normal)
+        .ok_or(SegmentGap::Unknown("SUPPORT_NORMAL_INVALID"))?;
+    let mut min_clearance = f64::INFINITY;
+    for (name, sphere, tool) in &spheres {
+        if *tool {
+            // Intended tool/object overlap is allowed. Other bodies are not.
+        } else if sphere_aabb_clearance(*sphere, object_center, world.object_half) < -1e-9 {
+            return Err(SegmentGap::Forbidden(BLOCK_UNINTENDED_CONTACT));
+        } else {
+            min_clearance = min_clearance.min(sphere_aabb_clearance(
+                *sphere,
+                object_center,
+                world.object_half,
+            ));
+        }
+        let plane = sphere_plane_clearance(*sphere, world.support_origin, support_normal);
+        if plane < -1e-9 {
+            return Err(SegmentGap::Forbidden(BLOCK_SUPPORT_COLLISION));
+        }
+        min_clearance = min_clearance.min(plane);
+        for obstacle in &world.obstacles {
+            let clearance = sphere_aabb_clearance(*sphere, obstacle.center, obstacle.half_extents);
+            if clearance < -1e-9 {
+                return Err(SegmentGap::Forbidden(BLOCK_OBSTACLE_COLLISION));
+            }
+            min_clearance = min_clearance.min(clearance);
+        }
+        let _ = name;
+    }
+    for i in 0..spheres.len() {
+        for j in (i + 1)..spheres.len() {
+            if spheres[i].2 && spheres[j].2 {
+                continue;
+            }
+            let clearance = sphere_sphere_clearance(spheres[i].1, spheres[j].1);
+            if clearance < -1e-9 {
+                return Err(SegmentGap::Forbidden(BLOCK_SELF_COLLISION));
+            }
+            min_clearance = min_clearance.min(clearance);
+        }
+    }
+    if !min_clearance.is_finite() {
+        // No forbidden body was close enough to produce a finite clearance.
+        // The motion bound is then automatically satisfied.
+        min_clearance = 1.0e3;
+    }
+    Ok(min_clearance)
+}
+
+fn posed_spheres(
+    model: &EmbodimentModel,
+    ee: &str,
+    names: &[String],
+    q: &[f64],
+    world: &CollisionWorld,
+) -> Result<Vec<(String, Sphere, bool)>, SegmentGap> {
+    let tool = tool_sphere(model, ee, names, q, world)
+        .ok_or(SegmentGap::Unknown("FORWARD_KINEMATICS_UNAVAILABLE"))?;
+    let mut spheres = vec![("tool".into(), tool, true)];
+    for volume in &world.robot_volumes {
+        let posed = volume_sphere(model, ee, names, q, volume, tool)
+            .ok_or(SegmentGap::Unknown("FORWARD_KINEMATICS_UNAVAILABLE"))?;
+        if posed.radius <= 0.0 {
+            continue;
+        }
+        let name = if volume.body.is_empty() {
+            "tool".into()
+        } else {
+            volume.body.clone()
+        };
+        let tool_body = name == "tool" || name == ee;
+        spheres.push((name, posed, tool_body));
+    }
+    Ok(spheres)
+}
+
+fn axis_aligned_quat(quat: [f64; 4]) -> bool {
+    let norm = quat.iter().map(|value| value * value).sum::<f64>().sqrt();
+    if !(norm.is_finite() && norm > 1e-9) {
+        return false;
+    }
+    let w = quat[0] / norm;
+    let xyz = quat[1] / norm;
+    let y = quat[2] / norm;
+    let z = quat[3] / norm;
+    w.abs() > 1.0 - 1e-6 && xyz.abs() < 1e-6 && y.abs() < 1e-6 && z.abs() < 1e-6
+}
+
+fn sphere_aabb_clearance(sphere: Sphere, center: [f64; 3], half: [f64; 3]) -> f64 {
+    let closest = [
+        center[0] + clamp(sphere.center[0] - center[0], -half[0], half[0]),
+        center[1] + clamp(sphere.center[1] - center[1], -half[1], half[1]),
+        center[2] + clamp(sphere.center[2] - center[2], -half[2], half[2]),
+    ];
+    norm3(sub3(sphere.center, closest)) - sphere.radius
+}
+
+fn sphere_plane_clearance(sphere: Sphere, origin: [f64; 3], normal: [f64; 3]) -> f64 {
+    let height = normal[0] * (sphere.center[0] - origin[0])
+        + normal[1] * (sphere.center[1] - origin[1])
+        + normal[2] * (sphere.center[2] - origin[2]);
+    height - sphere.radius
+}
+
+fn sphere_sphere_clearance(a: Sphere, b: Sphere) -> f64 {
+    norm3(sub3(a.center, b.center)) - a.radius - b.radius
 }
 
 fn refuse_if_needed(t: &mut PhaseTransition, hit: Option<(&'static str, ContactEvidenceClass)>) {
@@ -653,9 +1023,9 @@ pub fn apply_collision_admissibility(
             &policy,
             ContactPhase::from_transition(kind),
         );
-        let hit = report.block_reason().map(|r| {
+        let hit = report.execution_refusal().map(|reason| {
             (
-                r,
+                reason,
                 report
                     .class
                     .unwrap_or(ContactEvidenceClass::ObstacleContact),
@@ -1038,6 +1408,57 @@ mod tests {
             w.is_executable()
                 || crate::maneuver_witness::execution_block_reason(&w).as_deref()
                     != Some(BLOCK_UNINTENDED_CONTACT)
+        );
+    }
+
+    #[test]
+    fn an_obstacle_between_stroke_samples_is_not_a_continuous_clear() {
+        let model = synth_planar_two_link();
+        let names = model.ee_joint_chain("ee").unwrap();
+        let contact = vec![0.15, -0.25];
+        let end = vec![1.05, -1.2];
+        let mid: Vec<f64> = contact
+            .iter()
+            .zip(&end)
+            .map(|(start, finish)| 0.5 * (start + finish))
+            .collect();
+        let quarter: Vec<f64> = contact
+            .iter()
+            .zip(&end)
+            .map(|(start, finish)| 0.75 * start + 0.25 * finish)
+            .collect();
+        let tool = |q: &[f64]| forward_kinematics(&model, &names, "ee", q).unwrap().ee.xyz;
+        let hit_at = tool(&quarter);
+        let mut world = world_at([2.0, 0.0, 0.0]);
+        world.support_origin = [0.0, 0.0, -1.0];
+        world.ee_radius = 0.008;
+        world.obstacles.push(NamedBox::aabb(
+            "between-samples",
+            hit_at,
+            [0.003, 0.003, 0.003],
+        ));
+        for q in [&contact, &mid, &end] {
+            let sample = tool(q);
+            let gap = norm3(crate::transform::sub3(sample, hit_at));
+            assert!(
+                gap > world.ee_radius + 0.006,
+                "stroke sample is already inside the interior obstacle, gap={gap}"
+            );
+        }
+        let assessment = prove_coupled_sticking_stroke(
+            &model,
+            "ee",
+            &names,
+            &contact,
+            &mid,
+            &end,
+            &world,
+            [1.0, 0.0, 0.0],
+            0.0,
+        );
+        assert!(
+            matches!(assessment, StickingStrokeAssessment::Forbidden { .. }),
+            "interior obstacle must refuse the stroke, got {assessment:?}"
         );
     }
 }

@@ -282,6 +282,87 @@ pub fn jacobian_translational_at(fk: &FkState, point_world: [f64; 3]) -> Vec<Vec
     j
 }
 
+/// Configuration-independent upper bound on `||J_trans Δq||` / `||Δq||_2`.
+///
+/// Each revolute column is at most the triangle-inequality length of the
+/// kinematic path from that joint to the end-effector. A prismatic column of a
+/// unit axis is 1. The sum of those column bounds is a Lipschitz constant at
+/// every configuration. Unknown link geometry returns an error instead of a
+/// substituted length.
+pub fn uniform_translational_lipschitz(
+    model: &EmbodimentModel,
+    chain: &[String],
+    ee: &str,
+) -> Result<f64, SkillRefuse> {
+    if chain.is_empty() {
+        return Err(SkillRefuse::Unsupported);
+    }
+    let _ = ee_pose(model, ee)?;
+    let mut sum = 0.0;
+    for (index, name) in chain.iter().enumerate() {
+        let joint = model
+            .joints
+            .iter()
+            .find(|joint| joint.name == *name)
+            .ok_or(SkillRefuse::Unsupported)?;
+        let bound = match joint.kind {
+            JointKind::Hinge => tip_reach_from_joint(model, chain, index, ee)?,
+            JointKind::Slide => 1.0,
+            JointKind::Fixed => 0.0,
+            JointKind::Ball | JointKind::Free | JointKind::Other => {
+                return Err(SkillRefuse::KinematicsUnsupported);
+            }
+        };
+        if !bound.is_finite() || bound < 0.0 {
+            return Err(SkillRefuse::KinematicsUnsupported);
+        }
+        sum += bound;
+    }
+    if !(sum.is_finite() && sum > 0.0) {
+        return Err(SkillRefuse::KinematicsUnsupported);
+    }
+    Ok(sum)
+}
+
+fn tip_reach_from_joint(
+    model: &EmbodimentModel,
+    chain: &[String],
+    index: usize,
+    ee: &str,
+) -> Result<f64, SkillRefuse> {
+    let joint = model
+        .joints
+        .iter()
+        .find(|candidate| candidate.name == chain[index])
+        .ok_or(SkillRefuse::Unsupported)?;
+    let origin = joint
+        .origin_in_child
+        .value
+        .ok_or(SkillRefuse::KinematicsUnsupported)?;
+    if !origin.iter().all(|value| value.is_finite()) {
+        return Err(SkillRefuse::KinematicsUnsupported);
+    }
+    let mut reach = norm3(origin);
+    for later in chain.iter().skip(index + 1) {
+        let child = model
+            .joints
+            .iter()
+            .find(|candidate| candidate.name == *later)
+            .ok_or(SkillRefuse::Unsupported)?;
+        let local = body_local(model, &child.child_body)?;
+        if !local.xyz.iter().all(|value| value.is_finite()) {
+            return Err(SkillRefuse::KinematicsUnsupported);
+        }
+        reach += norm3(local.xyz);
+    }
+    let ee_local = ee_pose(model, ee)?;
+    if !ee_local.xyz.iter().all(|value| value.is_finite()) {
+        return Err(SkillRefuse::KinematicsUnsupported);
+    }
+    reach += norm3(ee_local.xyz);
+    Ok(reach)
+}
+
 fn clamp_joint(joint: &Joint, q: f64) -> f64 {
     let q = match joint.q_min.value {
         Some(min) => q.max(min),

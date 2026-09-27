@@ -5,8 +5,9 @@ use realityos_semantics::discrepancy::{
     Stimulus,
 };
 use realityos_semantics::execution_envelope::{
-    supervise_execution, ExecutionEnvelope, ExecutionProgress, FrozenAction, ObservationContract,
-    ObservationField, RuntimePolicyObservation, SupervisorDecision,
+    contents_digest, supervise_execution, ExecutionAuthorization, ExecutionEnvelope,
+    ExecutionProgress, FrozenAction, ObservationContract, ObservationField,
+    RuntimePolicyObservation, SupervisorDecision,
 };
 use realityos_semantics::physical_belief::{PhysicalParameter, PhysicalParameterBelief};
 use realityos_semantics::physical_consequence::{
@@ -130,51 +131,54 @@ fn abort_probe_observe_update_and_replan_stays_on_the_canonical_path() {
         predicted_contact_persists: true,
         quasi_static_stroke_limit_m: 0.015,
     };
-    let frozen_probe = FrozenAction {
-        action_id: probe_prediction.action_id.clone(),
-        action_key: probe_action.action_key.clone(),
-        candidate_id: probe_action.candidate_id.clone(),
-        contact_id: probe_action.contact_id.clone(),
-        witness_id: probe_action.witness_id.clone(),
-        witness_contents: probe_action.witness_contents.clone(),
-        witness_digest: String::new(),
-        requested_stroke_m: probe_prediction.stroke_m,
-        prediction: probe_prediction.clone(),
-        belief_snapshot: PhysicalParameterBelief::declared_point(
-            PhysicalParameter::SupportFriction,
-            0.3,
-            "scene.support_friction",
-        )
-        .with_unknown(PhysicalParameter::QuasiStaticApplicability, "scene.regime"),
-        recoverability: RecoverabilityClass::NoProgress,
-        envelope: ExecutionEnvelope::for_quasi_static_stroke(0.012, 0.006),
-        observation_contract: ObservationContract {
-            source: "policy-sensors".into(),
-            model_epoch: "model:1".into(),
-            calibration_epoch: "calibration:1".into(),
-            max_age_s: 0.2,
-            required_units: BTreeMap::new(),
-            required_fields: vec![
-                ObservationField::StrokeConsumed,
-                ObservationField::Displacement,
-                ObservationField::Yaw,
-                ObservationField::Contact,
-                ObservationField::GoalError,
-                ObservationField::Tracking,
-                ObservationField::Reachability,
-                ObservationField::QuasiStaticApplicability,
-            ],
+    let frozen_probe = fixture_grant(
+        FrozenAction {
+            action_id: probe_prediction.action_id.clone(),
+            action_key: probe_action.action_key.clone(),
+            candidate_id: probe_action.candidate_id.clone(),
+            contact_id: probe_action.contact_id.clone(),
+            witness_id: probe_action.witness_id.clone(),
+            witness_contents: probe_action.witness_contents.clone(),
+            witness_digest: String::new(),
+            requested_stroke_m: probe_prediction.stroke_m,
+            prediction: probe_prediction.clone(),
+            belief_snapshot: PhysicalParameterBelief::declared_point(
+                PhysicalParameter::SupportFriction,
+                0.3,
+                "scene.support_friction",
+            )
+            .with_unknown(PhysicalParameter::QuasiStaticApplicability, "scene.regime"),
+            recoverability: RecoverabilityClass::NoProgress,
+            envelope: ExecutionEnvelope::for_quasi_static_stroke(0.012, 0.006),
+            observation_contract: ObservationContract {
+                source: "policy-sensors".into(),
+                model_epoch: "model:1".into(),
+                calibration_epoch: "calibration:1".into(),
+                max_age_s: 0.2,
+                required_units: BTreeMap::new(),
+                required_fields: vec![
+                    ObservationField::StrokeConsumed,
+                    ObservationField::Displacement,
+                    ObservationField::Yaw,
+                    ObservationField::Contact,
+                    ObservationField::GoalError,
+                    ObservationField::Tracking,
+                    ObservationField::Reachability,
+                    ObservationField::QuasiStaticApplicability,
+                ],
+            },
+            model_id: String::new(),
+            embodiment_id: String::new(),
+            observation_epoch: String::new(),
+            actuator_id: String::new(),
+            observation_contract_id: String::new(),
+            abort_contract_id: String::new(),
+            authority_granted: true,
+            execution_authorization: None,
         },
-        model_id: String::new(),
-        embodiment_id: String::new(),
-        observation_epoch: String::new(),
-        actuator_id: String::new(),
-        observation_contract_id: String::new(),
-        abort_contract_id: String::new(),
-        authority_granted: true,
-        execution_authorization: None,
-    }
-    .with_matching_authorization(10.0, 40.0);
+        10.0,
+        40.0,
+    );
     let progress = ExecutionProgress {
         action_id: frozen_probe.action_id.clone(),
         witness_id: frozen_probe.witness_id.clone(),
@@ -300,4 +304,49 @@ fn abort_probe_observe_update_and_replan_stays_on_the_canonical_path() {
     assert_eq!(next_action.candidate_id, "goal-after-probe");
     assert_ne!(next_action.action_key, "action-key:failed-goal");
     assert_eq!(next_action.role, CandidateRole::GoalAction);
+}
+
+fn fixture_grant(mut action: FrozenAction, issued_at_s: f64, expires_at_s: f64) -> FrozenAction {
+    if action.witness_digest.is_empty() {
+        action.witness_digest = contents_digest(&action.witness_contents);
+    }
+    if action.model_id.is_empty() {
+        action.model_id = "model".into();
+    }
+    if action.embodiment_id.is_empty() {
+        action.embodiment_id = "embodiment".into();
+    }
+    if action.observation_epoch.is_empty() {
+        action.observation_epoch = "epoch".into();
+    }
+    if action.actuator_id.is_empty() {
+        action.actuator_id = "actuator".into();
+    }
+    if action.observation_contract_id.is_empty() {
+        action.observation_contract_id = format!("sensors:{}", action.observation_epoch);
+    }
+    if action.abort_contract_id.is_empty() {
+        action.abort_contract_id = "abort-and-reobserve".into();
+    }
+    let scope_digest = action.witness_digest.clone();
+    let authorization = ExecutionAuthorization {
+        grant_id: format!("sim-scope:{scope_digest}"),
+        scope_digest,
+        model_id: action.model_id.clone(),
+        embodiment_id: action.embodiment_id.clone(),
+        observation_epoch: action.observation_epoch.clone(),
+        candidate_id: action.candidate_id.clone(),
+        action_key: action.action_key.clone(),
+        witness_digest: action.witness_digest.clone(),
+        actuator_id: action.actuator_id.clone(),
+        requested_stroke_m: action.requested_stroke_m,
+        execution_bound_m: action.requested_stroke_m,
+        issued_at_s,
+        expires_at_s,
+        observation_contract_id: action.observation_contract_id.clone(),
+        abort_contract_id: action.abort_contract_id.clone(),
+    };
+    action
+        .bind_issued_authorization(authorization, issued_at_s)
+        .expect("fixture grant covers the action")
 }

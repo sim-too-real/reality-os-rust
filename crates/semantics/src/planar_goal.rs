@@ -9,6 +9,7 @@ const PROGRESS_EPS: f64 = 1e-6;
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum InteractionFamily {
     PlanarPush,
+    PinchGrasp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

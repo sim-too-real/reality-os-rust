@@ -5,8 +5,8 @@
 use crate::command_domain::{named_joint_limit_margin, MIN_NAMED_JOINT_MARGIN_FRAC};
 use crate::contact::declared_manipulation_contact_bodies;
 use crate::contact_collision::{
-    apply_collision_admissibility, forbidden_class_on_interpolation, is_collision_block_reason,
-    AttachedSphere, CollisionWorld, NamedBox,
+    apply_collision_admissibility, is_collision_block_reason, prove_coupled_sticking_stroke,
+    AttachedSphere, CollisionWorld, NamedBox, StickingStrokeAssessment,
 };
 use crate::contact_manifold::{
     contact_constraint_residual, evaluate_box_face_contact, ContactGeometryTolerance,
@@ -19,7 +19,7 @@ use crate::kinematics::{
 };
 use crate::maneuver_witness::{
     execution_block_reason, witness_from_continuing_phases, witness_min_joint_margin,
-    ExecutableContactManeuver, ManeuverPhase, TransitionKind, TransitionVerdict,
+    ExecutableContactManeuver, ManeuverPhase, TransitionVerdict,
 };
 use crate::push::{
     effective_push_distance, push_approach_standoff_m, push_contact_success_radius,
@@ -953,10 +953,11 @@ pub fn witness_admissible_for_translation_ball(
     execution_block_reason(&witness).is_none()
 }
 
-/// The proved stroke against a fixed object, and the same phases against the
-/// object translated along the push by half and all of `stroke_m`.
-/// Intended contact stays allowed. This is the sticking interval, not a grown box.
-pub fn sticking_stroke_samples_admissible(
+/// Sampled clearance is not a continuous sticking-interval proof.
+/// `Continuous` is returned only when the uniform Lipschitz cover terminates
+/// inside the forbidden-body clearance. Interpolation or FK failure is
+/// `Unknown`, never admissibility.
+pub fn assess_sticking_stroke(
     model: &EmbodimentModel,
     ee: &str,
     maneuver: &ContactManeuver,
@@ -964,45 +965,29 @@ pub fn sticking_stroke_samples_admissible(
     support: SupportPlane,
     spec: &ContactManeuverSpec,
     stroke_m: f64,
-) -> bool {
-    if !stroke_m.is_finite() || stroke_m < 0.0 {
-        return false;
-    }
+) -> StickingStrokeAssessment {
     let Some(witness) = maneuver.executable.as_ref() else {
-        return false;
+        return StickingStrokeAssessment::Unknown {
+            reason: "WITNESS_MISSING",
+        };
     };
     if execution_block_reason(witness).is_some() {
-        return false;
+        return StickingStrokeAssessment::Unknown {
+            reason: "WITNESS_NOT_EXECUTABLE",
+        };
     }
-    let Some(push) = normalize3(maneuver.push_direction) else {
-        return false;
-    };
-    let samples = [
-        (0.0, witness.contact.q.as_slice()),
-        (0.5 * stroke_m, witness.mid_stroke.q.as_slice()),
-        (stroke_m, witness.end_stroke.q.as_slice()),
-    ];
-    for (distance, q) in samples {
-        if q.len() != witness.joint_names.len() {
-            return false;
-        }
-        let mut shifted = object;
-        shifted.center = add3(object.center, scale3(push, distance));
-        let world = collision_world_of(model, ee, shifted, support, spec);
-        let hit = forbidden_class_on_interpolation(
-            model,
-            ee,
-            &witness.joint_names,
-            q,
-            q,
-            &world,
-            TransitionKind::ContactToMidStroke,
-        );
-        if hit.ok().flatten().is_some() {
-            return false;
-        }
-    }
-    true
+    let world = collision_world_of(model, ee, object, support, spec);
+    prove_coupled_sticking_stroke(
+        model,
+        ee,
+        &witness.joint_names,
+        &witness.contact.q,
+        &witness.mid_stroke.q,
+        &witness.end_stroke.q,
+        &world,
+        maneuver.push_direction,
+        stroke_m,
+    )
 }
 
 fn collision_world_of(

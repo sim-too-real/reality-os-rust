@@ -81,6 +81,28 @@ impl TransitionReport {
             None => Some(BLOCK_UNINTENDED_CONTACT),
         }
     }
+
+    /// Collision block, or a proof that did not finish. An unfinished proof is
+    /// not admissibility.
+    pub fn execution_refusal(&self) -> Option<&'static str> {
+        if let Some(reason) = self.block_reason() {
+            return Some(reason);
+        }
+        let constraint = self
+            .witness
+            .as_ref()
+            .map(|witness| witness.failed_constraint.as_str())
+            .unwrap_or("");
+        match constraint {
+            "FORWARD_KINEMATICS_UNAVAILABLE"
+            | "SUBDIVISION_BUDGET_EXHAUSTED"
+            | "INTERPOLATION_UNAVAILABLE"
+            | "UNCLASSIFIED_CONTACT_PAIR" => {
+                Some(crate::contact_collision::BLOCK_COLLISION_PROOF_INCOMPLETE)
+            }
+            _ => None,
+        }
+    }
 }
 
 fn lerp_q(qa: &[f64], qb: &[f64], t: f64) -> Vec<f64> {
@@ -109,7 +131,7 @@ fn posed_at<'a>(
     let mut out = Vec::new();
     for g in scene.robot.iter().filter(|g| g.participates_in_collision()) {
         let Some(body) = bodies.get(&g.owner_body).copied() else {
-            continue;
+            return Err("fk_body_missing");
         };
         out.push(Posed {
             geom: g,
@@ -253,7 +275,23 @@ fn classify_hit(
             coverage,
             class,
         }),
-        PairPermission::Unknown => None,
+        PairPermission::Unknown => Some(TransitionReport {
+            verdict: GeometryVerdict::UnknownCoverage,
+            witness: Some(TransitionWitness {
+                body_a: a.owner_body.clone(),
+                body_b: b.owner_body.clone(),
+                shape_a: a.id.clone(),
+                shape_b: b.id.clone(),
+                interval: [t0, t1],
+                contact_point_a: q.point_a,
+                contact_point_b: q.point_b,
+                normal: q.normal_a_to_b,
+                clearance: q.distance,
+                failed_constraint: "UNCLASSIFIED_CONTACT_PAIR".into(),
+            }),
+            coverage,
+            class: None,
+        }),
     }
 }
 
@@ -302,8 +340,28 @@ fn check_interval(
 ) -> Option<TransitionReport> {
     let q0 = lerp_q(qa, qb, t0);
     let q1 = lerp_q(qa, qb, t1);
-    let posed0 = posed_at(model, names, &q0, scene).ok()?;
-    let posed1 = posed_at(model, names, &q1, scene).ok()?;
+    let posed0 = match posed_at(model, names, &q0, scene) {
+        Ok(posed) => posed,
+        Err(_) => {
+            return Some(proof_incomplete(
+                coverage,
+                t0,
+                t1,
+                "FORWARD_KINEMATICS_UNAVAILABLE",
+            ));
+        }
+    };
+    let posed1 = match posed_at(model, names, &q1, scene) {
+        Ok(posed) => posed,
+        Err(_) => {
+            return Some(proof_incomplete(
+                coverage,
+                t0,
+                t1,
+                "FORWARD_KINEMATICS_UNAVAILABLE",
+            ));
+        }
+    };
     let phase_n = 8usize;
     let sample_of = |t: f64| {
         ((t * (phase_n.saturating_sub(1) as f64)).round() as usize).min(phase_n.saturating_sub(1))
@@ -360,6 +418,14 @@ fn check_interval(
             }
         }
     }
+    if must_split && depth >= MAX_SUBDIVIDE {
+        return Some(proof_incomplete(
+            coverage,
+            t0,
+            t1,
+            "SUBDIVISION_BUDGET_EXHAUSTED",
+        ));
+    }
     if must_split && depth < MAX_SUBDIVIDE {
         let tm = 0.5 * (t0 + t1);
         if let Some(block) = absorb_hit(
@@ -410,7 +476,12 @@ fn check_interval(
         .collect();
     for p0 in &posed0 {
         let Some(p1) = posed1.iter().find(|p| p.geom.id == p0.geom.id) else {
-            continue;
+            return Some(proof_incomplete(
+                coverage,
+                t0,
+                t1,
+                "FORWARD_KINEMATICS_UNAVAILABLE",
+            ));
         };
         let g0 = p0.world.compose(p0.geom.local_pose);
         let g1 = p1.world.compose(p1.geom.local_pose);
@@ -475,6 +546,31 @@ fn check_interval(
         // Robot-robot: discrete at both ends already; subdivide covers mid.
     }
     allowed
+}
+
+fn proof_incomplete(
+    coverage: &CoverageReport,
+    t0: f64,
+    t1: f64,
+    constraint: &str,
+) -> TransitionReport {
+    TransitionReport {
+        verdict: GeometryVerdict::UnknownCoverage,
+        witness: Some(TransitionWitness {
+            body_a: String::new(),
+            body_b: String::new(),
+            shape_a: String::new(),
+            shape_b: String::new(),
+            interval: [t0, t1],
+            contact_point_a: None,
+            contact_point_b: None,
+            normal: None,
+            clearance: None,
+            failed_constraint: constraint.to_string(),
+        }),
+        coverage: coverage.clone(),
+        class: None,
+    }
 }
 
 fn finish_clear(coverage: CoverageReport) -> TransitionReport {
@@ -554,7 +650,17 @@ pub fn discrete_interpolation_first_forbidden(
     for i in 0..n {
         let t = i as f64 / (n - 1) as f64;
         let q = lerp_q(qa, qb, t);
-        let posed = posed_at(model, names, &q, scene).ok()?;
+        let posed = match posed_at(model, names, &q, scene) {
+            Ok(posed) => posed,
+            Err(_) => {
+                return Some(proof_incomplete(
+                    &coverage,
+                    t,
+                    t,
+                    "FORWARD_KINEMATICS_UNAVAILABLE",
+                ));
+            }
+        };
         for (ga, wa, gb, wb, _) in pairs_to_check(&posed, scene) {
             if let Some(hit) = classify_hit(
                 policy,

@@ -126,6 +126,11 @@ impl ExecutionAuthorization {
             && self.scope_digest.len() == 64
             && self.scope_digest.chars().all(|ch| ch.is_ascii_hexdigit())
             && self.grant_id.contains(&self.scope_digest)
+            && !self.model_id.is_empty()
+            && !self.embodiment_id.is_empty()
+            && !self.observation_epoch.is_empty()
+            && !self.candidate_id.is_empty()
+            && !self.action_key.is_empty()
             && self.model_id == action.model_id
             && self.embodiment_id == action.embodiment_id
             && self.observation_epoch == action.observation_epoch
@@ -180,50 +185,23 @@ pub struct FrozenAction {
 }
 
 impl FrozenAction {
-    /// Attach an authorization whose fields match this action.
-    /// This does not issue a grant. Callers that execute must copy an issued grant.
-    pub fn with_matching_authorization(mut self, issued_at_s: f64, expires_at_s: f64) -> Self {
+    /// Attach a grant an independent issuer already produced.
+    /// Empty identity fields and a non-covering grant are refused. This method
+    /// does not invent grant ids, epochs, or actuator names.
+    pub fn bind_issued_authorization(
+        mut self,
+        authorization: ExecutionAuthorization,
+        now_s: f64,
+    ) -> Result<Self, &'static str> {
         if self.witness_digest.is_empty() {
             self.witness_digest = contents_digest(&self.witness_contents);
         }
-        if self.model_id.is_empty() {
-            self.model_id = "model".into();
+        if !authorization.covers(&self, now_s) {
+            return Err("ISSUED_GRANT_DOES_NOT_COVER_ACTION");
         }
-        if self.embodiment_id.is_empty() {
-            self.embodiment_id = "embodiment".into();
-        }
-        if self.observation_epoch.is_empty() {
-            self.observation_epoch = "epoch".into();
-        }
-        if self.actuator_id.is_empty() {
-            self.actuator_id = "actuator".into();
-        }
-        if self.observation_contract_id.is_empty() {
-            self.observation_contract_id = format!("sensors:{}", self.observation_epoch);
-        }
-        if self.abort_contract_id.is_empty() {
-            self.abort_contract_id = "abort-and-reobserve".into();
-        }
-        let scope_digest = self.witness_digest.clone();
-        self.execution_authorization = Some(ExecutionAuthorization {
-            grant_id: format!("sim-scope:{scope_digest}"),
-            scope_digest,
-            model_id: self.model_id.clone(),
-            embodiment_id: self.embodiment_id.clone(),
-            observation_epoch: self.observation_epoch.clone(),
-            candidate_id: self.candidate_id.clone(),
-            action_key: self.action_key.clone(),
-            witness_digest: self.witness_digest.clone(),
-            actuator_id: self.actuator_id.clone(),
-            requested_stroke_m: self.requested_stroke_m,
-            execution_bound_m: self.requested_stroke_m,
-            issued_at_s,
-            expires_at_s,
-            observation_contract_id: self.observation_contract_id.clone(),
-            abort_contract_id: self.abort_contract_id.clone(),
-        });
+        self.execution_authorization = Some(authorization);
         self.authority_granted = true;
-        self
+        Ok(self)
     }
 }
 

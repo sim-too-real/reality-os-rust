@@ -1,15 +1,16 @@
 use std::collections::BTreeMap;
 
 use realityos_semantics::execution_envelope::{
-    supervise_execution, ExecutionEnvelope, ExecutionProgress, FrozenAction, ObservationContract,
-    ObservationField, RuntimePolicyObservation, SupervisorDecision,
+    contents_digest, supervise_execution, ExecutionAuthorization, ExecutionEnvelope,
+    ExecutionProgress, FrozenAction, ObservationContract, ObservationField,
+    RuntimePolicyObservation, SupervisorDecision,
 };
 use realityos_semantics::physical_belief::PhysicalParameterBelief;
 use realityos_semantics::physical_consequence::FrozenPrediction;
 use realityos_semantics::recoverability::RecoverabilityClass;
 
 fn frozen() -> FrozenAction {
-    FrozenAction {
+    let action = FrozenAction {
         action_id: "action:1".into(),
         action_key: "face:1".into(),
         candidate_id: "candidate:1".into(),
@@ -54,8 +55,54 @@ fn frozen() -> FrozenAction {
         abort_contract_id: String::new(),
         authority_granted: true,
         execution_authorization: None,
+    };
+    // Test fixture only. Production execution has to bind an issued grant.
+    fixture_grant(action, 10.0, 40.0)
+}
+
+fn fixture_grant(mut action: FrozenAction, issued_at_s: f64, expires_at_s: f64) -> FrozenAction {
+    if action.witness_digest.is_empty() {
+        action.witness_digest = contents_digest(&action.witness_contents);
     }
-    .with_matching_authorization(10.0, 40.0)
+    if action.model_id.is_empty() {
+        action.model_id = "model".into();
+    }
+    if action.embodiment_id.is_empty() {
+        action.embodiment_id = "embodiment".into();
+    }
+    if action.observation_epoch.is_empty() {
+        action.observation_epoch = "epoch".into();
+    }
+    if action.actuator_id.is_empty() {
+        action.actuator_id = "actuator".into();
+    }
+    if action.observation_contract_id.is_empty() {
+        action.observation_contract_id = format!("sensors:{}", action.observation_epoch);
+    }
+    if action.abort_contract_id.is_empty() {
+        action.abort_contract_id = "abort-and-reobserve".into();
+    }
+    let scope_digest = action.witness_digest.clone();
+    let authorization = ExecutionAuthorization {
+        grant_id: format!("sim-scope:{scope_digest}"),
+        scope_digest,
+        model_id: action.model_id.clone(),
+        embodiment_id: action.embodiment_id.clone(),
+        observation_epoch: action.observation_epoch.clone(),
+        candidate_id: action.candidate_id.clone(),
+        action_key: action.action_key.clone(),
+        witness_digest: action.witness_digest.clone(),
+        actuator_id: action.actuator_id.clone(),
+        requested_stroke_m: action.requested_stroke_m,
+        execution_bound_m: action.requested_stroke_m,
+        issued_at_s,
+        expires_at_s,
+        observation_contract_id: action.observation_contract_id.clone(),
+        abort_contract_id: action.abort_contract_id.clone(),
+    };
+    action
+        .bind_issued_authorization(authorization, issued_at_s)
+        .expect("fixture grant covers the action")
 }
 
 fn progress() -> ExecutionProgress {

@@ -2073,50 +2073,60 @@ mod tests {
             model, ee, maneuver, object, support, &spec, radius_m,
         );
         if !grown {
-            let sticking =
-                realityos_semantics::contact_maneuver::sticking_stroke_samples_admissible(
-                    model, ee, maneuver, object, support, &spec, radius_m,
-                );
-            if sticking {
-                let coverage = CommonWitnessCoverage {
-                    label: label.into(),
-                    witness_digest: digest.clone(),
-                    contact_point: maneuver.contact_point,
-                    object_center: object.center,
-                    object_quat: object.quat_wxyz,
-                    object_half: object.half_extents,
-                    push_direction: maneuver.push_direction,
-                    support_normal: support.normal,
-                    face_gap_m: scenario_face_gap.max(0.0),
-                    translation_radius_m: radius_m,
-                    yaw_abs_rad,
-                    geometry_residual_m: residual_m,
-                    support_clearance_m: maneuver.support_clearance,
-                    min_support_clearance_m: 0.004,
-                    joint_margin_rad: maneuver.joint_margin,
-                    collision_admissible_for_grown_object: false,
-                    model_applicable: yaw_abs_rad <= 0.02,
-                    model_applicability:
-                        "sticking interval of the proved stroke, yaw bound within the samples"
-                            .into(),
-                };
-                let domain = realityos_semantics::future_interaction::domain_from_sticking_stroke(
-                    &coverage, true,
-                )?;
-                let outcome = realityos_semantics::future_interaction::SupportedProbeOutcome {
-                    label: label.into(),
-                    object_supported: Some(maneuver.support_clearance > 0.004),
-                    inside_reachable_workspace: Some(true),
-                    joint_margin_rad: Some(maneuver.joint_margin),
-                    collision_admissible: Some(true),
-                    motion_within_declared_bound: Some(radius_m.is_finite()),
-                    belief_outcome_bounded: Some(radius_m.is_finite()),
-                    contact_persists: Some(false),
-                    return_contact_witness_digest: Some(digest),
-                };
-                return Ok((outcome, domain));
+            match realityos_semantics::contact_maneuver::assess_sticking_stroke(
+                model, ee, maneuver, object, support, &spec, radius_m,
+            ) {
+                realityos_semantics::contact_collision::StickingStrokeAssessment::Continuous(
+                    proof,
+                ) => {
+                    let coverage = CommonWitnessCoverage {
+                        label: label.into(),
+                        witness_digest: digest.clone(),
+                        contact_point: maneuver.contact_point,
+                        object_center: object.center,
+                        object_quat: object.quat_wxyz,
+                        object_half: object.half_extents,
+                        push_direction: maneuver.push_direction,
+                        support_normal: support.normal,
+                        face_gap_m: scenario_face_gap.max(0.0),
+                        translation_radius_m: radius_m,
+                        yaw_abs_rad,
+                        geometry_residual_m: residual_m,
+                        support_clearance_m: maneuver.support_clearance,
+                        min_support_clearance_m: 0.004,
+                        joint_margin_rad: maneuver.joint_margin,
+                        collision_admissible_for_grown_object: false,
+                        model_applicable: yaw_abs_rad <= 0.02
+                            && !model.calibration_epoch.trim().is_empty(),
+                        model_applicability:
+                            "coupled stroke under a uniform translational Lipschitz bound".into(),
+                        observation_epoch: model.calibration_epoch.clone(),
+                    };
+                    let domain =
+                        realityos_semantics::future_interaction::domain_from_coupled_stroke(
+                            &coverage,
+                            proof.subdivisions,
+                            proof.lipschitz_m_per_unit,
+                            proof.min_forbidden_clearance_m,
+                            &proof.assumptions,
+                        )?;
+                    let outcome = realityos_semantics::future_interaction::SupportedProbeOutcome {
+                        label: label.into(),
+                        object_supported: Some(maneuver.support_clearance > 0.004),
+                        inside_reachable_workspace: Some(true),
+                        joint_margin_rad: Some(maneuver.joint_margin),
+                        collision_admissible: Some(true),
+                        motion_within_declared_bound: Some(radius_m.is_finite()),
+                        belief_outcome_bounded: Some(radius_m.is_finite()),
+                        contact_persists: Some(false),
+                        return_contact_witness_digest: Some(digest),
+                    };
+                    return Ok((outcome, domain));
+                }
+                other => {
+                    return Err(format!("STROKE_COVERAGE_NOT_CONTINUOUS:{other:?}"));
+                }
             }
-            return Err("GROWN_COLLISION_INADMISSIBLE".into());
         }
         let coverage = CommonWitnessCoverage {
             label: label.into(),
@@ -2135,9 +2145,10 @@ mod tests {
             min_support_clearance_m: 0.004,
             joint_margin_rad: maneuver.joint_margin,
             collision_admissible_for_grown_object: true,
-            model_applicable: yaw_abs_rad <= 0.2,
+            model_applicable: yaw_abs_rad <= 0.2 && !model.calibration_epoch.trim().is_empty(),
             model_applicability: "planar-push fixed witness over the proved translation ball"
                 .into(),
+            observation_epoch: model.calibration_epoch.clone(),
         };
         let domain = domain_from_common_witness(&coverage)?;
         let outcome = realityos_semantics::future_interaction::SupportedProbeOutcome {
