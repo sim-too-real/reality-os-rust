@@ -5623,31 +5623,35 @@ mod tests {
                 .iter()
                 .find(|action| {
                     // The aborted goal records the probe on the same action.
-                    // The next record is the post-update push. It can reuse the
-                    // same face id with a shorter stroke.
+                    // The next record is the post-update push. A refusal there
+                    // is a failure, including NO_ROBUST_STRICT_PROGRESS.
                     action
                         .get("reasoning")
                         .and_then(|note| note.get("executed_probe_witness_digest"))
                         .and_then(|value| value.as_str())
                         .filter(|digest| !digest.is_empty())
                         .is_none()
-                        && action["authority_decision"] != "REFUSE"
                 })
                 .cloned()
         };
         let next_a = later(&runs[0]);
         let next_b = later(&runs[1]);
-        assert_eq!(
-            next_a
-                .as_ref()
-                .map(|action| action["selection_rationale"].as_str()),
-            next_b
-                .as_ref()
-                .map(|action| action["selection_rationale"].as_str())
-        );
         let next = next_a.as_ref().expect("canonical decision after the probe");
         let next_b = next_b.as_ref().expect("second run next action");
-        assert_ne!(next["authority_decision"], "REFUSE", "{next}");
+        assert_eq!(next["authority_decision"], "AUTHORIZE", "{next}");
+        assert_eq!(next_b["authority_decision"], "AUTHORIZE", "{next_b}");
+        assert!(
+            next["selected_id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty()),
+            "{next}"
+        );
+        assert!(
+            next_b["selected_id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty()),
+            "{next_b}"
+        );
         assert_ne!(
             next["selection_rationale"], runs[0].actions[0]["selection_rationale"],
             "post-probe action must differ from the aborted goal"
@@ -5658,6 +5662,13 @@ mod tests {
                 .unwrap_or("")
                 .contains("NO_ROBUST_STRICT_PROGRESS"),
             "{next}"
+        );
+        assert!(
+            !next_b["selection_rationale"]
+                .as_str()
+                .unwrap_or("")
+                .contains("NO_ROBUST_STRICT_PROGRESS"),
+            "{next_b}"
         );
         assert!(
             next["outcome"] == "GOAL_PROGRESS" || next["outcome"] == "GOAL_REACHED",
@@ -5682,6 +5693,17 @@ mod tests {
         assert_eq!(after_a, after_b);
         assert_eq!(next["selected_id"], next_b["selected_id"]);
         assert_eq!(next["selection_rationale"], next_b["selection_rationale"]);
+        std::fs::write(
+            scratch.join("experiment-decisions.txt"),
+            format!(
+                "run1 authority_decision={} selected_id={} translation_residual_before_m={before_a} translation_residual_after_m={after_a}\nrun2 authority_decision={} selected_id={} translation_residual_before_m={before_b} translation_residual_after_m={after_b}\n",
+                next["authority_decision"],
+                next["selected_id"],
+                next_b["authority_decision"],
+                next_b["selected_id"],
+            ),
+        )
+        .unwrap();
         let counters = &a["work_counters"];
         let proof = counters["proof_wall_time_ns"].as_u64().unwrap_or(0);
         let simulation = counters["simulation_wall_time_ns"].as_u64().unwrap_or(0);
