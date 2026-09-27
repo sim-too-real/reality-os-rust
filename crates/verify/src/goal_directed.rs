@@ -1062,6 +1062,271 @@ mod tests {
         joint <= 0.4
     }
 
+    /// Move the live tool onto the current face, then  `stroke_m` along the push.
+    /// The joint solution has to stay near the live arm.
+    fn ik_push_from_live(
+        model: &EmbodimentModel,
+        ee_name: &str,
+        live_q: &[f64],
+        source: &ContactManeuver,
+        xy: [f64; 2],
+        z: f64,
+        yaw: f64,
+        size: f64,
+        face_gap: f64,
+        tool_off: [f64; 3],
+        stroke_m: f64,
+    ) -> Result<ContactManeuver, String> {
+        use realityos_semantics::maneuver_witness::{assess_named_interpolation, TransitionKind};
+        use realityos_semantics::transform::{add3, rotate_by_quat};
+        let chain = model
+            .ee_joint_chain(ee_name)
+            .ok_or_else(|| "NO_EE_CHAIN".to_string())?;
+        let fk =
+            forward_kinematics(model, &chain, ee_name, live_q).map_err(|err| format!("{err:?}"))?;
+        let tool = add3(fk.ee.xyz, rotate_by_quat(fk.ee.quat_wxyz, tool_off));
+        let pose = pose_xy_yaw(xy, z, yaw);
+        let manifold = realityos_semantics::contact_manifold::box_push_face_manifold_posed(
+            pose,
+            [size, size, size],
+            source.push_direction,
+            [0.0, 0.0, 1.0],
+            face_gap,
+        )
+        .ok()
+        .flatten()
+        .ok_or_else(|| "FACE_MANIFOLD_MISSING".to_string())?;
+        let face = [
+            manifold.origin[0] + manifold.normal[0] * manifold.face_gap,
+            manifold.origin[1] + manifold.normal[1] * manifold.face_gap,
+            manifold.origin[2] + manifold.normal[2] * manifold.face_gap,
+        ];
+        let slide = [face[0] - tool[0], face[1] - tool[1], face[2] - tool[2]];
+        let ee_face = add3(fk.ee.xyz, slide);
+        let travel = stroke_m;
+        let ee_end = [
+            ee_face[0] + manifold.push[0] * travel,
+            ee_face[1] + manifold.push[1] * travel,
+            ee_face[2] + manifold.push[2] * travel,
+        ];
+        let (q_face, face_trace) =
+            realityos_semantics::kinematics::solve_ik(model, &chain, ee_name, ee_face, live_q)
+                .map_err(|err| format!("IK_FACE:{err:?}"))?;
+        if face_trace.joint_delta_norm > 0.4 {
+            return Err(format!(
+                "IK_FACE_NOT_LOCAL {:.3}",
+                face_trace.joint_delta_norm
+            ));
+        }
+        let (q_end, end_trace) =
+            realityos_semantics::kinematics::solve_ik(model, &chain, ee_name, ee_end, &q_face)
+                .map_err(|err| format!("IK_END:{err:?}"))?;
+        if end_trace.joint_delta_norm > 0.4 {
+            return Err(format!(
+                "IK_END_NOT_LOCAL {:.3}",
+                end_trace.joint_delta_norm
+            ));
+        }
+        let mut next = source.clone();
+        let witness = next
+            .executable
+            .as_mut()
+            .ok_or_else(|| "NO_WITNESS".to_string())?;
+        if witness.joint_names.len() != q_face.len() {
+            return Err("IK_Q_LEN".to_string());
+        }
+        let mid_q: Vec<f64> = q_face
+            .iter()
+            .zip(q_end.iter())
+            .map(|(a, b)| a + (b - a) * 0.5)
+            .collect();
+        witness.start_q = live_q.to_vec();
+        witness.approach.q = q_face.clone();
+        witness.approach.pose.xyz = ee_face;
+        witness.contact.q = q_face.clone();
+        witness.contact.pose.xyz = ee_face;
+        witness.mid_stroke.q = mid_q;
+        witness.mid_stroke.pose.xyz = [
+            ee_face[0] + manifold.push[0] * travel * 0.5,
+            ee_face[1] + manifold.push[1] * travel * 0.5,
+            ee_face[2] + manifold.push[2] * travel * 0.5,
+        ];
+        witness.end_stroke.q = q_end;
+        witness.end_stroke.pose.xyz = ee_end;
+        let joints = model.joints.clone();
+        witness.current_to_approach = assess_named_interpolation(
+            TransitionKind::CurrentToApproach,
+            &witness.joint_names,
+            live_q,
+            &witness.approach.q,
+            &joints,
+        );
+        witness.approach_to_contact = assess_named_interpolation(
+            TransitionKind::ContactToMidStroke,
+            &witness.joint_names,
+            &witness.approach.q,
+            &witness.contact.q,
+            &joints,
+        );
+        witness.contact_to_mid = assess_named_interpolation(
+            TransitionKind::ContactToMidStroke,
+            &witness.joint_names,
+            &witness.contact.q,
+            &witness.mid_stroke.q,
+            &joints,
+        );
+        witness.mid_to_end = assess_named_interpolation(
+            TransitionKind::MidToEndStroke,
+            &witness.joint_names,
+            &witness.mid_stroke.q,
+            &witness.end_stroke.q,
+            &joints,
+        );
+        if !witness.is_executable() {
+            return Err("IK_WITNESS_NOT_EXECUTABLE".to_string());
+        }
+        next.approach_pose = witness.approach.pose;
+        next.contact_pose = witness.contact.pose;
+        next.contact_point = face;
+        next.push_direction = manifold.push;
+        next.requested_stroke = travel;
+        next.available_stroke = travel;
+        Ok(next)
+    }
+
+    /// Short stroke from the live arm, with the contact point on the current face.
+    fn certify_local_continuation(
+        model: &EmbodimentModel,
+        ee_name: &str,
+        qpos: &[f64],
+        source: &ContactManeuver,
+        xy: [f64; 2],
+        z: f64,
+        yaw: f64,
+        size: f64,
+        face_gap: f64,
+        tool_off: [f64; 3],
+        stroke_m: f64,
+        residual_m: f64,
+        motion_basis: f64,
+        observed_displacement: Option<f64>,
+    ) -> Result<
+        (
+            ContactManeuver,
+            realityos_semantics::future_interaction::FutureInteractionReport,
+            f64,
+        ),
+        String,
+    > {
+        let q = chain_q_from_qpos(model, ee_name, qpos).ok_or_else(|| "NO_CHAIN_Q".to_string())?;
+        let mut next = match ik_push_from_live(
+            model, ee_name, &q, source, xy, z, yaw, size, face_gap, tool_off, stroke_m,
+        ) {
+            Ok(maneuver) => maneuver,
+            Err(ik_err) => continuation_witness(source, &q, stroke_m, &model.joints)
+                .ok_or(format!("{ik_err};CONTINUATION_NOT_EXECUTABLE"))?,
+        };
+        let pose = pose_xy_yaw(xy, z, yaw);
+        if let Some(manifold) = realityos_semantics::contact_manifold::box_push_face_manifold_posed(
+            pose,
+            [size, size, size],
+            next.push_direction,
+            [0.0, 0.0, 1.0],
+            face_gap,
+        )
+        .ok()
+        .flatten()
+        {
+            next.contact_point = [
+                manifold.origin[0] + manifold.normal[0] * manifold.face_gap,
+                manifold.origin[1] + manifold.normal[1] * manifold.face_gap,
+                manifold.origin[2] + manifold.normal[2] * manifold.face_gap,
+            ];
+        }
+        let chain = model
+            .ee_joint_chain(ee_name)
+            .ok_or_else(|| "NO_EE_CHAIN".to_string())?;
+        let live_ee = forward_kinematics(model, &chain, ee_name, &q)
+            .map_err(|err| format!("{err:?}"))?
+            .ee
+            .xyz;
+        next.approach_pose.xyz = live_ee;
+        if let Some(witness) = next.executable.as_mut() {
+            witness.approach.pose.xyz = live_ee;
+            witness.contact.pose.xyz = live_ee;
+        }
+        if !witness_reconfiguration_is_local(&next, live_ee) {
+            let cartesian = {
+                let approach = next.approach_pose.xyz;
+                ((approach[0] - live_ee[0]).powi(2)
+                    + (approach[1] - live_ee[1]).powi(2)
+                    + (approach[2] - live_ee[2]).powi(2))
+                .sqrt()
+            };
+            let joint = next
+                .executable
+                .as_ref()
+                .map(|witness| {
+                    witness
+                        .start_q
+                        .iter()
+                        .zip(witness.approach.q.iter())
+                        .map(|(start, target)| {
+                            let delta = start - target;
+                            delta * delta
+                        })
+                        .sum::<f64>()
+                        .sqrt()
+                })
+                .unwrap_or(f64::INFINITY);
+            return Err(format!(
+                "NOT_LOCAL_TO_LIVE_ARM joint={joint:.3} cart={cartesian:.3}"
+            ));
+        }
+        let face_residual = {
+            let planar = ((next.contact_point[0] - xy[0]).powi(2)
+                + (next.contact_point[1] - xy[1]).powi(2))
+            .sqrt();
+            (planar - size - face_gap.max(0.0)).abs()
+        };
+        let residual = if face_residual.is_finite() {
+            face_residual
+        } else {
+            residual_m
+        };
+        let (outcome, domain) = ball_domain_for_maneuver(
+            model,
+            ee_name,
+            &next,
+            xy,
+            z,
+            yaw,
+            size,
+            face_gap,
+            tool_off,
+            next.push_direction,
+            next.requested_stroke,
+            0.0,
+            residual,
+            "local-stroke",
+        )?;
+        let again = assess_probe_future(&ProbeFutureInputs {
+            consumed_stroke_m: motion_basis.max(stroke_m),
+            observed_displacement_m: observed_displacement,
+            geometry_residual_m: Some(residual),
+            outcomes: vec![outcome],
+            domain: Some(domain),
+        });
+        if again.assessment != ProbeRecoverabilityAssessment::Preserved {
+            return Err(format!(
+                "LOCAL_STROKE_NOT_PRESERVED:{}",
+                again.evidence.join(",")
+            ));
+        }
+        let stroke = next.requested_stroke;
+        Ok((next, again, stroke))
+    }
+
     fn proven_witness_stroke(maneuver: &ContactManeuver) -> Option<f64> {
         let witness = maneuver.executable.as_ref()?;
         let from = witness.contact.pose.xyz;
@@ -1838,11 +2103,13 @@ mod tests {
                 .map(|(a, b)| a + (b - a) * t)
                 .collect()
         };
-        let span = maneuver.requested_stroke.max(extra_m);
+        // `mid_stroke` is the halfway pose of the proved witness, so the
+        // fraction is measured against that half-stroke, not the full stroke.
+        let half_stroke = (maneuver.requested_stroke * 0.5).max(extra_m).max(1e-6);
         let end_q = lerp(
             &exec.contact.q,
             &exec.mid_stroke.q,
-            (extra_m / span).min(1.0),
+            (extra_m / half_stroke).clamp(0.0, 1.0),
         );
         let shift = |distance: f64| {
             let mut pose = exec.contact.pose;
@@ -1851,24 +2118,32 @@ mod tests {
             pose
         };
         let contact_q = exec.contact.q.clone();
-        let mid_q = lerp(&contact_q, &end_q, 0.5);
+        // Apply the proved stroke's joint delta on top of the live arm.
+        // Driving back to the planned contact q first is what knocks the box
+        // off the finger before the stroke starts.
+        let end_from_live: Vec<f64> = live_q
+            .iter()
+            .zip(contact_q.iter())
+            .zip(end_q.iter())
+            .map(|((live, contact), planned)| live + (planned - contact))
+            .collect();
+        let live_owned = live_q.to_vec();
+        let mid_q = lerp(&live_owned, &end_from_live, 0.5);
         let mut witness = exec.clone();
-        witness.start_q = live_q.to_vec();
-        // Stay on the proved contact. A fresh 5 cm approach is a different
-        // motion from the stroke the sticking samples checked.
+        witness.start_q = live_owned.clone();
         witness.approach = ManeuverPhase::positional(
             exec.contact.pose,
-            contact_q.clone(),
-            live_q.to_vec(),
+            live_owned.clone(),
+            live_owned.clone(),
             0.0,
             exec.contact.orientation_error,
         );
         witness.contact =
-            ManeuverPhase::positional(shift(0.0), contact_q.clone(), contact_q.clone(), 0.0, 0.0);
+            ManeuverPhase::positional(shift(0.0), live_owned.clone(), live_owned.clone(), 0.0, 0.0);
         witness.mid_stroke =
-            ManeuverPhase::positional(shift(extra_m * 0.5), mid_q, contact_q.clone(), 0.0, 0.0);
+            ManeuverPhase::positional(shift(extra_m * 0.5), mid_q, live_owned.clone(), 0.0, 0.0);
         witness.end_stroke =
-            ManeuverPhase::positional(shift(extra_m), end_q.clone(), contact_q.clone(), 0.0, 0.0);
+            ManeuverPhase::positional(shift(extra_m), end_from_live, live_owned, 0.0, 0.0);
         witness.current_to_approach = assess_named_interpolation(
             TransitionKind::CurrentToApproach,
             &witness.joint_names,
@@ -4066,71 +4341,59 @@ mod tests {
                                     if report.assessment == ProbeRecoverabilityAssessment::Preserved
                                     {
                                         probe_stroke = candidate.min(probe_stroke).max(0.001);
-                                        let certified = (|| -> Result<_, String> {
-                                            let q = chain_q_from_qpos(&model, &ee_name, &qpos)
-                                                .ok_or_else(|| "NO_CHAIN_Q".to_string())?;
-                                            let next = continuation_witness(
-                                                &maneuver,
-                                                &q,
-                                                probe_stroke,
-                                                &model.joints,
-                                            )
-                                            .ok_or_else(|| {
-                                                "CONTINUATION_NOT_EXECUTABLE".to_string()
-                                            })?;
-                                            let chain = model
-                                                .ee_joint_chain(&ee_name)
-                                                .ok_or_else(|| "NO_EE_CHAIN".to_string())?;
-                                            let live_ee =
-                                                forward_kinematics(&model, &chain, &ee_name, &q)
-                                                    .map_err(|err| format!("{err:?}"))?
-                                                    .ee
-                                                    .xyz;
-                                            if !witness_reconfiguration_is_local(&next, live_ee) {
-                                                return Err("NOT_LOCAL_TO_LIVE_ARM".to_string());
-                                            }
-                                            let (outcome, domain) = ball_domain_for_maneuver(
+                                        // The arm is already on the aborted goal witness.
+                                        // A continuation of that witness is the local stroke.
+                                        // The wide-search contact is only a fallback.
+                                        let mut sources = Vec::new();
+                                        if let Some(current) = sel.maneuver.clone() {
+                                            sources.push(current);
+                                        }
+                                        sources.push(maneuver.clone());
+                                        // A few millimetres from the live pose. A longer joint
+                                        // delta swings the wrist through the light box and the
+                                        // contact is gone by the final sample.
+                                        let stroke_try = 0.004;
+                                        let mut certified_reason = String::new();
+                                        for source in sources {
+                                            match certify_local_continuation(
                                                 &model,
                                                 &ee_name,
-                                                &next,
+                                                &qpos,
+                                                &source,
                                                 nxy,
                                                 z,
                                                 nyaw,
                                                 size,
                                                 face_gap,
                                                 tool_off,
-                                                next.push_direction,
-                                                probe_stroke,
-                                                0.0,
+                                                stroke_try,
                                                 residual,
-                                                "local-stroke",
-                                            )?;
-                                            let again = assess_probe_future(&ProbeFutureInputs {
-                                                consumed_stroke_m: motion_basis.max(probe_stroke),
-                                                observed_displacement_m: observed_displacement,
-                                                geometry_residual_m: Some(residual),
-                                                outcomes: vec![outcome],
-                                                domain: Some(domain),
-                                            });
-                                            if again.assessment
-                                                != ProbeRecoverabilityAssessment::Preserved
-                                            {
-                                                return Err(format!(
-                                                    "LOCAL_STROKE_NOT_PRESERVED:{}",
-                                                    again.evidence.join(",")
-                                                ));
+                                                motion_basis,
+                                                observed_displacement,
+                                            ) {
+                                                Ok((next, again, stroke)) => {
+                                                    probe_stroke = stroke;
+                                                    probe_maneuver = Some(next.clone());
+                                                    proof = FutureProbeProof {
+                                                        report: again,
+                                                        maneuver: Some(next),
+                                                    };
+                                                    certified_reason.clear();
+                                                    break;
+                                                }
+                                                Err(reason) => {
+                                                    if !certified_reason.is_empty() {
+                                                        certified_reason.push(';');
+                                                    }
+                                                    certified_reason.push_str(&reason);
+                                                }
                                             }
-                                            Ok((next, again))
-                                        })(
-                                        );
-                                        match certified {
-                                            Ok((next, again)) => {
-                                                proof = FutureProbeProof {
-                                                    report: again,
-                                                    maneuver: Some(next),
-                                                };
-                                            }
-                                            Err(reason) => proof.report.evidence.push(reason),
+                                        }
+                                        if proof.report.assessment
+                                            != ProbeRecoverabilityAssessment::Preserved
+                                            && !certified_reason.is_empty()
+                                        {
+                                            proof.report.evidence.push(certified_reason);
                                         }
                                     } else {
                                         proof.report.evidence.extend(report.evidence);
@@ -4335,7 +4598,10 @@ mod tests {
                                 &maneuver,
                                 probe_stroke,
                                 quasi_limit_m,
-                                options.joint_step_max,
+                                // The certified continuation is a few millimetres.
+                                // The goal path keeps its own step. A 0.35 rad
+                                // probe step knocks the box off the finger.
+                                options.joint_step_max.min(0.05),
                                 issued_probe_grant.as_ref().map(authorization_from_grant),
                                 last_loaded.take(),
                             );
