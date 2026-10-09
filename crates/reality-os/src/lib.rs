@@ -11,6 +11,7 @@ pub mod command;
 pub mod control;
 pub mod decide;
 pub mod domains;
+pub mod generated_arm;
 pub mod lifecycle;
 pub mod plan;
 pub mod see;
@@ -31,6 +32,7 @@ pub use control::{
 };
 pub use decide::{DecideRequest, KernelDecision, RealityOs};
 pub use domains::{DomainPlugin, DomainRegistry, WorldView};
+pub use generated_arm::{run_generated_subsystem, GeneratedArmRecord, GeneratedSubsystem};
 pub use lifecycle::{
     AcknowledgedCommand, CertifiedIntent, EvidenceBound, SessionBound, SignedCommand,
 };
