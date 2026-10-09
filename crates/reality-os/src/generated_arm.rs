@@ -45,8 +45,14 @@ pub fn run_generated_subsystem(
         return Err("a simulation value must be labeled simulation".into());
     }
     if let Some(source) = input.solver_source {
-        if source == "solver" || source.contains("readback") || source.contains("read-back") {
-            return Err("a solver read-back is not a Reality OS measurement".into());
+        let lower = source.to_ascii_lowercase();
+        if lower.contains("solver")
+            || lower.contains("readback")
+            || lower.contains("read-back")
+            || lower.contains("simulation")
+            || lower.contains("fixture")
+        {
+            return Err(format!("{source} is not a Reality OS measurement"));
         }
     }
     let intent = Intent::language("observe the generated subsystem before motion", "place");
@@ -171,5 +177,18 @@ mod tests {
     fn an_unlabeled_simulation_is_refused() {
         let error = run_generated_subsystem(&arm(None, None, "solver")).unwrap_err();
         assert!(error.contains("labeled simulation"));
+    }
+
+    #[test]
+    fn simulation_and_fixture_sources_are_not_stored() {
+        let simulation =
+            run_generated_subsystem(&arm(None, Some("simulation"), "simulation")).unwrap_err();
+        assert!(simulation.contains("not a Reality OS measurement"));
+        let fixture = run_generated_subsystem(&arm(None, Some("fixture"), "simulation")).unwrap_err();
+        assert!(fixture.contains("not a Reality OS measurement"));
+        println!(
+            "GATE_REALITY_REFUSE simulation_refused={} fixture_refused={} measurement=absent",
+            simulation, fixture
+        );
     }
 }
