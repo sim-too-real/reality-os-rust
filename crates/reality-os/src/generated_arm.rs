@@ -119,6 +119,17 @@ mod tests {
         assert!(!record.observation_recorded);
         assert_eq!(record.simulation_label, "simulation");
         assert_eq!(record.simulation_pa, Some(1.0e6));
+        assert!(record.cause.contains("observation") || !record.cause.is_empty());
+        println!(
+            "GATE_REALITY outcome={} blocked_step={} measurement=absent discrepancy=absent simulation_label={} simulation_pa={:?} authorized_execution={} observation_recorded={} cause={}",
+            record.outcome,
+            record.blocked_step,
+            record.simulation_label,
+            record.simulation_pa,
+            record.authorized_execution,
+            record.observation_recorded,
+            record.cause
+        );
     }
 
     #[test]
@@ -147,9 +158,13 @@ mod tests {
     fn solver_readback_is_not_stored() {
         let error = run_generated_subsystem(&arm(None, Some("solver"), "simulation")).unwrap_err();
         assert!(error.contains("not a Reality OS measurement"));
-        let error =
+        let readback =
             run_generated_subsystem(&arm(None, Some("solver_readback"), "simulation")).unwrap_err();
-        assert!(error.contains("not a Reality OS measurement"));
+        assert!(readback.contains("not a Reality OS measurement"));
+        println!(
+            "GATE_REALITY_SOLVER solver_refused={} readback_refused={} residual=absent",
+            error, readback
+        );
     }
 
     #[test]
