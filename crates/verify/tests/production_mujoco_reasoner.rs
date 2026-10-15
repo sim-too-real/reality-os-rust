@@ -880,6 +880,7 @@ impl World {
             grants: Vec::new(),
             now_s: 10.0,
             evidence_fresh: true,
+            safety_faults: Vec::new(),
             mass_kg: Some(0.05),
             gripper_force_n: Some(2.0),
             gripper_resource: None,

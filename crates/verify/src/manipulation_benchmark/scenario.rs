@@ -1,7 +1,7 @@
 use super::BenchmarkError;
 use crate::bundle::RobotBundle;
 use crate::manipulation_scenarios::{
-    arm_is_planar, grasp_scenario, push_scenario, ManipulationScenario, Polarity,
+    arm_is_planar, grasp_scenario, push_scenario, ManipulationScenario, NegKind, Polarity,
 };
 use crate::normalize::RobotManifest;
 use crate::semantics_map::embodiment_from_manifest;
@@ -11,11 +11,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-pub const BENCHMARK_SCHEMA_VERSION: u32 = 1;
+pub const BENCHMARK_SCHEMA_VERSION: u32 = 3;
 pub const PILOT_SEEDS: std::ops::Range<u64> = 9000..9020;
 pub const PUBLIC_SEEDS: std::ops::Range<u64> = 0..100;
 pub const HOLDOUT_SEEDS: std::ops::Range<u64> = 10000..10100;
-pub const TOOL_OBJECT_FRICTION_INTERVAL: [f64; 2] = [0.3, 1.2];
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct SimulatedFrictionOracleInput {
+    pub samples: Vec<f64>,
+    pub interval: [f64; 2],
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -337,27 +342,6 @@ pub fn resolve_benchmark_trial(
         target_pos[2] = json!(0.09 + half_z);
     }
 
-    if task == BenchmarkTask::PinchGraspLift
-        && scenario.polarity == Polarity::Ambiguous
-        && scenario.expected_refusal.is_none()
-    {
-        if let Some(max_provable_mass_kg) = conservative_grasp_mass_limit(bundle, manifest) {
-            let target = scenario
-                .objects
-                .iter_mut()
-                .find(|object| object["name"] == scenario.object_id)
-                .ok_or_else(|| {
-                    BenchmarkError::InvalidTrial("missing ambiguous grasp target".into())
-                })?;
-            // Keep the ambiguity stratum physically observable to the reasoner:
-            // the measured target mass sits just beyond this embodiment's
-            // conservative hold-force envelope, so the expected refusal is
-            // grounded in the request's mass and gripper-force evidence.
-            target["mass"] = json!(max_provable_mass_kg * 1.05);
-            scenario.expected_refusal = Some("HOLD_MECHANICS_UNPROVEN".into());
-        }
-    }
-
     let mut rng = StdRng::seed_from_u64(
         seed.wrapping_add((index as u64).wrapping_mul(0x9e37_79b9)) ^ 0x6d61_6e69_7075_6c61,
     );
@@ -449,7 +433,12 @@ fn grasp_hold_is_conservatively_provable(
     manifest: &RobotManifest,
     scenario: &ManipulationScenario,
 ) -> bool {
-    let Some(max_provable_mass_kg) = conservative_grasp_mass_limit(bundle, manifest) else {
+    let Some(friction_oracle_input) = simulated_grasp_friction_oracle_input(scenario) else {
+        return false;
+    };
+    let Some(max_provable_mass_kg) =
+        conservative_grasp_mass_limit(bundle, manifest, friction_oracle_input.interval[0])
+    else {
         return false;
     };
     let Some(mass) = scenario
@@ -465,7 +454,14 @@ fn grasp_hold_is_conservatively_provable(
     mass <= max_provable_mass_kg + 1e-12
 }
 
-fn conservative_grasp_mass_limit(bundle: &RobotBundle, manifest: &RobotManifest) -> Option<f64> {
+fn conservative_grasp_mass_limit(
+    bundle: &RobotBundle,
+    manifest: &RobotManifest,
+    friction_lower_bound: f64,
+) -> Option<f64> {
+    if !friction_lower_bound.is_finite() || friction_lower_bound <= 0.0 {
+        return None;
+    }
     let finger_joints = bundle
         .manifest
         .joint_aliases
@@ -489,8 +485,52 @@ fn conservative_grasp_mass_limit(bundle: &RobotBundle, manifest: &RobotManifest)
         })
         .collect::<Option<Vec<_>>>()
         .and_then(|forces| forces.into_iter().reduce(f64::min))?;
-    let max_mass_kg = 2.0 * TOOL_OBJECT_FRICTION_INTERVAL[0] * force_ceiling / 9.81;
+    let max_mass_kg = 2.0 * friction_lower_bound * force_ceiling / 9.81;
     max_mass_kg.is_finite().then_some(max_mass_kg)
+}
+
+/// Deterministic simulated friction-oracle input for strict MuJoCo trials.
+/// It samples the scenario's configured simulator friction with seeded noise;
+/// it is not a tactile sensor measurement or evidence of autonomous detection.
+/// Physical trials must use the separate calibrated sensor provenance adapter.
+pub(super) fn simulated_grasp_friction_oracle_input(
+    scenario: &ManipulationScenario,
+) -> Option<SimulatedFrictionOracleInput> {
+    const SIMULATED_INPUT_NOISE_BOUND: f64 = 0.01;
+    const FROZEN_INTERVAL_ERROR: f64 = 0.02;
+    const SAMPLE_COUNT: usize = 5;
+    // Ambiguous trials withhold the simulator friction input, so the selector
+    // must refuse with unknown friction. A slip case injects a low-friction
+    // oracle value to test safe response; it does not test slip detection.
+    if scenario.polarity == Polarity::Ambiguous && scenario.neg != Some(NegKind::Slip) {
+        return None;
+    }
+    let friction = scenario
+        .objects
+        .iter()
+        .find(|object| object["name"] == scenario.object_id)?["friction"]
+        .as_f64()
+        .filter(|value| value.is_finite() && *value >= 0.0 && *value <= 1.2)?;
+    let mut rng = StdRng::seed_from_u64(
+        scenario.seed
+            ^ 0x006f_7261_636c_655f
+            ^ scenario.object_id.len() as u64
+            ^ friction.to_bits(),
+    );
+    let samples = (0..SAMPLE_COUNT)
+        .map(|_| {
+            (friction + rng.gen_range(-SIMULATED_INPUT_NOISE_BOUND..=SIMULATED_INPUT_NOISE_BOUND))
+                .clamp(0.0, 1.2)
+        })
+        .collect::<Vec<_>>();
+    let estimate = samples.iter().sum::<f64>() / samples.len() as f64;
+    Some(SimulatedFrictionOracleInput {
+        samples,
+        interval: [
+            (estimate - FROZEN_INTERVAL_ERROR).max(0.0),
+            (estimate + FROZEN_INTERVAL_ERROR).min(1.2),
+        ],
+    })
 }
 
 pub fn trial_digest(trial: &ResolvedBenchmarkTrial) -> Result<String, BenchmarkError> {

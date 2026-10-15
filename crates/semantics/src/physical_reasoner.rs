@@ -87,12 +87,36 @@ pub struct ReasoningRequest {
     pub grants: Vec<ScopedGrantBinding>,
     pub now_s: f64,
     pub evidence_fresh: bool,
+    /// Typed safety fault alerts for the current observation epoch. Asserted
+    /// faults are hard refusals; adapters must preserve provenance and origin,
+    /// and these alerts participate in the proof dependency digest.
+    pub safety_faults: Vec<SafetyFaultObservation>,
     pub mass_kg: Option<f64>,
     pub gripper_force_n: Option<f64>,
     pub gripper_resource: Option<crate::resource::ControlledResource>,
     /// Optional authority cap installed by a scoped linear-action bridge.
     pub linear_execution_bound_m: Option<f64>,
     pub gravity_m_s2: [f64; 3],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SafetyFaultKind {
+    StaleObservation,
+    ReplayDetected,
+    ControllerUnavailable,
+    ActuatorSaturated,
+    GripperUnavailable,
+    UnsupportedGripperCoupling,
+    GripperForceBoundUnavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SafetyFaultObservation {
+    pub kind: SafetyFaultKind,
+    /// `true` means the source asserts that this fault condition is present.
+    /// The source and provenance identify whether it was measured or injected.
+    pub asserted: Provenanced<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -650,6 +674,7 @@ pub fn benchmark_scene() -> (EmbodimentModel, ReasoningRequest) {
         grants: Vec::new(),
         now_s: 10.0,
         evidence_fresh: true,
+        safety_faults: Vec::new(),
         mass_kg: Some(0.05),
         gripper_force_n: Some(2.0),
         gripper_resource: None,
@@ -796,6 +821,9 @@ fn prove_push(
     candidate: &RawCandidate,
 ) -> ProvedAction {
     work_counters::note_mechanics_evaluation();
+    if let Some(reason) = safety_fault_refusal(request) {
+        return rejected(PUSH_FAMILY, candidate, reason, MechanicsStatus::Unknown);
+    }
     if request
         .linear_execution_bound_m
         .is_some_and(|bound| !bound.is_finite() || bound <= 0.0)
@@ -989,12 +1017,45 @@ fn finish_probe(
     action
 }
 
+fn safety_fault_refusal(request: &ReasoningRequest) -> Option<&'static str> {
+    for observation in &request.safety_faults {
+        if !matches!(
+            observation.asserted.provenance,
+            crate::provenance::Provenance::SimulatorDerived
+                | crate::provenance::Provenance::CalibrationMeasured
+                | crate::provenance::Provenance::HardwareMeasured
+        ) || observation.asserted.source.trim().is_empty()
+            || !observation.asserted.as_of_s.is_finite()
+            || observation.asserted.as_of_s > request.now_s
+            || observation.asserted.value.is_none()
+        {
+            return Some("SAFETY_FAULT_EVIDENCE_INVALID");
+        }
+        if observation.asserted.value != Some(true) {
+            continue;
+        }
+        return Some(match observation.kind {
+            SafetyFaultKind::StaleObservation => "OBSERVATION_STALE_OR_INVALID",
+            SafetyFaultKind::ReplayDetected => "OBSERVATION_REPLAY_DETECTED",
+            SafetyFaultKind::ControllerUnavailable => "CONTROLLER_HEARTBEAT_LOST",
+            SafetyFaultKind::ActuatorSaturated => "ACTUATOR_SATURATED",
+            SafetyFaultKind::GripperUnavailable => "GRIPPER_RESOURCE_UNKNOWN",
+            SafetyFaultKind::UnsupportedGripperCoupling => "GRIPPER_RESOURCE_UNSUPPORTED",
+            SafetyFaultKind::GripperForceBoundUnavailable => "GRIPPER_FORCE_BOUND_UNKNOWN",
+        });
+    }
+    None
+}
+
 fn prove_grasp(
     model: &EmbodimentModel,
     request: &ReasoningRequest,
     candidate: &RawCandidate,
 ) -> ProvedAction {
     work_counters::note_mechanics_evaluation();
+    if let Some(reason) = safety_fault_refusal(request) {
+        return rejected(GRASP_FAMILY, candidate, reason, MechanicsStatus::Unknown);
+    }
     if !request.evidence_fresh || !request.now_s.is_finite() {
         return rejected(
             GRASP_FAMILY,
@@ -2555,6 +2616,7 @@ fn proof_dependency_digest(
     push_str(&mut bytes, &model.calibration_epoch);
     push_str(&mut bytes, &model.robot_id);
     push_str(&mut bytes, &request.scene.observation_epoch);
+    bytes.push(u8::from(request.evidence_fresh));
     for name in &request.scene.joint_names {
         push_str(&mut bytes, name);
     }
@@ -2590,6 +2652,22 @@ fn proof_dependency_digest(
     push_opt_f64(&mut bytes, request.mass_kg);
     push_opt_f64(&mut bytes, request.gripper_force_n);
     push_opt_f64(&mut bytes, request.linear_execution_bound_m);
+    let mut safety_faults = request.safety_faults.iter().collect::<Vec<_>>();
+    safety_faults.sort_by_key(|observation| observation.kind);
+    for observation in safety_faults {
+        push_str(&mut bytes, &format!("{:?}", observation.kind));
+        push_str(
+            &mut bytes,
+            &format!("{:?}", observation.asserted.provenance),
+        );
+        push_str(&mut bytes, &observation.asserted.source);
+        push_f64(&mut bytes, observation.asserted.as_of_s);
+        bytes.push(match observation.asserted.value {
+            Some(true) => 2,
+            Some(false) => 1,
+            None => 0,
+        });
+    }
     if let Some(resource) = &request.gripper_resource {
         bytes.push(1);
         push_controlled_resource(&mut bytes, resource);
@@ -2764,6 +2842,38 @@ mod tests {
     use crate::hardware_boundary::{HardwareActionScope, HardwareAuthority, UnconfiguredHardware};
     use crate::maneuver_witness::TransitionKind;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn typed_safety_fault_observations_refuse_and_require_provenance() {
+        let (model, mut request) = benchmark_scene();
+        let mut reasoner = PhysicalReasoner::new(model);
+        let _ = reasoner.consider(&request);
+        request.safety_faults.push(SafetyFaultObservation {
+            kind: SafetyFaultKind::ActuatorSaturated,
+            asserted: Provenanced::simulator_derived(
+                true,
+                "mujoco_fault_injection_adapter.actuator_saturation",
+                request.now_s,
+            ),
+        });
+        let report = reasoner.consider(&request);
+        let push = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.action_key == "push:+x")
+            .expect("push candidate");
+        assert_eq!(push.status, "ACTUATOR_SATURATED");
+
+        request.safety_faults[0].asserted =
+            Provenanced::unknown("missing_alert_source", request.now_s);
+        let report = reasoner.consider(&request);
+        let push = report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.action_key == "push:+x")
+            .expect("push candidate");
+        assert_eq!(push.status, "SAFETY_FAULT_EVIDENCE_INVALID");
+    }
 
     #[test]
     fn interpolation_failure_is_not_absence_of_collision() {

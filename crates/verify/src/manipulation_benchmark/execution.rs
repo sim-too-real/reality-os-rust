@@ -5,12 +5,12 @@
 
 use super::geometry::{validate_collision_geometry, GeometryGateResult};
 use super::scenario::{
-    trial_digest, BenchmarkTask, ResolvedBenchmarkTrial, TrialExpectation,
-    TOOL_OBJECT_FRICTION_INTERVAL,
+    simulated_grasp_friction_oracle_input, trial_digest, BenchmarkTask, ResolvedBenchmarkTrial,
+    TrialExpectation,
 };
 use super::BenchmarkError;
 use crate::bundle::RobotBundle;
-use crate::manipulation_scenarios::ManipulationScenario;
+use crate::manipulation_scenarios::{ManipulationScenario, NegKind};
 use crate::mujoco_exec::{json_f64_vec, MujocoInstance};
 use crate::normalize::RobotManifest;
 use crate::observation::VerifierTruth;
@@ -25,8 +25,10 @@ use realityos_reasoner_bridge::{
 use realityos_semantics::contact_collision::NamedBox;
 use realityos_semantics::physical_belief::{PhysicalParameter, PhysicalParameterBelief};
 use realityos_semantics::physical_reasoner::{
-    integrate_support_friction, PhysicalObjective, PhysicalReasoner, ReasoningRequest, TableScene,
+    integrate_support_friction, PhysicalObjective, PhysicalReasoner, ReasoningRequest,
+    SafetyFaultKind, SafetyFaultObservation, TableScene,
 };
+use realityos_semantics::provenance::Provenanced;
 use realityos_semantics::resource::{
     ControlledResource, QualificationStatus, ResourceKind, ResourceTopology,
 };
@@ -123,6 +125,9 @@ pub struct BenchmarkEpisode {
     pub ctrl_writes_after: u64,
     pub unauthorized_writes: u64,
     pub actions: Vec<ActionTrace>,
+    pub safety_fault_observations: Vec<SafetyFaultObservation>,
+    pub grasp_simulated_friction_oracle_samples: Vec<f64>,
+    pub grasp_simulated_friction_oracle_interval: Option<[f64; 2]>,
     pub object_start_xyz: [f64; 3],
     pub object_end_xyz: [f64; 3],
     pub goal_error_start_m: f64,
@@ -189,6 +194,7 @@ pub fn run_benchmark_trial(
             };
             qualified_resources.push(resource);
         }
+        apply_grasp_fault_observation(&trial.scenario, &mut qualified_resources);
     }
 
     let loaded = worker
@@ -217,6 +223,9 @@ pub fn run_benchmark_trial(
     let initial_state = state_payload(&mut worker)?;
     let object_start_xyz = body_position(&initial_state, &trial.scenario.object_id)?;
     let goal_error_start_m = xy_distance(object_start_xyz, trial.goal_xyz);
+    let friction_oracle_input = (trial.task == BenchmarkTask::PinchGraspLift)
+        .then(|| simulated_grasp_friction_oracle_input(&trial.scenario))
+        .flatten();
 
     let mut episode = BenchmarkEpisode {
         schema_version: super::scenario::BENCHMARK_SCHEMA_VERSION,
@@ -243,6 +252,14 @@ pub fn run_benchmark_trial(
         ctrl_writes_after: writes_before,
         unauthorized_writes: 0,
         actions: Vec::new(),
+        safety_fault_observations: Vec::new(),
+        grasp_simulated_friction_oracle_samples: friction_oracle_input
+            .as_ref()
+            .map(|observation| observation.samples.clone())
+            .unwrap_or_default(),
+        grasp_simulated_friction_oracle_interval: friction_oracle_input
+            .as_ref()
+            .map(|observation| observation.interval),
         object_start_xyz,
         object_end_xyz: object_start_xyz,
         goal_error_start_m,
@@ -270,6 +287,18 @@ pub fn run_benchmark_trial(
         ));
         finish_refusal(&mut episode, &trial.expectation);
         return finalize(worker, episode, wall);
+    }
+    if trial.scenario.move_object_after_obs {
+        let moved = [
+            object_start_xyz[0] + 0.18,
+            object_start_xyz[1] + 0.14,
+            object_start_xyz[2],
+        ];
+        worker
+            .set_body_pos(&trial.scenario.object_id, moved)
+            .map_err(|error| BenchmarkError::Simulation(format!("object_move_fault:{error}")))?;
+        episode.object_end_xyz = moved;
+        episode.goal_error_end_m = xy_distance(moved, trial.goal_xyz);
     }
     if !admission.execution_bound_m.is_finite()
         || admission.execution_bound_m <= 0.0
@@ -313,7 +342,7 @@ pub fn run_benchmark_trial(
                 &current_state,
                 &epoch,
                 now_s,
-                !trial.scenario.stale,
+                reasoning_evidence_fresh(&trial.scenario),
                 belief.clone(),
             )?,
             BenchmarkTask::PinchGraspLift => build_grasp_reasoning_request(
@@ -324,10 +353,16 @@ pub fn run_benchmark_trial(
                 &current_state,
                 &epoch,
                 now_s,
-                !trial.scenario.stale,
+                reasoning_evidence_fresh(&trial.scenario),
                 qualified_resources.first(),
+                friction_oracle_input.as_ref(),
             )?,
         };
+        for observation in &request.safety_faults {
+            if !episode.safety_fault_observations.contains(observation) {
+                episode.safety_fault_observations.push(observation.clone());
+            }
+        }
         let request_debug = format!("{request:?}");
         episode.reasoning_request_audits.push(request_debug.clone());
         if request_debug.contains("ExpectedSuccess")
@@ -1481,6 +1516,7 @@ fn build_push_reasoning_request(
         grants: Vec::new(),
         now_s,
         evidence_fresh,
+        safety_faults: injected_safety_fault_alerts(scenario, now_s),
         mass_kg,
         gripper_force_n: None,
         gripper_resource: None,
@@ -1499,6 +1535,7 @@ fn build_grasp_reasoning_request(
     now_s: f64,
     evidence_fresh: bool,
     resource: Option<&ControlledResource>,
+    friction_oracle_input: Option<&super::scenario::SimulatedFrictionOracleInput>,
 ) -> Result<ReasoningRequest, BenchmarkError> {
     let ee = model.end_effectors.first().ok_or_else(|| {
         BenchmarkError::InvalidTrial("bundle has no declared end-effector".into())
@@ -1589,11 +1626,18 @@ fn build_grasp_reasoning_request(
         PhysicalParameter::ToolObjectFriction,
         "unmeasured_grasp_pair",
     );
-    belief.narrow_interval(
-        PhysicalParameter::ToolObjectFriction,
-        TOOL_OBJECT_FRICTION_INTERVAL,
-        "declared_grasp_material_domain",
-    );
+    if let Some(input) = friction_oracle_input {
+        // These are seeded samples from simulator-configured friction, not
+        // sensor observations. Their origin remains explicit in belief lineage.
+        belief.narrow_interval(
+            PhysicalParameter::ToolObjectFriction,
+            input.interval,
+            &format!(
+                "mujoco_oracle_friction_input_v1:samples={:?}",
+                input.samples
+            ),
+        );
+    }
     Ok(ReasoningRequest {
         scene: TableScene {
             object_id: scenario.object_id.clone(),
@@ -1630,12 +1674,100 @@ fn build_grasp_reasoning_request(
         grants: Vec::new(),
         now_s,
         evidence_fresh,
+        safety_faults: injected_safety_fault_alerts(scenario, now_s),
         mass_kg,
         gripper_force_n,
         gripper_resource: resource.cloned(),
         linear_execution_bound_m: None,
         gravity_m_s2: [0.0, 0.0, -9.81],
     })
+}
+
+/// Apply injected fault conditions to reasoner-visible resource observations.
+/// The evaluator's `NegKind` selects the fault, but the label itself is never
+/// copied into the reasoning request.
+fn apply_grasp_fault_observation(
+    scenario: &ManipulationScenario,
+    resources: &mut Vec<ControlledResource>,
+) {
+    match scenario.neg {
+        Some(NegKind::GripperUnavailable) => resources.clear(),
+        Some(NegKind::UnsupportedCoupling) => {
+            for resource in resources {
+                resource.topology = ResourceTopology::UnsupportedResourceTopology;
+                resource.qualification = QualificationStatus::Failed;
+                resource.unsupported_detail = Some("injected coupling fault".into());
+            }
+        }
+        Some(NegKind::ForceBoundUnavailable) => {
+            for resource in resources {
+                resource.force_bound =
+                    Provenanced::unknown("simulated_force_sensor_unavailable", 0.0);
+            }
+        }
+        Some(NegKind::ActuatorSaturation) => {
+            for resource in resources {
+                resource.qualification = QualificationStatus::Failed;
+                resource.unsupported_detail = Some("simulated actuator saturation".into());
+            }
+        }
+        Some(NegKind::ControllerFailure) => {
+            for resource in resources {
+                resource.qualification = QualificationStatus::Failed;
+                resource.unsupported_detail = Some("simulated controller health failure".into());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn reasoning_evidence_fresh(scenario: &ManipulationScenario) -> bool {
+    !(scenario.stale
+        || scenario.move_object_after_obs
+        || scenario.replay
+        || scenario.restart_replay
+        || scenario.crash_controller)
+}
+
+fn injected_safety_fault_alerts(
+    scenario: &ManipulationScenario,
+    now_s: f64,
+) -> Vec<SafetyFaultObservation> {
+    let (kind, source) = match scenario.neg {
+        Some(NegKind::StaleObject | NegKind::ObjectMoved) => (
+            SafetyFaultKind::StaleObservation,
+            "mujoco_fault_injection_adapter.stale_observation",
+        ),
+        Some(NegKind::Replay | NegKind::RestartReplay) => (
+            SafetyFaultKind::ReplayDetected,
+            "mujoco_fault_injection_adapter.sequence_replay",
+        ),
+        Some(NegKind::ControllerFailure) => (
+            SafetyFaultKind::ControllerUnavailable,
+            "mujoco_fault_injection_adapter.controller_unavailable",
+        ),
+        Some(NegKind::ActuatorSaturation) => (
+            SafetyFaultKind::ActuatorSaturated,
+            "mujoco_fault_injection_adapter.actuator_saturation",
+        ),
+        Some(NegKind::GripperUnavailable) => (
+            SafetyFaultKind::GripperUnavailable,
+            "mujoco_fault_injection_adapter.gripper_unavailable",
+        ),
+        Some(NegKind::UnsupportedCoupling) => (
+            SafetyFaultKind::UnsupportedGripperCoupling,
+            "mujoco_fault_injection_adapter.unsupported_coupling",
+        ),
+        Some(NegKind::ForceBoundUnavailable) => (
+            SafetyFaultKind::GripperForceBoundUnavailable,
+            "mujoco_fault_injection_adapter.force_bound_unavailable",
+        ),
+        _ => return Vec::new(),
+    };
+    vec![SafetyFaultObservation {
+        kind,
+        asserted: Provenanced::simulator_derived(true, source, now_s),
+    }]
 }
 
 fn uncertain_push_belief() -> PhysicalParameterBelief {

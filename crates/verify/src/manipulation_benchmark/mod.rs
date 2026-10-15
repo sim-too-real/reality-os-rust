@@ -24,6 +24,7 @@ pub use report::{
 pub use scenario::{
     resolve_benchmark_trial, trial_digest, BenchmarkConfig, BenchmarkTask, EmbodimentRegistration,
     EmbodimentRegistry, EmbodimentRole, ResolvedBenchmarkTrial, TrialExpectation,
+    BENCHMARK_SCHEMA_VERSION,
 };
 
 use thiserror::Error;

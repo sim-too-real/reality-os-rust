@@ -194,7 +194,7 @@ fn synthetic_episode(
 ) -> realityos_verify::manipulation_benchmark::BenchmarkEpisode {
     let point = [0.2, 0.0, 0.14];
     realityos_verify::manipulation_benchmark::BenchmarkEpisode {
-        schema_version: 1,
+        schema_version: realityos_verify::manipulation_benchmark::BENCHMARK_SCHEMA_VERSION,
         trial_id: trial.trial_id.clone(),
         trial_digest: trial_digest(trial).unwrap(),
         seed: trial.seed,
@@ -218,6 +218,9 @@ fn synthetic_episode(
         ctrl_writes_after: 0,
         unauthorized_writes: 0,
         actions: Vec::new(),
+        safety_fault_observations: Vec::new(),
+        grasp_simulated_friction_oracle_samples: Vec::new(),
+        grasp_simulated_friction_oracle_interval: None,
         object_start_xyz: point,
         object_end_xyz: point,
         goal_error_start_m: 0.1,
@@ -943,6 +946,130 @@ fn ambiguous_grasp_mechanics_are_refused_before_control_writes() {
     assert_eq!(episode.outcome, TrialOutcome::ValidRefusal);
     assert_eq!(episode.ctrl_writes_before, episode.ctrl_writes_after);
     assert_eq!(episode.unauthorized_writes, 0);
+    assert!(episode.reasoning_request_audits[0].contains("ToolObjectFriction"));
+    assert!(episode.reasoning_request_audits[0].contains("status: Unknown"));
+    assert!(!episode.reasoning_request_audits[0].contains("mujoco_oracle_friction_input_v1"));
+    assert!(episode.grasp_simulated_friction_oracle_samples.is_empty());
+    assert_eq!(episode.grasp_simulated_friction_oracle_interval, None);
+}
+
+#[test]
+fn faulted_grasp_observations_are_refused_before_control_writes() {
+    let _mujoco_guard = lock_mujoco_test();
+    let bundle = grasp_fixture_bundle();
+    let (worker, manifest) =
+        load_and_normalize(&bundle, &[], 9).expect("strict benchmark requires MuJoCo");
+    checkin_worker(worker);
+    // These are the exact twelve false-acceptance trials from the first
+    // frozen public run. Repeated actuator and replay faults remain separate
+    // seeds so the regression covers the full observed failure set.
+    let cases = [
+        (9, 24, "ACTUATOR_SATURATION", Some("ActuatorSaturated")),
+        (23, 38, "ACTUATOR_SATURATION", Some("ActuatorSaturated")),
+        (24, 39, "REPLAY", Some("ReplayDetected")),
+        (38, 53, "REPLAY", Some("ReplayDetected")),
+        (39, 54, "REPLAY", Some("ReplayDetected")),
+        (29, 44, "OBJECT_MOVED", Some("StaleObservation")),
+        (58, 73, "RESOURCE_UNSUPPORTED", Some("GripperUnavailable")),
+        (68, 83, "CONTROLLER_FAILURE", Some("ControllerUnavailable")),
+        (
+            73,
+            88,
+            "COUPLING_UNSUPPORTED",
+            Some("UnsupportedGripperCoupling"),
+        ),
+        (
+            78,
+            93,
+            "FORCE_BOUND_UNAVAILABLE",
+            Some("GripperForceBoundUnavailable"),
+        ),
+        (93, 108, "ACTUATOR_SATURATION", Some("ActuatorSaturated")),
+        (97, 112, "SLIP", None),
+    ];
+
+    for (seed, index, fault, monitor) in cases {
+        let trial = resolve_benchmark_trial(
+            seed,
+            index,
+            BenchmarkTask::PinchGraspLift,
+            EmbodimentRole::GraspFixture,
+            &bundle,
+            &manifest,
+        )
+        .expect("faulted grasp trial resolves");
+        assert_eq!(trial.expectation, TrialExpectation::ExpectedRefusal);
+        assert_eq!(trial.scenario.neg.map(|neg| neg.as_str()), Some(fault));
+
+        let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
+            &bundle,
+            &trial,
+            SimulationAdmission {
+                execution_bound_m: 0.1,
+                expires_at_s: 120.0,
+            },
+        )
+        .expect("strict runner records the fault refusal");
+
+        assert_eq!(
+            episode.outcome,
+            TrialOutcome::ValidRefusal,
+            "{fault} must be visible to the shared selector"
+        );
+        assert_eq!(
+            episode.ctrl_writes_before, episode.ctrl_writes_after,
+            "{fault}"
+        );
+        assert_eq!(episode.unauthorized_writes, 0, "{fault}");
+        assert_eq!(episode.reasoning_request_audits.len(), 1, "{fault}");
+        let request = &episode.reasoning_request_audits[0];
+        assert!(
+            !request.contains(fault),
+            "evaluator label {fault} leaked into the reasoner input"
+        );
+        if matches!(fault, "REPLAY" | "OBJECT_MOVED") {
+            assert!(request.contains("evidence_fresh: false"), "{fault}");
+        }
+        if let Some(monitor) = monitor {
+            assert!(
+                request.contains(monitor),
+                "missing typed injected fault alert for {fault}"
+            );
+            assert!(
+                request.contains("mujoco_fault_injection_adapter."),
+                "simulated alerts must be attributed to fault injection, not a detecting monitor"
+            );
+            assert!(
+                !request.contains("_monitor."),
+                "fault injection must not claim an autonomous monitor detected the event"
+            );
+            assert!(request.contains("provenance: SimulatorDerived"), "{fault}");
+            assert_eq!(episode.safety_fault_observations.len(), 1, "{fault}");
+            assert_eq!(
+                format!("{:?}", episode.safety_fault_observations[0].kind),
+                monitor,
+                "{fault}"
+            );
+            assert_eq!(
+                episode.safety_fault_observations[0].asserted.provenance,
+                realityos_semantics::provenance::Provenance::SimulatorDerived,
+                "{fault}"
+            );
+        }
+        if fault == "SLIP" {
+            assert!(
+                request.contains("mujoco_oracle_friction_input_v1:samples="),
+                "slip must be represented as simulator-oracle friction input, not a sensor trace"
+            );
+            assert_eq!(episode.grasp_simulated_friction_oracle_samples.len(), 5);
+            assert!(
+                episode
+                    .grasp_simulated_friction_oracle_interval
+                    .is_some_and(|interval| interval[1] < 0.1),
+                "slip sensor interval should reflect low simulated friction"
+            );
+        }
+    }
 }
 
 #[test]
@@ -1827,15 +1954,23 @@ fn grasp_success_labels_require_conservative_hold_mechanics() {
         load_and_normalize(&bundle, &[], 9000).expect("strict benchmark requires MuJoCo");
     checkin_worker(worker);
 
-    let unsupported_mass = resolve_benchmark_trial(
-        0,
-        15,
-        BenchmarkTask::PinchGraspLift,
-        EmbodimentRole::GraspFixture,
-        &bundle,
-        &manifest,
-    )
-    .expect("deterministic grasp trial resolves");
+    let unsupported_mass = (0..1000)
+        .find_map(|seed| {
+            resolve_benchmark_trial(
+                seed,
+                15,
+                BenchmarkTask::PinchGraspLift,
+                EmbodimentRole::GraspFixture,
+                &bundle,
+                &manifest,
+            )
+            .ok()
+            .filter(|trial| {
+                trial.expectation == TrialExpectation::ExpectedRefusal
+                    && trial.scenario.expected_refusal.as_deref() == Some("HOLD_MECHANICS_UNPROVEN")
+            })
+        })
+        .expect("sampled heavy grasps produce a conservative refusal label");
     assert_eq!(
         unsupported_mass.expectation,
         TrialExpectation::ExpectedRefusal
@@ -1845,7 +1980,7 @@ fn grasp_success_labels_require_conservative_hold_mechanics() {
         Some("HOLD_MECHANICS_UNPROVEN")
     );
 
-    let supported_mass = (9000..9020)
+    let supported_mass = (9000..10000)
         .find_map(|seed| {
             resolve_benchmark_trial(
                 seed,
