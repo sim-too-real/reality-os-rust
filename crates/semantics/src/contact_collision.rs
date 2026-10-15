@@ -106,6 +106,16 @@ fn validate_world_geometry(
     }
     let support_normal = crate::transform::normalize3(world.support_normal)
         .ok_or(CollisionWorldError::InvalidSupportPlane)?;
+    if world.support_half_extents.is_some()
+        && (support_normal[0].abs() > 1e-9
+            || support_normal[1].abs() > 1e-9
+            || support_normal[2].abs() < 1.0 - 1e-9)
+    {
+        // Finite support extents are axis-aligned and carry no orientation.
+        // Refuse tilted supports instead of treating their footprint as an
+        // infinite plane.
+        return Err(CollisionWorldError::InvalidSupportPlane);
+    }
     let obstacle_poses = world
         .obstacles
         .iter()
@@ -395,19 +405,29 @@ fn sphere_aabb(s: Sphere, center: [f64; 3], half: [f64; 3]) -> bool {
     norm3(sub3(s.center, closest)) <= s.radius + 1e-9
 }
 
-fn sphere_plane(
-    s: Sphere,
-    origin: [f64; 3],
+fn support_clearance(
+    sphere: Sphere,
+    world: &CollisionWorld,
     normal: [f64; 3],
-) -> Result<bool, CollisionWorldError> {
-    if !origin.iter().all(|v| v.is_finite()) {
-        return Err(CollisionWorldError::InvalidSupportPlane);
+) -> Result<f64, SegmentGap> {
+    if let Some(half) = world.support_half_extents {
+        if !half.iter().all(|value| value.is_finite() && *value > 0.0)
+            || !world.support_origin.iter().all(|value| value.is_finite())
+            || normal[0].abs() > 1e-9
+            || normal[1].abs() > 1e-9
+            || normal[2].abs() < 1.0 - 1e-9
+        {
+            return Err(SegmentGap::Unknown("SUPPORT_GEOMETRY_INVALID"));
+        }
+        let center = [
+            world.support_origin[0],
+            world.support_origin[1],
+            world.support_origin[2] - normal[2] * half[2],
+        ];
+        Ok(sphere_aabb_clearance(sphere, center, half))
+    } else {
+        Ok(sphere_plane_clearance(sphere, world.support_origin, normal))
     }
-    let n = crate::transform::normalize3(normal).ok_or(CollisionWorldError::InvalidSupportPlane)?;
-    let h = n[0] * (s.center[0] - origin[0])
-        + n[1] * (s.center[1] - origin[1])
-        + n[2] * (s.center[2] - origin[2]);
-    Ok(h < s.radius - 1e-9)
 }
 
 fn sphere_sphere(a: Sphere, b: Sphere) -> bool {
@@ -548,7 +568,9 @@ pub fn forbidden_class_on_interpolation(
                 }
             }
         }
-        if sphere_plane(tool, world.support_origin, support_normal)? {
+        let tool_support_gap = support_clearance(tool, world, support_normal)
+            .map_err(|_| CollisionWorldError::InvalidSupportPlane)?;
+        if tool_support_gap < -1e-9 {
             return Ok(Some((
                 BLOCK_SUPPORT_COLLISION,
                 ContactEvidenceClass::SupportContact,
@@ -588,7 +610,9 @@ pub fn forbidden_class_on_interpolation(
                         }
                     }
                 }
-                if sphere_plane(s, world.support_origin, support_normal)? {
+                let support_gap = support_clearance(s, world, support_normal)
+                    .map_err(|_| CollisionWorldError::InvalidSupportPlane)?;
+                if support_gap < -1e-9 {
                     return Ok(Some((
                         BLOCK_SUPPORT_COLLISION,
                         ContactEvidenceClass::SupportContact,
@@ -918,7 +942,7 @@ fn forbidden_clearance(
             }
             min_clearance = min_clearance.min(clearance);
         }
-        let plane = sphere_plane_clearance(*sphere, world.support_origin, support_normal);
+        let plane = support_clearance(*sphere, world, support_normal)?;
         if plane < -1e-9 {
             return Err(SegmentGap::Forbidden(BLOCK_SUPPORT_COLLISION));
         }
@@ -1280,6 +1304,79 @@ mod tests {
             scene_from_collision_world(&model, "ee", &world),
             Err(CollisionWorldError::InvalidSupportPlane)
         ));
+    }
+
+    #[test]
+    fn finite_support_does_not_block_motion_outside_its_footprint() {
+        let model = synth_planar_two_link();
+        let names = vec!["j0".into(), "j1".into()];
+        let mut world = world_at([2.0, 0.0, 0.0]);
+        world.support_origin = [0.0, 0.0, 0.0];
+        world.support_normal = [0.0, 0.0, 1.0];
+        world.support_half_extents = Some([0.1, 0.1, 0.02]);
+
+        let hit = forbidden_class_on_interpolation(
+            &model,
+            "ee",
+            &names,
+            &[0.0, 0.0],
+            &[0.0, 0.0],
+            &world,
+            TransitionKind::CurrentToApproach,
+        )
+        .expect("valid finite support geometry");
+
+        assert_eq!(hit, None);
+    }
+
+    #[test]
+    fn finite_support_still_blocks_motion_inside_its_footprint() {
+        let model = synth_planar_two_link();
+        let names = vec!["j0".into(), "j1".into()];
+        let mut world = world_at([2.0, 0.0, 0.0]);
+        world.support_origin = [0.3, 0.0, 0.0];
+        world.support_normal = [0.0, 0.0, 1.0];
+        world.support_half_extents = Some([0.1, 0.1, 0.02]);
+
+        let hit = forbidden_class_on_interpolation(
+            &model,
+            "ee",
+            &names,
+            &[0.0, 0.0],
+            &[0.0, 0.0],
+            &world,
+            TransitionKind::CurrentToApproach,
+        )
+        .expect("valid finite support geometry");
+
+        assert_eq!(
+            hit,
+            Some((
+                BLOCK_SUPPORT_COLLISION,
+                ContactEvidenceClass::SupportContact
+            ))
+        );
+    }
+
+    #[test]
+    fn finite_support_rejects_unmodeled_tilted_orientation() {
+        let model = synth_planar_two_link();
+        let names = vec!["j0".into(), "j1".into()];
+        let mut world = world_at([2.0, 0.0, 0.0]);
+        world.support_half_extents = Some([0.1, 0.1, 0.02]);
+        world.support_normal = [0.5, 0.0, 0.8660254037844386];
+
+        let result = forbidden_class_on_interpolation(
+            &model,
+            "ee",
+            &names,
+            &[0.0, 0.0],
+            &[0.0, 0.0],
+            &world,
+            TransitionKind::CurrentToApproach,
+        );
+
+        assert_eq!(result, Err(CollisionWorldError::InvalidSupportPlane));
     }
 
     fn executable_witness(model: &EmbodimentModel) -> ExecutableContactManeuver {

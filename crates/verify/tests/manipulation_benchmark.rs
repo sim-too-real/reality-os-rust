@@ -801,6 +801,124 @@ fn expectation_and_verifier_outcome_are_absent_from_reasoning_request() {
 }
 
 #[test]
+fn ambiguous_grasp_mechanics_are_refused_before_control_writes() {
+    let _mujoco_guard = lock_mujoco_test();
+    let bundle = grasp_fixture_bundle();
+    let (worker, manifest) =
+        load_and_normalize(&bundle, &[], 9017).expect("strict benchmark requires MuJoCo");
+    checkin_worker(worker);
+    let trial = resolve_benchmark_trial(
+        9017,
+        32,
+        BenchmarkTask::PinchGraspLift,
+        EmbodimentRole::GraspFixture,
+        &bundle,
+        &manifest,
+    )
+    .expect("pilot ambiguity trial resolves");
+    assert_eq!(trial.expectation, TrialExpectation::ExpectedRefusal);
+
+    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
+        &bundle,
+        &trial,
+        SimulationAdmission {
+            execution_bound_m: 0.1,
+            expires_at_s: 120.0,
+        },
+    )
+    .expect("strict runner records the refusal decision");
+
+    assert_eq!(episode.outcome, TrialOutcome::ValidRefusal);
+    assert_eq!(episode.ctrl_writes_before, episode.ctrl_writes_after);
+    assert_eq!(episode.unauthorized_writes, 0);
+}
+
+#[test]
+fn resolved_positive_grasp_records_acquisition_but_refuses_unsafe_hold() {
+    let _mujoco_guard = lock_mujoco_test();
+    let bundle = grasp_fixture_bundle();
+    let (worker, manifest) =
+        load_and_normalize(&bundle, &[], 9006).expect("strict benchmark requires MuJoCo");
+    checkin_worker(worker);
+    let trial = resolve_benchmark_trial(
+        9006,
+        21,
+        BenchmarkTask::PinchGraspLift,
+        EmbodimentRole::GraspFixture,
+        &bundle,
+        &manifest,
+    )
+    .expect("positive pilot grasp resolves");
+    assert_eq!(trial.expectation, TrialExpectation::ExpectedSuccess);
+
+    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
+        &bundle,
+        &trial,
+        SimulationAdmission {
+            execution_bound_m: 0.1,
+            expires_at_s: 120.0,
+        },
+    )
+    .expect("strict runner records the grasp episode");
+
+    assert_eq!(episode.unauthorized_writes, 0);
+    assert_eq!(episode.acquisition_verified, Some(true));
+    assert_eq!(episode.hold_verified, Some(false));
+    assert_eq!(episode.outcome, TrialOutcome::ActionFailed);
+    assert_eq!(episode.failure_cause, Some(FailureCause::HoldNotVerified));
+    assert!(episode
+        .grasp_verifier_evidence
+        .iter()
+        .any(|evidence| evidence == "per_finger_force_exceeds_authorized_ceiling"));
+}
+
+#[test]
+fn positive_grasp_trial_resolves_to_randomized_reachable_standoff() {
+    let bundle = grasp_fixture_bundle();
+    let (_, manifest) =
+        load_and_normalize(&bundle, &[], 9006).expect("strict benchmark requires MuJoCo");
+    let trial = resolve_benchmark_trial(
+        9006,
+        21,
+        BenchmarkTask::PinchGraspLift,
+        EmbodimentRole::GraspFixture,
+        &bundle,
+        &manifest,
+    )
+    .expect("positive pilot grasp resolves");
+    assert_eq!(trial.expectation, TrialExpectation::ExpectedSuccess);
+
+    let model = embodiment_from_manifest(&bundle, &manifest);
+    let chain = model.ee_joint_chain("ee").expect("declared grasp chain");
+    let arm_q = chain
+        .iter()
+        .map(|name| {
+            let joint = manifest
+                .joints
+                .iter()
+                .find(|joint| joint.name == *name)
+                .expect("chain joint is inspected");
+            trial.initial_qpos[joint.qpos_address as usize]
+        })
+        .collect::<Vec<_>>();
+    let fk = realityos_semantics::kinematics::forward_kinematics(&model, &chain, "ee", &arm_q)
+        .expect("resolved arm configuration has supported kinematics");
+    let object = object_named(&trial.scenario.objects, &trial.scenario.object_id);
+    let target = [
+        object["pos"][0].as_f64().unwrap(),
+        object["pos"][1].as_f64().unwrap(),
+        object["pos"][2].as_f64().unwrap() + 0.05,
+    ];
+    let residual = (0..3)
+        .map(|axis| (fk.ee.xyz[axis] - target[axis]).powi(2))
+        .sum::<f64>()
+        .sqrt();
+
+    assert!(residual <= 0.015, "standoff residual was {residual:.4} m");
+    assert!(trial.initial_qpos.iter().all(|value| value.is_finite()));
+}
+
+#[test]
 fn qualified_grasp_records_acquisition_and_hold_separately() {
     let _mujoco_guard = lock_mujoco_test();
     let bundle = grasp_fixture_bundle();

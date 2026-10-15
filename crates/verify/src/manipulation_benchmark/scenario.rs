@@ -1,9 +1,10 @@
 use super::BenchmarkError;
 use crate::bundle::RobotBundle;
 use crate::manipulation_scenarios::{
-    arm_is_planar, grasp_scenario, push_scenario, ManipulationScenario,
+    arm_is_planar, grasp_scenario, push_scenario, ManipulationScenario, Polarity,
 };
 use crate::normalize::RobotManifest;
+use crate::semantics_map::embodiment_from_manifest;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -336,13 +337,33 @@ pub fn resolve_benchmark_trial(
         target_pos[2] = json!(0.09 + half_z);
     }
 
+    if task == BenchmarkTask::PinchGraspLift
+        && scenario.polarity == Polarity::Ambiguous
+        && scenario.expected_refusal.is_none()
+    {
+        if let Some(max_provable_mass_kg) = conservative_grasp_mass_limit(bundle, manifest) {
+            let target = scenario
+                .objects
+                .iter_mut()
+                .find(|object| object["name"] == scenario.object_id)
+                .ok_or_else(|| {
+                    BenchmarkError::InvalidTrial("missing ambiguous grasp target".into())
+                })?;
+            // Keep the ambiguity stratum physically observable to the reasoner:
+            // the measured target mass sits just beyond this embodiment's
+            // conservative hold-force envelope, so the expected refusal is
+            // grounded in the request's mass and gripper-force evidence.
+            target["mass"] = json!(max_provable_mass_kg * 1.05);
+            scenario.expected_refusal = Some("HOLD_MECHANICS_UNPROVEN".into());
+        }
+    }
+
     let mut rng = StdRng::seed_from_u64(
         seed.wrapping_add((index as u64).wrapping_mul(0x9e37_79b9)) ^ 0x6d61_6e69_7075_6c61,
     );
     if task == BenchmarkTask::PushProbeReplan {
         add_randomized_obstacles(&mut scenario, &mut rng)?;
     }
-    let initial_qpos = sample_initial_qpos(manifest, &mut rng)?;
     scenario.objects.sort_by(|left, right| {
         left["name"]
             .as_str()
@@ -373,13 +394,21 @@ pub fn resolve_benchmark_trial(
     {
         scenario.expected_refusal = Some("HOLD_MECHANICS_UNPROVEN".into());
     }
-    let expectation = if scenario.polarity == crate::manipulation_scenarios::Polarity::Positive
+    let mut expectation = if scenario.polarity == crate::manipulation_scenarios::Polarity::Positive
         && scenario.expected_refusal.is_none()
     {
         TrialExpectation::ExpectedSuccess
     } else {
         TrialExpectation::ExpectedRefusal
     };
+    let mut initial_qpos = sample_initial_qpos(manifest, &mut rng)?;
+    if task == BenchmarkTask::PinchGraspLift
+        && expectation == TrialExpectation::ExpectedSuccess
+        && !set_randomized_grasp_standoff(bundle, manifest, &scenario, &mut initial_qpos, &mut rng)?
+    {
+        scenario.expected_refusal = Some("GRASP_STANDOFF_UNREACHABLE".into());
+        expectation = TrialExpectation::ExpectedRefusal;
+    }
     let task_name = task.as_str();
     let role_name = role.as_str();
     let trial_id = format!(
@@ -420,30 +449,7 @@ fn grasp_hold_is_conservatively_provable(
     manifest: &RobotManifest,
     scenario: &ManipulationScenario,
 ) -> bool {
-    let finger_joints = bundle
-        .manifest
-        .joint_aliases
-        .iter()
-        .filter(|(semantic, _)| semantic.to_ascii_lowercase().contains("finger"))
-        .map(|(_, physical)| physical.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    if finger_joints.len() != 2 {
-        return false;
-    }
-    let Some(force_ceiling) = finger_joints
-        .iter()
-        .map(|joint| {
-            manifest
-                .actuators
-                .iter()
-                .find(|actuator| actuator.transmission_target == **joint)
-                .and_then(|actuator| actuator.force_range)
-                .map(|range| range[0].abs().max(range[1].abs()))
-                .filter(|force| force.is_finite() && *force > 0.0)
-        })
-        .collect::<Option<Vec<_>>>()
-        .and_then(|forces| forces.into_iter().reduce(f64::min))
-    else {
+    let Some(max_provable_mass_kg) = conservative_grasp_mass_limit(bundle, manifest) else {
         return false;
     };
     let Some(mass) = scenario
@@ -456,9 +462,35 @@ fn grasp_hold_is_conservatively_provable(
         return false;
     };
 
-    let required_each_finger_n = mass * 9.81 / 2.0;
-    let available_each_finger_n = TOOL_OBJECT_FRICTION_INTERVAL[0] * force_ceiling;
-    required_each_finger_n <= available_each_finger_n + 1e-12
+    mass <= max_provable_mass_kg + 1e-12
+}
+
+fn conservative_grasp_mass_limit(bundle: &RobotBundle, manifest: &RobotManifest) -> Option<f64> {
+    let finger_joints = bundle
+        .manifest
+        .joint_aliases
+        .iter()
+        .filter(|(semantic, _)| semantic.to_ascii_lowercase().contains("finger"))
+        .map(|(_, physical)| physical.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if finger_joints.len() != 2 {
+        return None;
+    }
+    let force_ceiling = finger_joints
+        .iter()
+        .map(|joint| {
+            manifest
+                .actuators
+                .iter()
+                .find(|actuator| actuator.transmission_target == **joint)
+                .and_then(|actuator| actuator.force_range)
+                .map(|range| range[0].abs().max(range[1].abs()))
+                .filter(|force| force.is_finite() && *force > 0.0)
+        })
+        .collect::<Option<Vec<_>>>()
+        .and_then(|forces| forces.into_iter().reduce(f64::min))?;
+    let max_mass_kg = 2.0 * TOOL_OBJECT_FRICTION_INTERVAL[0] * force_ceiling / 9.81;
+    max_mass_kg.is_finite().then_some(max_mass_kg)
 }
 
 pub fn trial_digest(trial: &ResolvedBenchmarkTrial) -> Result<String, BenchmarkError> {
@@ -530,6 +562,101 @@ fn sample_initial_qpos(
         };
     }
     Ok(qpos)
+}
+
+fn set_randomized_grasp_standoff(
+    bundle: &RobotBundle,
+    manifest: &RobotManifest,
+    scenario: &ManipulationScenario,
+    qpos: &mut [f64],
+    rng: &mut StdRng,
+) -> Result<bool, BenchmarkError> {
+    let model = embodiment_from_manifest(bundle, manifest);
+    let Some(ee) = model
+        .end_effectors
+        .first()
+        .map(|end_effector| end_effector.name.as_str())
+    else {
+        return Ok(false);
+    };
+    let Some(chain) = model.ee_joint_chain(ee) else {
+        return Ok(false);
+    };
+    let object = object_named(&scenario.objects, &scenario.object_id)?;
+    let mut target = vec3(&object["pos"])
+        .ok_or_else(|| BenchmarkError::InvalidTrial("grasp target has no finite 3D pose".into()))?;
+    target[2] += 0.05;
+    let mut current_q = Vec::with_capacity(chain.len());
+    for name in &chain {
+        let joint = manifest
+            .joints
+            .iter()
+            .find(|joint| joint.name == *name)
+            .ok_or_else(|| {
+                BenchmarkError::InvalidManifest(format!(
+                    "end-effector chain references uninspected joint {name}"
+                ))
+            })?;
+        let index = usize::try_from(joint.qpos_address).map_err(|_| {
+            BenchmarkError::InvalidManifest(format!("negative qpos address for {name}"))
+        })?;
+        current_q.push(*qpos.get(index).ok_or_else(|| {
+            BenchmarkError::InvalidManifest(format!("qpos address outside state for {name}"))
+        })?);
+    }
+    let randomized_seed = current_q
+        .iter()
+        .map(|value| value + rng.gen_range(-0.08_f64..=0.08_f64))
+        .collect::<Vec<_>>();
+    let solved = realityos_semantics::kinematics::with_ik_q_seed(Some(&randomized_seed), || {
+        realityos_semantics::kinematics::solve_ik(&model, &chain, ee, target, &current_q)
+    });
+    let Ok((arm_q, trace)) = solved else {
+        return Ok(false);
+    };
+    if !realityos_semantics::kinematics::ik_residual_is_precise(trace.residual) {
+        return Ok(false);
+    }
+    for (name, value) in chain.iter().zip(arm_q) {
+        let joint = manifest
+            .joints
+            .iter()
+            .find(|joint| joint.name == *name)
+            .expect("chain joint validated above");
+        let index =
+            usize::try_from(joint.qpos_address).expect("non-negative qpos address validated above");
+        qpos[index] = value;
+    }
+
+    let finger_joints = bundle
+        .manifest
+        .joint_aliases
+        .iter()
+        .filter(|(semantic, _)| semantic.to_ascii_lowercase().contains("finger"))
+        .map(|(_, physical)| physical.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if finger_joints.len() != 2 {
+        return Ok(false);
+    }
+    for name in finger_joints {
+        let joint = manifest
+            .joints
+            .iter()
+            .find(|joint| joint.name == name)
+            .ok_or_else(|| {
+                BenchmarkError::InvalidManifest(format!(
+                    "gripper alias references uninspected joint {name}"
+                ))
+            })?;
+        let index = usize::try_from(joint.qpos_address).map_err(|_| {
+            BenchmarkError::InvalidManifest(format!("negative gripper qpos address for {name}"))
+        })?;
+        let value = qpos.get_mut(index).ok_or_else(|| {
+            BenchmarkError::InvalidManifest(format!("qpos address outside state for {name}"))
+        })?;
+        *value = joint.range[1];
+    }
+    Ok(true)
 }
 
 fn add_randomized_obstacles(
