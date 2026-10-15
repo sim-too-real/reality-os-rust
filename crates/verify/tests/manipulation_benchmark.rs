@@ -916,6 +916,84 @@ fn qualified_grasp_records_acquisition_and_hold_separately() {
 }
 
 #[test]
+fn grasp_authority_expiry_between_phases_keeps_the_correct_failure_cause() {
+    let _mujoco_guard = lock_mujoco_test();
+    let bundle = grasp_fixture_bundle();
+    let (worker, manifest) =
+        load_and_normalize(&bundle, &[], 9015).expect("strict benchmark requires MuJoCo");
+    let mut trial = (9000..9020)
+        .find_map(|seed| {
+            resolve_benchmark_trial(
+                seed,
+                15,
+                BenchmarkTask::PinchGraspLift,
+                EmbodimentRole::GraspFixture,
+                &bundle,
+                &manifest,
+            )
+            .ok()
+            .filter(|trial| trial.expectation == TrialExpectation::ExpectedSuccess)
+        })
+        .expect("pilot range contains a mechanically supportable grasp trial");
+    let table = object_named(&trial.scenario.objects, "table");
+    let table_top = table["pos"][2].as_f64().unwrap() + table["size"][2].as_f64().unwrap();
+    let target_spec = trial
+        .scenario
+        .objects
+        .iter_mut()
+        .find(|object| object["name"] == trial.scenario.object_id)
+        .expect("resolved trial has a target object");
+    target_spec["friction"] = serde_json::json!(1.2);
+    target_spec["size"] = serde_json::json!([0.01, 0.01, 0.025]);
+    target_spec["pos"][2] = serde_json::json!(table_top + 0.025);
+    checkin_worker(worker);
+
+    let model = embodiment_from_manifest(&bundle, &manifest);
+    let chain = model.ee_joint_chain("ee").expect("declared grasp chain");
+    let object = object_named(&trial.scenario.objects, &trial.scenario.object_id);
+    let object_pos = object["pos"].as_array().expect("target position");
+    let seed_q = vec![0.6, -1.0, 0.6, 0.0];
+    let target = [
+        object_pos[0].as_f64().unwrap(),
+        object_pos[1].as_f64().unwrap(),
+        object_pos[2].as_f64().unwrap() + 0.05,
+    ];
+    let (standoff, _) = realityos_semantics::kinematics::with_ik_q_seed(Some(&seed_q), || {
+        realityos_semantics::kinematics::solve_ik(&model, &chain, "ee", target, &seed_q)
+    })
+    .expect("grasp fixture has a reachable standoff");
+    trial.initial_qpos[..standoff.len()].copy_from_slice(&standoff);
+    for finger in ["finger_l", "finger_r"] {
+        let joint = manifest
+            .joints
+            .iter()
+            .find(|joint| joint.name == finger)
+            .expect("declared finger joint");
+        trial.initial_qpos[joint.qpos_address as usize] = joint.range[1];
+    }
+
+    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
+        &bundle,
+        &trial,
+        SimulationAdmission {
+            execution_bound_m: 0.1,
+            expires_at_s: 10.0 + manifest.timestep * 500.0,
+        },
+    )
+    .expect("the runner records an expired grasp episode");
+
+    assert_eq!(episode.outcome, TrialOutcome::ActionFailed);
+    assert_eq!(episode.failure_cause, Some(FailureCause::AuthorityExpired));
+    assert_eq!(
+        episode.refusal_code.as_deref(),
+        Some("AUTHORITY_EXPIRED_DURING_EXECUTION")
+    );
+    assert_eq!(episode.actions.len(), 1);
+    assert!(episode.ctrl_writes_after > episode.ctrl_writes_before);
+    assert_eq!(episode.unauthorized_writes, 0);
+}
+
+#[test]
 fn runtime_divergence_fault_is_frozen_into_trial() {
     let bundle = planar_bundle();
     let trial = resolve_benchmark_trial(

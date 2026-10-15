@@ -1058,9 +1058,11 @@ fn write_grasp_ctrl(
 ) -> Result<GraspControlStatus, BenchmarkError> {
     if arm_targets.len() != request.scene.joint_names.len()
         || finger_targets.len() != request.scene.finger_names.len()
-        || !authorized_covers_now(worker, authorized, request.now_s)?
     {
         return Ok(GraspControlStatus::Rejected);
+    }
+    if !authorized_covers_now(worker, authorized, request.now_s)? {
+        return Ok(GraspControlStatus::AuthorityExpired);
     }
     let (mut ctrl, _) = worker
         .peek_ctrl()
@@ -1093,10 +1095,11 @@ fn write_grasp_ctrl(
         }
         ctrl[actuator[0].0] = *value;
     }
-    if ctrl.iter().any(|value| !value.is_finite())
-        || !authorized_covers_now(worker, authorized, request.now_s)?
-    {
+    if ctrl.iter().any(|value| !value.is_finite()) {
         return Ok(GraspControlStatus::Rejected);
+    }
+    if !authorized_covers_now(worker, authorized, request.now_s)? {
+        return Ok(GraspControlStatus::AuthorityExpired);
     }
     worker.set_ctrl(&ctrl).map_err(|error| {
         BenchmarkError::Simulation(format!("authorized_grasp_control_write:{error}"))
