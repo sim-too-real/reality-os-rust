@@ -647,6 +647,7 @@ fn failure_cause_name(cause: &FailureCause) -> &'static str {
         FailureCause::ActionEnvelopeMismatch => "action_envelope_mismatch",
         FailureCause::AcquisitionNotVerified => "acquisition_not_verified",
         FailureCause::HoldNotVerified => "hold_not_verified",
+        FailureCause::AuthorityExpired => "authority_expired",
     }
 }
 

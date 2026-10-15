@@ -393,6 +393,58 @@ fn eligible_push_uses_scoped_bridge_and_replans_after_probe() {
 }
 
 #[test]
+fn expired_authority_stops_control_steps_before_continuing_the_segment() {
+    let _mujoco_guard = lock_mujoco_test();
+    let (bundle, mut trial) = live_trial(9010, 10, BenchmarkTask::PushProbeReplan);
+    let (inspection_worker, base_manifest) =
+        load_and_normalize(&bundle, &[], trial.seed).expect("strict benchmark requires MuJoCo");
+    checkin_worker(inspection_worker);
+    let model = embodiment_from_manifest(&bundle, &base_manifest);
+    let chain = model.ee_joint_chain("ee").expect("declared arm chain");
+    let object = object_named(&trial.scenario.objects, &trial.scenario.object_id);
+    let object_pos = object["pos"].as_array().expect("target position");
+    let half_x = object["size"][0].as_f64().expect("target half width");
+    let target = [
+        object_pos[0].as_f64().unwrap() - half_x - 0.015 - 0.008,
+        object_pos[1].as_f64().unwrap(),
+        0.12,
+    ];
+    let seed_q = vec![0.6, -1.0, 0.6];
+    let (standoff, _) = realityos_semantics::kinematics::with_ik_q_seed(Some(&seed_q), || {
+        realityos_semantics::kinematics::solve_ik(&model, &chain, "ee", target, &seed_q)
+    })
+    .expect("fixture has a reachable standoff");
+    trial.initial_qpos[..standoff.len()].copy_from_slice(&standoff);
+
+    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
+        &bundle,
+        &trial,
+        SimulationAdmission {
+            execution_bound_m: 0.1,
+            expires_at_s: 10.01,
+        },
+    )
+    .expect("the runner records an authority-expiry episode");
+
+    assert_eq!(episode.outcome, TrialOutcome::ActionFailed);
+    assert_eq!(
+        episode.refusal_code.as_deref(),
+        Some("AUTHORITY_EXPIRED_DURING_EXECUTION")
+    );
+    assert_eq!(
+        episode.actions.len(),
+        1,
+        "expired authority must not continue to another target"
+    );
+    assert!(episode.ctrl_writes_after > episode.ctrl_writes_before);
+    assert!(
+        episode.simulation_time_s <= 0.021,
+        "the simulator must stop at the first expired control window"
+    );
+    assert_eq!(episode.unauthorized_writes, 0);
+}
+
+#[test]
 fn divergent_action_stops_before_replan() {
     let _mujoco_guard = lock_mujoco_test();
     let (bundle, mut trial) = live_trial(9010, 10, BenchmarkTask::PushProbeReplan);

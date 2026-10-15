@@ -40,6 +40,7 @@ const MU_REQUIRED: f64 = 0.3;
 const MAX_ACTIONS: usize = 6;
 const CONTROL_STEPS_PER_SEGMENT: u32 = 500;
 const CONTROL_CONVERGENCE_CHECK_STEPS: u32 = 100;
+const CONTROL_AUTHORITY_CHECK_STEPS: u32 = 10;
 const GRASP_CLOSE_SETTLE_STEPS: u32 = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +68,7 @@ pub enum FailureCause {
     ActionEnvelopeMismatch,
     AcquisitionNotVerified,
     HoldNotVerified,
+    AuthorityExpired,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -524,6 +526,12 @@ pub fn run_benchmark_trial(
             recovery_pending = true;
             continue;
         }
+        if exec == WitnessExecution::AuthorityExpired {
+            episode.failure_cause = Some(FailureCause::AuthorityExpired);
+            episode.refusal_code = Some("AUTHORITY_EXPIRED_DURING_EXECUTION".into());
+            episode.outcome = TrialOutcome::ActionFailed;
+            break;
+        }
         if exec == WitnessExecution::WroteNothing {
             episode.failure_cause = Some(FailureCause::UnsupportedControlMapping);
             episode.refusal_code = Some("NO_AUTHORIZED_CONTROL_MAPPING".into());
@@ -674,6 +682,14 @@ enum WitnessExecution {
     Wrote,
     WroteNothing,
     Diverged,
+    AuthorityExpired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GraspControlStatus {
+    Written,
+    Rejected,
+    AuthorityExpired,
 }
 
 fn execute_push_witness(
@@ -692,24 +708,12 @@ fn execute_push_witness(
         return Ok(WitnessExecution::WroteNothing);
     }
     let contents = &frozen.witness_contents;
-    let q0 = witness_joint_line(contents, "q0_bits=");
-    let transit = witness_joint_line(contents, "q_transit_bits=");
-    let contact = witness_joint_line(contents, "q_contact_bits=");
-    let end = witness_joint_line(contents, "q_end_bits=");
-    let retract = witness_joint_line(contents, "q_retract_bits=");
-    if q0.is_empty()
-        || transit.len() != q0.len()
-        || contact.len() != q0.len()
-        || end.len() != q0.len()
-        || (!retract.is_empty() && retract.len() != q0.len())
-        || q0.len() != request.scene.joint_names.len()
-        || ![&q0, &transit, &contact, &end]
-            .iter()
-            .flat_map(|values| values.iter())
-            .all(|value| value.is_finite())
-    {
+    let is_probe = frozen.action_key.starts_with("probe:");
+    let Some((q0, targets)) =
+        decode_push_witness(contents, request.scene.joint_names.len(), is_probe)
+    else {
         return Ok(WitnessExecution::WroteNothing);
-    }
+    };
     if !authorized_covers_now(worker, authorized, request.now_s)? {
         return Ok(WitnessExecution::WroteNothing);
     }
@@ -719,15 +723,16 @@ fn execute_push_witness(
     }
 
     let actuator_map = position_actuator_map(manifest, &request.scene.joint_names)?;
-    let mut targets = vec![transit, contact, end];
-    if !retract.is_empty() {
-        targets.push(retract);
-    }
+    let mut has_written = false;
     for target in targets {
         let now = simulator_now(worker)?;
         let now_s = 10.0 + now;
         if !authorized_covers_now(worker, authorized, now_s)? {
-            return Ok(WitnessExecution::WroteNothing);
+            return Ok(if has_written {
+                WitnessExecution::AuthorityExpired
+            } else {
+                WitnessExecution::WroteNothing
+            });
         }
         let (ctrl, _) = worker
             .peek_ctrl()
@@ -760,14 +765,18 @@ fn execute_push_witness(
         worker.set_ctrl(&next).map_err(|error| {
             BenchmarkError::Simulation(format!("authorized_control_write:{error}"))
         })?;
+        has_written = true;
         let mut converged = false;
         let mut remaining_steps = CONTROL_STEPS_PER_SEGMENT;
         while remaining_steps > 0 {
-            let steps = remaining_steps.min(CONTROL_CONVERGENCE_CHECK_STEPS);
-            worker
-                .step(steps)
-                .map_err(|error| BenchmarkError::Simulation(format!("action_step:{error}")))?;
+            let steps = remaining_steps.min(CONTROL_AUTHORITY_CHECK_STEPS);
+            if !step_with_authority(worker, authorized, request.now_s, steps)? {
+                return Ok(WitnessExecution::AuthorityExpired);
+            }
             remaining_steps -= steps;
+            if remaining_steps > 0 && remaining_steps % CONTROL_CONVERGENCE_CHECK_STEPS != 0 {
+                continue;
+            }
             let observed = read_named_joints(worker, manifest, &request.scene.joint_names)?;
             if vectors_near(&observed, &target, 0.08) {
                 converged = true;
@@ -779,6 +788,48 @@ fn execute_push_witness(
         }
     }
     Ok(WitnessExecution::Wrote)
+}
+
+fn decode_push_witness(
+    contents: &str,
+    joint_count: usize,
+    is_probe: bool,
+) -> Option<(Vec<f64>, Vec<Vec<f64>>)> {
+    let q0 = strict_witness_joint_line(contents, "q0_bits=")?;
+    let transit = strict_witness_joint_line(contents, "q_transit_bits=")?;
+    let contact = strict_witness_joint_line(contents, "q_contact_bits=")?;
+    let end = strict_witness_joint_line(contents, "q_end_bits=")?;
+    let retract = strict_witness_joint_line(contents, "q_retract_bits=");
+    let valid = |values: &[f64]| {
+        values.len() == joint_count && values.iter().all(|value| value.is_finite())
+    };
+    if joint_count == 0
+        || !valid(&q0)
+        || !valid(&transit)
+        || !valid(&contact)
+        || !valid(&end)
+        || (is_probe && !retract.as_deref().is_some_and(valid))
+    {
+        return None;
+    }
+    let mut targets = vec![transit, contact, end];
+    if is_probe {
+        targets.push(retract?);
+    }
+    Some((q0, targets))
+}
+
+fn strict_witness_joint_line(contents: &str, prefix: &str) -> Option<Vec<f64>> {
+    let payload = contents
+        .lines()
+        .find_map(|line| line.strip_prefix(prefix))?;
+    if payload.is_empty() {
+        return None;
+    }
+    payload
+        .split(',')
+        .map(|bits| bits.parse::<u64>().ok().map(f64::from_bits))
+        .collect()
 }
 
 struct GraspWitnessExecution {
@@ -883,7 +934,7 @@ fn execute_grasp_witness(
     let mut hold_start = None;
     let mut phase_object_positions = Vec::new();
     for (arm, fingers, phase) in phases {
-        if !write_grasp_ctrl(
+        match write_grasp_ctrl(
             worker,
             manifest,
             request,
@@ -893,7 +944,15 @@ fn execute_grasp_witness(
             fingers,
             CONTROL_STEPS_PER_SEGMENT,
         )? {
-            return Ok(rejection());
+            GraspControlStatus::Written => {}
+            GraspControlStatus::Rejected => return Ok(rejection()),
+            GraspControlStatus::AuthorityExpired => {
+                return Ok(GraspWitnessExecution {
+                    execution: WitnessExecution::AuthorityExpired,
+                    hold_start,
+                    phase_object_positions,
+                });
+            }
         }
         let measured = read_named_joints(worker, manifest, &request.scene.joint_names)?;
         if !vectors_near(&measured, arm, 0.08) {
@@ -907,9 +966,13 @@ fn execute_grasp_witness(
             if !authorized_covers_now(worker, authorized, request.now_s)? {
                 return Ok(rejection());
             }
-            worker.step(GRASP_CLOSE_SETTLE_STEPS).map_err(|error| {
-                BenchmarkError::Simulation(format!("grasp_close_settle:{error}"))
-            })?;
+            if !step_with_authority(worker, authorized, request.now_s, GRASP_CLOSE_SETTLE_STEPS)? {
+                return Ok(GraspWitnessExecution {
+                    execution: WitnessExecution::AuthorityExpired,
+                    hold_start,
+                    phase_object_positions,
+                });
+            }
             let settled = read_named_joints(worker, manifest, &request.scene.joint_names)?;
             if !vectors_near(&settled, arm, 0.08) {
                 return Ok(GraspWitnessExecution {
@@ -944,7 +1007,7 @@ fn execute_grasp_witness(
                 .zip(end_arm)
                 .map(|(start, end)| start + fraction * (end - start))
                 .collect::<Vec<_>>();
-            if !write_grasp_ctrl(
+            match write_grasp_ctrl(
                 worker,
                 manifest,
                 request,
@@ -954,7 +1017,15 @@ fn execute_grasp_witness(
                 end_fingers,
                 CONTROL_STEPS_PER_SEGMENT,
             )? {
-                return Ok(rejection());
+                GraspControlStatus::Written => {}
+                GraspControlStatus::Rejected => return Ok(rejection()),
+                GraspControlStatus::AuthorityExpired => {
+                    return Ok(GraspWitnessExecution {
+                        execution: WitnessExecution::AuthorityExpired,
+                        hold_start,
+                        phase_object_positions,
+                    });
+                }
             }
             let measured = read_named_joints(worker, manifest, &request.scene.joint_names)?;
             if !vectors_near(&measured, &arm, 0.08) {
@@ -984,23 +1055,23 @@ fn write_grasp_ctrl(
     arm_targets: &[f64],
     finger_targets: &[f64],
     steps: u32,
-) -> Result<bool, BenchmarkError> {
+) -> Result<GraspControlStatus, BenchmarkError> {
     if arm_targets.len() != request.scene.joint_names.len()
         || finger_targets.len() != request.scene.finger_names.len()
         || !authorized_covers_now(worker, authorized, request.now_s)?
     {
-        return Ok(false);
+        return Ok(GraspControlStatus::Rejected);
     }
     let (mut ctrl, _) = worker
         .peek_ctrl()
         .map_err(|error| BenchmarkError::Simulation(error.to_string()))?;
     if ctrl.len() != manifest.nu.max(0) as usize {
-        return Ok(false);
+        return Ok(GraspControlStatus::Rejected);
     }
     for (joint, value) in request.scene.joint_names.iter().zip(arm_targets) {
         let index = position_actuator_map(manifest, std::slice::from_ref(joint))?[joint];
         if !target_inside_control_range(&manifest.actuators[index], *value) {
-            return Ok(false);
+            return Ok(GraspControlStatus::Rejected);
         }
         ctrl[index] = *value;
     }
@@ -1018,21 +1089,41 @@ fn write_grasp_ctrl(
             || !resource.actuator_inputs.contains(&actuator[0].1.name)
             || !target_inside_control_range(actuator[0].1, *value)
         {
-            return Ok(false);
+            return Ok(GraspControlStatus::Rejected);
         }
         ctrl[actuator[0].0] = *value;
     }
     if ctrl.iter().any(|value| !value.is_finite())
         || !authorized_covers_now(worker, authorized, request.now_s)?
     {
-        return Ok(false);
+        return Ok(GraspControlStatus::Rejected);
     }
     worker.set_ctrl(&ctrl).map_err(|error| {
         BenchmarkError::Simulation(format!("authorized_grasp_control_write:{error}"))
     })?;
-    worker
-        .step(steps)
-        .map_err(|error| BenchmarkError::Simulation(format!("grasp_step:{error}")))?;
+    if !step_with_authority(worker, authorized, request.now_s, steps)? {
+        return Ok(GraspControlStatus::AuthorityExpired);
+    }
+    Ok(GraspControlStatus::Written)
+}
+
+fn step_with_authority(
+    worker: &mut MujocoInstance,
+    authorized: &AuthorizedReasonerAction,
+    now_s: f64,
+    steps: u32,
+) -> Result<bool, BenchmarkError> {
+    let mut remaining_steps = steps;
+    while remaining_steps > 0 {
+        if !authorized_covers_now(worker, authorized, now_s)? {
+            return Ok(false);
+        }
+        let window = remaining_steps.min(CONTROL_AUTHORITY_CHECK_STEPS);
+        worker.step(window).map_err(|error| {
+            BenchmarkError::Simulation(format!("authorized_step_window:{error}"))
+        })?;
+        remaining_steps -= window;
+    }
     Ok(true)
 }
 
@@ -1825,4 +1916,54 @@ fn sub3(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
 fn truth_position(truth: &VerifierTruth, name: &str) -> Option<[f64; 3]> {
     let position = truth.named_pos.get(name).or_else(|| truth.xpos.get(name))?;
     (position.len() >= 3).then(|| [position[0], position[1], position[2]])
+}
+
+#[cfg(test)]
+mod witness_tests {
+    use super::decode_push_witness;
+
+    fn line(name: &str, values: &[f64]) -> String {
+        let bits = values
+            .iter()
+            .map(|value| value.to_bits().to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("{name}={bits}\n")
+    }
+
+    fn witness(include_retract: bool) -> String {
+        let mut contents = String::new();
+        contents.push_str(&line("q0_bits", &[0.1, 0.2]));
+        contents.push_str(&line("q_transit_bits", &[0.2, 0.3]));
+        contents.push_str(&line("q_contact_bits", &[0.3, 0.4]));
+        contents.push_str(&line("q_end_bits", &[0.4, 0.5]));
+        if include_retract {
+            contents.push_str(&line("q_retract_bits", &[0.2, 0.3]));
+        }
+        contents
+    }
+
+    #[test]
+    fn probe_witness_requires_a_finite_full_dimension_retreat() {
+        assert!(decode_push_witness(&witness(false), 2, true).is_none());
+
+        let malformed = witness(true).replace(
+            &line("q_retract_bits", &[0.2, 0.3]),
+            "q_retract_bits=not-a-number\n",
+        );
+        assert!(decode_push_witness(&malformed, 2, true).is_none());
+
+        let non_finite = witness(true).replace(
+            &line("q_retract_bits", &[0.2, 0.3]),
+            &line("q_retract_bits", &[f64::NAN, 0.3]),
+        );
+        assert!(decode_push_witness(&non_finite, 2, true).is_none());
+    }
+
+    #[test]
+    fn non_probe_push_witness_does_not_require_retreat() {
+        let decoded = decode_push_witness(&witness(false), 2, false)
+            .expect("ordinary push witnesses have three checked motion targets");
+        assert_eq!(decoded.1.len(), 3);
+    }
 }
