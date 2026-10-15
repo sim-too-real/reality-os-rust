@@ -20,6 +20,7 @@ members = [
     "crates/virtual-metal",
     "crates/verify",
     "crates/semantics",
+    "crates/reasoner-bridge",
     "apps/ros-governor",
 ]
 default-members = [
@@ -42,6 +43,7 @@ default-members = [
     "crates/virtual-metal",
     "crates/verify",
     "crates/semantics",
+    "crates/reasoner-bridge",
     "apps/ros-governor",
 ]
 
@@ -74,6 +76,7 @@ realityos-metal = { path = "crates/metal" }
 realityos-virtual-metal = { path = "crates/virtual-metal" }
 realityos-verify = { path = "crates/verify" }
 realityos-semantics = { path = "crates/semantics" }
+realityos-reasoner-bridge = { path = "crates/reasoner-bridge" }
 serialport = { version = "4.7", default-features = false }
 nix = { version = "0.26", default-features = false, features = ["term"] }
 

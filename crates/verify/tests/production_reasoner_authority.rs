@@ -3,14 +3,13 @@
 
 use realityos_core::{PolicyProposal, RealityOs};
 use realityos_semantics::execution_envelope::ExecutionAuthorization;
-use realityos_semantics::physical_reasoner::{
-    benchmark_scene, PhysicalReasoner, PlanStep, EVIDENCE_STATUS,
-};
+use realityos_semantics::physical_reasoner::{benchmark_scene, PhysicalReasoner, EVIDENCE_STATUS};
 use realityos_session::{issue_scoped_simulation_grant, PhysicalActionScope, ScopeRefusal};
 
 #[test]
 fn production_reasoner_binds_only_an_independently_issued_grant() {
-    let (model, request) = benchmark_scene();
+    let (model, mut request) = benchmark_scene();
+    request.linear_execution_bound_m = Some(0.02);
     let mut reasoner = PhysicalReasoner::new(model);
     let report = reasoner.consider(&request);
     assert_eq!(report.evidence_status, EVIDENCE_STATUS);
@@ -19,17 +18,11 @@ fn production_reasoner_binds_only_an_independently_issued_grant() {
         .iter()
         .find(|candidate| candidate.action_key == "probe:+x" && candidate.status == "PROVED")
         .expect("probe");
-    let step = PlanStep {
-        family: probe.family.clone(),
-        action_key: probe.action_key.clone(),
-        candidate_id: probe.action_key.clone(),
-        witness_digest: probe.witness_digest.clone().expect("digest"),
-        witness_contents: probe.witness_contents.clone().expect("contents"),
-        stroke_m: request.probe_stroke_m,
-        immediate_progress: false,
-        predicted_translation_m: request.probe_stroke_m,
-        error_after: 0.1,
-    };
+    let step = report
+        .authority_request
+        .clone()
+        .expect("reasoner selected the proved probe for authority");
+    assert_eq!(step.action_key, probe.action_key);
     let scope = PhysicalActionScope {
         model_id: "hash-table".into(),
         embodiment_id: "synth_planar".into(),
@@ -37,8 +30,7 @@ fn production_reasoner_binds_only_an_independently_issued_grant() {
         candidate_id: step.candidate_id.clone(),
         action_key: step.action_key.clone(),
         witness_digest: step.witness_digest.clone(),
-        requested_stroke_m: step.stroke_m,
-        execution_bound_m: step.stroke_m.max(0.02),
+        action_envelope: step.action_envelope.clone(),
         issued_at_s: request.now_s,
         expires_at_s: 40.0,
         actuator_id: "tool".into(),
@@ -72,8 +64,7 @@ fn production_reasoner_binds_only_an_independently_issued_grant() {
         action_key: grant.scope.action_key.clone(),
         witness_digest: grant.scope.witness_digest.clone(),
         actuator_id: grant.scope.actuator_id.clone(),
-        requested_stroke_m: grant.scope.requested_stroke_m,
-        execution_bound_m: grant.scope.execution_bound_m,
+        action_envelope: grant.scope.action_envelope.clone(),
         issued_at_s: grant.scope.issued_at_s,
         expires_at_s: grant.scope.expires_at_s,
         observation_contract_id: grant.scope.observation_contract_id.clone(),

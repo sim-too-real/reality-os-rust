@@ -4,6 +4,7 @@
 //! object motion, yaw, contact persistence, goal error, tracking, reachability
 //! margin, quasi-static applicability, and authority. No future state.
 
+use realityos_kernel::physical_action::PhysicalActionEnvelope;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -110,8 +111,7 @@ pub struct ExecutionAuthorization {
     pub action_key: String,
     pub witness_digest: String,
     pub actuator_id: String,
-    pub requested_stroke_m: f64,
-    pub execution_bound_m: f64,
+    pub action_envelope: PhysicalActionEnvelope,
     pub issued_at_s: f64,
     pub expires_at_s: f64,
     pub observation_contract_id: String,
@@ -144,9 +144,10 @@ impl ExecutionAuthorization {
             && self.abort_contract_id == action.abort_contract_id
             && !self.observation_contract_id.is_empty()
             && !self.abort_contract_id.is_empty()
-            && self.requested_stroke_m.is_finite()
-            && (self.requested_stroke_m - action.requested_stroke_m).abs() <= 1e-9
-            && self.execution_bound_m + 1e-12 >= self.requested_stroke_m
+            && self.action_envelope.validate().is_ok()
+            && self
+                .action_envelope
+                .exactly_matches(&action.action_envelope)
             && self.issued_at_s.is_finite()
             && self.expires_at_s.is_finite()
             && now_s.is_finite()
@@ -166,7 +167,7 @@ pub struct FrozenAction {
     /// Exact serialized witness contents used by the executor.
     pub witness_contents: String,
     pub witness_digest: String,
-    pub requested_stroke_m: f64,
+    pub action_envelope: PhysicalActionEnvelope,
     pub prediction: FrozenPrediction,
     pub belief_snapshot: PhysicalParameterBelief,
     pub recoverability: RecoverabilityClass,
@@ -185,6 +186,10 @@ pub struct FrozenAction {
 }
 
 impl FrozenAction {
+    pub fn linear_stroke_bounds(&self) -> Option<(f64, f64)> {
+        self.action_envelope.linear_stroke_bounds()
+    }
+
     /// Attach a grant an independent issuer already produced.
     /// Empty identity fields and a non-covering grant are refused. This method
     /// does not invent grant ids, epochs, or actuator names.
@@ -409,9 +414,12 @@ pub fn supervise_execution(
         return unavailable(action, "STROKE_PROGRESS_MISMATCH_OR_INVALID");
     }
 
+    let Some((commanded_stroke_m, _)) = action.linear_stroke_bounds() else {
+        return unavailable(action, "TYPED_GRASP_REQUIRES_PHASE_SUPERVISOR");
+    };
     let runtime_observation = RuntimeExecutionObservation {
         stroke_consumed_m: consumed,
-        commanded_stroke_m: action.requested_stroke_m,
+        commanded_stroke_m,
         object_displacement_m: observation
             .object_displacement_m
             .expect("required envelope field checked above"),

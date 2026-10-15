@@ -2,10 +2,13 @@
 
 use crate::normalize::RobotManifest;
 use crate::observation::{ContactTruth, VerifierTruth};
+use realityos_kernel::physical_action::PhysicalActionEnvelope;
 use realityos_semantics::contact::{SupportKind, SupportRelation, FORCE_BOUND_UNAVAILABLE};
 use realityos_semantics::failure::ManipulationFailure;
 use realityos_semantics::provenance::Provenance;
-use realityos_semantics::resource::ControlledResource;
+use realityos_semantics::resource::{
+    ControlledResource, QualificationStatus, ResourceKind, ResourceTopology,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +21,10 @@ pub struct PrivilegedVerdict {
     pub force_bound_unavailable: bool,
     pub object_followed: Option<bool>,
     pub opening_ok: Option<bool>,
+    #[serde(default)]
+    pub grasp_acquired: bool,
+    #[serde(default)]
+    pub verified_hold: bool,
     pub notes: Vec<String>,
 }
 
@@ -125,6 +132,8 @@ pub fn verify_release(
         force_bound_unavailable: resource.force_bound.value.is_none(),
         object_followed: Some(false),
         opening_ok,
+        grasp_acquired: false,
+        verified_hold: false,
         notes,
     }
 }
@@ -139,59 +148,126 @@ pub fn verify_grasp(
     opening_01: Option<f64>,
     now_s: f64,
     ee_names: &[&str],
+    authorized_envelope: Option<&PhysicalActionEnvelope>,
 ) -> PrivilegedVerdict {
     let mut evidence = Vec::new();
     let mut notes = Vec::new();
-    let finger_contact = after.contacts.iter().any(|c| {
-        resource
-            .finger_bodies
+    let two_finger_resource =
+        resource.finger_bodies.len() == 2 && resource.finger_bodies[0] != resource.finger_bodies[1];
+    let left_contact = two_finger_resource
+        && after
+            .contacts
             .iter()
-            .any(|f| c.pair_has(object_id, f))
-            || ((c.body1.contains("finger") || c.body2.contains("finger"))
-                && (c.body1.contains(object_id) || c.body2.contains(object_id)))
-    });
-    if finger_contact {
-        evidence.push("expected_finger_object_contact".into());
+            .any(|c| c.pair_has(object_id, &resource.finger_bodies[0]));
+    let right_contact = two_finger_resource
+        && after
+            .contacts
+            .iter()
+            .any(|c| c.pair_has(object_id, &resource.finger_bodies[1]));
+    let grasp_acquired = left_contact && right_contact;
+    if left_contact {
+        evidence.push("left_finger_object_contact".into());
     }
-    let empty_close = opening_01.map(|o| o < 0.08).unwrap_or(false) && !finger_contact;
-    if empty_close {
+    if right_contact {
+        evidence.push("right_finger_object_contact".into());
+    }
+    if grasp_acquired {
+        evidence.push("grasp_acquired".into());
+    }
+    let any_finger_contact = left_contact || right_contact;
+    if opening_01.is_some_and(|opening| opening < 0.08) && !any_finger_contact {
         evidence.push("gripper_empty_close".into());
-        return fail(ManipulationFailure::GripperEmptyClose, evidence, notes);
+        return fail_with_acquisition(
+            ManipulationFailure::GripperEmptyClose,
+            evidence,
+            notes,
+            grasp_acquired,
+        );
     }
-    if opening_01.unwrap_or(1.0) > 0.08 && finger_contact {
-        evidence.push("closure_blocked_before_empty".into());
+    if !grasp_acquired {
+        return fail_with_acquisition(ManipulationFailure::Miss, evidence, notes, false);
     }
-    let unexpected = after.contacts.iter().any(|c| {
-        unexpected_bodies
-            .iter()
-            .any(|b| c.body1.contains(b.as_str()) || c.body2.contains(b.as_str()))
+
+    let unexpected = after.contacts.iter().any(|contact| {
+        unexpected_bodies.iter().any(|body| {
+            contact.body1.contains(body.as_str()) || contact.body2.contains(body.as_str())
+        })
     });
     if unexpected {
         evidence.push("unexpected_contact".into());
-        return fail(ManipulationFailure::UnexpectedContact, evidence, notes);
+        return fail_with_acquisition(
+            ManipulationFailure::UnexpectedContact,
+            evidence,
+            notes,
+            grasp_acquired,
+        );
     }
     evidence.push("no_forbidden_contact".into());
 
-    let force_unavailable = after.contacts.iter().all(|c| !c.force_available);
-    if force_unavailable {
-        notes.push(FORCE_BOUND_UNAVAILABLE.into());
-    }
-
-    let obj_before = body_xyz(before, object_id);
-    let obj_after = body_xyz(after, object_id);
-    let ee_before = ee_xyz(before, ee_names);
-    let ee_after = ee_xyz(after, ee_names);
-    let followed = match (obj_before, obj_after, ee_before, ee_after) {
-        (Some(ob), Some(oa), Some(eb), Some(ea)) => {
-            let od = sub(oa, ob);
-            let ed = sub(ea, eb);
-            mag(ed) > 0.012 && dist(od, ed) < 0.025
+    let envelope = match authorized_envelope {
+        Some(PhysicalActionEnvelope::PinchGrasp {
+            resource_id,
+            finger_joint_names,
+            per_finger_force_ceiling_n,
+            maximum_lift_m,
+            ..
+        }) if authorized_envelope.is_some_and(|envelope| envelope.validate().is_ok())
+            && resource_id == &resource.id
+            && finger_joint_names == &resource.affected_joints
+            && resource.kind == ResourceKind::Gripper
+            && resource.topology == ResourceTopology::DirectJointGripper
+            && resource.qualification == QualificationStatus::Qualified
+            && resource.force_bound.known_value().is_some_and(|bound| {
+                bound[1].is_finite() && bound[1] >= *per_finger_force_ceiling_n
+            }) =>
+        {
+            Some((*per_finger_force_ceiling_n, *maximum_lift_m))
         }
-        _ => false,
+        _ => None,
     };
-    if followed {
-        evidence.push("object_follows_ee".into());
+    let Some((force_ceiling, maximum_lift_m)) = envelope else {
+        notes.push("typed pinch-grasp authority unavailable or does not match the resource".into());
+        return fail_with_acquisition(
+            ManipulationFailure::Blocked,
+            evidence,
+            notes,
+            grasp_acquired,
+        );
+    };
+    evidence.push("typed_grasp_authority_matches_resource".into());
+
+    let mut force_unavailable = false;
+    for finger in &resource.finger_bodies {
+        match measured_finger_force(after, object_id, finger) {
+            Some(force) if force <= force_ceiling => {}
+            Some(_) => {
+                evidence.push("per_finger_force_exceeds_authorized_ceiling".into());
+                return fail_with_acquisition(
+                    ManipulationFailure::ExcessForce,
+                    evidence,
+                    notes,
+                    grasp_acquired,
+                );
+            }
+            None => {
+                force_unavailable = true;
+                break;
+            }
+        }
     }
+    if force_unavailable {
+        evidence.push("per_finger_force_unavailable".into());
+        notes.push(FORCE_BOUND_UNAVAILABLE.into());
+        let mut verdict = fail_with_acquisition(
+            ManipulationFailure::ForceBoundUnavailable,
+            evidence,
+            notes,
+            grasp_acquired,
+        );
+        verdict.force_bound_unavailable = true;
+        return verdict;
+    }
+    evidence.push("per_finger_force_within_authorized_ceiling".into());
 
     let support = support_of(
         after,
@@ -200,32 +276,97 @@ pub fn verify_grasp(
         &resource.finger_bodies,
         now_s,
     );
-    let support_changed = !matches!(support.kind, SupportKind::SupportedBy);
-    if support_changed {
-        evidence.push("support_relation_change".into());
+    let support_ok = matches!(support.kind, SupportKind::Unsupported);
+    if support_ok {
+        evidence.push("object_separated_from_table_support".into());
+    } else {
+        evidence.push("object_retains_table_support".into());
     }
 
-    let used_enough =
-        finger_contact && (followed || support_changed || opening_01.unwrap_or(1.0) > 0.08);
-    if !used_enough {
-        if !finger_contact {
-            return fail(ManipulationFailure::Miss, evidence, notes);
-        }
-        return fail(ManipulationFailure::Slip, evidence, notes);
+    let lift = match (ee_xyz(before, ee_names), ee_xyz(after, ee_names)) {
+        (Some(ee_before), Some(ee_after)) => sub(ee_after, ee_before),
+        _ => [f64::NAN; 3],
+    };
+    let lift_vertical_m = lift[2];
+    let lateral_m = (lift[0] * lift[0] + lift[1] * lift[1]).sqrt();
+    let lift_ok = lift.iter().all(|value| value.is_finite())
+        && (0.02..=maximum_lift_m).contains(&lift_vertical_m)
+        && lateral_m <= 0.005 + 1e-12;
+    if lift_ok {
+        evidence.push("bounded_vertical_lift_verified".into());
+    } else {
+        evidence.push("bounded_vertical_lift_not_verified".into());
     }
-    PrivilegedVerdict {
-        success: true,
-        failure: None,
-        evidence_used: evidence,
-        support: vec![support],
-        unexpected_contact: false,
-        force_bound_unavailable: force_unavailable,
-        object_followed: Some(followed),
-        opening_ok: opening_01.map(|o| o < 0.95),
-        notes,
+
+    let object_delta = match (body_xyz(before, object_id), body_xyz(after, object_id)) {
+        (Some(object_before), Some(object_after)) => sub(object_after, object_before),
+        _ => [f64::NAN; 3],
+    };
+    let follow_residual_m = dist(object_delta, lift);
+    let followed = follow_residual_m.is_finite() && follow_residual_m <= 0.005 + 1e-12;
+    if followed {
+        evidence.push("object_follows_ee".into());
+    } else {
+        evidence.push("object_follow_residual_exceeds_five_mm".into());
+    }
+
+    // A held object can prevent the jaws from reaching the exact zero target.
+    // Bilateral measured contact and bounded force are the evidence of closure;
+    // this ratio only rejects a materially open gripper.
+    let opening_ok = opening_01.map(|opening| opening <= 0.15);
+    if opening_ok == Some(true) {
+        evidence.push("gripper_closed_during_hold_check".into());
+    } else if opening_ok.is_none() {
+        notes.push("gripper opening unobserved during hold check".into());
+    }
+    let verified_hold = lift_ok && followed && support_ok && opening_ok == Some(true);
+    if verified_hold {
+        evidence.push("verified_hold".into());
+        PrivilegedVerdict {
+            success: true,
+            failure: None,
+            evidence_used: evidence,
+            support: vec![support],
+            unexpected_contact: false,
+            force_bound_unavailable: false,
+            object_followed: Some(true),
+            opening_ok,
+            grasp_acquired,
+            verified_hold: true,
+            notes,
+        }
+    } else {
+        let mut verdict =
+            fail_with_acquisition(ManipulationFailure::Slip, evidence, notes, grasp_acquired);
+        verdict.support = vec![support];
+        verdict.object_followed = Some(followed);
+        verdict.opening_ok = opening_ok;
+        verdict
     }
 }
 
+fn measured_finger_force(truth: &VerifierTruth, object_id: &str, finger_body: &str) -> Option<f64> {
+    let contacts = truth
+        .contacts
+        .iter()
+        .filter(|contact| contact.pair_has(object_id, finger_body))
+        .collect::<Vec<_>>();
+    if contacts.is_empty() {
+        return None;
+    }
+    let mut total = 0.0;
+    for contact in contacts {
+        if !contact.force_available {
+            return None;
+        }
+        let force = contact.normal_force?;
+        if !force.is_finite() || force < 0.0 {
+            return None;
+        }
+        total += force;
+    }
+    total.is_finite().then_some(total)
+}
 pub fn verify_push(
     before: &VerifierTruth,
     after: &VerifierTruth,
@@ -285,6 +426,8 @@ pub fn verify_push(
             force_bound_unavailable: after.contacts.iter().all(|c| !c.force_available),
             object_followed: None,
             opening_ok: None,
+            grasp_acquired: false,
+            verified_hold: false,
             notes,
         };
     }
@@ -295,6 +438,15 @@ pub fn verify_push(
 }
 
 fn fail(f: ManipulationFailure, evidence: Vec<String>, notes: Vec<String>) -> PrivilegedVerdict {
+    fail_with_acquisition(f, evidence, notes, false)
+}
+
+fn fail_with_acquisition(
+    f: ManipulationFailure,
+    evidence: Vec<String>,
+    notes: Vec<String>,
+    grasp_acquired: bool,
+) -> PrivilegedVerdict {
     PrivilegedVerdict {
         success: false,
         failure: Some(f.as_str().into()),
@@ -304,6 +456,8 @@ fn fail(f: ManipulationFailure, evidence: Vec<String>, notes: Vec<String>) -> Pr
         force_bound_unavailable: false,
         object_followed: None,
         opening_ok: None,
+        grasp_acquired,
+        verified_hold: false,
         notes,
     }
 }

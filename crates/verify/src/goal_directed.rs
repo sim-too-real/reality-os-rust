@@ -119,6 +119,7 @@ mod tests {
     use crate::runner::load_and_normalize;
     use crate::semantics_map::embodiment_from_manifest;
     use realityos_core::{PolicyProposal, RealityOs};
+    use realityos_kernel::physical_action::PhysicalActionEnvelope;
     use realityos_physics::{PressureDistribution, SupportFrictionModel};
     use realityos_semantics::command_domain::named_joint_limit_margin;
     use realityos_semantics::contact::declared_manipulation_contact_bodies;
@@ -1672,6 +1673,7 @@ mod tests {
         source_candidate_id: &str,
         maneuver: &ContactManeuver,
         stroke_m: f64,
+        maximum_stroke_m: f64,
         authority_ok: bool,
         probe: ProbeEvidence,
     ) -> CandidateEvidence {
@@ -1716,6 +1718,10 @@ mod tests {
             role: CandidateRole::PhysicalProbe,
             strict_goal_progress: false,
             authority_ok,
+            action_envelope: Some(PhysicalActionEnvelope::LinearStroke {
+                requested_m: stroke_m,
+                maximum_m: maximum_stroke_m.max(stroke_m),
+            }),
             scoped_grant: None,
             executable_witness_id: witness_contents
                 .as_ref()
@@ -1766,8 +1772,10 @@ mod tests {
             candidate_id: candidate_id.to_string(),
             action_key: action_key.to_string(),
             witness_digest: witness_digest.to_string(),
-            requested_stroke_m: stroke_m,
-            execution_bound_m: bound_m.max(stroke_m),
+            action_envelope: PhysicalActionEnvelope::LinearStroke {
+                requested_m: stroke_m,
+                maximum_m: bound_m.max(stroke_m),
+            },
             issued_at_s: now_s,
             expires_at_s: now_s + 30.0,
             actuator_id: actuator_id.to_string(),
@@ -1787,8 +1795,7 @@ mod tests {
             action_key: grant.scope.action_key.clone(),
             witness_digest: grant.scope.witness_digest.clone(),
             actuator_id: grant.scope.actuator_id.clone(),
-            requested_stroke_m: grant.scope.requested_stroke_m,
-            execution_bound_m: grant.scope.execution_bound_m,
+            action_envelope: grant.scope.action_envelope.clone(),
             issued_at_s: grant.scope.issued_at_s,
             expires_at_s: grant.scope.expires_at_s,
             observation_contract_id: grant.scope.observation_contract_id.clone(),
@@ -1804,7 +1811,7 @@ mod tests {
             candidate_id: grant.scope.candidate_id.clone(),
             witness_digest: grant.scope.witness_digest.clone(),
             observation_epoch: grant.scope.observation_epoch.clone(),
-            requested_stroke_m: grant.scope.requested_stroke_m,
+            action_envelope: grant.scope.action_envelope.clone(),
             expires_at_s: grant.scope.expires_at_s,
         }
     }
@@ -2359,7 +2366,13 @@ mod tests {
                 .as_ref()
                 .map(|auth| auth.witness_digest.clone())
                 .unwrap_or_default(),
-            requested_stroke_m: probe_stroke,
+            action_envelope: authorization
+                .as_ref()
+                .map(|auth| auth.action_envelope.clone())
+                .unwrap_or(PhysicalActionEnvelope::LinearStroke {
+                    requested_m: probe_stroke,
+                    maximum_m: probe_stroke,
+                }),
             prediction,
             belief_snapshot,
             recoverability: action.recoverability,
@@ -3895,7 +3908,7 @@ mod tests {
                 witness_id: witness_id.clone(),
                 witness_contents,
                 witness_digest: goal_scope.witness_digest.clone(),
-                requested_stroke_m: full_stroke,
+                action_envelope: goal_scope.action_envelope.clone(),
                 prediction: frozen_prediction.clone(),
                 belief_snapshot,
                 recoverability,
@@ -4619,10 +4632,16 @@ mod tests {
                         let mut issued_probe_grant = None;
                         let mut probe_candidate = probe_maneuver.as_ref().map(|maneuver| {
                             let witness_digest = witness_digest_of(maneuver).unwrap_or_default();
+                            let scope_bound_m = probe_stroke.max(future_motion_bound(
+                                consumed,
+                                observed_displacement,
+                                probe_stroke,
+                            ));
                             let mut evidence = physical_probe_candidate_evidence(
                                 ranking_before.selected_id.as_deref().unwrap_or("probe"),
                                 maneuver,
                                 probe_stroke,
+                                scope_bound_m,
                                 true,
                                 probe_information,
                             );
@@ -4634,11 +4653,7 @@ mod tests {
                                 &evidence.action_key,
                                 &witness_digest,
                                 probe_stroke,
-                                probe_stroke.max(future_motion_bound(
-                                    consumed,
-                                    observed_displacement,
-                                    probe_stroke,
-                                )),
+                                scope_bound_m,
                                 authority_now_s,
                                 &ee_name,
                             );

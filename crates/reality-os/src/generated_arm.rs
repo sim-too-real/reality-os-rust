@@ -184,7 +184,8 @@ mod tests {
         let simulation =
             run_generated_subsystem(&arm(None, Some("simulation"), "simulation")).unwrap_err();
         assert!(simulation.contains("not a Reality OS measurement"));
-        let fixture = run_generated_subsystem(&arm(None, Some("fixture"), "simulation")).unwrap_err();
+        let fixture =
+            run_generated_subsystem(&arm(None, Some("fixture"), "simulation")).unwrap_err();
         assert!(fixture.contains("not a Reality OS measurement"));
         println!(
             "GATE_REALITY_REFUSE simulation_refused={} fixture_refused={} measurement=absent",

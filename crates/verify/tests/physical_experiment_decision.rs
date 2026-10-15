@@ -1,6 +1,7 @@
 //! Decision matrix for the shipped physical-decision and authority paths.
 
 use realityos_core::{PolicyProposal, RealityOs};
+use realityos_kernel::physical_action::PhysicalActionEnvelope;
 use realityos_semantics::discrepancy::{
     apply_probe_observation, DiscrepancyKind, Identifiability, ObservationTag, Stimulus,
 };
@@ -36,14 +37,23 @@ fn scope(action: &str, witness: &str, epoch: &str) -> PhysicalActionScope {
         candidate_id: format!("candidate:{action}"),
         action_key: action.into(),
         witness_digest: witness.into(),
-        requested_stroke_m: 0.012,
-        execution_bound_m: 0.02,
+        action_envelope: PhysicalActionEnvelope::LinearStroke {
+            requested_m: 0.012,
+            maximum_m: 0.02,
+        },
         issued_at_s: 10.0,
         expires_at_s: 40.0,
         actuator_id: "tool".into(),
         observation_contract_id: format!("sensors:{epoch}"),
         abort_contract_id: "abort-and-reobserve".into(),
     }
+}
+
+fn linear_scope_bounds(scope: &PhysicalActionScope) -> (f64, f64) {
+    scope
+        .action_envelope
+        .linear_stroke_bounds()
+        .expect("physical experiment fixtures use linear scopes")
 }
 
 fn binding(scope: &PhysicalActionScope, grant_id: &str) -> ScopedGrantBinding {
@@ -54,7 +64,7 @@ fn binding(scope: &PhysicalActionScope, grant_id: &str) -> ScopedGrantBinding {
         candidate_id: scope.candidate_id.clone(),
         witness_digest: scope.witness_digest.clone(),
         observation_epoch: scope.observation_epoch.clone(),
-        requested_stroke_m: scope.requested_stroke_m,
+        action_envelope: scope.action_envelope.clone(),
         expires_at_s: scope.expires_at_s,
     }
 }
@@ -72,6 +82,7 @@ fn probe(
         role: CandidateRole::PhysicalProbe,
         strict_goal_progress: false,
         authority_ok: true,
+        action_envelope: Some(scope.action_envelope.clone()),
         scoped_grant: grant,
         executable_witness_id: Some(format!("witness:{}", scope.candidate_id)),
         witness_digest: Some(scope.witness_digest.clone()),
@@ -94,7 +105,7 @@ fn probe(
             error_derivative: None,
             angular_rate_abs: None,
             contact_offset_abs_m: None,
-            stroke_m: scope.requested_stroke_m,
+            stroke_m: linear_scope_bounds(scope).0,
         },
         hard_rejections: vec![],
     }
@@ -313,7 +324,7 @@ fn shipped_decision_and_authority_matrix() {
             witness_id: action.witness_id.clone(),
             witness_contents: action.witness_contents.clone(),
             witness_digest: String::new(),
-            requested_stroke_m: 0.012,
+            action_envelope: probe_scope.action_envelope.clone(),
             prediction: realityos_semantics::physical_consequence::FrozenPrediction {
                 action_id: "probe-action".into(),
                 witness_id: action.witness_id.clone(),
@@ -509,8 +520,7 @@ fn issued_authorization(
         action_key: grant.scope.action_key.clone(),
         witness_digest: grant.scope.witness_digest.clone(),
         actuator_id: grant.scope.actuator_id.clone(),
-        requested_stroke_m: grant.scope.requested_stroke_m,
-        execution_bound_m: grant.scope.execution_bound_m,
+        action_envelope: grant.scope.action_envelope.clone(),
         issued_at_s: grant.scope.issued_at_s,
         expires_at_s: grant.scope.expires_at_s,
         observation_contract_id: grant.scope.observation_contract_id.clone(),
@@ -533,11 +543,15 @@ fn authorized_frozen(
         witness_id: format!("witness:{candidate_id}"),
         witness_contents: witness_contents.into(),
         witness_digest: authorization.witness_digest.clone(),
-        requested_stroke_m: authorization.requested_stroke_m,
+        action_envelope: authorization.action_envelope.clone(),
         prediction: realityos_semantics::physical_consequence::FrozenPrediction {
             action_id: format!("action:{candidate_id}"),
             witness_id: format!("witness:{candidate_id}"),
-            stroke_m: authorization.requested_stroke_m,
+            stroke_m: authorization
+                .action_envelope
+                .linear_stroke_bounds()
+                .unwrap()
+                .0,
             predicted_displacement_m: Some(0.004),
             predicted_yaw_change_rad: Some(0.0),
             predicted_contact_persists: true,
@@ -550,7 +564,11 @@ fn authorized_frozen(
         ),
         recoverability: RecoverabilityClass::ProgressAndRecoverable,
         envelope: ExecutionEnvelope::for_quasi_static_stroke(
-            authorization.requested_stroke_m,
+            authorization
+                .action_envelope
+                .linear_stroke_bounds()
+                .unwrap()
+                .1,
             0.004,
         ),
         observation_contract: ObservationContract {
@@ -935,8 +953,7 @@ fn fixture_grant(mut action: FrozenAction, issued_at_s: f64, expires_at_s: f64) 
         action_key: action.action_key.clone(),
         witness_digest: action.witness_digest.clone(),
         actuator_id: action.actuator_id.clone(),
-        requested_stroke_m: action.requested_stroke_m,
-        execution_bound_m: action.requested_stroke_m,
+        action_envelope: action.action_envelope.clone(),
         issued_at_s,
         expires_at_s,
         observation_contract_id: action.observation_contract_id.clone(),

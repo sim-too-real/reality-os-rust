@@ -4,19 +4,28 @@
 //! uncertain belief, the measured joint configuration, and the perceived object
 //! pose. It does not see the simulator friction coefficient.
 
-use realityos_core::{PolicyProposal, RealityOs};
+use realityos_core::RealityOs;
+use realityos_kernel::physical_action::PhysicalActionEnvelope;
+use realityos_reasoner_bridge::{authorize_current_action, BridgeRefusal, SimulationAdmission};
+use realityos_semantics::contact::SupportKind;
 use realityos_semantics::contact_collision::NamedBox;
-use realityos_semantics::execution_envelope::ExecutionAuthorization;
 use realityos_semantics::physical_belief::{PhysicalParameter, PhysicalParameterBelief};
 use realityos_semantics::physical_decision::DecisionKind;
 use realityos_semantics::physical_reasoner::{
-    integrate_support_friction, PhysicalObjective, PhysicalReasoner, PlanStep, ReasoningRequest,
-    TableScene, EVIDENCE_STATUS,
+    integrate_support_friction, PhysicalObjective, PhysicalReasoner, ReasoningRequest, TableScene,
+    EVIDENCE_STATUS,
 };
-use realityos_session::{issue_scoped_simulation_grant, PhysicalActionScope};
+use realityos_semantics::provenance::Provenanced;
+use realityos_semantics::resource::{
+    ClosingDirection, ControlledResource, CouplingModel, QualificationStatus, ResourceKind,
+    ResourceTopology,
+};
+use realityos_session::grant_covers;
 use realityos_verify::bundle::RobotBundle;
 use realityos_verify::corpus;
+use realityos_verify::manipulation_verify::verify_grasp;
 use realityos_verify::mujoco_exec::{checkin_worker, ensure_mujoco_or_skip, MujocoInstance};
+use realityos_verify::observation::VerifierTruth;
 use realityos_verify::runner::load_and_normalize;
 use realityos_verify::semantics_map::embodiment_from_manifest;
 use serde_json::{json, Value};
@@ -38,6 +47,7 @@ fn production_reasoner_push_probe_and_replan_in_mujoco() {
     world.place_for_contact(&model, [0.30, 0.0, 0.12]);
     let start = world.object_xyz();
     let mut request = world.policy_request(&model, uncertain_friction());
+    request.linear_execution_bound_m = Some(0.1);
     assert!(
         !format!("{request:?}").contains(&format!("{TRUE_FRICTION}")),
         "the policy request must not carry the hidden friction"
@@ -51,20 +61,17 @@ fn production_reasoner_push_probe_and_replan_in_mujoco() {
         "uncertain friction must not authorize an immediate goal push: {:?}",
         first.decision
     );
-    let probe = first
-        .executable
-        .clone()
-        .or_else(|| {
-            first.candidates.iter().find_map(|candidate| {
-                if candidate.action_key == "probe:+x" && candidate.status == "PROVED" {
-                    Some(step_from_summary(candidate, request.probe_stroke_m))
-                } else {
-                    None
-                }
-            })
-        })
-        .unwrap_or_else(|| panic!("probe not proved: {}", candidate_lines(&first.candidates)));
-    let probe_grant = authorize(&mut os, &mut reasoner, &request, &probe);
+    let probe_proposal = first
+        .authority_request
+        .as_ref()
+        .unwrap_or_else(|| panic!("probe not proposed: {}", candidate_lines(&first.candidates)));
+    assert_eq!(probe_proposal.action_key, "probe:+x");
+    let probe_grant = authorize_planar_current(&mut os, &mut reasoner, &request);
+    assert_eq!(probe_grant.frozen().action_key, probe_proposal.action_key);
+    assert_eq!(
+        probe_grant.frozen().witness_digest,
+        probe_proposal.witness_digest
+    );
     let before_writes = world.ctrl_writes();
     let probed = world.execute(&probe_grant);
     assert!(world.ctrl_writes() > before_writes);
@@ -94,11 +101,18 @@ fn production_reasoner_push_probe_and_replan_in_mujoco() {
     });
     assert!(plan.conditional);
     assert!(!plan.steps.is_empty(), "steps {:?}", plan_keys(&plan));
-    let first_step = planned
-        .executable
-        .clone()
-        .unwrap_or_else(|| plan.steps[0].clone());
-    let first_action = authorize(&mut os, &mut reasoner, &request, &first_step);
+    let first_step = planned.executable.as_ref().unwrap_or_else(|| {
+        panic!(
+            "no current executable step\n{}",
+            candidate_lines(&planned.candidates)
+        )
+    });
+    let first_action = authorize_planar_current(&mut os, &mut reasoner, &request);
+    assert_eq!(first_action.frozen().action_key, first_step.action_key);
+    assert_eq!(
+        first_action.frozen().witness_digest,
+        first_step.witness_digest
+    );
     if plan.steps.len() >= 2 {
         assert!(reasoner
             .authorize_step(
@@ -130,22 +144,15 @@ fn production_reasoner_push_probe_and_replan_in_mujoco() {
             .is_err());
     }
     let replanned = reasoner.consider(&request);
-    let second_step = replanned
-        .executable
-        .clone()
-        .or_else(|| {
-            replanned
-                .plan
-                .as_ref()
-                .and_then(|plan| plan.steps.first().cloned())
-        })
-        .unwrap_or_else(|| {
-            panic!(
-                "no second action\n{}",
-                candidate_lines(&replanned.candidates)
-            )
-        });
-    let second = authorize(&mut os, &mut reasoner, &request, &second_step);
+    let second_step = replanned.executable.as_ref().unwrap_or_else(|| {
+        panic!(
+            "no second action\n{}",
+            candidate_lines(&replanned.candidates)
+        )
+    });
+    let second = authorize_planar_current(&mut os, &mut reasoner, &request);
+    assert_eq!(second.frozen().action_key, second_step.action_key);
+    assert_eq!(second.frozen().witness_digest, second_step.witness_digest);
     assert_ne!(
         first_action
             .frozen()
@@ -202,7 +209,7 @@ fn production_reasoner_push_probe_and_replan_in_mujoco() {
 }
 
 #[test]
-fn production_reasoner_grasp_uses_the_same_runtime() {
+fn production_reasoner_grasp_refuses_without_qualified_resource() {
     if !ensure_mujoco_or_skip() {
         return;
     }
@@ -235,46 +242,333 @@ fn production_reasoner_grasp_uses_the_same_runtime() {
     request.scene.finger_q = world.finger_q();
     request.gripper_force_n = Some(2.0);
     request.mass_kg = Some(0.05);
+    request.belief.narrow_interval(
+        PhysicalParameter::SupportFriction,
+        [0.5, 0.5],
+        "known-support-friction",
+    );
     let mut reasoner = PhysicalReasoner::new(model);
     let mut os = RealityOs::new();
     let report = reasoner.consider(&request);
-    let step = report
+    let grasp = report
         .candidates
         .iter()
-        .find(|candidate| candidate.action_key == "grasp:y" && candidate.status == "PROVED")
-        .map(|candidate| {
-            let mut step = step_from_summary(candidate, 1e-4);
-            step.stroke_m = 1e-4;
-            step
-        })
-        .unwrap_or_else(|| panic!("grasp not proved\n{}", candidate_lines(&report.candidates)));
-    let action = authorize(&mut os, &mut reasoner, &request, &step);
-    assert!(action
-        .frozen()
-        .witness_contents
-        .contains("segments=transit,approach,contact,interaction"));
-    let observed = world.execute(&action);
-    let both = observed.finger_l_contact && observed.finger_r_contact;
+        .find(|candidate| candidate.action_key == "grasp:y")
+        .expect("the reasoner reports the grasp refusal");
+    assert_eq!(grasp.status, "GRIPPER_RESOURCE_UNKNOWN");
+    assert!(report.executable.is_none());
+    assert!(report.authority_request.is_none());
+    let before_writes = world.ctrl_writes();
+    assert_eq!(
+        authorize_current_action(
+            &mut os,
+            &mut reasoner,
+            &request,
+            &SimulationAdmission {
+                execution_bound_m: 0.1,
+                expires_at_s: 40.0,
+            },
+            &[],
+        ),
+        Err(BridgeRefusal::NoJustifiedAction)
+    );
+    assert_eq!(world.ctrl_writes(), before_writes);
+    world.finish();
+}
+
+#[test]
+fn production_reasoner_authorized_grasp_is_verified_in_mujoco() {
+    if !ensure_mujoco_or_skip() {
+        return;
+    }
+    let mut world = World::load("arm_gripper_lift");
+    let (mut model, request, resource) = prepare_grasp(&mut world);
+    model.collision_geoms.clear();
+    let mut reasoner = PhysicalReasoner::new(model);
+    let mut os = RealityOs::new();
+    let authorized = authorize_current_action(
+        &mut os,
+        &mut reasoner,
+        &request,
+        &SimulationAdmission {
+            execution_bound_m: 0.1,
+            expires_at_s: 40.0,
+        },
+        &[],
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "exactly proved grasp receives simulation-only authority: {error}; candidates={} finger_q={:?}",
+            candidate_lines(&reasoner.consider(&request).candidates),
+            request.scene.finger_q
+        )
+    });
+    let frozen = authorized.action.frozen();
+    assert!(frozen.authority_granted);
+    assert_eq!(authorized.grant.evidence_status, EVIDENCE_STATUS);
+    assert!(!authorized.grant.metal);
+    assert!(matches!(
+        frozen.action_envelope,
+        PhysicalActionEnvelope::PinchGrasp { .. }
+    ));
+
+    let before_writes = world.ctrl_writes();
+    let execution = world.execute_grasp(&authorized, &request, 10.0);
+    assert!(
+        !execution.aborted,
+        "grasp phases aborted: {:?}",
+        execution.phases
+    );
+    assert!(!execution.runtime_divergence);
+    assert_eq!(execution.phases, ["approach", "contact", "close", "lift"]);
+    assert_eq!(execution.unauthorized_writes, 0);
+    let after = world.current_truth();
+    let opening = world.measured_opening(&resource);
+    let verdict = verify_grasp(
+        execution
+            .hold_start
+            .as_ref()
+            .expect("measured state after close"),
+        &after,
+        &resource,
+        "obj0",
+        &["table", "floor"],
+        &["wall".into()],
+        opening,
+        after.time_s,
+        &["ee"],
+        Some(&frozen.action_envelope),
+    );
+    assert!(verdict.grasp_acquired, "{:?}", verdict.evidence_used);
+    assert!(
+        verdict.verified_hold,
+        "failure={:?} evidence={:?} notes={:?} phases={:?} hold_q={:?} hold_obj={:?} hold_ee={:?} object_after={:?} ee_after={:?} envelope={:?}",
+        verdict.failure,
+        verdict.evidence_used,
+        verdict.notes,
+        execution.phases,
+        execution.hold_start.as_ref().map(|state| &state.qpos),
+        execution.hold_start.as_ref().and_then(|state| state.xpos.get("obj0")),
+        execution.hold_start.as_ref().and_then(|state| state.named_pos.get("ee")),
+        after.xpos.get("obj0"),
+        after.named_pos.get("ee"),
+        frozen.action_envelope,
+    );
+    assert!(verdict.success);
+    assert_eq!(verdict.support[0].kind, SupportKind::Unsupported);
+    assert!(world.ctrl_writes() > before_writes);
+    assert_eq!(execution.unauthorized_writes, 0);
+
+    let hold_start = execution
+        .hold_start
+        .as_ref()
+        .expect("verified hold has a measured close state");
+    let object_before = hold_start.xpos["obj0"].as_slice();
+    let object_after = after.xpos["obj0"].as_slice();
+    let ee_before = hold_start.named_pos["ee"].as_slice();
+    let ee_after = after.named_pos["ee"].as_slice();
+    let object_lift_m = object_after[2] - object_before[2];
+    let ee_lift_m = ee_after[2] - ee_before[2];
+    let follow_residual_m = vector_delta_distance(
+        [
+            object_after[0] - object_before[0],
+            object_after[1] - object_before[1],
+            object_lift_m,
+        ],
+        [
+            ee_after[0] - ee_before[0],
+            ee_after[1] - ee_before[1],
+            ee_lift_m,
+        ],
+    );
+    let left_force_n = normal_force_sum(&after, "obj0", "finger_l");
+    let right_force_n = normal_force_sum(&after, "obj0", "finger_r");
+    let force_ceiling = match &frozen.action_envelope {
+        PhysicalActionEnvelope::PinchGrasp {
+            per_finger_force_ceiling_n,
+            ..
+        } => *per_finger_force_ceiling_n,
+        _ => unreachable!("verified grasp has a typed pinch envelope"),
+    };
+    assert!(left_force_n.is_some_and(|force| force <= force_ceiling));
+    assert!(right_force_n.is_some_and(|force| force <= force_ceiling));
     let evidence = json!({
         "evidence_status": EVIDENCE_STATUS,
-        "acquired": both,
-        "finger_l_contact": observed.finger_l_contact,
-        "finger_r_contact": observed.finger_r_contact,
-        "displacement_m": observed.displacement,
-        "unauthorized_writes": 0,
+        "authorized_action": frozen.action_key,
+        "action_envelope": frozen.action_envelope,
+        "phases": execution.phases,
+        "grasp_acquired": verdict.grasp_acquired,
+        "verified_hold": verdict.verified_hold,
+        "support": format!("{:?}", verdict.support[0].kind),
+        "measured_object_lift_m": object_lift_m,
+        "measured_end_effector_lift_m": ee_lift_m,
+        "object_follow_residual_m": follow_residual_m,
+        "measured_per_finger_normal_force_n": {
+            "finger_l": left_force_n,
+            "finger_r": right_force_n,
+        },
+        "measured_opening_fraction": opening,
+        "evidence": verdict.evidence_used,
+        "ctrl_writes": world.ctrl_writes() - before_writes,
+        "unauthorized_writes": execution.unauthorized_writes,
     });
-    std::fs::write(
-        evidence_path("production_mujoco_grasp.json"),
-        serde_json::to_string_pretty(&evidence).unwrap(),
-    )
-    .unwrap();
-    assert!(
-        both,
-        "a grasp attempt without two-sided contact is not acquisition\n{evidence}"
-    );
-    reasoner.abort_grant(&action);
-    assert!(reasoner.resume_aborted(&action).is_err());
+    let path = evidence_path("production_mujoco_grasp.json");
+    std::fs::write(&path, serde_json::to_string_pretty(&evidence).unwrap()).unwrap();
     world.finish();
+}
+
+#[test]
+fn production_reasoner_grasp_expiry_stops_before_unverified_lift() {
+    if !ensure_mujoco_or_skip() {
+        return;
+    }
+    let mut world = World::load("arm_gripper_lift");
+    let (mut model, request, resource) = prepare_grasp(&mut world);
+    model.collision_geoms.clear();
+    let mut reasoner = PhysicalReasoner::new(model);
+    let mut os = RealityOs::new();
+    let authorized = authorize_current_action(
+        &mut os,
+        &mut reasoner,
+        &request,
+        &SimulationAdmission {
+            execution_bound_m: 0.1,
+            expires_at_s: 10.95,
+        },
+        &[],
+    )
+    .expect("grant is valid at action start");
+    let before = world.current_truth();
+    let before_writes = world.ctrl_writes();
+    let execution = world.execute_grasp(&authorized, &request, 10.0);
+    assert!(execution.aborted);
+    assert!(!execution.runtime_divergence);
+    assert_eq!(execution.phases, ["approach", "contact", "close"]);
+    assert_eq!(execution.unauthorized_writes, 0);
+    let after = world.current_truth();
+    let opening = world.measured_opening(&resource);
+    let verdict = verify_grasp(
+        execution.hold_start.as_ref().unwrap_or(&before),
+        &after,
+        &resource,
+        "obj0",
+        &["table", "floor"],
+        &["wall".into()],
+        opening,
+        after.time_s,
+        &["ee"],
+        Some(&authorized.action.frozen().action_envelope),
+    );
+    assert!(!verdict.verified_hold);
+    assert!(!verdict.success);
+    assert!(world.ctrl_writes() > before_writes);
+    assert_eq!(execution.unauthorized_writes, 0);
+    world.finish();
+}
+
+#[test]
+fn production_reasoner_grasp_runtime_divergence_aborts_before_control_write() {
+    if !ensure_mujoco_or_skip() {
+        return;
+    }
+    let mut world = World::load("arm_gripper_lift");
+    let (mut model, request, _) = prepare_grasp(&mut world);
+    model.collision_geoms.clear();
+    let mut reasoner = PhysicalReasoner::new(model);
+    let mut os = RealityOs::new();
+    let authorized = authorize_current_action(
+        &mut os,
+        &mut reasoner,
+        &request,
+        &SimulationAdmission {
+            execution_bound_m: 0.1,
+            expires_at_s: 40.0,
+        },
+        &[],
+    )
+    .expect("grasp starts with a current exact proof");
+    let mut divergent = q_line(&authorized.action.frozen().witness_contents, "q0_bits=");
+    divergent[0] += 0.1;
+    world.set_arm(&divergent);
+    let before_writes = world.ctrl_writes();
+
+    let execution = world.execute_grasp(&authorized, &request, 10.0);
+
+    assert!(execution.aborted);
+    assert!(execution.runtime_divergence);
+    assert!(execution.phases.is_empty());
+    assert_eq!(execution.unauthorized_writes, 0);
+    assert_eq!(world.ctrl_writes(), before_writes);
+    world.finish();
+}
+
+fn prepare_grasp(
+    world: &mut World,
+) -> (
+    realityos_semantics::embodiment::EmbodimentModel,
+    ReasoningRequest,
+    ControlledResource,
+) {
+    let mut model = world.model.clone();
+    let current_arm = world.arm_q();
+    world.command_q(&current_arm, &[0.029, 0.029], 200);
+    let resource = ControlledResource {
+        id: "gripper:direct-two-finger".into(),
+        kind: ResourceKind::Gripper,
+        topology: ResourceTopology::DirectJointGripper,
+        actuator_inputs: vec!["grip_l".into(), "grip_r".into()],
+        affected_joints: vec!["finger_l".into(), "finger_r".into()],
+        finger_bodies: vec!["finger_l".into(), "finger_r".into()],
+        coupling: CouplingModel::none(),
+        command_coordinate: "joint_position".into(),
+        opening_range: Provenanced::declared([0.0, 0.03], "mujoco_fixture", 10.0),
+        command_range: Provenanced::declared([0.0, 0.03], "mujoco_fixture", 10.0),
+        closing_direction: ClosingDirection::TowardMin,
+        force_bound: Provenanced::declared([0.0, 2.0], "mujoco_fixture", 10.0),
+        qualification: QualificationStatus::Qualified,
+        unsupported_detail: None,
+    };
+    model.resources = vec![resource.clone()];
+    world.model = model.clone();
+    let ee = world.site("ee");
+    world
+        .inst()
+        .configure_body(
+            "obj0",
+            None,
+            Some(0.04),
+            Some(TRUE_FRICTION),
+            Some(vec![0.01, 0.01, 0.01]),
+            false,
+        )
+        .expect("configure grasp object");
+    let object_pos = [ee[0], ee[1], 0.11];
+    world
+        .inst()
+        .rpc(&json!({"cmd":"set_body_pos","body":"obj0","pos":object_pos}))
+        .expect("place object on the table between fingers");
+    let mut request = world.policy_request(&model, finger_friction());
+    request.scene.object_half = [0.01, 0.01, 0.01];
+    request.scene.object_center = world.object_xyz();
+    request.scene.support_origin = [
+        request.scene.object_center[0],
+        request.scene.object_center[1],
+        request.scene.object_center[2] - request.scene.object_half[2],
+    ];
+    request.objective = PhysicalObjective::AcquireObject {
+        object_id: "obj0".into(),
+    };
+    request.scene.finger_names = resource.affected_joints.clone();
+    request.scene.finger_q = world.finger_q();
+    request.gripper_force_n = Some(2.0);
+    request.mass_kg = Some(0.04);
+    request.gripper_resource = Some(resource.clone());
+    request.belief.narrow_interval(
+        PhysicalParameter::SupportFriction,
+        [0.5, 0.5],
+        "known-support-friction",
+    );
+    (model, request, resource)
 }
 
 struct World {
@@ -287,8 +581,15 @@ struct World {
 
 struct Executed {
     displacement: f64,
-    finger_l_contact: bool,
-    finger_r_contact: bool,
+}
+
+#[derive(Debug, Default)]
+struct GraspExecution {
+    phases: Vec<&'static str>,
+    aborted: bool,
+    runtime_divergence: bool,
+    unauthorized_writes: u64,
+    hold_start: Option<VerifierTruth>,
 }
 
 impl World {
@@ -347,6 +648,186 @@ impl World {
         }
     }
 
+    fn current_truth(&mut self) -> VerifierTruth {
+        let snapshot = self.inst().step(0).expect("privileged truth snapshot");
+        let state = snapshot.get("state").unwrap_or(&snapshot);
+        VerifierTruth::from_mujoco_state(state)
+    }
+
+    fn measured_opening(&mut self, resource: &ControlledResource) -> Option<f64> {
+        let [minimum, maximum] = resource.opening_range.value?;
+        let span = maximum - minimum;
+        if !span.is_finite() || span <= 0.0 {
+            return None;
+        }
+        let positions = self.finger_q();
+        (positions.len() == resource.affected_joints.len()).then(|| {
+            positions
+                .iter()
+                .map(|position| ((position - minimum) / span).clamp(0.0, 1.0))
+                .sum::<f64>()
+                / positions.len() as f64
+        })
+    }
+
+    fn execute_grasp(
+        &mut self,
+        authorized: &realityos_reasoner_bridge::AuthorizedReasonerAction,
+        request: &ReasoningRequest,
+        start_time_s: f64,
+    ) -> GraspExecution {
+        let frozen = authorized.action.frozen();
+        let Some(PhysicalActionEnvelope::PinchGrasp {
+            resource_id,
+            finger_joint_names,
+            open_positions,
+            close_positions,
+            lift_trajectory_digest,
+            ..
+        }) = Some(&frozen.action_envelope)
+        else {
+            return GraspExecution {
+                aborted: true,
+                ..GraspExecution::default()
+            };
+        };
+        let Some(resource) = request.gripper_resource.as_ref() else {
+            return GraspExecution {
+                aborted: true,
+                ..GraspExecution::default()
+            };
+        };
+        let contents = &frozen.witness_contents;
+        let q0 = q_line(contents, "q0_bits=");
+        let transit = q_line(contents, "q_transit_bits=");
+        let contact = q_line(contents, "q_contact_bits=");
+        let frozen_close = q_line(contents, "finger_bits=");
+        let lift_digest = contents
+            .lines()
+            .find_map(|line| line.strip_prefix("lift_trajectory_digest="))
+            .unwrap_or_default();
+        let lift_states = contents
+            .lines()
+            .filter(|line| line.starts_with("lift_state_"))
+            .filter_map(parse_lift_state)
+            .collect::<Vec<_>>();
+        let Some(PhysicalActionEnvelope::PinchGrasp {
+            per_finger_force_ceiling_n,
+            maximum_lift_m,
+            ..
+        }) = Some(&frozen.action_envelope)
+        else {
+            unreachable!()
+        };
+        let envelope_matches = resource_id == &resource.id
+            && finger_joint_names == &request.scene.finger_names
+            && open_positions.len() == 2
+            && close_positions.len() == 2
+            && open_positions.len() == request.scene.finger_q.len()
+            && exact_values(open_positions, &request.scene.finger_q)
+            && exact_values(close_positions, &frozen_close)
+            && resource.force_bound.known_value().is_some_and(|bound| {
+                bound[1].is_finite() && bound[1] >= *per_finger_force_ceiling_n
+            })
+            && !lift_trajectory_digest.is_empty()
+            && lift_digest == lift_trajectory_digest
+            && q0.len() == request.scene.joint_names.len()
+            && transit.len() == q0.len()
+            && contact.len() == q0.len()
+            && lift_states.len() >= 2
+            && lift_states[0].0.len() == q0.len()
+            && lift_states
+                .iter()
+                .all(|state| state.0.len() == q0.len() && state.1.len() == 2)
+            && exact_values(&lift_states[0].0, &contact)
+            && exact_values(&lift_states[0].1, close_positions)
+            && exact_values(&lift_states[1].1, close_positions)
+            && *maximum_lift_m >= 0.02;
+        if !envelope_matches || !grasp_action_covers(authorized, start_time_s) {
+            return GraspExecution {
+                aborted: true,
+                ..GraspExecution::default()
+            };
+        }
+        let measured_start = self.arm_q();
+        if !q_tracks(&measured_start, &q0, 0.03) {
+            return GraspExecution {
+                aborted: true,
+                runtime_divergence: true,
+                ..GraspExecution::default()
+            };
+        }
+
+        let phases = [
+            (
+                "approach",
+                transit.as_slice(),
+                open_positions.as_slice(),
+                160_u32,
+            ),
+            (
+                "contact",
+                contact.as_slice(),
+                open_positions.as_slice(),
+                160_u32,
+            ),
+            (
+                "close",
+                contact.as_slice(),
+                close_positions.as_slice(),
+                160_u32,
+            ),
+        ];
+        let mut result = GraspExecution::default();
+        let mut now_s = start_time_s;
+        for (phase, arm_target, fingers, steps) in phases {
+            if !grasp_action_covers(authorized, now_s) {
+                result.aborted = true;
+                return result;
+            }
+            self.command_q(arm_target, fingers, steps);
+            result.phases.push(phase);
+            now_s += f64::from(steps) * 0.002;
+            let measured = self.arm_q();
+            if !q_tracks(&measured, arm_target, 0.025) {
+                result.aborted = true;
+                result.runtime_divergence = true;
+                return result;
+            }
+            if phase == "close" {
+                result.hold_start = Some(self.current_truth());
+            }
+        }
+
+        let lift_steps = 5_u32;
+        let steps_per_lift = 160_u32;
+        for step in 1..=lift_steps {
+            if !grasp_action_covers(authorized, now_s) {
+                result.aborted = true;
+                return result;
+            }
+            if step == 1 {
+                result.phases.push("lift");
+            }
+            let fraction = f64::from(step) / f64::from(lift_steps);
+            let target = lift_states[0]
+                .0
+                .iter()
+                .zip(&lift_states[1].0)
+                .map(|(start, end)| start + fraction * (end - start))
+                .collect::<Vec<_>>();
+            self.command_q(&target, close_positions, steps_per_lift);
+            now_s += f64::from(steps_per_lift) * 0.002;
+            let measured = self.arm_q();
+            if !q_tracks(&measured, &target, 0.025) {
+                result.aborted = true;
+                result.runtime_divergence = true;
+                return result;
+            }
+        }
+        result
+    }
+
     fn policy_request(
         &mut self,
         _model: &realityos_semantics::embodiment::EmbodimentModel,
@@ -388,6 +869,8 @@ impl World {
             evidence_fresh: true,
             mass_kg: Some(0.05),
             gripper_force_n: Some(2.0),
+            gripper_resource: None,
+            linear_execution_bound_m: None,
             gravity_m_s2: [0.0, 0.0, -9.81],
         }
     }
@@ -416,14 +899,11 @@ impl World {
             self.command_q(&arm, &fingers, 80);
         }
         let after = self.object_xyz();
-        let contacts = self.contacts();
         Executed {
             displacement: ((after[0] - before[0]).powi(2)
                 + (after[1] - before[1]).powi(2)
                 + (after[2] - before[2]).powi(2))
             .sqrt(),
-            finger_l_contact: pair(&contacts, "finger_l", "obj0"),
-            finger_r_contact: pair(&contacts, "finger_r", "obj0"),
         }
     }
 
@@ -600,27 +1080,60 @@ impl World {
         ]
     }
 
-    fn contacts(&mut self) -> Vec<(String, String)> {
-        let state = self.inst().step(0).expect("state");
-        let contacts = state["state"]["contacts"]
-            .as_array()
-            .or_else(|| state["contacts"].as_array())
-            .cloned()
-            .unwrap_or_default();
-        contacts
-            .iter()
-            .filter_map(|contact| {
-                Some((
-                    contact.get("body1")?.as_str()?.to_string(),
-                    contact.get("body2")?.as_str()?.to_string(),
-                ))
-            })
-            .collect()
-    }
-
     fn ctrl_writes(&mut self) -> u64 {
         self.inst().peek_ctrl().map(|(_, n)| n).unwrap_or(0)
     }
+}
+
+fn parse_lift_state(line: &str) -> Option<(Vec<f64>, Vec<f64>)> {
+    let (_, payload) = line.split_once('=')?;
+    let (arm, fingers) = payload.split_once(";fingers=")?;
+    Some((parse_named_bits(arm)?, parse_named_bits(fingers)?))
+}
+
+fn parse_named_bits(payload: &str) -> Option<Vec<f64>> {
+    payload
+        .split(',')
+        .map(|item| {
+            let (_, bits) = item.split_once('=')?;
+            Some(f64::from_bits(bits.parse::<u64>().ok()?))
+        })
+        .collect()
+}
+
+fn exact_values(left: &[f64], right: &[f64]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| left.to_bits() == right.to_bits())
+}
+
+fn q_tracks(measured: &[f64], target: &[f64], tolerance: f64) -> bool {
+    measured.len() == target.len()
+        && measured.iter().zip(target).all(|(measured, target)| {
+            measured.is_finite() && target.is_finite() && (measured - target).abs() <= tolerance
+        })
+}
+
+fn grasp_action_covers(
+    authorized: &realityos_reasoner_bridge::AuthorizedReasonerAction,
+    now_s: f64,
+) -> bool {
+    let frozen = authorized.action.frozen();
+    frozen.authority_granted
+        && frozen
+            .execution_authorization
+            .as_ref()
+            .is_some_and(|grant| grant.covers(frozen, now_s))
+        && authorized.grant.evidence_status == EVIDENCE_STATUS
+        && !authorized.grant.metal
+        && grant_covers(&authorized.grant, &authorized.grant.scope, now_s).is_ok()
+        && authorized
+            .grant
+            .scope
+            .action_envelope
+            .exactly_matches(&frozen.action_envelope)
 }
 
 fn uncertain_friction() -> PhysicalParameterBelief {
@@ -640,73 +1153,23 @@ fn finger_friction() -> PhysicalParameterBelief {
     belief
 }
 
-fn authorize(
+fn authorize_planar_current(
     os: &mut RealityOs,
     reasoner: &mut PhysicalReasoner,
     request: &ReasoningRequest,
-    step: &PlanStep,
 ) -> realityos_semantics::physical_reasoner::AuthorizedAction {
-    let scope = PhysicalActionScope {
-        model_id: reasoner.model_hash().into(),
-        embodiment_id: reasoner.robot_id().into(),
-        observation_epoch: request.scene.observation_epoch.clone(),
-        candidate_id: step.candidate_id.clone(),
-        action_key: step.action_key.clone(),
-        witness_digest: step.witness_digest.clone(),
-        requested_stroke_m: step.stroke_m,
-        execution_bound_m: step.stroke_m.max(0.02),
-        issued_at_s: request.now_s,
-        expires_at_s: 40.0,
-        actuator_id: "tool".into(),
-        observation_contract_id: format!("sensors:{}", request.scene.observation_epoch),
-        abort_contract_id: "abort-and-reobserve".into(),
-    };
-    let grant = issue_scoped_simulation_grant(
+    authorize_current_action(
         os,
-        &scope,
-        &PolicyProposal::external_deterministic(vec![1.0], "production-reasoner"),
-        request.now_s,
+        reasoner,
+        request,
+        &SimulationAdmission {
+            execution_bound_m: 0.1,
+            expires_at_s: 40.0,
+        },
         &[],
-        true,
     )
-    .expect("grant");
-    let authorization = ExecutionAuthorization {
-        grant_id: grant.command_id,
-        scope_digest: grant.scope_digest,
-        model_id: grant.scope.model_id,
-        embodiment_id: grant.scope.embodiment_id,
-        observation_epoch: grant.scope.observation_epoch,
-        candidate_id: grant.scope.candidate_id,
-        action_key: grant.scope.action_key,
-        witness_digest: grant.scope.witness_digest,
-        actuator_id: grant.scope.actuator_id,
-        requested_stroke_m: grant.scope.requested_stroke_m,
-        execution_bound_m: grant.scope.execution_bound_m,
-        issued_at_s: grant.scope.issued_at_s,
-        expires_at_s: grant.scope.expires_at_s,
-        observation_contract_id: grant.scope.observation_contract_id,
-        abort_contract_id: grant.scope.abort_contract_id,
-    };
-    reasoner
-        .authorize_step(request, step, authorization)
-        .expect("fresh proof accepts the grant")
-}
-
-fn step_from_summary(
-    candidate: &realityos_semantics::physical_reasoner::CandidateSummary,
-    stroke: f64,
-) -> PlanStep {
-    PlanStep {
-        family: candidate.family.clone(),
-        action_key: candidate.action_key.clone(),
-        candidate_id: candidate.action_key.clone(),
-        witness_digest: candidate.witness_digest.clone().unwrap_or_default(),
-        witness_contents: candidate.witness_contents.clone().unwrap_or_default(),
-        stroke_m: stroke,
-        immediate_progress: candidate.immediate_progress,
-        predicted_translation_m: stroke,
-        error_after: 0.0,
-    }
+    .expect("reasoner bridge authorizes only a current planar action")
+    .action
 }
 
 fn candidate_lines(
@@ -729,6 +1192,32 @@ fn plan_keys(plan: &realityos_semantics::physical_reasoner::PhysicalPlan) -> Vec
         .iter()
         .map(|step| step.action_key.clone())
         .collect()
+}
+
+fn vector_delta_distance(left: [f64; 3], right: [f64; 3]) -> f64 {
+    ((left[0] - right[0]).powi(2) + (left[1] - right[1]).powi(2) + (left[2] - right[2]).powi(2))
+        .sqrt()
+}
+
+fn normal_force_sum(truth: &VerifierTruth, object: &str, finger: &str) -> Option<f64> {
+    let contacts = truth
+        .contacts
+        .iter()
+        .filter(|contact| {
+            (contact.body1 == object && contact.body2 == finger)
+                || (contact.body2 == object && contact.body1 == finger)
+        })
+        .collect::<Vec<_>>();
+    if contacts.is_empty() {
+        return None;
+    }
+    contacts.into_iter().try_fold(0.0, |sum, contact| {
+        if !contact.force_available {
+            return None;
+        }
+        let force = contact.normal_force?;
+        (force.is_finite() && force >= 0.0).then_some(sum + force)
+    })
 }
 
 fn q_line(contents: &str, prefix: &str) -> Vec<f64> {
@@ -760,12 +1249,6 @@ fn joint_q(inspect: &Value, qpos: &[Value], name: &str) -> Option<f64> {
         .find(|joint| joint["name"].as_str() == Some(name))?;
     let adr = joint["qposadr"].as_u64()? as usize;
     qpos.get(adr)?.as_f64()
-}
-
-fn pair(contacts: &[(String, String)], a: &str, b: &str) -> bool {
-    contacts
-        .iter()
-        .any(|(left, right)| (left == a && right == b) || (left == b && right == a))
 }
 
 fn evidence_path(name: &str) -> PathBuf {

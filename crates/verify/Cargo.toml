@@ -15,6 +15,7 @@ realityos-governor.workspace = true
 realityos-session.workspace = true
 realityos-physics.workspace = true
 realityos-semantics.workspace = true
+realityos-reasoner-bridge.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

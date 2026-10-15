@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use realityos_kernel::physical_action::PhysicalActionEnvelope;
 use realityos_semantics::discrepancy::{
     apply_probe_observation, tag_probe_motion, DiscrepancyKind, Identifiability, ObservationTag,
     Stimulus,
@@ -31,6 +32,10 @@ fn candidate(id: &str, role: CandidateRole) -> CandidateEvidence {
         role,
         strict_goal_progress: role == CandidateRole::GoalAction,
         authority_ok: true,
+        action_envelope: Some(PhysicalActionEnvelope::LinearStroke {
+            requested_m: 0.012,
+            maximum_m: 0.012,
+        }),
         scoped_grant: None,
         executable_witness_id: Some(format!("witness:{id}")),
         witness_digest: Some(format!("digest:{id}")),
@@ -101,7 +106,7 @@ fn abort_probe_observe_update_and_replan_stays_on_the_canonical_path() {
         candidate_id: probe.candidate_id.clone(),
         witness_digest: probe.witness_digest.clone().unwrap_or_default(),
         observation_epoch: "epoch:1".into(),
-        requested_stroke_m: probe.preference.stroke_m,
+        action_envelope: probe.action_envelope.clone().unwrap(),
         expires_at_s: 40.0,
     });
 
@@ -140,7 +145,10 @@ fn abort_probe_observe_update_and_replan_stays_on_the_canonical_path() {
             witness_id: probe_action.witness_id.clone(),
             witness_contents: probe_action.witness_contents.clone(),
             witness_digest: String::new(),
-            requested_stroke_m: probe_prediction.stroke_m,
+            action_envelope: PhysicalActionEnvelope::LinearStroke {
+                requested_m: probe_prediction.stroke_m,
+                maximum_m: 0.015,
+            },
             prediction: probe_prediction.clone(),
             belief_snapshot: PhysicalParameterBelief::declared_point(
                 PhysicalParameter::SupportFriction,
@@ -339,8 +347,7 @@ fn fixture_grant(mut action: FrozenAction, issued_at_s: f64, expires_at_s: f64) 
         action_key: action.action_key.clone(),
         witness_digest: action.witness_digest.clone(),
         actuator_id: action.actuator_id.clone(),
-        requested_stroke_m: action.requested_stroke_m,
-        execution_bound_m: action.requested_stroke_m,
+        action_envelope: action.action_envelope.clone(),
         issued_at_s,
         expires_at_s,
         observation_contract_id: action.observation_contract_id.clone(),

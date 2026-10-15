@@ -15,6 +15,7 @@ pub mod honesty;
 pub mod ids;
 pub mod layer;
 pub mod observation;
+pub mod physical_action;
 pub mod rail;
 pub mod time;
 pub mod units;

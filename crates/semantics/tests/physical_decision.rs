@@ -1,3 +1,4 @@
+use realityos_kernel::physical_action::PhysicalActionEnvelope;
 use realityos_semantics::physical_decision::{
     decide_physical_action, CandidateEvidence, CandidateRole, DecisionContext, DecisionKind,
     LexicographicPreference, PredictedPhysicalEffect, ProbeEvidence, ProbeRecoverabilityAssessment,
@@ -16,6 +17,10 @@ fn candidate(id: &str, role: CandidateRole) -> CandidateEvidence {
         role,
         strict_goal_progress: role == CandidateRole::GoalAction,
         authority_ok: true,
+        action_envelope: Some(PhysicalActionEnvelope::LinearStroke {
+            requested_m: 0.02,
+            maximum_m: 0.02,
+        }),
         scoped_grant: None,
         executable_witness_id: Some(format!("witness:{id}")),
         witness_digest: Some(format!("digest:{id}")),
@@ -61,7 +66,7 @@ fn with_matching_grant(mut candidate: CandidateEvidence) -> CandidateEvidence {
         candidate_id: candidate.candidate_id.clone(),
         witness_digest: candidate.witness_digest.clone().unwrap_or_default(),
         observation_epoch: "epoch:1".into(),
-        requested_stroke_m: candidate.preference.stroke_m,
+        action_envelope: candidate.action_envelope.clone().unwrap(),
         expires_at_s: 40.0,
     });
     candidate

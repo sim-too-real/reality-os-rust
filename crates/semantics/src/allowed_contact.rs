@@ -13,6 +13,7 @@ pub enum ContactPhase {
     ContactStroke,
     GraspApproach,
     GraspClose,
+    GraspLift,
     FreeSpace,
 }
 
@@ -31,10 +32,8 @@ impl ContactPhase {
     /// Early approach samples are forbidden (forearm/tool strike).
     pub fn intended_tool_object_ok(self, sample_i: usize, n_samples: usize) -> bool {
         match self {
-            Self::ContactStroke | Self::GraspClose => true,
-            Self::ApproachToContact | Self::GraspApproach => {
-                n_samples > 0 && sample_i + 1 == n_samples
-            }
+            Self::ContactStroke | Self::GraspApproach | Self::GraspClose | Self::GraspLift => true,
+            Self::ApproachToContact => n_samples > 0 && sample_i + 1 == n_samples,
             // Start may already sit near the face; retracting is not a strike.
             Self::CurrentToApproach | Self::FreeSpace => true,
         }
@@ -202,6 +201,19 @@ mod tests {
         assert_eq!(
             p.permit("tool", "object", ContactPhase::ApproachToContact, 7, 8),
             PairPermission::Allowed
+        );
+    }
+
+    #[test]
+    fn pinch_midpoint_contact_is_permitted_during_grasp_approach() {
+        let p = policy();
+        assert_eq!(
+            p.permit("tool", "object", ContactPhase::GraspApproach, 0, 8),
+            PairPermission::Allowed
+        );
+        assert_eq!(
+            p.permit("link1", "object", ContactPhase::GraspApproach, 7, 8),
+            PairPermission::Forbidden
         );
     }
 

@@ -313,11 +313,13 @@ impl ManipulationMetrics {
             }
             "skill.grasp" => {
                 self.grasp_episodes += 1;
-                if e.task_result == "success" {
+                if e.evidence_used.iter().any(|x| x == "grasp_acquired") {
                     self.grasp_acquisition_success += 1;
-                    if e.evidence_used.iter().any(|x| x == "object_follows_ee") {
-                        self.grasp_verified_hold_success += 1;
-                    }
+                }
+                if e.task_result == "success"
+                    && e.evidence_used.iter().any(|x| x == "verified_hold")
+                {
+                    self.grasp_verified_hold_success += 1;
                 }
                 if e.failure_taxonomy.as_deref() == Some("SLIP") {
                     self.grasp_slip += 1;
@@ -1720,6 +1722,7 @@ fn execute_plan(
                 opening,
                 now,
                 &[&ee, &sem],
+                None,
             )
         }
     };

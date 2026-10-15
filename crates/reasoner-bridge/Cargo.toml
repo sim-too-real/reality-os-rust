@@ -1,0 +1,17 @@
+[package]
+name = "realityos-reasoner-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Simulation-only authority bridge for proved physical reasoner actions."
+readme = false
+
+[dependencies]
+realityos-core.workspace = true
+realityos-semantics.workspace = true
+realityos-session.workspace = true
+realityos-kernel.workspace = true
+
+[lints]
+workspace = true

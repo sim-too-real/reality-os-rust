@@ -9,6 +9,7 @@ use realityos_core::{
     is_learned_source, DecideRequest, Intent, PolicyProposal, ProposalClass, RealityOs, WorldView,
 };
 use realityos_governor::{admit_from_parts, RuntimeGovernor, RuntimeIdentity};
+use realityos_kernel::physical_action::PhysicalActionEnvelope;
 
 use crate::packages::GovernorPackage;
 use realityos_plant::{ActuationCommand, SimPlant};
@@ -24,8 +25,7 @@ pub struct PhysicalActionScope {
     pub candidate_id: String,
     pub action_key: String,
     pub witness_digest: String,
-    pub requested_stroke_m: f64,
-    pub execution_bound_m: f64,
+    pub action_envelope: PhysicalActionEnvelope,
     pub issued_at_s: f64,
     pub expires_at_s: f64,
     pub actuator_id: String,
@@ -82,29 +82,78 @@ pub struct AuthorityEligibility {
 }
 
 pub fn scope_digest(scope: &PhysicalActionScope) -> String {
-    let canonical = format!(
-        "m={}\ne={}\no={}\nc={}\na={}\nw={}\ns={:.9}\nb={:.9}\ni={:.6}\nx={:.6}\nu={}\nv={}\nz={}\n",
-        scope.model_id,
-        scope.embodiment_id,
-        scope.observation_epoch,
-        scope.candidate_id,
-        scope.action_key,
-        scope.witness_digest,
-        scope.requested_stroke_m,
-        scope.execution_bound_m,
-        scope.issued_at_s,
-        scope.expires_at_s,
-        scope.actuator_id,
-        scope.observation_contract_id,
-        scope.abort_contract_id,
-    );
-    hex::encode(Sha256::digest(canonical.as_bytes()))
+    let mut canonical = b"realityos.physical_action_scope/v2\0".to_vec();
+    encode_string(&mut canonical, &scope.model_id);
+    encode_string(&mut canonical, &scope.embodiment_id);
+    encode_string(&mut canonical, &scope.observation_epoch);
+    encode_string(&mut canonical, &scope.candidate_id);
+    encode_string(&mut canonical, &scope.action_key);
+    encode_string(&mut canonical, &scope.witness_digest);
+    encode_action_envelope(&mut canonical, &scope.action_envelope);
+    encode_f64(&mut canonical, scope.issued_at_s);
+    encode_f64(&mut canonical, scope.expires_at_s);
+    encode_string(&mut canonical, &scope.actuator_id);
+    encode_string(&mut canonical, &scope.observation_contract_id);
+    encode_string(&mut canonical, &scope.abort_contract_id);
+    hex::encode(Sha256::digest(canonical))
 }
 
+fn encode_len_prefixed(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    out.extend_from_slice(bytes);
+}
+
+fn encode_string(out: &mut Vec<u8>, value: &str) {
+    encode_len_prefixed(out, value.as_bytes());
+}
+
+fn encode_f64(out: &mut Vec<u8>, value: f64) {
+    out.extend_from_slice(&value.to_bits().to_be_bytes());
+}
+
+fn encode_f64_vec(out: &mut Vec<u8>, values: &[f64]) {
+    out.extend_from_slice(&(values.len() as u64).to_be_bytes());
+    for value in values {
+        encode_f64(out, *value);
+    }
+}
+
+fn encode_action_envelope(out: &mut Vec<u8>, envelope: &PhysicalActionEnvelope) {
+    match envelope {
+        PhysicalActionEnvelope::LinearStroke {
+            requested_m,
+            maximum_m,
+        } => {
+            out.push(0);
+            encode_f64(out, *requested_m);
+            encode_f64(out, *maximum_m);
+        }
+        PhysicalActionEnvelope::PinchGrasp {
+            resource_id,
+            finger_joint_names,
+            open_positions,
+            close_positions,
+            per_finger_force_ceiling_n,
+            lift_trajectory_digest,
+            maximum_lift_m,
+        } => {
+            out.push(1);
+            encode_string(out, resource_id);
+            out.extend_from_slice(&(finger_joint_names.len() as u64).to_be_bytes());
+            for name in finger_joint_names {
+                encode_string(out, name);
+            }
+            encode_f64_vec(out, open_positions);
+            encode_f64_vec(out, close_positions);
+            encode_f64(out, *per_finger_force_ceiling_n);
+            encode_string(out, lift_trajectory_digest);
+            encode_f64(out, *maximum_lift_m);
+        }
+    }
+}
 fn nonempty(value: &str) -> bool {
     !value.trim().is_empty()
 }
-
 fn experience_or_learned(proposal: &PolicyProposal) -> bool {
     proposal.class == ProposalClass::UntrustedLearned
         || proposal.is_learned()
@@ -136,13 +185,12 @@ fn scope_problem(scope: &PhysicalActionScope) -> Option<&'static str> {
     if !nonempty(&scope.witness_digest) {
         return Some("witness_digest");
     }
-    if !scope.requested_stroke_m.is_finite() || scope.requested_stroke_m <= 0.0 {
-        return Some("requested_stroke");
-    }
-    if !scope.execution_bound_m.is_finite()
-        || scope.execution_bound_m + 1e-12 < scope.requested_stroke_m
-    {
-        return Some("execution_bound");
+    if let Err(problem) = scope.action_envelope.validate() {
+        return Some(match problem {
+            "requested_stroke" => "requested_stroke",
+            "maximum_stroke" => "execution_bound",
+            _ => "action_envelope",
+        });
     }
     if !scope.issued_at_s.is_finite() || scope.issued_at_s <= 0.0 {
         return Some("issued_at");
@@ -303,6 +351,8 @@ fn incomplete_label(reason: &str) -> &'static str {
         "candidate_id"
     } else if reason.contains("action_key") {
         "action_key"
+    } else if reason.contains("action_envelope") {
+        "action_envelope"
     } else if reason.contains("witness") {
         "witness_digest"
     } else if reason.contains("requested_stroke") {
@@ -348,8 +398,10 @@ pub fn grant_covers(
         && same_text(&grant.scope.candidate_id, &scope.candidate_id)
         && same_text(&grant.scope.action_key, &scope.action_key)
         && same_text(&grant.scope.witness_digest, &scope.witness_digest)
-        && same_quantity(grant.scope.requested_stroke_m, scope.requested_stroke_m)
-        && same_quantity(grant.scope.execution_bound_m, scope.execution_bound_m)
+        && grant
+            .scope
+            .action_envelope
+            .exactly_matches(&scope.action_envelope)
         && same_quantity(grant.scope.issued_at_s, scope.issued_at_s)
         && same_quantity(grant.scope.expires_at_s, scope.expires_at_s)
         && same_text(&grant.scope.actuator_id, &scope.actuator_id)
@@ -378,8 +430,10 @@ mod tests {
             candidate_id: format!("candidate:{action}"),
             action_key: action.into(),
             witness_digest: witness.into(),
-            requested_stroke_m: 0.012,
-            execution_bound_m: 0.02,
+            action_envelope: PhysicalActionEnvelope::LinearStroke {
+                requested_m: 0.012,
+                maximum_m: 0.02,
+            },
             issued_at_s: 10.0,
             expires_at_s: 40.0,
             actuator_id: "tool".into(),
@@ -457,5 +511,111 @@ mod tests {
             grant_covers(&grant, &probe, 11.0),
             Err(ScopeRefusal::BindingMismatch)
         );
+    }
+}
+
+#[cfg(test)]
+mod typed_action_envelope_tests {
+    use super::*;
+    use realityos_kernel::physical_action::PhysicalActionEnvelope;
+
+    fn typed_scope() -> PhysicalActionScope {
+        PhysicalActionScope {
+            model_id: "model-hash".into(),
+            embodiment_id: "arm".into(),
+            observation_epoch: "epoch:1".into(),
+            candidate_id: "candidate:grasp".into(),
+            action_key: "grasp:y".into(),
+            witness_digest: "a".repeat(64),
+            action_envelope: PhysicalActionEnvelope::LinearStroke {
+                requested_m: 0.012,
+                maximum_m: 0.02,
+            },
+            issued_at_s: 10.0,
+            expires_at_s: 40.0,
+            actuator_id: "tool".into(),
+            observation_contract_id: "policy-sensors:epoch:1".into(),
+            abort_contract_id: "abort-and-reobserve".into(),
+        }
+    }
+
+    fn pinch(open_positions: [f64; 2], close_positions: [f64; 2]) -> PhysicalActionEnvelope {
+        PhysicalActionEnvelope::PinchGrasp {
+            resource_id: "gripper:two-finger".into(),
+            finger_joint_names: vec!["finger_l".into(), "finger_r".into()],
+            open_positions: open_positions.to_vec(),
+            close_positions: close_positions.to_vec(),
+            per_finger_force_ceiling_n: 2.0,
+            lift_trajectory_digest: "b".repeat(64),
+            maximum_lift_m: 0.02,
+        }
+    }
+
+    #[test]
+    fn scope_digest_uses_exact_float_bits_and_unambiguous_string_lengths() {
+        let baseline = typed_scope();
+
+        let mut sub_nanometer_change = baseline.clone();
+        sub_nanometer_change.action_envelope = PhysicalActionEnvelope::LinearStroke {
+            requested_m: 0.0120000002,
+            maximum_m: 0.02,
+        };
+        assert_ne!(scope_digest(&baseline), scope_digest(&sub_nanometer_change));
+
+        let mut negative_zero = baseline.clone();
+        negative_zero.action_envelope = pinch([-0.0, 0.0], [0.01, 0.01]);
+        let mut positive_zero = baseline.clone();
+        positive_zero.action_envelope = pinch([0.0, 0.0], [0.01, 0.01]);
+        assert_ne!(scope_digest(&negative_zero), scope_digest(&positive_zero));
+
+        let mut delimiter_left = baseline.clone();
+        delimiter_left.model_id = "x\ne=y".into();
+        delimiter_left.embodiment_id = "z".into();
+        let mut delimiter_right = baseline;
+        delimiter_right.model_id = "x".into();
+        delimiter_right.embodiment_id = "y\ne=z".into();
+        assert_ne!(
+            scope_digest(&delimiter_left),
+            scope_digest(&delimiter_right)
+        );
+    }
+
+    #[test]
+    fn action_envelope_rejects_malformed_and_overflowing_bounds() {
+        let duplicate_fingers = PhysicalActionEnvelope::PinchGrasp {
+            resource_id: "gripper:two-finger".into(),
+            finger_joint_names: vec!["finger_l".into(), "finger_l".into()],
+            open_positions: vec![0.02, 0.02],
+            close_positions: vec![0.0, 0.0],
+            per_finger_force_ceiling_n: 2.0,
+            lift_trajectory_digest: "b".repeat(64),
+            maximum_lift_m: 0.02,
+        };
+        assert!(duplicate_fingers.validate().is_err());
+
+        let mismatched_positions = PhysicalActionEnvelope::PinchGrasp {
+            resource_id: "gripper:two-finger".into(),
+            finger_joint_names: vec!["finger_l".into(), "finger_r".into()],
+            open_positions: vec![0.02],
+            close_positions: vec![0.0, 0.0],
+            per_finger_force_ceiling_n: 2.0,
+            lift_trajectory_digest: "b".repeat(64),
+            maximum_lift_m: 0.02,
+        };
+        assert!(mismatched_positions.validate().is_err());
+
+        let overflowing_range = pinch([f64::MAX, f64::MAX], [-f64::MAX, -f64::MAX]);
+        assert!(overflowing_range.validate().is_err());
+
+        let missing_force = PhysicalActionEnvelope::PinchGrasp {
+            resource_id: "gripper:two-finger".into(),
+            finger_joint_names: vec!["finger_l".into(), "finger_r".into()],
+            open_positions: vec![0.02, 0.02],
+            close_positions: vec![0.0, 0.0],
+            per_finger_force_ceiling_n: f64::INFINITY,
+            lift_trajectory_digest: "b".repeat(64),
+            maximum_lift_m: 0.02,
+        };
+        assert!(missing_force.validate().is_err());
     }
 }

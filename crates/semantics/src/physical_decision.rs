@@ -4,6 +4,7 @@
 //! authority result, robustness assessment, and recoverability result already
 //! exist. It cannot write to a plant or manufacture any of those proofs.
 
+use realityos_kernel::physical_action::PhysicalActionEnvelope;
 use serde::{Deserialize, Serialize};
 
 use crate::planar_goal::GoalProgressClass;
@@ -65,7 +66,7 @@ pub struct ScopedGrantBinding {
     pub candidate_id: String,
     pub witness_digest: String,
     pub observation_epoch: String,
-    pub requested_stroke_m: f64,
+    pub action_envelope: PhysicalActionEnvelope,
     pub expires_at_s: f64,
 }
 
@@ -84,8 +85,11 @@ impl ScopedGrantBinding {
             && self.action_key == candidate.action_key
             && self.candidate_id == candidate.candidate_id
             && candidate.witness_digest.as_deref() == Some(self.witness_digest.as_str())
-            && self.requested_stroke_m.is_finite()
-            && (self.requested_stroke_m - candidate.preference.stroke_m).abs() <= 1e-9
+            && self.action_envelope.validate().is_ok()
+            && candidate
+                .action_envelope
+                .as_ref()
+                .is_some_and(|envelope| self.action_envelope.exactly_matches(envelope))
             && now_s.is_finite()
             && now_s < self.expires_at_s
     }
@@ -121,6 +125,9 @@ pub struct CandidateEvidence {
     pub strict_goal_progress: bool,
     /// Policy eligibility. This is not a scoped grant.
     pub authority_ok: bool,
+    /// Exact typed action proof; absent for evidence-only candidates.
+    #[serde(default)]
+    pub action_envelope: Option<PhysicalActionEnvelope>,
     /// Present only when an independent authority path issued a grant for this action.
     #[serde(default)]
     pub scoped_grant: Option<ScopedGrantBinding>,
@@ -221,7 +228,11 @@ enum Eligibility {
     UnprovedAndUnscoped,
 }
 
-fn eligibility(candidate: &CandidateEvidence, context: &DecisionContext) -> Eligibility {
+fn eligibility(
+    candidate: &CandidateEvidence,
+    context: &DecisionContext,
+    allow_probe_scope_request: bool,
+) -> Eligibility {
     // Hard rejections always precede class membership and preferences, while
     // preserving whether the missing proof is evidence, authority, or safety.
     if context
@@ -326,7 +337,9 @@ fn eligibility(candidate: &CandidateEvidence, context: &DecisionContext) -> Elig
                 ProbeRecoverabilityAssessment::Unknown => {
                     return Eligibility::ProbeRecoverabilityUnknown;
                 }
-                ProbeRecoverabilityAssessment::Preserved if !grant_ok => {
+                ProbeRecoverabilityAssessment::Preserved
+                    if !grant_ok && !allow_probe_scope_request =>
+                {
                     return Eligibility::UnscopedGrant;
                 }
                 ProbeRecoverabilityAssessment::Preserved => {}
@@ -397,6 +410,19 @@ fn contact_transition(context: &DecisionContext, action: SelectedPhysicalAction)
 /// Select exactly one already-proved physical action using hard gates followed
 /// by class tiers and deterministic lexicographic preferences. No plant I/O.
 pub fn decide_physical_action(context: &DecisionContext) -> DecisionKind {
+    decide_physical_action_inner(context, false)
+}
+
+/// Select a safe probe that can be sent to an independent authority for scoping.
+/// This is crate-private and its result is a proposal, never an executable action.
+pub(crate) fn select_probe_for_authority_request(context: &DecisionContext) -> DecisionKind {
+    decide_physical_action_inner(context, true)
+}
+
+fn decide_physical_action_inner(
+    context: &DecisionContext,
+    allow_probe_scope_request: bool,
+) -> DecisionKind {
     if context.goal_reached {
         return DecisionKind::GoalReached {
             goal_id: context.goal_id.clone(),
@@ -422,7 +448,7 @@ pub fn decide_physical_action(context: &DecisionContext) -> DecisionKind {
     let mut unscoped_grant = false;
     let mut unproved_and_unscoped = false;
     for (index, candidate) in context.candidates.iter().enumerate() {
-        match eligibility(candidate, context) {
+        match eligibility(candidate, context, allow_probe_scope_request) {
             Eligibility::Eligible => match candidate.role {
                 CandidateRole::GoalAction => eligible_goals.push(index),
                 CandidateRole::PhysicalProbe => eligible_probes.push(index),

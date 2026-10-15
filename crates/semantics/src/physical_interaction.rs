@@ -560,6 +560,7 @@ fn select_with_physical_decision(
                 strict_goal_progress: candidate.goal_progress
                     == Some(GoalProgressClass::StrictProgress),
                 authority_ok: candidate.authority_ok,
+                action_envelope: None,
                 scoped_grant: None,
                 executable_witness_id: executable.then(|| format!("{}:witness", candidate.id)),
                 witness_digest,

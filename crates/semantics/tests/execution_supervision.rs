@@ -1,3 +1,4 @@
+use realityos_kernel::physical_action::PhysicalActionEnvelope;
 use std::collections::BTreeMap;
 
 use realityos_semantics::execution_envelope::{
@@ -18,7 +19,10 @@ fn frozen() -> FrozenAction {
         witness_id: "witness:1".into(),
         witness_contents: "frozen-witness-content".into(),
         witness_digest: String::new(),
-        requested_stroke_m: 0.02,
+        action_envelope: PhysicalActionEnvelope::LinearStroke {
+            requested_m: 0.02,
+            maximum_m: 0.02,
+        },
         prediction: FrozenPrediction {
             action_id: "action:1".into(),
             witness_id: "witness:1".into(),
@@ -93,8 +97,7 @@ fn fixture_grant(mut action: FrozenAction, issued_at_s: f64, expires_at_s: f64) 
         action_key: action.action_key.clone(),
         witness_digest: action.witness_digest.clone(),
         actuator_id: action.actuator_id.clone(),
-        requested_stroke_m: action.requested_stroke_m,
-        execution_bound_m: action.requested_stroke_m,
+        action_envelope: action.action_envelope.clone(),
         issued_at_s,
         expires_at_s,
         observation_contract_id: action.observation_contract_id.clone(),

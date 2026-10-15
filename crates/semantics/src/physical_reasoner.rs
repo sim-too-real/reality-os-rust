@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+use realityos_kernel::physical_action::PhysicalActionEnvelope;
 use serde::{Deserialize, Serialize};
 
 use crate::adapter::synth_planar_two_link;
@@ -29,9 +30,9 @@ use crate::physical_belief::{BeliefEpistemicStatus, PhysicalParameter, PhysicalP
 use crate::physical_consequence::FrozenPrediction;
 use crate::physical_decision::CandidateRole::{GoalAction, PhysicalProbe};
 use crate::physical_decision::{
-    decide_physical_action, CandidateEvidence, CandidateRole, DecisionContext, DecisionKind,
-    LexicographicPreference, PredictedPhysicalEffect, ProbeEvidence, ProbeRecoverabilityAssessment,
-    ScopedGrantBinding,
+    decide_physical_action, select_probe_for_authority_request, CandidateEvidence, CandidateRole,
+    DecisionContext, DecisionKind, LexicographicPreference, PredictedPhysicalEffect, ProbeEvidence,
+    ProbeRecoverabilityAssessment, ScopedGrantBinding,
 };
 use crate::planar_goal::GoalProgressClass;
 use crate::probe_selection::BeliefRobustness;
@@ -85,6 +86,9 @@ pub struct ReasoningRequest {
     pub evidence_fresh: bool,
     pub mass_kg: Option<f64>,
     pub gripper_force_n: Option<f64>,
+    pub gripper_resource: Option<crate::resource::ControlledResource>,
+    /// Optional authority cap installed by a scoped linear-action bridge.
+    pub linear_execution_bound_m: Option<f64>,
     pub gravity_m_s2: [f64; 3],
 }
 
@@ -115,6 +119,8 @@ pub struct PlanStep {
     pub candidate_id: String,
     pub witness_digest: String,
     pub witness_contents: String,
+    pub action_envelope: PhysicalActionEnvelope,
+    /// Planner ranking metric; never interpreted as an executable command.
     pub stroke_m: f64,
     pub immediate_progress: bool,
     pub predicted_translation_m: f64,
@@ -138,6 +144,8 @@ pub struct ReasoningReport {
     pub plan: Option<PhysicalPlan>,
     /// The single next action justified by the current observation.
     pub executable: Option<PlanStep>,
+    /// A proved probe selected for external scoping. This is not executable.
+    pub authority_request: Option<PlanStep>,
     pub families: Vec<String>,
     pub evidence_status: &'static str,
 }
@@ -274,7 +282,8 @@ impl PhysicalReasoner {
     pub fn consider(&mut self, request: &ReasoningRequest) -> ReasoningReport {
         let proved = self.actions_at(request);
         let summaries = proved.iter().map(|action| action.summary.clone()).collect();
-        let decision = decide_physical_action(&decision_context(request, &proved));
+        let context = decision_context(request, &proved);
+        let decision = decide_physical_action(&context);
         self.note_geometric_fact();
         let plan = search_plan(self, request);
         let greedy_key = decision_action_key(&decision);
@@ -303,14 +312,48 @@ impl PhysicalReasoner {
                 .and_then(|proof| proof.action.step.clone()),
             _ => None,
         };
+        let authority_request = if executable.is_none() {
+            authority_request(&context, &proved)
+        } else {
+            None
+        };
         ReasoningReport {
             candidates: summaries,
             decision,
             plan,
             executable,
+            authority_request,
             families: self.families().map(str::to_string).to_vec(),
             evidence_status: EVIDENCE_STATUS,
         }
+    }
+
+    /// Re-prove a report step against the current request and return its frozen
+    /// contract without attaching an authority grant.
+    pub fn prepare_step(
+        &mut self,
+        request: &ReasoningRequest,
+        step: &PlanStep,
+    ) -> Result<FrozenAction, &'static str> {
+        let fresh = self.prove_action_key(request, &step.action_key);
+        if fresh.summary.status != "PROVED" {
+            return Err("NOT_PROVED");
+        }
+        let digest = fresh.summary.witness_digest.as_deref().unwrap_or("");
+        let contents = fresh.summary.witness_contents.as_deref().unwrap_or("");
+        if digest != step.witness_digest || contents != step.witness_contents {
+            return Err("STALE_OR_UNPROVED_WITNESS");
+        }
+        let Some(proved_step) = fresh.step.as_ref() else {
+            return Err("STALE_OR_UNPROVED_STEP");
+        };
+        if !same_plan_step(step, proved_step) {
+            return Err("STALE_OR_UNPROVED_STEP");
+        }
+        if !initial_configuration_matches(request, contents) {
+            return Err("INITIAL_CONFIGURATION_MISMATCH");
+        }
+        Ok(frozen_from_step(&self.model, request, step))
     }
 
     pub fn authorize_step(
@@ -322,19 +365,7 @@ impl PhysicalReasoner {
         if self.aborted_grants.contains(&authorization.grant_id) {
             return Err("ABORTED_GRANT_CANNOT_RESUME");
         }
-        let fresh = self.prove_action_key(request, &step.action_key);
-        if fresh.summary.status != "PROVED" {
-            return Err("NOT_PROVED");
-        }
-        let digest = fresh.summary.witness_digest.as_deref().unwrap_or("");
-        let contents = fresh.summary.witness_contents.as_deref().unwrap_or("");
-        if digest != step.witness_digest || contents != step.witness_contents {
-            return Err("STALE_OR_UNPROVED_WITNESS");
-        }
-        if !initial_configuration_matches(request, contents) {
-            return Err("INITIAL_CONFIGURATION_MISMATCH");
-        }
-        let frozen = frozen_from_step(&self.model, request, step);
+        let frozen = self.prepare_step(request, step)?;
         let frozen = frozen.bind_issued_authorization(authorization, request.now_s)?;
         Ok(AuthorizedAction { frozen })
     }
@@ -606,6 +637,8 @@ pub fn benchmark_scene() -> (EmbodimentModel, ReasoningRequest) {
         evidence_fresh: true,
         mass_kg: Some(0.05),
         gripper_force_n: Some(2.0),
+        gripper_resource: None,
+        linear_execution_bound_m: None,
         gravity_m_s2: [0.0, 0.0, -9.81],
     };
     (model, request)
@@ -715,13 +748,9 @@ fn push_raw(
 
 fn grasp_candidates(request: &ReasoningRequest) -> Vec<RawCandidate> {
     let direction = [0.0, -1.0, 0.0];
-    let target = add3(
-        request.scene.object_center,
-        scale3(
-            [0.0, 1.0, 0.0],
-            request.scene.object_half[1] + request.scene.tool_radius_m,
-        ),
-    );
+    // The end-effector frame is the pinch midpoint. Offset only the approach
+    // standoff; the contact pose must center both declared fingers on the object.
+    let target = request.scene.object_center;
     vec![RawCandidate {
         action_key: "grasp:y".into(),
         direction,
@@ -737,6 +766,28 @@ fn prove_push(
     candidate: &RawCandidate,
 ) -> ProvedAction {
     work_counters::note_mechanics_evaluation();
+    if request
+        .linear_execution_bound_m
+        .is_some_and(|bound| !bound.is_finite() || bound <= 0.0)
+    {
+        return rejected(
+            PUSH_FAMILY,
+            candidate,
+            "LINEAR_EXECUTION_BOUND_INVALID",
+            MechanicsStatus::Unknown,
+        );
+    }
+    if request
+        .linear_execution_bound_m
+        .is_some_and(|bound| bound + 1e-12 < candidate.stroke_m)
+    {
+        return rejected(
+            PUSH_FAMILY,
+            candidate,
+            "LINEAR_EXECUTION_BOUND_TOO_SMALL",
+            MechanicsStatus::Unknown,
+        );
+    }
     if cheap_obstacle_hit(request, candidate.target_xyz) {
         return rejected(
             PUSH_FAMILY,
@@ -832,7 +883,8 @@ fn finish_probe(
             mechanics,
         );
     }
-    let contents = witness_text(PUSH_FAMILY, model, request, candidate, solved);
+    let envelope = linear_action_envelope(request, candidate);
+    let contents = witness_text(PUSH_FAMILY, model, request, candidate, solved, &envelope);
     let digest = contents_digest(&contents);
     let coverage = CommonWitnessCoverage {
         label: candidate.action_key.clone(),
@@ -913,6 +965,52 @@ fn prove_grasp(
     candidate: &RawCandidate,
 ) -> ProvedAction {
     work_counters::note_mechanics_evaluation();
+    if !request.evidence_fresh || !request.now_s.is_finite() {
+        return rejected(
+            GRASP_FAMILY,
+            candidate,
+            "OBSERVATION_STALE_OR_INVALID",
+            MechanicsStatus::Unknown,
+        );
+    }
+    if !request
+        .scene
+        .object_center
+        .iter()
+        .all(|value| value.is_finite())
+        || !request
+            .scene
+            .object_half
+            .iter()
+            .all(|value| value.is_finite() && *value > 0.0)
+        || !request
+            .scene
+            .support_origin
+            .iter()
+            .all(|value| value.is_finite())
+        || !request
+            .scene
+            .support_normal
+            .iter()
+            .all(|value| value.is_finite())
+        || request
+            .scene
+            .support_normal
+            .iter()
+            .map(|value| value * value)
+            .sum::<f64>()
+            < 1e-12
+    {
+        return rejected(
+            GRASP_FAMILY,
+            candidate,
+            "OBJECT_OR_SUPPORT_GEOMETRY_UNKNOWN",
+            MechanicsStatus::Unknown,
+        );
+    }
+    if let Err(reason) = validate_gripper_resource(model, request) {
+        return rejected(GRASP_FAMILY, candidate, reason, MechanicsStatus::Unknown);
+    }
     if cheap_obstacle_hit(request, candidate.target_xyz) {
         return rejected(
             GRASP_FAMILY,
@@ -962,7 +1060,12 @@ fn grasp_mechanics(request: &ReasoningRequest) -> MechanicsStatus {
     let (Some(mass), Some(force)) = (request.mass_kg, request.gripper_force_n) else {
         return MechanicsStatus::Unknown;
     };
-    if !(mass > 0.0 && force > 0.0) {
+    if !(mass.is_finite()
+        && mass > 0.0
+        && force.is_finite()
+        && force > 0.0
+        && request.gravity_m_s2.iter().all(|value| value.is_finite()))
+    {
         return MechanicsStatus::Unknown;
     }
     let Some(interval) = friction_interval(&request.belief, PhysicalParameter::ToolObjectFriction)
@@ -999,6 +1102,9 @@ struct SolvedPose {
     q_contact: Vec<f64>,
     q_end: Vec<f64>,
     finger_q: Vec<f64>,
+    lift_states: Vec<Vec<f64>>,
+    lift_distance_m: f64,
+    lift_trajectory_digest: Option<String>,
 }
 
 fn prove_arm_path(
@@ -1013,13 +1119,12 @@ fn prove_arm_path(
         sub3(candidate.target_xyz, scale3(candidate.direction, 0.02))
     };
     let q_transit = solve_precise(model, &request.scene, standoff_xyz)?;
-    let transit_phase = ContactPhase::CurrentToApproach;
     arm_motion_clear(
         model,
         request,
         &request.scene.arm_q,
         &q_transit,
-        transit_phase,
+        ContactPhase::CurrentToApproach,
     )?;
     let mut contact_scene = request.scene.clone();
     contact_scene.arm_q = q_transit.clone();
@@ -1047,10 +1152,26 @@ fn prove_arm_path(
             ContactPhase::ContactStroke,
         )?;
     }
-    let finger_q = if grasp {
-        close_fingers(model, request)?
+    let (finger_q, lift_states, lift_distance_m, lift_trajectory_digest) = if grasp {
+        const BOUNDED_GRASP_LIFT_M: f64 = 0.025;
+        let finger_q = close_fingers(model, request)?;
+        let lift_target = add3(candidate.target_xyz, [0.0, 0.0, BOUNDED_GRASP_LIFT_M]);
+        let mut lift_scene = request.scene.clone();
+        lift_scene.arm_q = q_contact.clone();
+        let q_lift = solve_precise(model, &lift_scene, lift_target)?;
+        arm_motion_clear(model, request, &q_contact, &q_lift, ContactPhase::GraspLift)?;
+        carried_object_lift_clear(request, BOUNDED_GRASP_LIFT_M)?;
+        let states = vec![q_contact.clone(), q_lift];
+        let digest = lift_trajectory_digest(
+            &request.scene.joint_names,
+            &request.scene.finger_names,
+            &states,
+            &finger_q,
+            BOUNDED_GRASP_LIFT_M,
+        );
+        (finger_q, states, BOUNDED_GRASP_LIFT_M, Some(digest))
     } else {
-        request.scene.finger_q.clone()
+        (request.scene.finger_q.clone(), Vec::new(), 0.0, None)
     };
     Ok(SolvedPose {
         q0: request.scene.arm_q.clone(),
@@ -1058,47 +1179,363 @@ fn prove_arm_path(
         q_contact,
         q_end,
         finger_q,
+        lift_states,
+        lift_distance_m,
+        lift_trajectory_digest,
     })
 }
 
-fn close_fingers(
+fn validate_gripper_resource(
     model: &EmbodimentModel,
     request: &ReasoningRequest,
 ) -> Result<Vec<f64>, &'static str> {
-    if request.scene.finger_names.len() < 2
-        || request.scene.finger_q.len() != request.scene.finger_names.len()
+    use crate::resource::{ClosingDirection, QualificationStatus, ResourceKind, ResourceTopology};
+    let resource = request
+        .gripper_resource
+        .as_ref()
+        .ok_or("GRIPPER_RESOURCE_UNKNOWN")?;
+    if resource.id.trim().is_empty()
+        || resource.kind != ResourceKind::Gripper
+        || resource.topology != ResourceTopology::DirectJointGripper
+        || resource.qualification != QualificationStatus::Qualified
+        || resource.unsupported_detail.is_some()
+        || resource.coupling.tendon.is_some()
+        || !resource.coupling.equalities.is_empty()
+        || !resource.coupling.declared_only
     {
-        return Err("FINGERS_UNDECLARED");
+        return Err("GRIPPER_RESOURCE_UNSUPPORTED");
     }
-    let mut closed = Vec::new();
-    for (name, open) in request
-        .scene
-        .finger_names
-        .iter()
-        .zip(request.scene.finger_q.iter())
+    let names = &request.scene.finger_names;
+    if names.len() != 2
+        || names.iter().any(|name| name.trim().is_empty())
+        || names[0] == names[1]
+        || resource.affected_joints != *names
+        || resource.actuator_inputs.len() != 2
+        || resource.finger_bodies.len() != 2
+        || resource
+            .finger_bodies
+            .iter()
+            .any(|name| name.trim().is_empty())
+        || resource.finger_bodies[0] == resource.finger_bodies[1]
+        || request.scene.finger_q.len() != 2
     {
-        let Some(joint) = model.joints.iter().find(|joint| joint.name == *name) else {
-            return Err("FINGERS_UNDECLARED");
-        };
+        return Err("GRIPPER_RESOURCE_FINGER_MISMATCH");
+    }
+    if model
+        .resources
+        .iter()
+        .filter(|model_resource| model_resource.id == resource.id)
+        .count()
+        != 1
+        || model
+            .resources
+            .iter()
+            .find(|model_resource| model_resource.id == resource.id)
+            != Some(resource)
+    {
+        return Err("GRIPPER_RESOURCE_MODEL_MISMATCH");
+    }
+    let [opening_min, opening_max] = resource
+        .opening_range
+        .value
+        .ok_or("GRIPPER_OPENING_RANGE_UNKNOWN")?;
+    let [command_min, command_max] = resource
+        .command_range
+        .value
+        .ok_or("GRIPPER_COMMAND_RANGE_UNKNOWN")?;
+    let [force_min, force_max] = resource
+        .force_bound
+        .value
+        .ok_or("GRIPPER_FORCE_BOUND_UNKNOWN")?;
+    if ![
+        opening_min,
+        opening_max,
+        command_min,
+        command_max,
+        force_min,
+        force_max,
+    ]
+    .iter()
+    .all(|value| value.is_finite())
+        || opening_min >= opening_max
+        || command_min >= command_max
+        || force_min < 0.0
+        || force_max <= 0.0
+    {
+        return Err("GRIPPER_RESOURCE_BOUNDS_INVALID");
+    }
+    let force = request.gripper_force_n.ok_or("GRIPPER_FORCE_UNKNOWN")?;
+    if !force.is_finite() || force <= 0.0 || force > force_max {
+        return Err("GRIPPER_FORCE_OUTSIDE_RESOURCE_BOUND");
+    }
+    let actuators: Vec<_> = model
+        .actuators
+        .iter()
+        .filter(|actuator| resource.actuator_inputs.contains(&actuator.name))
+        .collect();
+    if actuators.len() != 2 {
+        return Err("GRIPPER_ACTUATOR_MAPPING_UNKNOWN");
+    }
+    let mut close = Vec::with_capacity(2);
+    for (index, name) in names.iter().enumerate() {
+        let open = request.scene.finger_q[index];
+        let joint = model
+            .joints
+            .iter()
+            .find(|joint| joint.name == *name)
+            .ok_or("FINGERS_UNDECLARED")?;
         if joint.kind != crate::embodiment::JointKind::Slide {
             return Err("FINGER_IS_NOT_A_SLIDE");
         }
         let (Some(lo), Some(hi)) = (joint.q_min.value, joint.q_max.value) else {
             return Err("FINGER_LIMITS_UNKNOWN");
         };
-        // Positive slide ranges in the supported grippers open outward. The
-        // closed stop is the lower limit. A command already at that stop has
-        // no close travel to prove.
-        let commanded = lo;
-        if !commanded.is_finite() || commanded < lo - 1e-9 || commanded > hi + 1e-9 {
-            return Err("FINGER_CLOSE_OUTSIDE_LIMITS");
+        if !lo.is_finite()
+            || !hi.is_finite()
+            || lo >= hi
+            || !open.is_finite()
+            || open < lo - 1e-9
+            || open > hi + 1e-9
+            || open < opening_min - 1e-9
+            || open > opening_max + 1e-9
+            || lo.to_bits() != command_min.to_bits()
+            || hi.to_bits() != command_max.to_bits()
+        {
+            return Err("GRIPPER_POSITION_OUTSIDE_RESOURCE_RANGE");
         }
-        if (commanded - open).abs() <= 1e-6 {
+        let close_target = match resource.closing_direction {
+            ClosingDirection::TowardMin => lo,
+            ClosingDirection::TowardMax => hi,
+        };
+        let moves_toward_close = match resource.closing_direction {
+            ClosingDirection::TowardMin => open > close_target + 1e-6,
+            ClosingDirection::TowardMax => open < close_target - 1e-6,
+        };
+        if !moves_toward_close {
             return Err("FINGER_CLOSE_HAS_NO_TRAVEL");
         }
-        closed.push(commanded);
+        let actuator_name = &resource.actuator_inputs[index];
+        let actuator = actuators
+            .iter()
+            .find(|actuator| actuator.name == *actuator_name)
+            .ok_or("GRIPPER_ACTUATOR_ORDER_MISMATCH")?;
+        if actuator.target_joint != *name
+            || !actuator.targets_joint()
+            || actuator.control_mode != "position"
+        {
+            return Err("GRIPPER_ACTUATOR_JOINT_MISMATCH");
+        }
+        let [ctrl_lo, ctrl_hi] = actuator
+            .ctrlrange
+            .value
+            .ok_or("GRIPPER_CONTROL_RANGE_UNKNOWN")?;
+        let [force_lo, force_hi] = actuator
+            .forcerange
+            .value
+            .ok_or("GRIPPER_ACTUATOR_FORCE_UNKNOWN")?;
+        if ![ctrl_lo, ctrl_hi, force_lo, force_hi]
+            .iter()
+            .all(|value| value.is_finite())
+            || ctrl_lo.to_bits() != command_min.to_bits()
+            || ctrl_hi.to_bits() != command_max.to_bits()
+            || force > force_lo.abs().max(force_hi.abs())
+        {
+            return Err("GRIPPER_ACTUATOR_BOUND_MISMATCH");
+        }
+        close.push(close_target);
     }
-    Ok(closed)
+    Ok(close)
+}
+
+fn close_fingers(
+    model: &EmbodimentModel,
+    request: &ReasoningRequest,
+) -> Result<Vec<f64>, &'static str> {
+    validate_gripper_resource(model, request)
+}
+
+fn lift_trajectory_digest(
+    arm_joint_names: &[String],
+    finger_joint_names: &[String],
+    arm_states: &[Vec<f64>],
+    closed_finger_positions: &[f64],
+    lift_distance_m: f64,
+) -> String {
+    let mut bytes = Vec::new();
+    push_str(&mut bytes, "realityos.pinch_lift_trajectory/v1");
+    bytes.extend_from_slice(&(arm_joint_names.len() as u64).to_le_bytes());
+    for name in arm_joint_names {
+        push_str(&mut bytes, name);
+    }
+    bytes.extend_from_slice(&(finger_joint_names.len() as u64).to_le_bytes());
+    for name in finger_joint_names {
+        push_str(&mut bytes, name);
+    }
+    bytes.extend_from_slice(&(arm_states.len() as u64).to_le_bytes());
+    for state in arm_states {
+        push_q(&mut bytes, state);
+        push_q(&mut bytes, closed_finger_positions);
+    }
+    push_f64(&mut bytes, lift_distance_m);
+    digest_bytes(&bytes)
+}
+
+fn carried_object_lift_clear(
+    request: &ReasoningRequest,
+    lift_distance_m: f64,
+) -> Result<(), &'static str> {
+    if !lift_distance_m.is_finite() || lift_distance_m < 0.02 {
+        return Err("GRASP_LIFT_BOUND_INVALID");
+    }
+    let object_half = oriented_aabb_half(request.scene.object_half, request.scene.object_quat)
+        .ok_or("OBJECT_ORIENTATION_UNKNOWN")?;
+    let swept_half = [
+        object_half[0],
+        object_half[1],
+        object_half[2] + lift_distance_m / 2.0,
+    ];
+    let swept_center = add3(
+        request.scene.object_center,
+        [0.0, 0.0, lift_distance_m / 2.0],
+    );
+    for obstacle in &request.scene.obstacles {
+        if !obstacle.center.iter().all(|value| value.is_finite())
+            || !obstacle
+                .half_extents
+                .iter()
+                .all(|value| value.is_finite() && *value > 0.0)
+        {
+            return Err("OBSTACLE_GEOMETRY_UNKNOWN");
+        }
+        let obstacle_half = oriented_aabb_half(obstacle.half_extents, obstacle.quat_wxyz)
+            .ok_or("OBSTACLE_GEOMETRY_UNKNOWN")?;
+        if !aabb_separated(swept_center, swept_half, obstacle.center, obstacle_half) {
+            return Err("CARRIED_OBJECT_LIFT_COLLISION");
+        }
+    }
+    Ok(())
+}
+
+fn oriented_aabb_half(half: [f64; 3], quat: [f64; 4]) -> Option<[f64; 3]> {
+    if !half.iter().all(|value| value.is_finite() && *value > 0.0)
+        || !quat.iter().all(|value| value.is_finite())
+    {
+        return None;
+    }
+    let [w, x, y, z] = quat;
+    let norm = (w * w + x * x + y * y + z * z).sqrt();
+    if !norm.is_finite() || (norm - 1.0).abs() > 1e-6 {
+        return None;
+    }
+    let (w, x, y, z) = (w / norm, x / norm, y / norm, z / norm);
+    let rotation = [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - z * w),
+            2.0 * (x * z + y * w),
+        ],
+        [
+            2.0 * (x * y + z * w),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - x * w),
+        ],
+        [
+            2.0 * (x * z - y * w),
+            2.0 * (y * z + x * w),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ];
+    Some([
+        (0..3)
+            .map(|axis| rotation[0][axis].abs() * half[axis])
+            .sum(),
+        (0..3)
+            .map(|axis| rotation[1][axis].abs() * half[axis])
+            .sum(),
+        (0..3)
+            .map(|axis| rotation[2][axis].abs() * half[axis])
+            .sum(),
+    ])
+}
+
+fn push_controlled_resource(bytes: &mut Vec<u8>, resource: &crate::resource::ControlledResource) {
+    push_str(bytes, &resource.id);
+    bytes.push(match resource.kind {
+        crate::resource::ResourceKind::Gripper => 1,
+        crate::resource::ResourceKind::ContactEndEffector => 2,
+    });
+    bytes.push(match resource.topology {
+        crate::resource::ResourceTopology::DirectJointGripper => 1,
+        crate::resource::ResourceTopology::CoupledJointGripper => 2,
+        crate::resource::ResourceTopology::TendonDrivenGripper => 3,
+        crate::resource::ResourceTopology::UnsupportedResourceTopology => 4,
+    });
+    push_strings(bytes, &resource.actuator_inputs);
+    push_strings(bytes, &resource.affected_joints);
+    push_strings(bytes, &resource.finger_bodies);
+    match &resource.coupling.tendon {
+        Some(tendon) => {
+            bytes.push(1);
+            push_str(bytes, &tendon.tendon);
+            bytes.extend_from_slice(&(tendon.joints.len() as u64).to_le_bytes());
+            for (joint, weight) in &tendon.joints {
+                push_str(bytes, joint);
+                push_f64(bytes, *weight);
+            }
+        }
+        None => bytes.push(0),
+    }
+    bytes.extend_from_slice(&(resource.coupling.equalities.len() as u64).to_le_bytes());
+    for equality in &resource.coupling.equalities {
+        push_str(bytes, &equality.joint_a);
+        push_str(bytes, &equality.joint_b);
+    }
+    bytes.push(u8::from(resource.coupling.declared_only));
+    push_str(bytes, &resource.command_coordinate);
+    push_provenanced_pair(bytes, &resource.opening_range);
+    push_provenanced_pair(bytes, &resource.command_range);
+    bytes.push(match resource.closing_direction {
+        crate::resource::ClosingDirection::TowardMin => 1,
+        crate::resource::ClosingDirection::TowardMax => 2,
+    });
+    push_provenanced_pair(bytes, &resource.force_bound);
+    bytes.push(match resource.qualification {
+        crate::resource::QualificationStatus::Unverified => 1,
+        crate::resource::QualificationStatus::Qualified => 2,
+        crate::resource::QualificationStatus::Failed => 3,
+        crate::resource::QualificationStatus::NotApplicable => 4,
+    });
+    match &resource.unsupported_detail {
+        Some(detail) => {
+            bytes.push(1);
+            push_str(bytes, detail);
+        }
+        None => bytes.push(0),
+    }
+}
+
+fn push_strings(bytes: &mut Vec<u8>, strings: &[String]) {
+    bytes.extend_from_slice(&(strings.len() as u64).to_le_bytes());
+    for value in strings {
+        push_str(bytes, value);
+    }
+}
+
+fn push_provenanced_pair(bytes: &mut Vec<u8>, value: &Provenanced<[f64; 2]>) {
+    bytes.push(match value.provenance {
+        crate::provenance::Provenance::ModelDeclared => 1,
+        crate::provenance::Provenance::CalibrationMeasured => 2,
+        crate::provenance::Provenance::HardwareMeasured => 3,
+        crate::provenance::Provenance::SimulatorDerived => 4,
+        crate::provenance::Provenance::UserDeclared => 5,
+        crate::provenance::Provenance::LearnedEstimate => 6,
+        crate::provenance::Provenance::Assumed => 7,
+        crate::provenance::Provenance::Unknown => 8,
+    });
+    push_str(bytes, &value.source);
+    push_f64(bytes, value.as_of_s);
+    push_opt_pair(bytes, value.value);
+    push_opt_pair(bytes, value.uncertainty);
 }
 
 fn finish_action(
@@ -1117,7 +1554,24 @@ fn finish_action(
     error_before: f64,
 ) -> ProvedAction {
     let _ = error_before;
-    let contents = witness_text(family, model, request, candidate, solved);
+    let action_envelope = if family == GRASP_FAMILY {
+        PhysicalActionEnvelope::PinchGrasp {
+            resource_id: request
+                .gripper_resource
+                .as_ref()
+                .map(|resource| resource.id.clone())
+                .unwrap_or_default(),
+            finger_joint_names: request.scene.finger_names.clone(),
+            open_positions: request.scene.finger_q.clone(),
+            close_positions: solved.finger_q.clone(),
+            per_finger_force_ceiling_n: request.gripper_force_n.unwrap_or(f64::NAN),
+            lift_trajectory_digest: solved.lift_trajectory_digest.clone().unwrap_or_default(),
+            maximum_lift_m: solved.lift_distance_m,
+        }
+    } else {
+        linear_action_envelope(request, candidate)
+    };
+    let contents = witness_text(family, model, request, candidate, solved, &action_envelope);
     let digest = contents_digest(&contents);
     let robust = if immediate && mechanics == MechanicsStatus::Feasible {
         BeliefRobustness::RobustStrictProgress
@@ -1132,6 +1586,7 @@ fn finish_action(
         role,
         strict_goal_progress: immediate,
         authority_ok: true,
+        action_envelope: Some(action_envelope.clone()),
         scoped_grant: None,
         executable_witness_id: Some(format!("witness:{}", candidate.action_key)),
         witness_digest: Some(digest.clone()),
@@ -1170,18 +1625,21 @@ fn finish_action(
         hard_rejections: Vec::new(),
     };
     let translation = norm3(sub3(successor_center, request.scene.object_center));
-    let step = if mechanics == MechanicsStatus::Feasible
-        && (immediate
-            || matches!(
-                request.objective,
-                PhysicalObjective::PlanarTranslation { .. }
-            )) {
+    let step = if role == CandidateRole::PhysicalProbe
+        || (mechanics == MechanicsStatus::Feasible
+            && (immediate
+                || matches!(
+                    request.objective,
+                    PhysicalObjective::PlanarTranslation { .. }
+                )))
+    {
         Some(PlanStep {
             family: family.into(),
             action_key: candidate.action_key.clone(),
             candidate_id: candidate.action_key.clone(),
             witness_digest: digest.clone(),
             witness_contents: contents.clone(),
+            action_envelope: action_envelope.clone(),
             stroke_m: candidate.stroke_m,
             immediate_progress: immediate,
             predicted_translation_m: translation,
@@ -1368,14 +1826,23 @@ fn frozen_from_step(
     request: &ReasoningRequest,
     step: &PlanStep,
 ) -> FrozenAction {
+    let linear_bounds = step.action_envelope.linear_stroke_bounds();
+    let executed_stroke_m = linear_bounds.map(|bounds| bounds.0).unwrap_or(0.0);
+    let execution_limit_m =
+        linear_bounds
+            .map(|bounds| bounds.1)
+            .unwrap_or_else(|| match &step.action_envelope {
+                PhysicalActionEnvelope::PinchGrasp { maximum_lift_m, .. } => *maximum_lift_m,
+                PhysicalActionEnvelope::LinearStroke { .. } => 0.0,
+            });
     let prediction = FrozenPrediction {
         action_id: format!("action:{}", step.candidate_id),
         witness_id: format!("witness:{}", step.action_key),
-        stroke_m: step.stroke_m,
+        stroke_m: executed_stroke_m,
         predicted_displacement_m: Some(step.predicted_translation_m),
         predicted_yaw_change_rad: Some(0.0),
         predicted_contact_persists: step.family == GRASP_FAMILY,
-        quasi_static_stroke_limit_m: step.stroke_m.max(request.goal_stroke_m),
+        quasi_static_stroke_limit_m: execution_limit_m.max(1e-4),
     };
     FrozenAction {
         action_id: prediction.action_id.clone(),
@@ -1385,7 +1852,7 @@ fn frozen_from_step(
         witness_id: prediction.witness_id.clone(),
         witness_contents: step.witness_contents.clone(),
         witness_digest: step.witness_digest.clone(),
-        requested_stroke_m: step.stroke_m,
+        action_envelope: step.action_envelope.clone(),
         prediction,
         belief_snapshot: request.belief.clone(),
         recoverability: if step.immediate_progress {
@@ -1394,7 +1861,7 @@ fn frozen_from_step(
             RecoverabilityClass::NoProgress
         },
         envelope: ExecutionEnvelope::for_quasi_static_stroke(
-            step.stroke_m.max(1e-4),
+            execution_limit_m.max(1e-4),
             step.predicted_translation_m,
         ),
         observation_contract: ObservationContract {
@@ -1423,6 +1890,19 @@ fn frozen_from_step(
         authority_granted: false,
         execution_authorization: None,
     }
+}
+
+fn same_plan_step(left: &PlanStep, right: &PlanStep) -> bool {
+    left.family == right.family
+        && left.action_key == right.action_key
+        && left.candidate_id == right.candidate_id
+        && left.witness_digest == right.witness_digest
+        && left.witness_contents == right.witness_contents
+        && left.action_envelope.exactly_matches(&right.action_envelope)
+        && left.stroke_m.to_bits() == right.stroke_m.to_bits()
+        && left.immediate_progress == right.immediate_progress
+        && left.predicted_translation_m.to_bits() == right.predicted_translation_m.to_bits()
+        && left.error_after.to_bits() == right.error_after.to_bits()
 }
 
 fn solve_precise(
@@ -1625,7 +2105,7 @@ fn joint_margin(model: &EmbodimentModel, names: &[String], q: &[f64]) -> f64 {
     }
 }
 
-const PROOF_ALGORITHM: &str = "physical-proof/3";
+const PROOF_ALGORITHM: &str = "physical-proof/4";
 
 fn witness_text(
     family: &str,
@@ -1633,11 +2113,12 @@ fn witness_text(
     request: &ReasoningRequest,
     candidate: &RawCandidate,
     solved: &SolvedPose,
+    action_envelope: &PhysicalActionEnvelope,
 ) -> String {
     let dependency = proof_dependency_digest(family, model, request, candidate);
-    format!(
-        "algorithm={PROOF_ALGORITHM}\nfamily={family}\nkey={}\npush_bits={}\nstroke_bits={}\nq0_bits={}\nq_transit_bits={}\nq_contact_bits={}\nq_end_bits={}\nfinger_bits={}\ndependency={dependency}\nsegments=transit,approach,contact,interaction\ncontact_observed=false\n",
-        candidate.action_key,
+    let mut witness = format!(
+        "algorithm={PROOF_ALGORITHM}\nfamily={family}\nkey={}\npush_bits={}\nstroke_bits={}\nq0_bits={}\nq_transit_bits={}\nq_contact_bits={}\nq_end_bits={}\nfinger_bits={}\naction_envelope={}\nlift_trajectory_digest={}\ndependency={dependency}\nsegments=transit,approach,contact,close,lift\ncontact_observed=false\n",
+        hex::encode(candidate.action_key.as_bytes()),
         bits3(candidate.direction),
         candidate.stroke_m.to_bits(),
         bits_q(&solved.q0),
@@ -1645,7 +2126,75 @@ fn witness_text(
         bits_q(&solved.q_contact),
         bits_q(&solved.q_end),
         bits_q(&solved.finger_q),
-    )
+        action_envelope_witness(action_envelope),
+        solved.lift_trajectory_digest.as_deref().unwrap_or("none"),
+    );
+    for (index, state) in solved.lift_states.iter().enumerate() {
+        let arm = request
+            .scene
+            .joint_names
+            .iter()
+            .zip(state)
+            .map(|(name, value)| format!("{}={}", hex::encode(name.as_bytes()), value.to_bits()))
+            .collect::<Vec<_>>()
+            .join(",");
+        let fingers = request
+            .scene
+            .finger_names
+            .iter()
+            .zip(&solved.finger_q)
+            .map(|(name, value)| format!("{}={}", hex::encode(name.as_bytes()), value.to_bits()))
+            .collect::<Vec<_>>()
+            .join(",");
+        witness.push_str(&format!("lift_state_{index}={arm};fingers={fingers}\n"));
+    }
+    witness
+}
+
+fn action_envelope_witness(envelope: &PhysicalActionEnvelope) -> String {
+    match envelope {
+        PhysicalActionEnvelope::LinearStroke {
+            requested_m,
+            maximum_m,
+        } => {
+            format!(
+                "linear:{:016x}:{:016x}",
+                requested_m.to_bits(),
+                maximum_m.to_bits()
+            )
+        }
+        PhysicalActionEnvelope::PinchGrasp {
+            resource_id,
+            finger_joint_names,
+            open_positions,
+            close_positions,
+            per_finger_force_ceiling_n,
+            lift_trajectory_digest,
+            maximum_lift_m,
+        } => {
+            let fingers = finger_joint_names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| {
+                    format!(
+                        "{}:{:016x}:{:016x}",
+                        hex::encode(name.as_bytes()),
+                        open_positions[index].to_bits(),
+                        close_positions[index].to_bits()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "pinch:{}:{}:{:016x}:{}:{:016x}",
+                hex::encode(resource_id.as_bytes()),
+                fingers,
+                per_finger_force_ceiling_n.to_bits(),
+                hex::encode(lift_trajectory_digest.as_bytes()),
+                maximum_lift_m.to_bits()
+            )
+        }
+    }
 }
 
 fn bits3(value: [f64; 3]) -> String {
@@ -1752,6 +2301,13 @@ fn proof_dependency_digest(
     push_f64(&mut bytes, request.probe_stroke_m);
     push_opt_f64(&mut bytes, request.mass_kg);
     push_opt_f64(&mut bytes, request.gripper_force_n);
+    push_opt_f64(&mut bytes, request.linear_execution_bound_m);
+    if let Some(resource) = &request.gripper_resource {
+        bytes.push(1);
+        push_controlled_resource(&mut bytes, resource);
+    } else {
+        bytes.push(0);
+    }
     push_q(&mut bytes, &request.gravity_m_s2);
     match request.objective {
         PhysicalObjective::PlanarTranslation { target_xy } => {
@@ -1801,6 +2357,29 @@ fn push_f64(bytes: &mut Vec<u8>, value: f64) {
     bytes.extend_from_slice(&value.to_bits().to_le_bytes());
 }
 
+fn push_opt_pair(bytes: &mut Vec<u8>, value: Option<[f64; 2]>) {
+    match value {
+        Some(pair) => {
+            bytes.push(1);
+            push_f64(bytes, pair[0]);
+            push_f64(bytes, pair[1]);
+        }
+        None => bytes.push(0),
+    }
+}
+
+fn linear_action_envelope(
+    request: &ReasoningRequest,
+    candidate: &RawCandidate,
+) -> PhysicalActionEnvelope {
+    PhysicalActionEnvelope::LinearStroke {
+        requested_m: candidate.stroke_m,
+        maximum_m: request
+            .linear_execution_bound_m
+            .unwrap_or(candidate.stroke_m),
+    }
+}
+
 fn push_opt_f64(bytes: &mut Vec<u8>, value: Option<f64>) {
     match value {
         Some(value) => {
@@ -1835,6 +2414,26 @@ fn decision_action_key(decision: &DecisionKind) -> Option<&str> {
     }
 }
 
+fn authority_request(context: &DecisionContext, actions: &[ProvedAction]) -> Option<PlanStep> {
+    let decision = select_probe_for_authority_request(context);
+    let action = match &decision {
+        DecisionKind::PhysicalProbe { action, .. }
+        | DecisionKind::ContactTransition { action, .. }
+            if action.role == CandidateRole::PhysicalProbe =>
+        {
+            action
+        }
+        _ => return None,
+    };
+    actions
+        .iter()
+        .find(|proved| {
+            proved.summary.action_key == action.action_key
+                && proved.summary.witness_digest.as_deref() == Some(action.witness_digest.as_str())
+        })
+        .and_then(|proved| proved.step.clone())
+}
+
 fn axis_label(direction: [f64; 3]) -> &'static str {
     if direction[0] > 0.5 {
         "+x"
@@ -1856,7 +2455,12 @@ fn fixture_binding(candidate: &CandidateSummary, request: &ReasoningRequest) -> 
         candidate_id: candidate.action_key.clone(),
         witness_digest: digest,
         observation_epoch: request.scene.observation_epoch.clone(),
-        requested_stroke_m: request.probe_stroke_m,
+        action_envelope: PhysicalActionEnvelope::LinearStroke {
+            requested_m: request.probe_stroke_m,
+            maximum_m: request
+                .linear_execution_bound_m
+                .unwrap_or(request.probe_stroke_m),
+        },
         expires_at_s: 40.0,
     }
 }
@@ -1955,6 +2559,17 @@ mod tests {
             .find(|candidate| candidate.action_key == "probe:+x")
             .expect("probe");
         assert_eq!(probe.status, "PROVED");
+        assert!(first.executable.is_none());
+        let authority_request = first
+            .authority_request
+            .as_ref()
+            .expect("a safe probe should request a scope before it can execute");
+        assert_eq!(authority_request.action_key, probe.action_key);
+        assert_eq!(
+            authority_request.witness_digest,
+            probe.witness_digest.as_deref().unwrap()
+        );
+        assert_eq!(authority_request.stroke_m, request.probe_stroke_m);
         assert!(matches!(
             first.decision,
             DecisionKind::Refuse { .. } | DecisionKind::InsufficientEvidence { .. }
@@ -1967,9 +2582,28 @@ mod tests {
             other => panic!("granted probe should be selected, got {other:?}"),
         };
         assert_eq!(action.action_key, "probe:+x");
-        let grant = covering_authorization(&reasoner, &request, &selected_step(action));
+        let executable = selected
+            .executable
+            .as_ref()
+            .expect("the selected probe should expose its exact proved step");
+        assert_eq!(executable.action_key, action.action_key);
+        assert_eq!(executable.witness_digest, action.witness_digest);
+        assert_eq!(executable.stroke_m, request.probe_stroke_m);
+        let prepared = reasoner
+            .prepare_step(&request, executable)
+            .expect("prepare re-proves the exact selected step");
+        assert!(!prepared.authority_granted);
+        assert!(prepared.execution_authorization.is_none());
+        assert_eq!(prepared.witness_digest, executable.witness_digest);
+        let mut widened = executable.clone();
+        widened.stroke_m += 0.001;
+        assert_eq!(
+            reasoner.prepare_step(&request, &widened),
+            Err("STALE_OR_UNPROVED_STEP")
+        );
+        let grant = covering_authorization(&reasoner, &request, executable);
         let authorized = reasoner
-            .authorize_step(&request, &selected_step(action), grant.clone())
+            .authorize_step(&request, executable, grant.clone())
             .expect("issued grant binds");
         let mut env = HiddenTable {
             center: request.scene.object_center,
@@ -2138,8 +2772,8 @@ mod tests {
             plan.steps[1].action_key,
             plan.steps[0].stroke_m,
             plan.steps[1].stroke_m,
-            lateral.frozen().requested_stroke_m,
-            goal.frozen().requested_stroke_m
+            lateral.frozen().linear_stroke_bounds().unwrap().0,
+            goal.frozen().linear_stroke_bounds().unwrap().0
         );
         let mut divergent = policy_observation(&goal, 0.001, 0.2);
         divergent.object_displacement_m = Some(0.2);
@@ -2164,27 +2798,14 @@ mod tests {
             object_id: "block".into(),
         };
         let acquired = reasoner.consider(&request);
-        let grasp = acquired
+        let unscoped_grasp = acquired
             .candidates
             .iter()
-            .find(|candidate| candidate.family == GRASP_FAMILY && candidate.status == "PROVED")
-            .unwrap_or_else(|| {
-                let lines: Vec<String> = acquired
-                    .candidates
-                    .iter()
-                    .map(|candidate| {
-                        format!(
-                            "{} {} {}",
-                            candidate.family, candidate.action_key, candidate.status
-                        )
-                    })
-                    .collect();
-                panic!(
-                    "grasp proved after finger friction is declared\n{}",
-                    lines.join("\n")
-                );
-            });
-        assert_eq!(grasp.mechanics, MechanicsStatus::Feasible);
+            .find(|candidate| candidate.action_key == "grasp:y")
+            .expect("grasp candidate is explicitly refused without a qualified resource");
+        assert_eq!(unscoped_grasp.status, "GRIPPER_RESOURCE_UNKNOWN");
+        assert_ne!(unscoped_grasp.mechanics, MechanicsStatus::Feasible);
+        assert!(acquired.executable.is_none());
         let mut missing = request.clone();
         missing.belief = PhysicalParameterBelief { parameters: vec![] };
         let unknown = reasoner.consider(&missing);
@@ -2203,6 +2824,252 @@ mod tests {
                 observation_epoch: "epoch:table".into(),
             })
             .is_err());
+    }
+
+    fn qualified_grasp_fixture() -> (EmbodimentModel, ReasoningRequest) {
+        let (mut model, mut request) = benchmark_scene();
+        model.model_hash = "hash-grasp".into();
+        model.bodies.push(crate::embodiment::Body {
+            name: "lift_link".into(),
+            parent: Some("link2".into()),
+            mass_kg: Provenanced::unknown("grasp.fixture", 0.0),
+            com: Provenanced::unknown("grasp.fixture", 0.0),
+            inertia: Provenanced::unknown("grasp.fixture", 0.0),
+            local_pose: Provenanced::declared(
+                crate::transform::Se3::identity(),
+                "grasp.fixture",
+                0.0,
+            ),
+        });
+        model.joints.push(crate::embodiment::Joint {
+            name: "lift_z".into(),
+            kind: crate::embodiment::JointKind::Slide,
+            axis: Provenanced::declared([0.0, 0.0, 1.0], "grasp.fixture", 0.0),
+            qpos_dim: 1,
+            dof_dim: 1,
+            parent_body: "link2".into(),
+            child_body: "lift_link".into(),
+            q_min: Provenanced::declared(0.0, "grasp.fixture", 0.0),
+            q_max: Provenanced::declared(0.05, "grasp.fixture", 0.0),
+            dq_max: Provenanced::declared(0.1, "grasp.fixture", 0.0),
+            effort_max: Provenanced::declared(10.0, "grasp.fixture", 0.0),
+            origin_in_child: Provenanced::declared([0.0, 0.0, 0.0], "grasp.fixture", 0.0),
+            parent_to_joint: Provenanced::declared(
+                crate::transform::Se3::identity(),
+                "grasp.fixture",
+                0.0,
+            ),
+            joint_to_child: Provenanced::declared(
+                crate::transform::Se3::identity(),
+                "grasp.fixture",
+                0.0,
+            ),
+            qpos_adr: Some(2),
+            dof_adr: Some(2),
+        });
+        model
+            .frames
+            .iter_mut()
+            .find(|frame| frame.name == "ee")
+            .unwrap()
+            .parent_body = "lift_link".into();
+        model.end_effectors[0].joint_chain.push("lift_z".into());
+        model.actuators.push(crate::embodiment::Actuator {
+            name: "act-lift-z".into(),
+            target_joint: "lift_z".into(),
+            control_mode: "position".into(),
+            transmission_kind: "joint".into(),
+            ctrlrange: Provenanced::declared([0.0, 0.05], "grasp.fixture", 0.0),
+            forcerange: Provenanced::declared([-10.0, 10.0], "grasp.fixture", 0.0),
+            gear: Provenanced::declared(1.0, "grasp.fixture", 0.0),
+        });
+        for actuator in model
+            .actuators
+            .iter_mut()
+            .filter(|actuator| actuator.target_joint.starts_with("finger_"))
+        {
+            actuator.ctrlrange = Provenanced::declared([0.0, 0.04], "grasp.fixture", 0.0);
+            actuator.forcerange = Provenanced::declared([-2.0, 2.0], "grasp.fixture", 0.0);
+            actuator.gear = Provenanced::declared(1.0, "grasp.fixture", 0.0);
+        }
+        let resource = crate::resource::ControlledResource {
+            id: "gripper:direct-two-finger".into(),
+            kind: crate::resource::ResourceKind::Gripper,
+            topology: crate::resource::ResourceTopology::DirectJointGripper,
+            actuator_inputs: vec!["act-finger_l".into(), "act-finger_r".into()],
+            affected_joints: vec!["finger_l".into(), "finger_r".into()],
+            finger_bodies: vec!["finger_l".into(), "finger_r".into()],
+            coupling: crate::resource::CouplingModel::none(),
+            command_coordinate: "joint_position".into(),
+            opening_range: Provenanced::declared([0.0, 0.04], "grasp.fixture", 0.0),
+            command_range: Provenanced::declared([0.0, 0.04], "grasp.fixture", 0.0),
+            closing_direction: crate::resource::ClosingDirection::TowardMin,
+            force_bound: Provenanced::declared([0.0, 2.0], "grasp.fixture", 0.0),
+            qualification: crate::resource::QualificationStatus::Qualified,
+            unsupported_detail: None,
+        };
+        model.resources.push(resource.clone());
+        request.scene.joint_names.push("lift_z".into());
+        request.scene.arm_q.push(0.0);
+        request.objective = PhysicalObjective::AcquireObject {
+            object_id: "block".into(),
+        };
+        request.belief = belief_with_finger(request.belief);
+        request.gripper_resource = Some(resource);
+        request.linear_execution_bound_m = None;
+        request
+            .scene
+            .obstacles
+            .retain(|obstacle| obstacle.name != "south-wall");
+        (model, request)
+    }
+
+    #[test]
+    fn grasp_requires_exact_qualified_direct_two_finger_resource() {
+        let (model, request) = qualified_grasp_fixture();
+        let mut reasoner = PhysicalReasoner::new(model);
+        let report = reasoner.consider(&request);
+        let step = report
+            .executable
+            .as_ref()
+            .expect("qualified grasp has a prepared step");
+        assert_eq!(step.family, GRASP_FAMILY);
+        match &step.action_envelope {
+            PhysicalActionEnvelope::PinchGrasp {
+                resource_id,
+                finger_joint_names,
+                open_positions,
+                close_positions,
+                per_finger_force_ceiling_n,
+                maximum_lift_m,
+                ..
+            } => {
+                assert_eq!(resource_id, "gripper:direct-two-finger");
+                assert_eq!(finger_joint_names, &["finger_l", "finger_r"]);
+                assert_eq!(open_positions, &[0.02, 0.02]);
+                assert_eq!(close_positions.len(), 2);
+                assert_eq!(*per_finger_force_ceiling_n, 2.0);
+                assert!(*maximum_lift_m >= 0.02);
+            }
+            other => panic!("grasp step must carry typed pinch authority: {other:?}"),
+        }
+
+        let mut missing = request.clone();
+        missing.gripper_resource = None;
+        assert!(PhysicalReasoner::new(reasoner.model.clone())
+            .consider(&missing)
+            .executable
+            .is_none());
+        let mut unqualified = request.clone();
+        unqualified.gripper_resource.as_mut().unwrap().qualification =
+            crate::resource::QualificationStatus::Unverified;
+        assert!(PhysicalReasoner::new(reasoner.model.clone())
+            .consider(&unqualified)
+            .executable
+            .is_none());
+        let mut coupled = request;
+        coupled.gripper_resource.as_mut().unwrap().topology =
+            crate::resource::ResourceTopology::CoupledJointGripper;
+        assert!(PhysicalReasoner::new(reasoner.model.clone())
+            .consider(&coupled)
+            .executable
+            .is_none());
+    }
+
+    #[test]
+    fn grasp_contact_frame_targets_the_object_center_between_fingers() {
+        let (model, request) = qualified_grasp_fixture();
+        let mut reasoner = PhysicalReasoner::new(model.clone());
+        let report = reasoner.consider(&request);
+        let step = report.executable.as_ref().unwrap_or_else(|| {
+            panic!(
+                "qualified grasp fixture: {}",
+                report
+                    .candidates
+                    .iter()
+                    .map(|candidate| format!("{} {}", candidate.action_key, candidate.status))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        });
+        let q_contact = q_from_bit_line(&step.witness_contents, "q_contact_bits=");
+        let chain = model.ee_joint_chain("ee").expect("ee chain");
+        let actual = forward_kinematics(&model, &chain, "ee", &q_contact)
+            .expect("contact FK")
+            .ee
+            .xyz;
+        let error = (0..3)
+            .map(|axis| (actual[axis] - request.scene.object_center[axis]).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        assert!(
+            error <= 1e-3,
+            "gripper center misses object center by {error} m"
+        );
+    }
+
+    #[test]
+    fn prepare_step_rejects_changed_gripper_force_target_and_lift() {
+        let (model, request) = qualified_grasp_fixture();
+        let mut reasoner = PhysicalReasoner::new(model);
+        let step = reasoner
+            .consider(&request)
+            .executable
+            .expect("fixture grasp step");
+        let mut changed_force = request.clone();
+        changed_force.gripper_force_n = Some(1.5);
+        assert!(reasoner.prepare_step(&changed_force, &step).is_err());
+        let mut changed_target = request.clone();
+        changed_target.scene.finger_q[0] += 0.001;
+        assert!(reasoner.prepare_step(&changed_target, &step).is_err());
+        let mut changed_lift = step;
+        if let PhysicalActionEnvelope::PinchGrasp { maximum_lift_m, .. } =
+            &mut changed_lift.action_envelope
+        {
+            *maximum_lift_m += 0.001;
+        } else {
+            panic!("fixture step must be a pinch grasp");
+        }
+        assert!(reasoner.prepare_step(&request, &changed_lift).is_err());
+    }
+
+    #[test]
+    fn lift_witness_commits_to_ordered_joint_states() {
+        let (model, request) = qualified_grasp_fixture();
+        let mut reasoner = PhysicalReasoner::new(model);
+        let step = reasoner
+            .consider(&request)
+            .executable
+            .expect("fixture grasp step");
+        let lift_lines: Vec<_> = step
+            .witness_contents
+            .lines()
+            .filter(|line| line.starts_with("lift_state_"))
+            .collect();
+        assert!(
+            lift_lines.len() >= 2,
+            "lift path must commit ordered states: {}",
+            step.witness_contents
+        );
+        let mut reordered = step.clone();
+        let mut lines: Vec<String> = reordered
+            .witness_contents
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        let lift_indexes: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(i, line)| line.starts_with("lift_state_").then_some(i))
+            .collect();
+        lines.swap(lift_indexes[0], lift_indexes[1]);
+        reordered.witness_contents = lines.join("\n") + "\n";
+        reordered.witness_digest = contents_digest(&reordered.witness_contents);
+        assert!(reasoner.prepare_step(&request, &reordered).is_err());
+
+        let mut changed_observation = request;
+        changed_observation.scene.arm_q[0] += 0.001;
+        assert!(reasoner.prepare_step(&changed_observation, &step).is_err());
     }
 
     #[test]
@@ -2383,7 +3250,7 @@ mod tests {
                 });
             }
             let push = parse_push(contents).ok_or(())?;
-            let stroke = frozen.requested_stroke_m;
+            let stroke = frozen.linear_stroke_bounds().ok_or(())?.0;
             let travel = if self.true_mu >= 0.2 {
                 stroke
             } else {
@@ -2408,20 +3275,6 @@ mod tests {
         Some([values.next()?, values.next()?, values.next()?])
     }
 
-    fn selected_step(action: &crate::physical_decision::SelectedPhysicalAction) -> PlanStep {
-        PlanStep {
-            family: PUSH_FAMILY.into(),
-            action_key: action.action_key.clone(),
-            candidate_id: action.candidate_id.clone(),
-            witness_digest: action.witness_digest.clone(),
-            witness_contents: action.witness_contents.clone(),
-            stroke_m: 0.008,
-            immediate_progress: false,
-            predicted_translation_m: 0.008,
-            error_after: 0.1,
-        }
-    }
-
     fn covering_authorization(
         reasoner: &PhysicalReasoner,
         request: &ReasoningRequest,
@@ -2439,8 +3292,7 @@ mod tests {
             action_key: frozen.action_key.clone(),
             witness_digest: digest,
             actuator_id: frozen.actuator_id.clone(),
-            requested_stroke_m: frozen.requested_stroke_m,
-            execution_bound_m: frozen.requested_stroke_m.max(0.02),
+            action_envelope: frozen.action_envelope.clone(),
             issued_at_s: 10.0,
             expires_at_s: 40.0,
             observation_contract_id: frozen.observation_contract_id.clone(),
