@@ -627,6 +627,118 @@ fn false_refusal_reduces_availability() {
 }
 
 #[test]
+fn uninformative_push_probe_is_not_repeated() {
+    let _mujoco_guard = lock_mujoco_test();
+    let bundle = ur5e_bundle();
+    let (worker, base_manifest) =
+        load_and_normalize(&bundle, &[], 9000).expect("strict benchmark requires MuJoCo");
+    checkin_worker(worker);
+    let mut trial = resolve_benchmark_trial(
+        9000,
+        10,
+        BenchmarkTask::PushProbeReplan,
+        EmbodimentRole::Development,
+        &bundle,
+        &base_manifest,
+    )
+    .expect("positive probe trial resolves");
+
+    // Give the complete 4 cm end-effector collision radius physical clearance
+    // above the support while retaining the real robot and table geometry.
+    let table = trial
+        .scenario
+        .objects
+        .iter()
+        .find(|object| object["name"] == "table")
+        .expect("table support");
+    let table_top = table["pos"][2].as_f64().unwrap() + table["size"][2].as_f64().unwrap();
+    let target = trial
+        .scenario
+        .objects
+        .iter_mut()
+        .find(|object| object["name"] == trial.scenario.object_id)
+        .expect("target object");
+    target["size"][2] = serde_json::json!(0.045);
+    target["pos"][2] = serde_json::json!(table_top + 0.045);
+    for object in &mut trial.scenario.objects {
+        if object["name"] == "table" || object["name"] == trial.scenario.object_id {
+            continue;
+        }
+        let half_z = if object["type"] == "cylinder" {
+            object["size"][1].as_f64().unwrap()
+        } else {
+            object["size"][2].as_f64().unwrap()
+        };
+        object["pos"][2] = serde_json::json!(table_top + half_z);
+    }
+    trial.goal_xyz[2] = table_top + 0.045;
+
+    let model = embodiment_from_manifest(&bundle, &base_manifest);
+    let chain = model
+        .ee_joint_chain(&model.end_effectors[0].name)
+        .expect("declared arm chain");
+    for joint in &chain {
+        let record = base_manifest
+            .joints
+            .iter()
+            .find(|record| record.name == *joint)
+            .expect("inspected arm joint");
+        trial.initial_qpos[record.qpos_address as usize] =
+            base_manifest.qpos0[record.qpos_address as usize];
+    }
+
+    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
+        &bundle,
+        &trial,
+        SimulationAdmission {
+            execution_bound_m: 0.1,
+            expires_at_s: 120.0,
+        },
+    )
+    .expect("strict runner records the uninformative probe and refusal");
+
+    assert_eq!(
+        episode
+            .actions
+            .iter()
+            .filter(|action| action.action_key.starts_with("probe:"))
+            .count(),
+        1,
+        "same uninformative probe must not consume the remaining action budget: {:?}",
+        episode.actions
+    );
+    assert_eq!(episode.outcome, TrialOutcome::UnexpectedRefusal);
+    assert_eq!(
+        episode.refusal_code.as_deref(),
+        Some("NO_JUSTIFIED_CURRENT_ACTION")
+    );
+    let observation_epochs = episode
+        .reasoning_request_audits
+        .iter()
+        .map(|audit| {
+            let (_, audit) = audit
+                .split_once("observation_epoch: \"")
+                .expect("reasoning request records its observation epoch");
+            let (epoch, _) = audit
+                .split_once('"')
+                .expect("observation epoch is quoted in the audit");
+            epoch.to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        observation_epochs.len(),
+        2,
+        "one probe should be followed by one fresh decision: {observation_epochs:?}"
+    );
+    assert_eq!(observation_epochs[0], episode.actions[0].observation_epoch);
+    assert_ne!(
+        observation_epochs[1], episode.actions[0].observation_epoch,
+        "runner must observe a new epoch after an uninformative probe"
+    );
+    assert_eq!(episode.unauthorized_writes, 0);
+}
+
+#[test]
 fn confidence_interval_uses_exact_boundary_rates() {
     let trial = synthetic_trial(29, 10, TrialExpectation::ExpectedSuccess);
     let config = config_for_trial_ids(vec![trial.trial_id.clone()]);

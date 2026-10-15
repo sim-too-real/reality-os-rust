@@ -285,6 +285,7 @@ pub fn run_benchmark_trial(
     let mut belief = uncertain_push_belief();
     let mut previous_epoch = String::new();
     let mut previous_action_was_probe = false;
+    let mut blocked_action_keys = Vec::new();
     let mut divergence_fault_pending =
         trial.fault_injection.as_deref() == Some("runtime_divergence");
     let mut recovery_pending = false;
@@ -337,7 +338,7 @@ pub fn run_benchmark_trial(
                 "evaluator-only data leaked into physical reasoning request".into(),
             ));
         }
-        let preview = reasoner.consider(&request);
+        let preview = reasoner.consider_excluding(&request, &blocked_action_keys);
         episode.decision_audits.push(format!(
             "decision={:?};candidates={}",
             preview.decision,
@@ -360,7 +361,7 @@ pub fn run_benchmark_trial(
                 execution_bound_m: admission.execution_bound_m,
                 expires_at_s: admission.expires_at_s,
             },
-            &[],
+            &blocked_action_keys,
         ) {
             Ok(authorized) => authorized,
             Err(refusal) => {
@@ -646,13 +647,19 @@ pub fn run_benchmark_trial(
             } else {
                 0.0
             };
-            belief = integrate_support_friction(
+            let receipt = integrate_support_friction(
                 &belief,
                 ratio,
                 request.mu_required,
                 &format!("benchmark-probe:{}", trial.trial_id),
-            )
-            .belief_after;
+            );
+            belief = receipt.belief_after;
+            if !receipt.information_gain && !blocked_action_keys.contains(&action_key) {
+                // A probe with no bounded inference cannot justify repeating
+                // the same physical interaction. Reobserve once, then let the
+                // shared selector choose a different proved action or refuse.
+                blocked_action_keys.push(action_key.clone());
+            }
         }
         previous_action_was_probe = is_probe;
         episode.object_end_xyz = object_after;

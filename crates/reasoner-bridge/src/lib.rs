@@ -74,7 +74,7 @@ pub fn authorize_current_action(
     // request is then used for preparation and the post-grant reselection.
     let mut effective_request = request.clone();
     effective_request.linear_execution_bound_m = Some(admission.execution_bound_m);
-    let report = reasoner.consider(&effective_request);
+    let report = reasoner.consider_excluding(&effective_request, forbidden_action_keys);
     let step = report
         .executable
         .clone()
@@ -147,7 +147,7 @@ pub fn authorize_current_action(
         action_envelope: grant.scope.action_envelope.clone(),
         expires_at_s: grant.scope.expires_at_s,
     });
-    let report = reasoner.consider(&granted_request);
+    let report = reasoner.consider_excluding(&granted_request, forbidden_action_keys);
     let selected = report
         .executable
         .as_ref()

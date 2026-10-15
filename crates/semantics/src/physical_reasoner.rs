@@ -283,12 +283,23 @@ impl PhysicalReasoner {
     }
 
     pub fn consider(&mut self, request: &ReasoningRequest) -> ReasoningReport {
+        self.consider_excluding(request, &[])
+    }
+
+    /// Reconsider the current observation while excluding actions that already
+    /// failed to provide information. The proof summaries remain visible, but
+    /// the selector and conditional planner cannot repeat the excluded action.
+    pub fn consider_excluding(
+        &mut self,
+        request: &ReasoningRequest,
+        forbidden_action_keys: &[String],
+    ) -> ReasoningReport {
         let proved = self.actions_at(request);
         let summaries = proved.iter().map(|action| action.summary.clone()).collect();
-        let context = decision_context(request, &proved);
+        let context = decision_context(request, &proved, forbidden_action_keys);
         let decision = decide_physical_action(&context);
         self.note_geometric_fact();
-        let plan = search_plan(self, request);
+        let plan = search_plan(self, request, forbidden_action_keys);
         let greedy_key = decision_action_key(&decision);
         let greedy_failed = plan.as_ref().is_some_and(|plan| {
             plan.steps.first().is_some_and(|step| {
@@ -1939,7 +1950,11 @@ fn rejected(
     }
 }
 
-fn decision_context(request: &ReasoningRequest, actions: &[ProvedAction]) -> DecisionContext {
+fn decision_context(
+    request: &ReasoningRequest,
+    actions: &[ProvedAction],
+    forbidden_action_keys: &[String],
+) -> DecisionContext {
     let mut candidates = Vec::new();
     for action in actions {
         let Some(mut evidence) = action.evidence.clone() else {
@@ -1972,7 +1987,7 @@ fn decision_context(request: &ReasoningRequest, actions: &[ProvedAction]) -> Dec
         observation_epoch: request.scene.observation_epoch.clone(),
         remaining_attempts: 4,
         current_contact_id: None,
-        forbidden_action_keys: Vec::new(),
+        forbidden_action_keys: forbidden_action_keys.to_vec(),
         candidates,
     }
 }
@@ -1980,6 +1995,7 @@ fn decision_context(request: &ReasoningRequest, actions: &[ProvedAction]) -> Dec
 fn search_plan(
     reasoner: &mut PhysicalReasoner,
     request: &ReasoningRequest,
+    forbidden_action_keys: &[String],
 ) -> Option<PhysicalPlan> {
     let root_error = translation_errors(request, request.scene.object_center).0;
     let mut budget = 48u32;
@@ -1987,7 +2003,14 @@ fn search_plan(
         if budget == 0 {
             break;
         }
-        if let Some(plan) = bounded_plan(reasoner, request, depth, root_error, &mut budget) {
+        if let Some(plan) = bounded_plan(
+            reasoner,
+            request,
+            depth,
+            root_error,
+            forbidden_action_keys,
+            &mut budget,
+        ) {
             let improved = plan
                 .steps
                 .last()
@@ -2005,6 +2028,7 @@ fn bounded_plan(
     request: &ReasoningRequest,
     depth: u32,
     root_error: f64,
+    forbidden_action_keys: &[String],
     budget: &mut u32,
 ) -> Option<PhysicalPlan> {
     if *budget == 0 {
@@ -2015,7 +2039,10 @@ fn bounded_plan(
     let goal = actions
         .iter()
         .filter(|action| {
-            action.summary.immediate_progress
+            !forbidden_action_keys
+                .iter()
+                .any(|key| key == &action.summary.action_key)
+                && action.summary.immediate_progress
                 && action.summary.mechanics == MechanicsStatus::Feasible
                 && action
                     .step
@@ -2043,7 +2070,10 @@ fn bounded_plan(
     let mut intermediates: Vec<ProvedAction> = actions
         .into_iter()
         .filter(|action| {
-            action.summary.mechanics == MechanicsStatus::Feasible
+            !forbidden_action_keys
+                .iter()
+                .any(|key| key == &action.summary.action_key)
+                && action.summary.mechanics == MechanicsStatus::Feasible
                 && !action.summary.immediate_progress
                 && action
                     .step
@@ -2058,7 +2088,14 @@ fn bounded_plan(
         next.scene.held = action.successor_held;
         next.scene.arm_q =
             q_from_contents(action.summary.witness_contents.as_deref().unwrap_or(""));
-        if let Some(mut rest) = bounded_plan(reasoner, &next, depth - 1, root_error, budget) {
+        if let Some(mut rest) = bounded_plan(
+            reasoner,
+            &next,
+            depth - 1,
+            root_error,
+            forbidden_action_keys,
+            budget,
+        ) {
             if let Some(step) = action.step.clone() {
                 rest.steps.insert(0, step);
                 rest.expansions = rest.expansions.saturating_add(1);
@@ -2791,6 +2828,29 @@ mod tests {
     }
 
     #[test]
+    fn excluded_probe_is_not_reselected_for_the_same_observation() {
+        let (model, request) = benchmark_scene();
+        let mut reasoner = PhysicalReasoner::new(model);
+        let initial = reasoner.consider(&request);
+        assert_eq!(
+            initial
+                .authority_request
+                .as_ref()
+                .map(|step| step.action_key.as_str()),
+            Some("probe:+x")
+        );
+
+        let blocked = reasoner.consider_excluding(&request, &["probe:+x".into()]);
+
+        assert!(blocked.executable.is_none());
+        assert!(blocked.authority_request.is_none());
+        assert!(!matches!(
+            blocked.decision,
+            DecisionKind::PhysicalProbe { .. } | DecisionKind::ContactTransition { .. }
+        ));
+    }
+
+    #[test]
     fn blocked_translation_needs_a_probe_then_an_intermediate_push() {
         let (model, mut request) = benchmark_scene();
         let mut reasoner = PhysicalReasoner::new(model);
@@ -3449,7 +3509,7 @@ mod tests {
         let mut shallow = PhysicalReasoner::new(model.clone());
         let root_error = translation_errors(&request, request.scene.object_center).0;
         let mut budget = 48u32;
-        let depth_two = bounded_plan(&mut shallow, &request, 2, root_error, &mut budget);
+        let depth_two = bounded_plan(&mut shallow, &request, 2, root_error, &[], &mut budget);
         let solved_in_two = depth_two.as_ref().is_some_and(|plan| {
             plan.steps
                 .last()
