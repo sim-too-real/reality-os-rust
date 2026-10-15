@@ -463,6 +463,7 @@ mod tests {
         RobotManifest {
             robot_id: "arm".into(),
             nq: 1,
+            qpos0: vec![0.0],
             nv: 1,
             nu: 1,
             nbody: 2,
@@ -504,6 +505,9 @@ mod tests {
             support_bodies: vec![],
             collision_groups: Default::default(),
             geoms: Vec::new(),
+            contact_pairs: Vec::new(),
+            excluded_body_pairs: Vec::new(),
+            geometry_inspection_complete: false,
             metal: false,
             evidence_status: SIMULATION_ONLY.into(),
         }

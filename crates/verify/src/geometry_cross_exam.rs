@@ -3,7 +3,7 @@
 
 use crate::mujoco_exec::ensure_mujoco_or_skip;
 use realityos_semantics::allowed_contact::{
-    adjacent_body_pairs, AllowedContactPolicy, ContactPhase, PairPermission,
+    self_contact_allowlist, AllowedContactPolicy, ContactPhase, PairPermission,
 };
 use realityos_semantics::contact::classify_contact_pair;
 use realityos_semantics::contact::{ContactClassContext, ContactEvidenceClass};
@@ -66,14 +66,14 @@ pub fn run_geometry_cross_exam() -> Result<Value, String> {
             .unwrap_or("ee"),
     );
     let support: Vec<String> = manifest.support_bodies.clone();
-    let adjacent = adjacent_body_pairs(&model);
+    let self_contact_allowlist = self_contact_allowlist(&model);
     let policy = AllowedContactPolicy::from_names(
         "object",
         intended.clone(),
         robot_bodies.clone(),
         support.clone(),
         Vec::new(),
-        adjacent,
+        self_contact_allowlist,
     );
     let mut false_negatives = Vec::new();
     for seed in 0u64..24 {

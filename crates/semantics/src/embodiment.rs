@@ -143,6 +143,9 @@ pub struct EmbodimentModel {
     pub resources: Vec<crate::resource::ControlledResource>,
     #[serde(default)]
     pub collision_geoms: Vec<crate::geometry::RigidGeometry>,
+    /// Body pairs explicitly excluded from collision response by the source model.
+    #[serde(default)]
+    pub contact_exclusions: Vec<(String, String)>,
     pub metal: bool,
 }
 
@@ -171,6 +174,7 @@ impl EmbodimentModel {
             diagnostics: Vec::new(),
             resources: Vec::new(),
             collision_geoms: Vec::new(),
+            contact_exclusions: Vec::new(),
             metal: false,
         }
     }

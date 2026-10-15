@@ -198,7 +198,7 @@ pub struct CollisionScene {
     pub intended_tool_bodies: Vec<String>,
     pub object_id: String,
     pub support_id: String,
-    pub adjacent_body_pairs: Vec<(String, String)>,
+    pub allowed_self_contact_pairs: Vec<(String, String)>,
 }
 
 impl CollisionScene {
@@ -365,7 +365,7 @@ mod tests {
             intended_tool_bodies: vec![],
             object_id: "object".into(),
             support_id: "table".into(),
-            adjacent_body_pairs: vec![],
+            allowed_self_contact_pairs: vec![],
         };
         let c = scene.coverage();
         assert_eq!(c.qualification, CoverageQualification::MissingRequired);
@@ -414,7 +414,7 @@ mod tests {
             intended_tool_bodies: vec!["tool".into()],
             object_id: "object".into(),
             support_id: "table".into(),
-            adjacent_body_pairs: vec![],
+            allowed_self_contact_pairs: vec![],
         };
         assert_eq!(
             scene.coverage().qualification,

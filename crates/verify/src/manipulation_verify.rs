@@ -11,6 +11,8 @@ use realityos_semantics::resource::{
 };
 use serde::{Deserialize, Serialize};
 
+const FORCE_MEASUREMENT_EPSILON_N: f64 = 1e-9;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrivilegedVerdict {
     pub success: bool,
@@ -239,7 +241,7 @@ pub fn verify_grasp(
     let mut force_unavailable = false;
     for finger in &resource.finger_bodies {
         match measured_finger_force(after, object_id, finger) {
-            Some(force) if force <= force_ceiling => {}
+            Some(force) if force <= force_ceiling + FORCE_MEASUREMENT_EPSILON_N => {}
             Some(_) => {
                 evidence.push("per_finger_force_exceeds_authorized_ceiling".into());
                 return fail_with_acquisition(

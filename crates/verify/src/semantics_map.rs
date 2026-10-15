@@ -37,12 +37,51 @@ pub fn embodiment_from_manifest(bundle: &RobotBundle, manifest: &RobotManifest) 
             target_joint: a.transmission_target.clone(),
         })
         .collect();
+    model.contact_exclusions = manifest
+        .excluded_body_pairs
+        .iter()
+        .map(|pair| (pair.body1.clone(), pair.body2.clone()))
+        .collect();
     model.diagnostics = map_diagnostics(manifest);
     model
         .diagnostics
         .extend(frame_diagnostics(bundle, manifest));
     model.diagnostics.extend(model.validate_transforms());
-    model.collision_geoms = manifest.geoms.iter().filter_map(map_geom).collect();
+    for geom in &manifest.geoms {
+        let forced_contact_pair = manifest
+            .contact_pairs
+            .iter()
+            .any(|pair| pair.geom1_id == geom.geom_id || pair.geom2_id == geom.geom_id);
+        let collision_enabled = geom.contype != 0 || geom.conaffinity != 0 || forced_contact_pair;
+        if collision_enabled {
+            if !map_shape(geom).query_supported() {
+                model.diagnostics.push(ModelDiagnostic {
+                    code: "UNSUPPORTED_COLLISION_GEOMETRY".into(),
+                    detail: format!(
+                        "collision geom {} on {} has unsupported shape {}",
+                        geom.name, geom.body, geom.geom_type
+                    ),
+                });
+            }
+            if Se3::try_new(geom.pos, geom.quat).is_err() {
+                model.diagnostics.push(ModelDiagnostic {
+                    code: "INVALID_COLLISION_GEOMETRY_POSE".into(),
+                    detail: format!(
+                        "collision geom {} on {} has an invalid local pose",
+                        geom.name, geom.body
+                    ),
+                });
+            }
+        }
+        if let Some(mapped) = map_geom(geom, collision_enabled) {
+            model.collision_geoms.push(mapped);
+        } else {
+            model.diagnostics.push(ModelDiagnostic {
+                code: "UNMAPPABLE_GEOMETRY".into(),
+                detail: format!("geom {} on {} could not be lowered", geom.name, geom.body),
+            });
+        }
+    }
     model
 }
 
@@ -71,14 +110,14 @@ fn map_shape(rec: &GeomRecord) -> PrimitiveShape {
     }
 }
 
-fn map_geom(rec: &GeomRecord) -> Option<RigidGeometry> {
+fn map_geom(rec: &GeomRecord, collision_enabled: bool) -> Option<RigidGeometry> {
     let pose = Se3::try_new(rec.pos, rec.quat)
         .or_else(|_| Se3::translation(rec.pos))
         .ok()?;
-    let collision_role = if rec.contype == 0 && rec.conaffinity == 0 {
-        CollisionRole::Visual
-    } else {
+    let collision_role = if collision_enabled {
         CollisionRole::Collision
+    } else {
+        CollisionRole::Visual
     };
     Some(RigidGeometry::declared(
         rec.name.clone(),
@@ -500,26 +539,32 @@ mod tests {
             Some(("ee", "link", [0.1, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0])),
         );
         man.geoms.push(crate::normalize::GeomRecord {
+            geom_id: 0,
             name: "link_box".into(),
             body: "link".into(),
             geom_type: "box".into(),
             size: [0.04, 0.02, 0.02],
+            friction: Some([1.0, 0.005, 0.0001]),
             pos: [0.05, 0.0, 0.0],
             quat: [1.0, 0.0, 0.0, 0.0],
             group: 0,
             contype: 1,
             conaffinity: 1,
+            mesh_asset: None,
         });
         man.geoms.push(crate::normalize::GeomRecord {
+            geom_id: 1,
             name: "viz".into(),
             body: "link".into(),
             geom_type: "mesh".into(),
             size: [0.0, 0.0, 0.0],
+            friction: Some([1.0, 0.005, 0.0001]),
             pos: [0.0, 0.0, 0.0],
             quat: [1.0, 0.0, 0.0, 0.0],
             group: 2,
             contype: 0,
             conaffinity: 0,
+            mesh_asset: None,
         });
         let m = embodiment_from_manifest(&bundle, &man);
         assert_eq!(m.collision_geoms.len(), 2);
@@ -602,6 +647,7 @@ mod tests {
         let mut man = RobotManifest {
             robot_id: "synth_body_ee".into(),
             nq: 1,
+            qpos0: vec![0.0],
             nv: 1,
             nu: 1,
             nbody: 2,
@@ -648,6 +694,9 @@ mod tests {
             support_bodies: vec![],
             collision_groups: Default::default(),
             geoms: Vec::new(),
+            contact_pairs: Vec::new(),
+            excluded_body_pairs: Vec::new(),
+            geometry_inspection_complete: false,
             metal: false,
             evidence_status: crate::honesty::SIMULATION_ONLY.into(),
         };

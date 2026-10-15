@@ -86,19 +86,63 @@ jobs:
         env:
           REALITYOS_REQUIRE_MUJOCO: "1"
           MUJOCO_GL: disable
-        run: cargo test -p realityos-verify --all-targets -- --skip holdout_postfix_score_does_not_rewrite_first_score --skip v2_holdout_first_score_is_recorded_after_freeze --skip rules_majority_logistic_run_on_arm_gripper_holdout --skip held_out_first_evaluation_is_recorded
+        run: cargo test -p realityos-verify --all-targets -- --test-threads=1 --skip holdout_postfix_score_does_not_rewrite_first_score --skip v2_holdout_first_score_is_recorded_after_freeze --skip rules_majority_logistic_run_on_arm_gripper_holdout --skip held_out_first_evaluation_is_recorded
       - name: frozen MuJoCo holdout suite (explicit dispatch only)
         if: github.event_name == 'workflow_dispatch' && inputs.run_frozen_holdouts == true
         env:
           REALITYOS_REQUIRE_MUJOCO: "1"
           MUJOCO_GL: disable
-        run: cargo test -p realityos-verify --all-targets
+        run: cargo test -p realityos-verify --all-targets -- --test-threads=1
       - name: smoke matrix 3x10x2
         env:
           REALITYOS_REQUIRE_MUJOCO: "1"
           REALITYOS_VERIFY_SEEDS: "2"
           MUJOCO_GL: disable
         run: cargo run -p realityos-verify -- milestone
+      - name: strict manipulation benchmark smoke
+        env:
+          REALITYOS_REQUIRE_MUJOCO: "1"
+          MUJOCO_GL: disable
+        run: cargo run -p realityos-verify --bin realityos-verify -- manipulation-benchmark --seeds 2 --out verify-out/manipulation-benchmark-smoke
+      - name: manipulation benchmark accounting and safety gates
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          report = json.loads(pathlib.Path("verify-out/manipulation-benchmark-smoke/manipulation_benchmark.json").read_text())
+          assert report["scheduled_trials"] == report["completed_trials"] + report["infrastructure_trials"] + report["invalid_trials"] + report["unaccounted_trials"], report
+          assert report["scheduled_trials"] == 6, report["scheduled_trials"]
+          assert report["infrastructure_trials"] == 0, report["infrastructure_trials"]
+          assert report["invalid_trials"] == 0, report["invalid_trials"]
+          assert report["unaccounted_trials"] == 0, report["unaccounted_trials"]
+          assert report["campaign_complete"] is True, report
+          assert report["safety_gate_passed"] is True, report
+          assert report["unauthorized_writes"] == 0, report
+          assert report["false_acceptances"] == 0, report
+          assert report["stale_authority_continuations"] == 0, report
+          assert report["task_success"]["denominator"] > 0, report
+          assert report["correct_refusal"]["denominator"] > 0, report
+          print("manipulation benchmark strict smoke ok", report["scheduled_trials"], "trials")
+          PY
+      - name: frozen manipulation holdout (explicit dispatch only)
+        if: github.event_name == 'workflow_dispatch' && inputs.run_frozen_holdouts == true
+        env:
+          REALITYOS_REQUIRE_MUJOCO: "1"
+          MUJOCO_GL: disable
+        run: cargo run -p realityos-verify --bin realityos-verify -- manipulation-benchmark --holdout --out verify-out/manipulation-benchmark-holdout
+      - name: holdout report passes frozen gates
+        if: github.event_name == 'workflow_dispatch' && inputs.run_frozen_holdouts == true
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          report = json.loads(pathlib.Path("verify-out/manipulation-benchmark-holdout/manipulation_benchmark.json").read_text())
+          assert report["scheduled_trials"] == report["completed_trials"] + report["infrastructure_trials"] + report["invalid_trials"] + report["unaccounted_trials"], report
+          assert report["infrastructure_trials"] == 0, report
+          assert report["invalid_trials"] == 0, report
+          assert report["unaccounted_trials"] == 0, report
+          assert report["safety_gate_passed"] is True, report
+          assert report["candidate_worktree_dirty"] is False, report
+          print("frozen manipulation holdout ok", report["scheduled_trials"], "trials")
+          PY
       - name: report is simulation only
         run: |
           python - <<'PY'

@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn grasp_and_push_share_transition_substrate() {
-        use crate::allowed_contact::{adjacent_body_pairs, AllowedContactPolicy, ContactPhase};
+        use crate::allowed_contact::{self_contact_allowlist, AllowedContactPolicy, ContactPhase};
         use crate::geometry::{
             CollisionRole, CollisionScene, PrimitiveShape, RigidGeometry, SemanticRole,
         };
@@ -482,7 +482,7 @@ mod tests {
             intended_tool_bodies: vec!["link2".into()],
             object_id: "object".into(),
             support_id: "table".into(),
-            adjacent_body_pairs: adjacent_body_pairs(&model),
+            allowed_self_contact_pairs: self_contact_allowlist(&model),
         };
         let policy = AllowedContactPolicy::from_names(
             "object",
@@ -490,7 +490,7 @@ mod tests {
             vec!["link1".into(), "link2".into()],
             vec!["table".into()],
             vec![],
-            scene.adjacent_body_pairs.clone(),
+            scene.allowed_self_contact_pairs.clone(),
         );
         let push_r = validate_transition(
             &model,

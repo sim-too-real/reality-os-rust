@@ -19,6 +19,7 @@ from typing import Any
 _ASSET_CACHE: dict[tuple[str, ...], dict[str, bytes]] = {}
 _BASE_MODEL: dict[str, Any] = {}
 _BASE_INSPECT: dict[str, Any] = {}
+_BASE_MESH_ASSETS: dict[str, dict[int, str]] = {}
 
 os.environ.setdefault("MUJOCO_GL", "disable")
 
@@ -84,6 +85,7 @@ class Instance:
         self.usd_experimental = False
         self.compiled_bytes_hash = ""
         self.asset_names: list[str] = []
+        self.mesh_asset_by_id: dict[int, str] = {}
 
     def inspect(self) -> dict[str, Any]:
         m, d = self.model, self.data
@@ -218,8 +220,10 @@ class Instance:
         }
         for i in range(m.ngeom):
             gtype = int(m.geom_type[i])
+            mesh_id = int(m.geom_dataid[i]) if gtype == 7 else -1
             geoms.append(
                 {
+                    "id": i,
                     "name": m.geom(i).name or f"geom_{i}",
                     "body": m.body(int(m.geom_bodyid[i])).name,
                     "group": int(m.geom_group[i]),
@@ -228,10 +232,33 @@ class Instance:
                     "pos": [float(x) for x in m.geom_pos[i]],
                     "quat": [float(x) for x in m.geom_quat[i]],
                     "size": [float(x) for x in m.geom_size[i]],
+                    "friction": [float(x) for x in m.geom_friction[i]],
                     "type": gtype,
                     "type_name": _geom_names.get(gtype, f"type_{gtype}"),
+                    "mesh_asset": self.mesh_asset_by_id.get(mesh_id),
                 }
             )
+        contact_pairs = []
+        for i in range(int(m.npair)):
+            contact_pairs.append(
+                {
+                    "pair_id": i,
+                    "geom1_id": int(m.pair_geom1[i]),
+                    "geom2_id": int(m.pair_geom2[i]),
+                }
+            )
+        excluded_body_pairs = []
+        for i in range(int(m.nexclude)):
+            signature = int(m.exclude_signature[i])
+            body1_id = (signature >> 16) & 0xFFFF
+            body2_id = signature & 0xFFFF
+            if 0 <= body1_id < m.nbody and 0 <= body2_id < m.nbody:
+                excluded_body_pairs.append(
+                    {
+                        "body1": m.body(body1_id).name or f"body_{body1_id}",
+                        "body2": m.body(body2_id).name or f"body_{body2_id}",
+                    }
+                )
         tendons = []
         wrap_joint = int(getattr(mujoco.mjtWrap, "mjWRAP_JOINT", 1))
         for i in range(int(getattr(m, "ntendon", 0))):
@@ -280,6 +307,7 @@ class Instance:
             "ncam": int(m.ncam),
             "nsite": int(m.nsite),
             "timestep": float(m.opt.timestep),
+            "qpos0": _jlist(m.qpos0),
             "gravity": [float(x) for x in m.opt.gravity],
             "joints": joints,
             "actuators": actuators,
@@ -288,6 +316,8 @@ class Instance:
             "bodies": bodies,
             "sites": sites,
             "geoms": geoms,
+            "contact_pairs": contact_pairs,
+            "excluded_body_pairs": excluded_body_pairs,
             "end_effector_chains": ee_chains,
             "tendons": tendons,
             "equalities": equalities,
@@ -332,6 +362,8 @@ class Instance:
                     "pos": [float(x) for x in c.pos],
                     "body1": m.body(int(m.geom_bodyid[g1])).name if g1 >= 0 else "",
                     "body2": m.body(int(m.geom_bodyid[g2])).name if g2 >= 0 else "",
+                    "dim": int(c.dim),
+                    "friction": [float(value) for value in c.friction],
                     "group1": int(m.geom_group[g1]) if g1 >= 0 else -1,
                     "group2": int(m.geom_group[g2]) if g2 >= 0 else -1,
                 }
@@ -348,6 +380,8 @@ class Instance:
                     cfrc.append(mag)
                     contacts[i]["normal_force"] = nrm
                     contacts[i]["tangential_force"] = tan
+                    contacts[i]["force_local"] = [float(force[0]), float(force[1]), float(force[2])]
+                    contacts[i]["frame"] = [float(value) for value in d.contact[i].frame]
                     contacts[i]["force_available"] = True
                 except Exception:
                     cfrc.append(0.0)
@@ -557,6 +591,7 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
     INST.lost_features = []
     INST.usd_experimental = False
     INST.asset_names = []
+    INST.mesh_asset_by_id = {}
     fmt = str(msg.get("format", "mjcf")).lower()
     INST.source_format = fmt
     path = msg.get("path")
@@ -590,6 +625,7 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
     seed = int(msg.get("seed", 0))
     if not extras and path in _BASE_MODEL:
         INST.model = _BASE_MODEL[path]
+        INST.mesh_asset_by_id = dict(_BASE_MESH_ASSETS.get(path, {}))
         INST.data = mujoco.MjData(INST.model)
         INST.data.qpos[:] = INST.model.qpos0
         INST.data.qvel[:] = 0
@@ -608,6 +644,13 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
     try:
         spec = _load_spec(path, assets)
         _add_scenario_objects(spec, extras)
+        meshdir = str(getattr(spec.compiler, "meshdir", "") or "")
+        for mesh in getattr(spec, "meshes", []) or []:
+            mesh_id = int(getattr(mesh, "id", -1))
+            mesh_file = str(getattr(mesh, "file", "") or "")
+            if mesh_id >= 0 and mesh_file:
+                asset_path = os.path.normpath(os.path.join(meshdir, mesh_file))
+                INST.mesh_asset_by_id[mesh_id] = asset_path.replace("\\", "/")
         INST.model = spec.compile()
     except Exception as exc:
         err = str(exc)
@@ -636,6 +679,7 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
     if not extras:
         _BASE_MODEL[path] = INST.model
         _BASE_INSPECT[path] = dict(inspect)
+        _BASE_MESH_ASSETS[path] = dict(INST.mesh_asset_by_id)
     else:
         gc.collect()
     return {"ok": True, "inspect": inspect, "state": INST.state(), "metal": False, "evidence_status": EVIDENCE_STATUS}

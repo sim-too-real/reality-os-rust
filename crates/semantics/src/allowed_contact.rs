@@ -54,7 +54,7 @@ pub struct AllowedContactPolicy {
     pub robot_bodies: Vec<String>,
     pub support_bodies: Vec<String>,
     pub obstacle_bodies: Vec<String>,
-    pub adjacent_body_pairs: Vec<(String, String)>,
+    pub allowed_self_contact_pairs: Vec<(String, String)>,
     /// World-fixed mounting bodies. Their intersection with the support
     /// surface is the fixture, not a manipulation collision.
     pub fixed_mount_bodies: Vec<String>,
@@ -75,7 +75,7 @@ impl AllowedContactPolicy {
             robot_bodies: robot,
             support_bodies: support,
             obstacle_bodies: obstacles,
-            adjacent_body_pairs: adjacent,
+            allowed_self_contact_pairs: adjacent,
             fixed_mount_bodies: Vec::new(),
         }
     }
@@ -95,7 +95,7 @@ impl AllowedContactPolicy {
     }
 
     pub fn adjacent(&self, a: &str, b: &str) -> bool {
-        self.adjacent_body_pairs
+        self.allowed_self_contact_pairs
             .iter()
             .any(|(x, y)| (x == a && y == b) || (x == b && y == a))
     }
@@ -139,8 +139,9 @@ impl AllowedContactPolicy {
     }
 }
 
-/// Parent↔child body pairs from the kinematic tree. Not robot-name exceptions.
-pub fn adjacent_body_pairs(model: &EmbodimentModel) -> Vec<(String, String)> {
+/// Parent↔child and explicitly excluded body pairs from the inspected model.
+/// Both are model-declared self-contact allowances, not robot-name exceptions.
+pub fn self_contact_allowlist(model: &EmbodimentModel) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for b in &model.bodies {
         if let Some(p) = &b.parent {
@@ -149,6 +150,9 @@ pub fn adjacent_body_pairs(model: &EmbodimentModel) -> Vec<(String, String)> {
             }
         }
     }
+    out.extend(model.contact_exclusions.iter().cloned());
+    out.sort();
+    out.dedup();
     out
 }
 
@@ -233,9 +237,21 @@ mod tests {
     #[test]
     fn adjacent_pairs_come_from_tree_not_robot_id() {
         let model = synth_planar_two_link();
-        let pairs = adjacent_body_pairs(&model);
+        let pairs = self_contact_allowlist(&model);
         assert!(pairs.iter().any(|(a, b)| a == "link1" && b == "link2"));
         assert!(!pairs.iter().any(|(a, b)| a == "base" && b == "link2"));
+    }
+
+    #[test]
+    fn declared_collision_exclusions_are_preserved_as_contact_policy_pairs() {
+        let mut model = synth_planar_two_link();
+        model
+            .contact_exclusions
+            .push(("base".into(), "link2".into()));
+
+        let pairs = self_contact_allowlist(&model);
+
+        assert!(pairs.iter().any(|(a, b)| a == "base" && b == "link2"));
     }
 
     #[test]

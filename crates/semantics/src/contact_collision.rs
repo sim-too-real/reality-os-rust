@@ -3,8 +3,11 @@
 //! Uses declared world/embodiment geometry only. Privileged simulator
 //! future labels are not an input.
 
-use crate::allowed_contact::{adjacent_body_pairs, AllowedContactPolicy, ContactPhase};
-use crate::contact::{classify_contact_pair, ContactClassContext, ContactEvidenceClass};
+use crate::allowed_contact::{self_contact_allowlist, AllowedContactPolicy, ContactPhase};
+use crate::contact::{
+    classify_contact_pair, declared_manipulation_contact_bodies, ContactClassContext,
+    ContactEvidenceClass,
+};
 use crate::embodiment::EmbodimentModel;
 use crate::geometry::{
     ApproximationClass, CollisionRole, CollisionScene, PrimitiveShape, RigidGeometry, SemanticRole,
@@ -291,6 +294,11 @@ pub fn scene_from_collision_world(
         })
         .collect();
     let mut intended = world.intended_tool_bodies.clone();
+    intended.extend(declared_manipulation_contact_bodies(
+        model,
+        model.resources.first(),
+        ee,
+    ));
     if let Some((parent, _)) = ee_parent_and_local(model, ee) {
         if !intended.iter().any(|n| n == &parent) {
             intended.push(parent);
@@ -304,7 +312,7 @@ pub fn scene_from_collision_world(
         intended_tool_bodies: intended,
         object_id: world.object_id.clone(),
         support_id: world.support_id.clone(),
-        adjacent_body_pairs: adjacent_body_pairs(model),
+        allowed_self_contact_pairs: self_contact_allowlist(model),
     })
 }
 
@@ -330,7 +338,7 @@ pub fn policy_from_scene_model(
             .iter()
             .map(|g| g.owner_body.clone())
             .collect(),
-        scene.adjacent_body_pairs.clone(),
+        scene.allowed_self_contact_pairs.clone(),
     );
     if let Some(model) = model {
         policy.fixed_mount_bodies = kinematic_root_bodies(model);

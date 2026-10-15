@@ -4197,6 +4197,7 @@ mod tests {
         let man = RobotManifest {
             robot_id: "t".into(),
             nq: 1,
+            qpos0: vec![0.0],
             nv: 1,
             nu: 1,
             nbody: 1,
@@ -4230,6 +4231,9 @@ mod tests {
             support_bodies: vec![],
             collision_groups: Default::default(),
             geoms: Vec::new(),
+            contact_pairs: Vec::new(),
+            excluded_body_pairs: Vec::new(),
+            geometry_inspection_complete: false,
             metal: false,
             evidence_status: crate::honesty::SIMULATION_ONLY.into(),
         };

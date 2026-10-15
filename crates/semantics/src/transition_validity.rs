@@ -687,7 +687,7 @@ pub fn discrete_interpolation_first_forbidden(
 mod tests {
     use super::*;
     use crate::adapter::synth_planar_two_link;
-    use crate::allowed_contact::{adjacent_body_pairs, AllowedContactPolicy};
+    use crate::allowed_contact::{self_contact_allowlist, AllowedContactPolicy};
     use crate::embodiment::{unknown_se3, Body, EmbodimentModel, Joint, JointKind};
     use crate::geometry::{CollisionRole, SemanticRole};
     use crate::maneuver_witness::interpolation_count;
@@ -777,7 +777,7 @@ mod tests {
             intended_tool_bodies: vec!["tool".into()],
             object_id: "object".into(),
             support_id: "table".into(),
-            adjacent_body_pairs: adjacent_body_pairs(&model),
+            allowed_self_contact_pairs: self_contact_allowlist(&model),
         };
         let policy = AllowedContactPolicy::from_names(
             "object",
@@ -785,7 +785,7 @@ mod tests {
             vec!["link".into(), "base".into()],
             vec!["table".into()],
             vec!["obstacle".into()],
-            scene.adjacent_body_pairs.clone(),
+            scene.allowed_self_contact_pairs.clone(),
         );
         (model, scene, policy)
     }
@@ -849,7 +849,7 @@ mod tests {
             intended_tool_bodies: vec![],
             object_id: "object".into(),
             support_id: "table".into(),
-            adjacent_body_pairs: vec![],
+            allowed_self_contact_pairs: vec![],
         };
         let policy =
             AllowedContactPolicy::from_names("object", vec![], vec![], vec![], vec![], vec![]);
@@ -900,7 +900,7 @@ mod tests {
             intended_tool_bodies: vec![],
             object_id: "object".into(),
             support_id: "table".into(),
-            adjacent_body_pairs: vec![],
+            allowed_self_contact_pairs: vec![],
         };
         let policy = AllowedContactPolicy::from_names(
             "object",
@@ -956,7 +956,7 @@ mod tests {
             intended_tool_bodies: vec!["link".into()],
             object_id: "object".into(),
             support_id: "table".into(),
-            adjacent_body_pairs: adjacent_body_pairs(&model),
+            allowed_self_contact_pairs: self_contact_allowlist(&model),
         };
         let policy = AllowedContactPolicy::from_names(
             "object",
@@ -964,7 +964,7 @@ mod tests {
             vec!["link".into(), "base".into()],
             vec!["table".into()],
             vec![],
-            scene.adjacent_body_pairs.clone(),
+            scene.allowed_self_contact_pairs.clone(),
         );
         let report = validate_transition(
             &model,

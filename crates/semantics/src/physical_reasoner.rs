@@ -1103,7 +1103,7 @@ struct SolvedPose {
     q_end: Vec<f64>,
     finger_q: Vec<f64>,
     lift_states: Vec<Vec<f64>>,
-    lift_distance_m: f64,
+    maximum_lift_m: f64,
     lift_trajectory_digest: Option<String>,
 }
 
@@ -1114,7 +1114,14 @@ fn prove_arm_path(
     grasp: bool,
 ) -> Result<SolvedPose, &'static str> {
     let standoff_xyz = if grasp {
-        add3(candidate.target_xyz, scale3([0.0, 1.0, 0.0], 0.02))
+        // Approach from the support-plane normal so open fingers clear the
+        // supported object before reaching the pinch pose. Approaching along
+        // the pinch axis can sweep one finger through the object and turn a
+        // valid grasp into an unintended push.
+        add3(
+            candidate.target_xyz,
+            scale3(request.scene.support_normal, 0.02),
+        )
     } else {
         sub3(candidate.target_xyz, scale3(candidate.direction, 0.02))
     };
@@ -1152,15 +1159,16 @@ fn prove_arm_path(
             ContactPhase::ContactStroke,
         )?;
     }
-    let (finger_q, lift_states, lift_distance_m, lift_trajectory_digest) = if grasp {
-        const BOUNDED_GRASP_LIFT_M: f64 = 0.025;
+    let (finger_q, lift_states, maximum_lift_m, lift_trajectory_digest) = if grasp {
+        const BOUNDED_GRASP_LIFT_M: f64 = 0.023;
+        const MAXIMUM_GRASP_LIFT_M: f64 = 0.025;
         let finger_q = close_fingers(model, request)?;
         let lift_target = add3(candidate.target_xyz, [0.0, 0.0, BOUNDED_GRASP_LIFT_M]);
         let mut lift_scene = request.scene.clone();
         lift_scene.arm_q = q_contact.clone();
         let q_lift = solve_precise(model, &lift_scene, lift_target)?;
         arm_motion_clear(model, request, &q_contact, &q_lift, ContactPhase::GraspLift)?;
-        carried_object_lift_clear(request, BOUNDED_GRASP_LIFT_M)?;
+        carried_object_lift_clear(request, MAXIMUM_GRASP_LIFT_M)?;
         let states = vec![q_contact.clone(), q_lift];
         let digest = lift_trajectory_digest(
             &request.scene.joint_names,
@@ -1168,8 +1176,9 @@ fn prove_arm_path(
             &states,
             &finger_q,
             BOUNDED_GRASP_LIFT_M,
+            MAXIMUM_GRASP_LIFT_M,
         );
-        (finger_q, states, BOUNDED_GRASP_LIFT_M, Some(digest))
+        (finger_q, states, MAXIMUM_GRASP_LIFT_M, Some(digest))
     } else {
         (request.scene.finger_q.clone(), Vec::new(), 0.0, None)
     };
@@ -1180,7 +1189,7 @@ fn prove_arm_path(
         q_end,
         finger_q,
         lift_states,
-        lift_distance_m,
+        maximum_lift_m,
         lift_trajectory_digest,
     })
 }
@@ -1360,6 +1369,7 @@ fn lift_trajectory_digest(
     arm_states: &[Vec<f64>],
     closed_finger_positions: &[f64],
     lift_distance_m: f64,
+    maximum_lift_m: f64,
 ) -> String {
     let mut bytes = Vec::new();
     push_str(&mut bytes, "realityos.pinch_lift_trajectory/v1");
@@ -1377,6 +1387,7 @@ fn lift_trajectory_digest(
         push_q(&mut bytes, closed_finger_positions);
     }
     push_f64(&mut bytes, lift_distance_m);
+    push_f64(&mut bytes, maximum_lift_m);
     digest_bytes(&bytes)
 }
 
@@ -1566,7 +1577,7 @@ fn finish_action(
             close_positions: solved.finger_q.clone(),
             per_finger_force_ceiling_n: request.gripper_force_n.unwrap_or(f64::NAN),
             lift_trajectory_digest: solved.lift_trajectory_digest.clone().unwrap_or_default(),
-            maximum_lift_m: solved.lift_distance_m,
+            maximum_lift_m: solved.maximum_lift_m,
         }
     } else {
         linear_action_envelope(request, candidate)

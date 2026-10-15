@@ -136,10 +136,28 @@ fn discover_one(
         .filter(|j| j.limited)
         .map(|j| j.range);
 
-    let force_bound = actuator_inputs
-        .first()
-        .and_then(|n| manifest.actuators.iter().find(|a| a.name == *n))
-        .and_then(|a| a.force_range);
+    // MuJoCo actuator force ranges are signed. A gripper's semantic force
+    // bound is a nonnegative per-finger magnitude; only infer it when every
+    // independently actuated finger has a known force range.
+    let force_bound = if topology == ResourceTopology::DirectJointGripper {
+        actuator_inputs
+            .iter()
+            .map(|name| {
+                manifest
+                    .actuators
+                    .iter()
+                    .find(|actuator| actuator.name == *name)
+                    .and_then(|actuator| actuator.force_range)
+                    .map(|range| range[0].abs().max(range[1].abs()))
+            })
+            .collect::<Option<Vec<_>>>()
+            .filter(|limits| {
+                !limits.is_empty() && limits.iter().all(|limit| limit.is_finite() && *limit > 0.0)
+            })
+            .map(|limits| [0.0, limits.into_iter().fold(f64::INFINITY, f64::min)])
+    } else {
+        None
+    };
 
     ControlledResource {
         id: g.name.clone(),

@@ -40,10 +40,7 @@ fn production_reasoner_push_probe_and_replan_in_mujoco() {
         return;
     }
     let mut world = World::load("planar_arm");
-    let mut model = world.model.clone();
-    // The production proof uses the same declared tool sphere as the synthetic
-    // embodiment. The simulator still has the full link geometry.
-    model.collision_geoms.clear();
+    let model = world.model.clone();
     world.place_for_contact(&model, [0.30, 0.0, 0.12]);
     let start = world.object_xyz();
     let mut request = world.policy_request(&model, uncertain_friction());
@@ -214,8 +211,7 @@ fn production_reasoner_grasp_refuses_without_qualified_resource() {
         return;
     }
     let mut world = World::load("arm_gripper");
-    let mut model = world.model.clone();
-    model.collision_geoms.clear();
+    let model = world.model.clone();
     let ee = world.site("ee");
     world
         .inst()
@@ -282,8 +278,7 @@ fn production_reasoner_authorized_grasp_is_verified_in_mujoco() {
         return;
     }
     let mut world = World::load("arm_gripper_lift");
-    let (mut model, request, resource) = prepare_grasp(&mut world);
-    model.collision_geoms.clear();
+    let (model, request, resource) = prepare_grasp(&mut world);
     let mut reasoner = PhysicalReasoner::new(model);
     let mut os = RealityOs::new();
     let authorized = authorize_current_action(
@@ -342,7 +337,7 @@ fn production_reasoner_authorized_grasp_is_verified_in_mujoco() {
     assert!(verdict.grasp_acquired, "{:?}", verdict.evidence_used);
     assert!(
         verdict.verified_hold,
-        "failure={:?} evidence={:?} notes={:?} phases={:?} hold_q={:?} hold_obj={:?} hold_ee={:?} object_after={:?} ee_after={:?} envelope={:?}",
+        "failure={:?} evidence={:?} notes={:?} phases={:?} hold_q={:?} hold_obj={:?} hold_ee={:?} object_after={:?} ee_after={:?} envelope={:?} left_force={:?} right_force={:?}",
         verdict.failure,
         verdict.evidence_used,
         verdict.notes,
@@ -353,6 +348,8 @@ fn production_reasoner_authorized_grasp_is_verified_in_mujoco() {
         after.xpos.get("obj0"),
         after.named_pos.get("ee"),
         frozen.action_envelope,
+        normal_force_sum(&after, "obj0", "finger_l"),
+        normal_force_sum(&after, "obj0", "finger_r"),
     );
     assert!(verdict.success);
     assert_eq!(verdict.support[0].kind, SupportKind::Unsupported);
@@ -390,8 +387,8 @@ fn production_reasoner_authorized_grasp_is_verified_in_mujoco() {
         } => *per_finger_force_ceiling_n,
         _ => unreachable!("verified grasp has a typed pinch envelope"),
     };
-    assert!(left_force_n.is_some_and(|force| force <= force_ceiling));
-    assert!(right_force_n.is_some_and(|force| force <= force_ceiling));
+    assert!(left_force_n.is_some_and(|force| force <= force_ceiling + 1e-9));
+    assert!(right_force_n.is_some_and(|force| force <= force_ceiling + 1e-9));
     let evidence = json!({
         "evidence_status": EVIDENCE_STATUS,
         "authorized_action": frozen.action_key,
@@ -423,8 +420,7 @@ fn production_reasoner_grasp_expiry_stops_before_unverified_lift() {
         return;
     }
     let mut world = World::load("arm_gripper_lift");
-    let (mut model, request, resource) = prepare_grasp(&mut world);
-    model.collision_geoms.clear();
+    let (model, request, resource) = prepare_grasp(&mut world);
     let mut reasoner = PhysicalReasoner::new(model);
     let mut os = RealityOs::new();
     let authorized = authorize_current_action(
@@ -472,8 +468,7 @@ fn production_reasoner_grasp_runtime_divergence_aborts_before_control_write() {
         return;
     }
     let mut world = World::load("arm_gripper_lift");
-    let (mut model, request, _) = prepare_grasp(&mut world);
-    model.collision_geoms.clear();
+    let (model, request, _) = prepare_grasp(&mut world);
     let mut reasoner = PhysicalReasoner::new(model);
     let mut os = RealityOs::new();
     let authorized = authorize_current_action(
@@ -510,7 +505,16 @@ fn prepare_grasp(
     ControlledResource,
 ) {
     let mut model = world.model.clone();
-    let current_arm = world.arm_q();
+    let mut current_arm = world.arm_q();
+    let lift_index = world
+        .arm_names
+        .iter()
+        .position(|name| name == "lift_z")
+        .expect("fixture declares its vertical lift joint");
+    // The default qpos leaves the open fingers 8 micrometers into the table.
+    // Start 2 mm higher so full-geometry admission evaluates a clear approach.
+    current_arm[lift_index] = 0.002;
+    world.set_arm(&current_arm);
     world.command_q(&current_arm, &[0.029, 0.029], 200);
     let resource = ControlledResource {
         id: "gripper:direct-two-finger".into(),
@@ -538,17 +542,19 @@ fn prepare_grasp(
             None,
             Some(0.04),
             Some(TRUE_FRICTION),
-            Some(vec![0.01, 0.01, 0.01]),
+            Some(vec![0.01, 0.01, 0.025]),
             false,
         )
         .expect("configure grasp object");
-    let object_pos = [ee[0], ee[1], 0.11];
+    // A 50 mm tall supported box leaves the complete 40 mm finger collision
+    // geometry above the table throughout the centered pinch approach.
+    let object_pos = [ee[0], ee[1], 0.125];
     world
         .inst()
         .rpc(&json!({"cmd":"set_body_pos","body":"obj0","pos":object_pos}))
         .expect("place object on the table between fingers");
     let mut request = world.policy_request(&model, finger_friction());
-    request.scene.object_half = [0.01, 0.01, 0.01];
+    request.scene.object_half = [0.01, 0.01, 0.025];
     request.scene.object_center = world.object_xyz();
     request.scene.support_origin = [
         request.scene.object_center[0],
@@ -560,7 +566,7 @@ fn prepare_grasp(
     };
     request.scene.finger_names = resource.affected_joints.clone();
     request.scene.finger_q = world.finger_q();
-    request.gripper_force_n = Some(2.0);
+    request.gripper_force_n = Some(1.95);
     request.mass_kg = Some(0.04);
     request.gripper_resource = Some(resource.clone());
     request.belief.narrow_interval(
@@ -830,7 +836,7 @@ impl World {
 
     fn policy_request(
         &mut self,
-        _model: &realityos_semantics::embodiment::EmbodimentModel,
+        model: &realityos_semantics::embodiment::EmbodimentModel,
         belief: PhysicalParameterBelief,
     ) -> ReasoningRequest {
         let object = self.object_xyz();
@@ -851,7 +857,8 @@ impl World {
                 arm_q: self.arm_q(),
                 joint_names: self.arm_names.clone(),
                 ee: "ee".into(),
-                tool_radius_m: 0.008,
+                tool_radius_m: declared_ee_cross_section_radius(model, "ee")
+                    .expect("declared end-effector collision geometry"),
                 observation_epoch: "epoch:mujoco-0".into(),
                 held: false,
                 finger_names: vec!["finger_l".into(), "finger_r".into()],
@@ -1185,6 +1192,37 @@ fn candidate_lines(
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn declared_ee_cross_section_radius(
+    model: &realityos_semantics::embodiment::EmbodimentModel,
+    ee_name: &str,
+) -> Option<f64> {
+    let ee = model.end_effectors.iter().find(|ee| ee.name == ee_name)?;
+    let frame = model.frames.iter().find(|frame| frame.name == ee.frame)?;
+    model
+        .collision_geoms
+        .iter()
+        .filter(|geom| {
+            geom.owner_body == frame.parent_body
+                && geom.collision_role == realityos_semantics::geometry::CollisionRole::Collision
+        })
+        .filter_map(|geom| match &geom.shape {
+            realityos_semantics::geometry::PrimitiveShape::Sphere { radius }
+            | realityos_semantics::geometry::PrimitiveShape::Capsule { radius, .. }
+            | realityos_semantics::geometry::PrimitiveShape::Cylinder { radius, .. } => {
+                Some(radius.abs())
+            }
+            realityos_semantics::geometry::PrimitiveShape::Box { half_extents } => Some(
+                half_extents
+                    .iter()
+                    .map(|extent| extent.abs())
+                    .fold(0.0, f64::max),
+            ),
+            realityos_semantics::geometry::PrimitiveShape::Plane { .. }
+            | realityos_semantics::geometry::PrimitiveShape::Unsupported { .. } => None,
+        })
+        .reduce(f64::max)
 }
 
 fn plan_keys(plan: &realityos_semantics::physical_reasoner::PhysicalPlan) -> Vec<String> {

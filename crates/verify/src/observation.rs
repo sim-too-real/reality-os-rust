@@ -97,6 +97,14 @@ pub struct ContactTruth {
     #[serde(default)]
     pub group2: i32,
     #[serde(default)]
+    pub contact_dim: Option<u8>,
+    #[serde(default)]
+    pub friction: Option<Vec<f64>>,
+    #[serde(default)]
+    pub force_local: Option<[f64; 3]>,
+    #[serde(default)]
+    pub contact_frame: Option<[f64; 9]>,
+    #[serde(default)]
     pub normal_force: Option<f64>,
     #[serde(default)]
     pub tangential_force: Option<f64>,
@@ -149,6 +157,17 @@ impl VerifierTruth {
                         force: forces.get(i).copied().unwrap_or(0.0),
                         group1: c["group1"].as_i64().unwrap_or(-1) as i32,
                         group2: c["group2"].as_i64().unwrap_or(-1) as i32,
+                        contact_dim: c["dim"].as_u64().map(|dim| dim as u8),
+                        friction: c.get("friction").and_then(|values| values.as_array()).map(
+                            |values| {
+                                values
+                                    .iter()
+                                    .filter_map(serde_json::Value::as_f64)
+                                    .collect()
+                            },
+                        ),
+                        force_local: array3_opt(&c["force_local"]),
+                        contact_frame: array9_opt(&c["frame"]),
                         normal_force: c.get("normal_force").and_then(|v| v.as_f64()),
                         tangential_force: c.get("tangential_force").and_then(|v| v.as_f64()),
                         force_available: c["force_available"].as_bool().unwrap_or(false),
@@ -190,6 +209,30 @@ impl VerifierTruth {
             .or_else(|| self.named_pos.get("tip").cloned())
             .or_else(|| self.named_pos.values().next().cloned())
     }
+}
+
+fn array3_opt(value: &Value) -> Option<[f64; 3]> {
+    let values = value.as_array()?;
+    Some([
+        values.first()?.as_f64()?,
+        values.get(1)?.as_f64()?,
+        values.get(2)?.as_f64()?,
+    ])
+}
+
+fn array9_opt(value: &Value) -> Option<[f64; 9]> {
+    let values = value.as_array()?;
+    Some([
+        values.first()?.as_f64()?,
+        values.get(1)?.as_f64()?,
+        values.get(2)?.as_f64()?,
+        values.get(3)?.as_f64()?,
+        values.get(4)?.as_f64()?,
+        values.get(5)?.as_f64()?,
+        values.get(6)?.as_f64()?,
+        values.get(7)?.as_f64()?,
+        values.get(8)?.as_f64()?,
+    ])
 }
 
 pub fn policy_observation(
@@ -288,6 +331,7 @@ mod tests {
         RobotManifest {
             robot_id: "x".into(),
             nq: 1,
+            qpos0: vec![0.0],
             nv: 1,
             nu: 1,
             nbody: 1,
@@ -320,6 +364,9 @@ mod tests {
             support_bodies: vec![],
             collision_groups: Default::default(),
             geoms: Vec::new(),
+            contact_pairs: Vec::new(),
+            excluded_body_pairs: Vec::new(),
+            geometry_inspection_complete: false,
             metal: false,
             evidence_status: crate::honesty::SIMULATION_ONLY.into(),
         }

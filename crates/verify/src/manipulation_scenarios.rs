@@ -33,7 +33,7 @@ pub enum NegKind {
     ControllerFailure,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ManipulationScenario {
     pub seed: u64,
     pub polarity: Polarity,

@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "registrations": [
+    {
+      "robot_id": "menagerie_ur5e",
+      "bundle_path": "robots/external/ur5e",
+      "role": "development",
+      "tasks": ["push_probe_replan"]
+    },
+    {
+      "robot_id": "menagerie_iiwa14",
+      "bundle_path": "robots/external/iiwa14",
+      "role": "development",
+      "tasks": ["push_probe_replan"]
+    },
+    {
+      "robot_id": "menagerie_wx250s",
+      "bundle_path": "robots/external/wx250s",
+      "role": "holdout",
+      "tasks": ["push_probe_replan"]
+    },
+    {
+      "robot_id": "arm_gripper_lift",
+      "bundle_path": "robots/bundles/arm_gripper_lift",
+      "role": "grasp_fixture",
+      "tasks": ["pinch_grasp_lift"]
+    }
+  ]
+}

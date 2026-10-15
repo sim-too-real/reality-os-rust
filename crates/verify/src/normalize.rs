@@ -65,8 +65,10 @@ pub struct SiteRecord {
     pub quat: Option<[f64; 4]>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct GeomRecord {
+    #[serde(default)]
+    pub geom_id: i32,
     pub name: String,
     pub body: String,
     #[serde(default)]
@@ -78,11 +80,27 @@ pub struct GeomRecord {
     #[serde(default)]
     pub quat: [f64; 4],
     #[serde(default)]
+    pub friction: Option<[f64; 3]>,
+    #[serde(default)]
     pub group: i32,
     #[serde(default)]
     pub contype: i32,
     #[serde(default)]
     pub conaffinity: i32,
+    #[serde(default)]
+    pub mesh_asset: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct ContactPairRecord {
+    pub geom1_id: i32,
+    pub geom2_id: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct ExcludedBodyPairRecord {
+    pub body1: String,
+    pub body2: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -138,6 +156,8 @@ pub struct RobotManifest {
     pub nsensor: i32,
     pub ncamera: i32,
     pub timestep: f64,
+    #[serde(default)]
+    pub qpos0: Vec<f64>,
     pub joints: Vec<JointRecord>,
     pub actuators: Vec<ActuatorRecord>,
     pub sensors: Vec<SensorRecord>,
@@ -158,12 +178,27 @@ pub struct RobotManifest {
     pub collision_groups: std::collections::BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub geoms: Vec<GeomRecord>,
+    #[serde(default)]
+    pub contact_pairs: Vec<ContactPairRecord>,
+    #[serde(default)]
+    pub excluded_body_pairs: Vec<ExcludedBodyPairRecord>,
+    /// True only when the inspector returned geometry and both contact-rule tables.
+    #[serde(default)]
+    pub geometry_inspection_complete: bool,
     pub metal: bool,
     pub evidence_status: String,
 }
 
 impl RobotManifest {
     pub fn from_inspect(bundle: &RobotBundle, inspect: &serde_json::Value) -> Self {
+        let geometry_inspection_complete = ["geoms", "contact_pairs", "excluded_body_pairs"]
+            .iter()
+            .all(|key| {
+                inspect
+                    .get(*key)
+                    .and_then(serde_json::Value::as_array)
+                    .is_some()
+            });
         let joints: Vec<JointRecord> = inspect
             .get("joints")
             .and_then(|v| v.as_array())
@@ -312,16 +347,48 @@ impl RobotManifest {
                                 geom_type_name(g.get("type").and_then(|v| v.as_i64()).unwrap_or(-1))
                             });
                         GeomRecord {
+                            geom_id: g["id"].as_i64().unwrap_or(-1) as i32,
                             name: g["name"].as_str().unwrap_or("").into(),
                             body: g["body"].as_str().unwrap_or("").into(),
                             geom_type: type_name,
                             size: vec3_opt(&g["size"]).unwrap_or([0.0, 0.0, 0.0]),
                             pos: vec3_opt(&g["pos"]).unwrap_or([0.0, 0.0, 0.0]),
                             quat: vec4_opt(&g["quat"]).unwrap_or([1.0, 0.0, 0.0, 0.0]),
+                            friction: vec3_opt(&g["friction"]),
                             group: g["group"].as_i64().unwrap_or(0) as i32,
                             contype: g["contype"].as_i64().unwrap_or(0) as i32,
                             conaffinity: g["conaffinity"].as_i64().unwrap_or(0) as i32,
+                            mesh_asset: g
+                                .get("mesh_asset")
+                                .and_then(|value| value.as_str())
+                                .map(str::to_owned),
                         }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let contact_pairs = inspect
+            .get("contact_pairs")
+            .and_then(|value| value.as_array())
+            .map(|pairs| {
+                pairs
+                    .iter()
+                    .map(|pair| ContactPairRecord {
+                        geom1_id: pair["geom1_id"].as_i64().unwrap_or(-1) as i32,
+                        geom2_id: pair["geom2_id"].as_i64().unwrap_or(-1) as i32,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let excluded_body_pairs = inspect
+            .get("excluded_body_pairs")
+            .and_then(|value| value.as_array())
+            .map(|pairs| {
+                pairs
+                    .iter()
+                    .map(|pair| ExcludedBodyPairRecord {
+                        body1: pair["body1"].as_str().unwrap_or("").to_owned(),
+                        body2: pair["body2"].as_str().unwrap_or("").to_owned(),
                     })
                     .collect()
             })
@@ -404,6 +471,11 @@ impl RobotManifest {
             nsensor: inspect["nsensor"].as_i64().unwrap_or(0) as i32,
             ncamera: inspect["ncam"].as_i64().unwrap_or(0) as i32,
             timestep: inspect["timestep"].as_f64().unwrap_or(0.002),
+            qpos0: inspect
+                .get("qpos0")
+                .and_then(|v| v.as_array())
+                .and_then(|values| values.iter().map(|value| value.as_f64()).collect())
+                .unwrap_or_default(),
             joints,
             actuators,
             sensors,
@@ -438,6 +510,9 @@ impl RobotManifest {
                 .collect(),
             collision_groups: bundle.manifest.collision_groups.clone(),
             geoms,
+            contact_pairs,
+            excluded_body_pairs,
+            geometry_inspection_complete,
             metal: false,
             evidence_status: crate::honesty::SIMULATION_ONLY.into(),
         }

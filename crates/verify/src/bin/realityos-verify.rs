@@ -6,12 +6,19 @@ use realityos_verify::evidence::{aggregate, render_markdown};
 use realityos_verify::families::{family_spec, MILESTONE_FAMILIES};
 use realityos_verify::foundation_report::{run_campaign, write_report};
 use realityos_verify::honesty::{refuse_physical_proof_origin, SIMULATION_ONLY};
+use realityos_verify::manipulation_benchmark::{
+    resolve_benchmark_trial, score_campaign, write_report as write_benchmark_report,
+    BenchmarkConfig, BenchmarkExecutionError, BenchmarkTask, BenchmarkTrialRecord,
+    EmbodimentRegistry, EmbodimentRole,
+};
 use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, require_mujoco_env};
 use realityos_verify::reduce::minimize;
-use realityos_verify::runner::{qualify_bundle, run_episode, run_matrix, run_resolved};
+use realityos_verify::runner::{
+    load_and_normalize, qualify_bundle, run_episode, run_matrix, run_resolved,
+};
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn main() {
     let mut args = env::args().skip(1).collect::<Vec<_>>();
@@ -21,21 +28,390 @@ fn main() {
         );
         std::process::exit(2);
     }
-    if require_mujoco_env() {
+    let cmd = args.remove(0);
+    if cmd != "manipulation-benchmark" && require_mujoco_env() {
         let _ = ensure_mujoco_or_skip();
     }
-    let cmd = args.remove(0);
     match cmd.as_str() {
         "inspect" => inspect(&args[0]),
         "qualify" => qualify(&args[0]),
         "episode" => episode(&args),
         "matrix" | "milestone" => milestone(),
         "foundation-reach" => foundation_reach(),
+        "manipulation-benchmark" => manipulation_benchmark(&args),
         other => {
             eprintln!("unknown {other}");
             std::process::exit(2);
         }
     }
+}
+
+#[derive(Clone)]
+struct BenchmarkBundleSpec {
+    robot_id: String,
+    role: EmbodimentRole,
+    task: BenchmarkTask,
+    path: PathBuf,
+}
+
+const BASELINE_SOURCE_SHA: &str = "c38a52a4d8ace0e70e6d144b20b91ff4e0a738eb";
+
+fn manipulation_benchmark(args: &[String]) {
+    let parsed = match parse_benchmark_args(args) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            eprintln!("{error}\nusage: realityos-verify manipulation-benchmark [--seeds N] [--pilot] [--holdout] [--out DIR] [--replay TRIAL.json]");
+            std::process::exit(2);
+        }
+    };
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let (candidate_sha, dirty) = git_revision(&repo_root);
+    if parsed.holdout && dirty {
+        eprintln!(
+            "frozen holdout requires a clean, committed candidate; current worktree is dirty"
+        );
+        std::process::exit(2);
+    }
+    if parsed.holdout {
+        println!(
+            "HOLDOUT_GATE: candidate {} is committed and clean",
+            candidate_sha
+        );
+    }
+
+    let mut config = BenchmarkConfig::default();
+    let records = if let Some(replay_path) = parsed.replay.as_ref() {
+        let bytes = match fs::read(replay_path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                eprintln!(
+                    "cannot read replay record {}: {error}",
+                    replay_path.display()
+                );
+                std::process::exit(2);
+            }
+        };
+        let saved: BenchmarkTrialRecord = match serde_json::from_slice(&bytes) {
+            Ok(record) => record,
+            Err(error) => {
+                eprintln!("invalid replay record {}: {error}", replay_path.display());
+                std::process::exit(2);
+            }
+        };
+        let Some(trial) = saved.trial else {
+            eprintln!("replay record has no resolved trial input");
+            std::process::exit(2);
+        };
+        config.scheduled_trial_ids.push(trial.trial_id.clone());
+        vec![BenchmarkTrialRecord::from_run_result(
+            trial.clone(),
+            realityos_verify::manipulation_benchmark::run_benchmark_trial(
+                &load_trial_bundle(&repo_root, &trial.robot_id).unwrap_or_else(|error| {
+                    eprintln!("cannot load replay bundle: {error}");
+                    std::process::exit(2);
+                }),
+                &trial,
+                realityos_reasoner_bridge::SimulationAdmission {
+                    execution_bound_m: 0.1,
+                    expires_at_s: 120.0,
+                },
+            ),
+        )]
+    } else {
+        let seeds = selected_benchmark_seeds(&config, parsed.seeds, parsed.pilot, parsed.holdout);
+        if seeds.is_empty() {
+            eprintln!("seed count must be at least 1");
+            std::process::exit(2);
+        }
+        if seeds.len() > 100 {
+            eprintln!("one benchmark invocation is limited to 100 frozen trials per seed set");
+            std::process::exit(2);
+        }
+        let (specs, registry_digest) = benchmark_bundle_specs(&repo_root, parsed.holdout)
+            .unwrap_or_else(|error| {
+                eprintln!("invalid benchmark embodiment registry: {error}");
+                std::process::exit(2);
+            });
+        config.embodiment_registry_sha256 = Some(registry_digest);
+        let mut records = Vec::new();
+        for spec in specs {
+            records.extend(run_bundle_campaign(&spec, &seeds, &mut config));
+        }
+        records
+    };
+
+    let mut report = match score_campaign(&config, &records) {
+        Ok(report) => report,
+        Err(error) => {
+            eprintln!("benchmark scoring failed: {error}");
+            std::process::exit(1);
+        }
+    };
+    report.candidate_source_sha = Some(candidate_sha);
+    report.candidate_worktree_dirty = dirty;
+    report.baseline_source_sha = Some(BASELINE_SOURCE_SHA.into());
+    report.baseline_status = "paired legacy safe-script run is not available in this build".into();
+    if let Err(error) = write_benchmark_report(&report, &parsed.out_dir) {
+        eprintln!("benchmark report write failed: {error}");
+        std::process::exit(1);
+    }
+    println!(
+        "MANIPULATION_BENCHMARK scheduled={} completed={} infra={} invalid={} unaccounted={} safety_gate={} task_success={}/{} correct_refusal={}/{}",
+        report.scheduled_trials,
+        report.completed_trials,
+        report.infrastructure_trials,
+        report.invalid_trials,
+        report.unaccounted_trials,
+        report.safety_gate_passed,
+        report.task_success.numerator,
+        report.task_success.denominator,
+        report.correct_refusal.numerator,
+        report.correct_refusal.denominator,
+    );
+    println!(
+        "wrote {}/manipulation_benchmark.json and raw trial records",
+        parsed.out_dir.display()
+    );
+    if !report.safety_gate_passed {
+        std::process::exit(1);
+    }
+}
+
+struct BenchmarkArgs {
+    seeds: Option<usize>,
+    pilot: bool,
+    holdout: bool,
+    out_dir: PathBuf,
+    replay: Option<PathBuf>,
+}
+
+fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
+    let mut parsed = BenchmarkArgs {
+        seeds: None,
+        pilot: false,
+        holdout: false,
+        out_dir: PathBuf::from("verify-out/manipulation-benchmark"),
+        replay: None,
+    };
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--seeds" => {
+                index += 1;
+                let value = args.get(index).ok_or("--seeds requires a number")?;
+                parsed.seeds = Some(
+                    value
+                        .parse::<usize>()
+                        .map_err(|_| "--seeds must be a positive integer")?,
+                );
+            }
+            "--pilot" => parsed.pilot = true,
+            "--holdout" => parsed.holdout = true,
+            "--out" => {
+                index += 1;
+                parsed.out_dir =
+                    PathBuf::from(args.get(index).ok_or("--out requires a directory")?);
+            }
+            "--replay" => {
+                index += 1;
+                parsed.replay = Some(PathBuf::from(
+                    args.get(index).ok_or("--replay requires a trial record")?,
+                ));
+            }
+            other => return Err(format!("unknown benchmark option: {other}")),
+        }
+        index += 1;
+    }
+    if parsed.holdout && parsed.pilot {
+        return Err("--holdout and --pilot are separate seed sets".into());
+    }
+    if parsed.replay.is_some() && (parsed.holdout || parsed.pilot || parsed.seeds.is_some()) {
+        return Err("--replay cannot be combined with --holdout, --pilot, or --seeds".into());
+    }
+    if parsed.seeds == Some(0) {
+        return Err("--seeds must be greater than zero".into());
+    }
+    Ok(parsed)
+}
+
+fn selected_benchmark_seeds(
+    config: &BenchmarkConfig,
+    count: Option<usize>,
+    pilot: bool,
+    holdout: bool,
+) -> Vec<u64> {
+    let source = if holdout {
+        &config.holdout_seeds
+    } else if pilot {
+        &config.pilot_seeds
+    } else {
+        &config.public_seeds
+    };
+    source
+        .iter()
+        .copied()
+        .take(count.unwrap_or(source.len()))
+        .collect()
+}
+
+fn benchmark_bundle_specs(
+    repo_root: &Path,
+    holdout: bool,
+) -> Result<(Vec<BenchmarkBundleSpec>, String), String> {
+    let registry_path = repo_root.join("robots/benchmarks/manipulation/embodiments.json");
+    let registry = EmbodimentRegistry::load(&registry_path).map_err(|error| error.to_string())?;
+    let digest = registry.digest().map_err(|error| error.to_string())?;
+    let mut specs = Vec::new();
+    for entry in registry.selected(holdout) {
+        let relative = PathBuf::from(&entry.bundle_path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err(format!(
+                "bundle path escapes repository: {}",
+                entry.bundle_path
+            ));
+        }
+        for task in &entry.tasks {
+            specs.push(BenchmarkBundleSpec {
+                robot_id: entry.robot_id.clone(),
+                role: entry.role,
+                task: *task,
+                path: repo_root.join(relative.clone()),
+            });
+        }
+    }
+    Ok((specs, digest))
+}
+
+fn run_bundle_campaign(
+    spec: &BenchmarkBundleSpec,
+    seeds: &[u64],
+    config: &mut BenchmarkConfig,
+) -> Vec<BenchmarkTrialRecord> {
+    let mut records = Vec::new();
+    let mut schedule_error = None;
+    let bundle = match RobotBundle::load(&spec.path) {
+        Ok(bundle) if bundle.manifest.robot_id == spec.robot_id => Some(bundle),
+        Ok(bundle) => {
+            schedule_error = Some(format!(
+                "registered robot id {} does not match bundle id {}",
+                spec.robot_id, bundle.manifest.robot_id
+            ));
+            None
+        }
+        Err(error) => {
+            schedule_error = Some(format!("bundle_load:{}", error));
+            None
+        }
+    };
+    let inspected = if let Some(bundle) = bundle.as_ref() {
+        load_and_normalize(bundle, &[], seeds[0])
+            .map(|(worker, manifest)| {
+                realityos_verify::mujoco_exec::checkin_worker(worker);
+                manifest
+            })
+            .map_err(|error| format!("strict_mujoco_preflight:{error}"))
+    } else {
+        Err(schedule_error
+            .clone()
+            .unwrap_or_else(|| "bundle unavailable".into()))
+    };
+    let manifest = match inspected {
+        Ok(manifest) => Some(manifest),
+        Err(error) => {
+            schedule_error = Some(error);
+            None
+        }
+    };
+
+    for (offset, seed) in seeds.iter().copied().enumerate() {
+        let trial_index = match (spec.task, offset) {
+            (_, 1) => 0,
+            (BenchmarkTask::PinchGraspLift, _) => 15_u32.saturating_add(offset as u32),
+            _ => 10_u32.saturating_add(offset as u32),
+        };
+        let fallback_id = format!(
+            "v1:{}:{}:{}:{}:{}",
+            spec.role.as_str(),
+            spec.robot_id,
+            spec.task.as_str(),
+            seed,
+            trial_index
+        );
+        if let Some(error) = schedule_error.as_ref() {
+            config.scheduled_trial_ids.push(fallback_id.clone());
+            records.push(BenchmarkTrialRecord::failed_before_resolution(
+                fallback_id,
+                None,
+                BenchmarkExecutionError::Infrastructure(error.clone()),
+            ));
+            continue;
+        }
+        let bundle = bundle.as_ref().expect("manifest requires loaded bundle");
+        let manifest = manifest.as_ref().expect("manifest was inspected");
+        let trial = match resolve_benchmark_trial(
+            seed,
+            trial_index,
+            spec.task,
+            spec.role,
+            bundle,
+            manifest,
+        ) {
+            Ok(trial) => trial,
+            Err(error) => {
+                config.scheduled_trial_ids.push(fallback_id.clone());
+                records.push(BenchmarkTrialRecord::failed_before_resolution(
+                    fallback_id,
+                    None,
+                    BenchmarkExecutionError::InvalidTrial(error.to_string()),
+                ));
+                continue;
+            }
+        };
+        config.scheduled_trial_ids.push(trial.trial_id.clone());
+        let result = realityos_verify::manipulation_benchmark::run_benchmark_trial(
+            bundle,
+            &trial,
+            realityos_reasoner_bridge::SimulationAdmission {
+                execution_bound_m: 0.1,
+                expires_at_s: 120.0,
+            },
+        );
+        records.push(BenchmarkTrialRecord::from_run_result(trial, result));
+    }
+    records
+}
+
+fn load_trial_bundle(repo_root: &Path, robot_id: &str) -> Result<RobotBundle, String> {
+    let registry_path = repo_root.join("robots/benchmarks/manipulation/embodiments.json");
+    let registry = EmbodimentRegistry::load(&registry_path).map_err(|error| error.to_string())?;
+    let entry = registry
+        .registrations
+        .iter()
+        .find(|entry| entry.robot_id == robot_id)
+        .ok_or_else(|| format!("robot {robot_id} is not registered in manipulation benchmark"))?;
+    RobotBundle::load(repo_root.join(&entry.bundle_path)).map_err(|error| error.to_string())
+}
+
+fn git_revision(repo_root: &Path) -> (String, bool) {
+    let revision = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(repo_root)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .unwrap_or_else(|| "unknown".into());
+    let dirty = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(repo_root)
+        .output()
+        .map(|output| !output.stdout.is_empty())
+        .unwrap_or(true);
+    (revision, dirty)
 }
 
 fn inspect(id: &str) {
