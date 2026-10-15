@@ -671,6 +671,91 @@ pub fn solve_ik(
     Ok((q, trace))
 }
 
+/// Return distinct precise inverse-kinematics solutions, ordered by distance
+/// from the current configuration. Motion planners use these alternatives to
+/// reject colliding branches without weakening the geometry policy.
+pub fn solve_ik_candidates(
+    model: &EmbodimentModel,
+    chain: &[String],
+    ee: &str,
+    target: [f64; 3],
+    current_q: &[f64],
+    max_candidates: usize,
+) -> Result<Vec<(Vec<f64>, IkTrace)>, SkillRefuse> {
+    crate::work_counters::note_ik_attempt();
+    let joints = resolve_chain_joints(model, chain)?;
+    if current_q.len() != joints.len() {
+        return Err(SkillRefuse::MissingJointState);
+    }
+    let mut seeds = Vec::new();
+    IK_Q_SEED.with(|cell| {
+        if let Some(seed) = cell.borrow().as_ref() {
+            if seed.len() == joints.len() && seed.iter().all(|value| value.is_finite()) {
+                seeds.push(seed.clone());
+            }
+        }
+    });
+    seeds.push(current_q.to_vec());
+    seeds.extend(extra_seeds(joints.len()));
+    seeds.extend(limit_space_seeds(&joints, 16));
+
+    let mut candidates: Vec<(Vec<f64>, IkTrace)> = Vec::new();
+    let mut structural = None;
+    for seed in seeds {
+        let (q, residual) = match solve_from_seed(model, chain, &joints, ee, target, seed) {
+            Ok(solution) => solution,
+            Err(
+                error @ (SkillRefuse::ModelFeatureUnsupported | SkillRefuse::KinematicsUnsupported),
+            ) => {
+                structural = Some(error);
+                continue;
+            }
+            Err(_) => continue,
+        };
+        if residual > IK_ACCEPT
+            || !q
+                .iter()
+                .enumerate()
+                .all(|(i, value)| in_limits(&joints[i], *value))
+        {
+            continue;
+        }
+        let delta_norm = distance_from_current(&q, current_q);
+        if candidates
+            .iter()
+            .any(|(existing, _)| distance_from_current(existing, &q) < 1e-5)
+        {
+            continue;
+        }
+        let mut max_move: f64 = 0.0;
+        for (from, to) in current_q.iter().zip(&q) {
+            max_move = max_move.max((to - from).abs());
+        }
+        candidates.push((
+            q.clone(),
+            IkTrace {
+                initial_q: current_q.to_vec(),
+                target_q: q,
+                joint_delta_norm: delta_norm,
+                max_joint_move: max_move,
+                residual,
+            },
+        ));
+    }
+    candidates.sort_by(|left, right| {
+        left.1
+            .joint_delta_norm
+            .total_cmp(&right.1.joint_delta_norm)
+            .then_with(|| left.1.residual.total_cmp(&right.1.residual))
+    });
+    candidates.truncate(max_candidates.max(1));
+    if candidates.is_empty() {
+        Err(structural.unwrap_or(SkillRefuse::Unreachable))
+    } else {
+        Ok(candidates)
+    }
+}
+
 pub fn resolve_chain_joints(
     model: &EmbodimentModel,
     chain: &[String],
@@ -781,6 +866,29 @@ mod tests {
         let fk = forward_kinematics(&m, &chain, "ee", &q).unwrap();
         assert!((fk.ee.xyz[0] - 0.2).abs() < 1e-3);
         assert!(fk.ee.xyz[1].abs() < 1e-3);
+    }
+
+    #[test]
+    fn precise_ik_candidates_preserve_distinct_collision_avoidance_branches() {
+        let model = synth_planar_two_link();
+        let chain = model.ee_joint_chain("ee").unwrap();
+        let candidates =
+            solve_ik_candidates(&model, &chain, "ee", [0.2, 0.0, 0.0], &[0.0, 0.0], 16).unwrap();
+
+        assert!(
+            candidates.len() >= 2,
+            "expected both elbow branches, got {candidates:?}"
+        );
+        for (q, trace) in &candidates {
+            assert!(trace.residual <= IK_ACCEPT_M);
+            let fk = forward_kinematics(&model, &chain, "ee", q).unwrap();
+            assert!((fk.ee.xyz[0] - 0.2).abs() <= IK_ACCEPT_M);
+            assert!(fk.ee.xyz[1].abs() <= IK_ACCEPT_M);
+        }
+        assert!(
+            distance_from_current(&candidates[0].0, &[0.0, 0.0])
+                <= distance_from_current(&candidates[1].0, &[0.0, 0.0])
+        );
     }
 
     #[test]

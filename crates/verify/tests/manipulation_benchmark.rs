@@ -318,7 +318,9 @@ fn eligible_push_uses_scoped_bridge_and_replans_after_probe() {
     // This integration case starts at a randomized, IK-derived standoff so it
     // exercises a justified action. Campaign runs retain the resolver's full
     // seeded joint-position randomization and score unreachable starts as
-    // refusals.
+    // refusals. After the measured probe, the randomized obstacle layout and
+    // full arm geometry may make the next approach inadmissible; that refusal
+    // is part of the benchmark result, not grounds to weaken collision checks.
     let (inspection_worker, base_manifest) =
         load_and_normalize(&bundle, &[], trial.seed).expect("strict benchmark requires MuJoCo");
     checkin_worker(inspection_worker);
@@ -351,16 +353,36 @@ fn eligible_push_uses_scoped_bridge_and_replans_after_probe() {
     assert_eq!(episode.trial_id, trial.trial_id);
     assert!(
         episode.actions.len() >= 2,
-        "probe must be followed by a newly authorized action: {:?}; {:?}",
+        "probe must be followed by a newly authorized action: {:?}; actions={:?}; decisions={:?}; request={:?}",
         episode.refusal_code,
-        episode.decision_audits
+        episode.actions,
+        episode.decision_audits,
+        episode.reasoning_request_audits.last()
     );
+    assert_eq!(
+        episode.reasoning_request_audits.len(),
+        episode.actions.len()
+    );
+    assert_ne!(
+        episode.reasoning_request_audits[0], episode.reasoning_request_audits[1],
+        "the replan must use a fresh post-probe observation"
+    );
+    assert_eq!(episode.outcome, TrialOutcome::Success);
+    assert!(episode.actions[1].reauthorized_after_observation);
     assert!(episode
         .actions
         .iter()
         .all(|action| !action.grant_id.is_empty() && !action.witness_digest.is_empty()));
     assert_eq!(episode.unauthorized_writes, 0);
     assert!(episode.ctrl_writes_after > episode.ctrl_writes_before);
+    assert_eq!(
+        episode.ctrl_writes_after,
+        episode
+            .actions
+            .last()
+            .expect("authorized action")
+            .writes_after
+    );
     assert!(!episode.reasoning_request_audits.is_empty());
     for request in &episode.reasoning_request_audits {
         assert!(!request.contains("ExpectedSuccess"));
@@ -1372,6 +1394,35 @@ fn initial_qpos_respects_joint_limits() {
     assert!((-1.0..=1.0).contains(&trial.initial_qpos[0]));
     assert!((-2.0..=2.0).contains(&trial.initial_qpos[1]));
     assert_eq!(trial.initial_qpos[2], 0.25);
+}
+
+#[test]
+fn initial_qpos_randomizes_across_declared_joint_ranges() {
+    let bundle = planar_bundle();
+    let manifest = planar_manifest();
+    let first = resolve_benchmark_trial(
+        42,
+        10,
+        BenchmarkTask::PushProbeReplan,
+        EmbodimentRole::Development,
+        &bundle,
+        &manifest,
+    )
+    .expect("declared joint ranges are valid");
+    let repeated = resolve_benchmark_trial(
+        43,
+        10,
+        BenchmarkTask::PushProbeReplan,
+        EmbodimentRole::Development,
+        &bundle,
+        &manifest,
+    )
+    .expect("second seed resolves independently");
+
+    assert!((-1.0..=1.0).contains(&first.initial_qpos[0]));
+    assert!((-2.0..=2.0).contains(&first.initial_qpos[1]));
+    assert_eq!(first.initial_qpos[2], 0.25);
+    assert_ne!(first.initial_qpos[..2], repeated.initial_qpos[..2]);
 }
 
 #[test]

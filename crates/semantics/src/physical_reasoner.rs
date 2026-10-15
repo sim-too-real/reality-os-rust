@@ -24,7 +24,9 @@ use crate::future_interaction::{
     SupportedProbeOutcome,
 };
 use crate::grasp_hold::{evaluate_pinch_hold, HoldFeasibility, PinchHoldInput};
-use crate::kinematics::{forward_kinematics, ik_residual_is_precise, solve_ik, with_ik_q_seed};
+use crate::kinematics::{
+    forward_kinematics, ik_residual_is_precise, solve_ik, solve_ik_candidates, with_ik_q_seed,
+};
 use crate::pair_friction::PairFriction;
 use crate::physical_belief::{BeliefEpistemicStatus, PhysicalParameter, PhysicalParameterBelief};
 use crate::physical_consequence::FrozenPrediction;
@@ -38,7 +40,7 @@ use crate::planar_goal::GoalProgressClass;
 use crate::probe_selection::BeliefRobustness;
 use crate::provenance::Provenanced;
 use crate::recoverability::RecoverabilityClass;
-use crate::transform::{add3, norm3, scale3, sub3};
+use crate::transform::{add3, norm3, rotate_by_quat, scale3, sub3};
 use crate::transition_validity::validate_transition;
 use crate::work_counters;
 
@@ -62,6 +64,7 @@ pub struct TableScene {
     pub object_quat: [f64; 4],
     pub support_origin: [f64; 3],
     pub support_normal: [f64; 3],
+    pub support_half_extents: Option<[f64; 3]>,
     pub obstacles: Vec<NamedBox>,
     pub arm_q: Vec<f64>,
     pub joint_names: Vec<String>,
@@ -611,6 +614,7 @@ pub fn benchmark_scene() -> (EmbodimentModel, ReasoningRequest) {
             object_quat: [1.0, 0.0, 0.0, 0.0],
             support_origin: [0.20, 0.0, -0.05],
             support_normal: [0.0, 0.0, 1.0],
+            support_half_extents: None,
             obstacles: vec![NamedBox::aabb(
                 "south-wall",
                 [0.20, -0.030, 0.0],
@@ -688,12 +692,9 @@ struct RawCandidate {
 }
 
 fn push_candidates(request: &ReasoningRequest) -> Vec<RawCandidate> {
-    let directions = [
-        [1.0, 0.0, 0.0],
-        [-1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, -1.0, 0.0],
-    ];
+    let axis_x = planar_object_axis(request.scene.object_quat, [1.0, 0.0, 0.0]);
+    let axis_y = planar_object_axis(request.scene.object_quat, [0.0, 1.0, 0.0]);
+    let directions = [axis_x, scale3(axis_x, -1.0), axis_y, scale3(axis_y, -1.0)];
     let mut out = Vec::new();
     for direction in directions {
         let label = axis_label(direction);
@@ -713,12 +714,26 @@ fn push_candidates(request: &ReasoningRequest) -> Vec<RawCandidate> {
         out.push(push_raw(
             request,
             "probe:+x",
-            [1.0, 0.0, 0.0],
+            axis_x,
             request.probe_stroke_m,
             true,
         ));
     }
     out
+}
+
+fn planar_object_axis(object_quat: [f64; 4], local_axis: [f64; 3]) -> [f64; 3] {
+    let world_axis = rotate_by_quat(object_quat, local_axis);
+    let planar_norm = world_axis[0].hypot(world_axis[1]);
+    if planar_norm.is_finite() && planar_norm > 1e-9 {
+        [
+            world_axis[0] / planar_norm,
+            world_axis[1] / planar_norm,
+            0.0,
+        ]
+    } else {
+        local_axis
+    }
 }
 
 fn push_raw(
@@ -728,7 +743,11 @@ fn push_raw(
     stroke: f64,
     probe: bool,
 ) -> RawCandidate {
-    let extent = if direction[0].abs() > 0.5 {
+    let axis_x = planar_object_axis(request.scene.object_quat, [1.0, 0.0, 0.0]);
+    let axis_y = planar_object_axis(request.scene.object_quat, [0.0, 1.0, 0.0]);
+    let x_alignment = direction[0] * axis_x[0] + direction[1] * axis_x[1];
+    let y_alignment = direction[0] * axis_y[0] + direction[1] * axis_y[1];
+    let extent = if x_alignment.abs() >= y_alignment.abs() {
         request.scene.object_half[0]
     } else {
         request.scene.object_half[1]
@@ -1101,6 +1120,7 @@ struct SolvedPose {
     q_transit: Vec<f64>,
     q_contact: Vec<f64>,
     q_end: Vec<f64>,
+    q_retract: Option<Vec<f64>>,
     finger_q: Vec<f64>,
     lift_states: Vec<Vec<f64>>,
     maximum_lift_m: f64,
@@ -1125,73 +1145,291 @@ fn prove_arm_path(
     } else {
         sub3(candidate.target_xyz, scale3(candidate.direction, 0.02))
     };
-    let q_transit = solve_precise(model, &request.scene, standoff_xyz)?;
-    arm_motion_clear(
+    const MAX_COLLISION_ALTERNATIVES: usize = 8;
+    let q_transit_candidates = solve_precise_candidates(
         model,
-        request,
-        &request.scene.arm_q,
-        &q_transit,
-        ContactPhase::CurrentToApproach,
+        &request.scene,
+        standoff_xyz,
+        MAX_COLLISION_ALTERNATIVES,
     )?;
-    let mut contact_scene = request.scene.clone();
-    contact_scene.arm_q = q_transit.clone();
-    let q_contact = solve_precise(model, &contact_scene, candidate.target_xyz)?;
     let approach_phase = if grasp {
         ContactPhase::GraspApproach
     } else {
         ContactPhase::ApproachToContact
     };
-    arm_motion_clear(model, request, &q_transit, &q_contact, approach_phase)?;
-    let mut q_end = q_contact.clone();
-    if !grasp && candidate.stroke_m > 1e-9 {
-        let end_xyz = add3(
-            candidate.target_xyz,
-            scale3(candidate.direction, candidate.stroke_m),
-        );
-        let mut stroke_scene = contact_scene;
-        stroke_scene.arm_q = q_contact.clone();
-        q_end = solve_precise(model, &stroke_scene, end_xyz)?;
-        arm_motion_clear(
+    let mut last_refusal = None;
+
+    for q_transit in q_transit_candidates {
+        if let Err(reason) = arm_motion_clear(
             model,
             request,
-            &q_contact,
-            &q_end,
-            ContactPhase::ContactStroke,
-        )?;
+            &q_transit,
+            &q_transit,
+            ContactPhase::CurrentToApproach,
+        ) {
+            last_refusal = Some(reason);
+            continue;
+        }
+        if let Err(reason) = arm_motion_clear(
+            model,
+            request,
+            &request.scene.arm_q,
+            &q_transit,
+            ContactPhase::CurrentToApproach,
+        ) {
+            last_refusal = Some(reason);
+            continue;
+        }
+        let mut contact_scene = request.scene.clone();
+        contact_scene.arm_q = q_transit.clone();
+        let q_contact_candidates = match solve_precise_candidates(
+            model,
+            &contact_scene,
+            candidate.target_xyz,
+            MAX_COLLISION_ALTERNATIVES,
+        ) {
+            Ok(candidates) => candidates,
+            Err(reason) => {
+                last_refusal = Some(reason);
+                continue;
+            }
+        };
+
+        for q_contact in q_contact_candidates {
+            let terminal_contact_phase = if grasp {
+                approach_phase
+            } else {
+                ContactPhase::ContactStroke
+            };
+            if let Err(reason) = arm_motion_clear(
+                model,
+                request,
+                &q_contact,
+                &q_contact,
+                terminal_contact_phase,
+            ) {
+                last_refusal = Some(reason);
+                continue;
+            }
+            if let Err(reason) =
+                arm_motion_clear(model, request, &q_transit, &q_contact, approach_phase)
+            {
+                last_refusal = Some(reason);
+                continue;
+            }
+
+            let mut q_end = q_contact.clone();
+            if !grasp && candidate.stroke_m > 1e-9 {
+                let end_xyz = add3(
+                    candidate.target_xyz,
+                    scale3(candidate.direction, candidate.stroke_m),
+                );
+                let mut stroke_scene = request.scene.clone();
+                stroke_scene.arm_q = q_contact.clone();
+                let q_end_candidates = match solve_precise_candidates(
+                    model,
+                    &stroke_scene,
+                    end_xyz,
+                    MAX_COLLISION_ALTERNATIVES,
+                ) {
+                    Ok(candidates) => candidates,
+                    Err(reason) => {
+                        last_refusal = Some(reason);
+                        continue;
+                    }
+                };
+                let mut clear_end = None;
+                for q_candidate_end in q_end_candidates {
+                    if let Err(reason) = arm_motion_clear(
+                        model,
+                        request,
+                        &q_candidate_end,
+                        &q_candidate_end,
+                        ContactPhase::ContactStroke,
+                    ) {
+                        last_refusal = Some(reason);
+                        continue;
+                    }
+                    match arm_motion_clear(
+                        model,
+                        request,
+                        &q_contact,
+                        &q_candidate_end,
+                        ContactPhase::ContactStroke,
+                    ) {
+                        Ok(()) => {
+                            clear_end = Some(q_candidate_end);
+                            break;
+                        }
+                        Err(reason) => last_refusal = Some(reason),
+                    }
+                }
+                let Some(end) = clear_end else {
+                    continue;
+                };
+                q_end = end;
+            }
+
+            let q_retract = if candidate.probe {
+                let predicted_center = add3(
+                    request.scene.object_center,
+                    scale3(candidate.direction, candidate.stroke_m),
+                );
+                let mut retreat_scene = request.scene.clone();
+                retreat_scene.object_center = predicted_center;
+                retreat_scene.arm_q = q_end.clone();
+                let retreat_target = add3(
+                    candidate.target_xyz,
+                    scale3(candidate.direction, candidate.stroke_m - 0.03),
+                );
+                let retreat_candidates = match solve_precise_candidates(
+                    model,
+                    &retreat_scene,
+                    retreat_target,
+                    MAX_COLLISION_ALTERNATIVES,
+                ) {
+                    Ok(candidates) => candidates,
+                    Err(reason) => {
+                        last_refusal = Some(reason);
+                        continue;
+                    }
+                };
+                let mut retreat_request = request.clone();
+                retreat_request.scene = retreat_scene;
+                let mut clear_retract = None;
+                for q_candidate_retract in retreat_candidates {
+                    if let Err(reason) = arm_motion_clear(
+                        model,
+                        &retreat_request,
+                        &q_candidate_retract,
+                        &q_candidate_retract,
+                        ContactPhase::CurrentToApproach,
+                    ) {
+                        last_refusal = Some(reason);
+                        continue;
+                    }
+                    match arm_motion_clear(
+                        model,
+                        &retreat_request,
+                        &q_end,
+                        &q_candidate_retract,
+                        ContactPhase::CurrentToApproach,
+                    ) {
+                        Ok(()) => {
+                            clear_retract = Some(q_candidate_retract);
+                            break;
+                        }
+                        Err(reason) => last_refusal = Some(reason),
+                    }
+                }
+                let Some(retract) = clear_retract else {
+                    continue;
+                };
+                Some(retract)
+            } else {
+                None
+            };
+
+            let (finger_q, lift_states, maximum_lift_m, lift_trajectory_digest) = if grasp {
+                const BOUNDED_GRASP_LIFT_M: f64 = 0.023;
+                const MAXIMUM_GRASP_LIFT_M: f64 = 0.025;
+                let finger_q = close_fingers(model, request)?;
+                let lift_target = add3(candidate.target_xyz, [0.0, 0.0, BOUNDED_GRASP_LIFT_M]);
+                let mut lift_scene = request.scene.clone();
+                lift_scene.arm_q = q_contact.clone();
+                let q_lift_candidates = match solve_precise_candidates(
+                    model,
+                    &lift_scene,
+                    lift_target,
+                    MAX_COLLISION_ALTERNATIVES,
+                ) {
+                    Ok(candidates) => candidates,
+                    Err(reason) => {
+                        last_refusal = Some(reason);
+                        continue;
+                    }
+                };
+                let mut clear_lift = None;
+                for q_candidate_lift in q_lift_candidates {
+                    if let Err(reason) = arm_motion_clear(
+                        model,
+                        request,
+                        &q_candidate_lift,
+                        &q_candidate_lift,
+                        ContactPhase::GraspLift,
+                    ) {
+                        last_refusal = Some(reason);
+                        continue;
+                    }
+                    match arm_motion_clear(
+                        model,
+                        request,
+                        &q_contact,
+                        &q_candidate_lift,
+                        ContactPhase::GraspLift,
+                    ) {
+                        Ok(()) => {
+                            clear_lift = Some(q_candidate_lift);
+                            break;
+                        }
+                        Err(reason) => last_refusal = Some(reason),
+                    }
+                }
+                let Some(q_lift) = clear_lift else {
+                    continue;
+                };
+                carried_object_lift_clear(request, MAXIMUM_GRASP_LIFT_M)?;
+                let states = vec![q_contact.clone(), q_lift];
+                let digest = lift_trajectory_digest(
+                    &request.scene.joint_names,
+                    &request.scene.finger_names,
+                    &states,
+                    &finger_q,
+                    BOUNDED_GRASP_LIFT_M,
+                    MAXIMUM_GRASP_LIFT_M,
+                );
+                (finger_q, states, MAXIMUM_GRASP_LIFT_M, Some(digest))
+            } else {
+                (request.scene.finger_q.clone(), Vec::new(), 0.0, None)
+            };
+            return Ok(SolvedPose {
+                q0: request.scene.arm_q.clone(),
+                q_transit,
+                q_contact,
+                q_end,
+                q_retract,
+                finger_q,
+                lift_states,
+                maximum_lift_m,
+                lift_trajectory_digest,
+            });
+        }
     }
-    let (finger_q, lift_states, maximum_lift_m, lift_trajectory_digest) = if grasp {
-        const BOUNDED_GRASP_LIFT_M: f64 = 0.023;
-        const MAXIMUM_GRASP_LIFT_M: f64 = 0.025;
-        let finger_q = close_fingers(model, request)?;
-        let lift_target = add3(candidate.target_xyz, [0.0, 0.0, BOUNDED_GRASP_LIFT_M]);
-        let mut lift_scene = request.scene.clone();
-        lift_scene.arm_q = q_contact.clone();
-        let q_lift = solve_precise(model, &lift_scene, lift_target)?;
-        arm_motion_clear(model, request, &q_contact, &q_lift, ContactPhase::GraspLift)?;
-        carried_object_lift_clear(request, MAXIMUM_GRASP_LIFT_M)?;
-        let states = vec![q_contact.clone(), q_lift];
-        let digest = lift_trajectory_digest(
-            &request.scene.joint_names,
-            &request.scene.finger_names,
-            &states,
-            &finger_q,
-            BOUNDED_GRASP_LIFT_M,
-            MAXIMUM_GRASP_LIFT_M,
-        );
-        (finger_q, states, MAXIMUM_GRASP_LIFT_M, Some(digest))
-    } else {
-        (request.scene.finger_q.clone(), Vec::new(), 0.0, None)
-    };
-    Ok(SolvedPose {
-        q0: request.scene.arm_q.clone(),
-        q_transit,
-        q_contact,
-        q_end,
-        finger_q,
-        lift_states,
-        maximum_lift_m,
-        lift_trajectory_digest,
-    })
+    Err(last_refusal.unwrap_or("IK_FAILED"))
+}
+
+fn solve_precise_candidates(
+    model: &EmbodimentModel,
+    scene: &TableScene,
+    target: [f64; 3],
+    limit: usize,
+) -> Result<Vec<Vec<f64>>, &'static str> {
+    let chain = model.ee_joint_chain(&scene.ee).ok_or("NO_CHAIN")?;
+    if scene.arm_q.len() != chain.len() {
+        return Err("Q_LENGTH");
+    }
+    let candidates = with_ik_q_seed(Some(&scene.arm_q), || {
+        solve_ik_candidates(model, &chain, &scene.ee, target, &scene.arm_q, limit)
+    });
+    match candidates {
+        Ok(candidates) => Ok(candidates.into_iter().map(|(q, _)| q).collect()),
+        Err(_) => {
+            // Preserve the existing refusal detail when no precise solution is
+            // available; best-effort IK may distinguish residual from failure.
+            let _ = solve_precise(model, scene, target)?;
+            Err("IK_FAILED")
+        }
+    }
 }
 
 fn validate_gripper_resource(
@@ -1973,6 +2211,7 @@ fn collision_world(request: &ReasoningRequest) -> CollisionWorld {
         support_id: "table".into(),
         support_origin: request.scene.support_origin,
         support_normal: request.scene.support_normal,
+        support_half_extents: request.scene.support_half_extents,
         intended_tool_bodies: vec!["tool".into(), "link2".into()],
         robot_volumes: Vec::new(),
         obstacles: request.scene.obstacles.clone(),
@@ -2116,7 +2355,7 @@ fn joint_margin(model: &EmbodimentModel, names: &[String], q: &[f64]) -> f64 {
     }
 }
 
-const PROOF_ALGORITHM: &str = "physical-proof/4";
+const PROOF_ALGORITHM: &str = "physical-proof/5";
 
 fn witness_text(
     family: &str,
@@ -2128,7 +2367,7 @@ fn witness_text(
 ) -> String {
     let dependency = proof_dependency_digest(family, model, request, candidate);
     let mut witness = format!(
-        "algorithm={PROOF_ALGORITHM}\nfamily={family}\nkey={}\npush_bits={}\nstroke_bits={}\nq0_bits={}\nq_transit_bits={}\nq_contact_bits={}\nq_end_bits={}\nfinger_bits={}\naction_envelope={}\nlift_trajectory_digest={}\ndependency={dependency}\nsegments=transit,approach,contact,close,lift\ncontact_observed=false\n",
+        "algorithm={PROOF_ALGORITHM}\nfamily={family}\nkey={}\npush_bits={}\nstroke_bits={}\nq0_bits={}\nq_transit_bits={}\nq_contact_bits={}\nq_end_bits={}\nq_retract_bits={}\nfinger_bits={}\naction_envelope={}\nlift_trajectory_digest={}\ndependency={dependency}\nsegments=transit,approach,contact,stroke,retreat,close,lift\ncontact_observed=false\n",
         hex::encode(candidate.action_key.as_bytes()),
         bits3(candidate.direction),
         candidate.stroke_m.to_bits(),
@@ -2136,6 +2375,7 @@ fn witness_text(
         bits_q(&solved.q_transit),
         bits_q(&solved.q_contact),
         bits_q(&solved.q_end),
+        solved.q_retract.as_deref().map(bits_q).unwrap_or_else(|| "none".into()),
         bits_q(&solved.finger_q),
         action_envelope_witness(action_envelope),
         solved.lift_trajectory_digest.as_deref().unwrap_or("none"),
@@ -2499,6 +2739,7 @@ mod tests {
             support_id: "table".into(),
             support_origin: [0.2, 0.0, -0.05],
             support_normal: [0.0, 0.0, 1.0],
+            support_half_extents: None,
             intended_tool_bodies: vec!["tool".into()],
             robot_volumes: Vec::new(),
             obstacles: Vec::new(),
@@ -2600,6 +2841,12 @@ mod tests {
         assert_eq!(executable.action_key, action.action_key);
         assert_eq!(executable.witness_digest, action.witness_digest);
         assert_eq!(executable.stroke_m, request.probe_stroke_m);
+        let retract = q_from_bit_line(&executable.witness_contents, "q_retract_bits=");
+        assert_eq!(
+            retract.len(),
+            request.scene.joint_names.len(),
+            "a probe witness must include a collision-checked retreat for re-observation"
+        );
         let prepared = reasoner
             .prepare_step(&request, executable)
             .expect("prepare re-proves the exact selected step");
@@ -2835,6 +3082,26 @@ mod tests {
                 observation_epoch: "epoch:table".into(),
             })
             .is_err());
+    }
+
+    #[test]
+    fn push_contact_face_tracks_observed_object_rotation() {
+        let (_, mut request) = benchmark_scene();
+        let yaw = 0.2_f64;
+        request.scene.object_quat = [(yaw * 0.5).cos(), 0.0, 0.0, (yaw * 0.5).sin()];
+
+        let candidate = push_candidates(&request)
+            .into_iter()
+            .find(|candidate| candidate.action_key == "push:+x")
+            .expect("positive local-x push");
+        let expected = crate::transform::rotate_by_quat(request.scene.object_quat, [1.0, 0.0, 0.0]);
+        assert!((candidate.direction[0] - expected[0]).abs() < 1e-12);
+        assert!((candidate.direction[1] - expected[1]).abs() < 1e-12);
+        let face_delta = sub3(request.scene.object_center, candidate.target_xyz);
+        assert!(
+            (face_delta[0] * candidate.direction[1] - face_delta[1] * candidate.direction[0]).abs()
+                < 1e-12
+        );
     }
 
     fn qualified_grasp_fixture() -> (EmbodimentModel, ReasoningRequest) {

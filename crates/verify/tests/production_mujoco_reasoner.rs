@@ -72,6 +72,11 @@ fn production_reasoner_push_probe_and_replan_in_mujoco() {
     let before_writes = world.ctrl_writes();
     let probed = world.execute(&probe_grant);
     assert!(world.ctrl_writes() > before_writes);
+    let probe_retract = q_line(&probe_grant.frozen().witness_contents, "q_retract_bits=");
+    assert!(
+        q_tracks(&world.arm_q(), &probe_retract, 0.03),
+        "MuJoCo probe executor must reach the frozen collision-checked retreat before re-observation"
+    );
     let ratio = if request.probe_stroke_m > 1e-9 {
         probed.displacement / request.probe_stroke_m
     } else {
@@ -853,6 +858,7 @@ impl World {
                 object_quat: [1.0, 0.0, 0.0, 0.0],
                 support_origin: [object[0], object[1], object[2] - 0.03],
                 support_normal: [0.0, 0.0, 1.0],
+                support_half_extents: None,
                 obstacles: vec![wall],
                 arm_q: self.arm_q(),
                 joint_names: self.arm_names.clone(),
@@ -894,6 +900,7 @@ impl World {
             q_line(contents, "q_contact_bits="),
             q_line(contents, "q_end_bits="),
         ];
+        let retract = q_line(contents, "q_retract_bits=");
         let fingers = q_line(contents, "finger_bits=");
         for q in segments.iter().take(3) {
             if q.len() == self.arm_names.len() {
@@ -901,6 +908,9 @@ impl World {
             }
         }
         self.track_stroke(contents, &fingers);
+        if retract.len() == self.arm_names.len() {
+            self.command_q(&retract, &fingers, 60);
+        }
         if fingers.len() == 2 {
             let arm = self.arm_q();
             self.command_q(&arm, &fingers, 80);

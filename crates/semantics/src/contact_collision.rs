@@ -78,6 +78,9 @@ pub struct CollisionWorld {
     pub support_id: String,
     pub support_origin: [f64; 3],
     pub support_normal: [f64; 3],
+    /// Optional exact finite support box half extents. `support_origin` is the
+    /// top-plane origin; when absent, retain the conservative support proxy.
+    pub support_half_extents: Option<[f64; 3]>,
     pub intended_tool_bodies: Vec<String>,
     pub robot_volumes: Vec<AttachedSphere>,
     pub obstacles: Vec<NamedBox>,
@@ -93,6 +96,12 @@ fn validate_world_geometry(
     let object_pose = Se3::try_new(world.object_center, world.object_quat)
         .map_err(|_| CollisionWorldError::InvalidObjectPose)?;
     if !world.support_origin.iter().all(|v| v.is_finite()) {
+        return Err(CollisionWorldError::InvalidSupportPlane);
+    }
+    if world
+        .support_half_extents
+        .is_some_and(|half| !half.iter().all(|value| value.is_finite() && *value > 0.0))
+    {
         return Err(CollisionWorldError::InvalidSupportPlane);
     }
     let support_normal = crate::transform::normalize3(world.support_normal)
@@ -249,17 +258,38 @@ pub fn scene_from_collision_world(
         SemanticRole::Object,
         "scene.object",
     )];
-    let thick = 0.02;
-    let support_center = [
-        world.support_origin[0] - n[0] * thick,
-        world.support_origin[1] - n[1] * thick,
-        world.support_origin[2] - n[2] * thick,
-    ];
-    let extent = world.object_half[0]
-        .abs()
-        .max(world.object_half[1].abs())
-        .max(0.15)
-        * 3.0;
+    let (support_half_extents, support_center, support_source, approximation) =
+        if let Some(half_extents) = world.support_half_extents {
+            let center = [
+                world.support_origin[0] - n[0] * half_extents[2],
+                world.support_origin[1] - n[1] * half_extents[2],
+                world.support_origin[2] - n[2] * half_extents[2],
+            ];
+            (
+                half_extents,
+                center,
+                "scene.declared_support_box",
+                ApproximationClass::ExactDeclared,
+            )
+        } else {
+            let thick = 0.02;
+            let center = [
+                world.support_origin[0] - n[0] * thick,
+                world.support_origin[1] - n[1] * thick,
+                world.support_origin[2] - n[2] * thick,
+            ];
+            let extent = world.object_half[0]
+                .abs()
+                .max(world.object_half[1].abs())
+                .max(0.15)
+                * 3.0;
+            (
+                [extent, extent, thick],
+                center,
+                "scene.support_slab",
+                ApproximationClass::ConservativeApproximation,
+            )
+        };
     let support_pose =
         Se3::translation(support_center).map_err(|_| CollisionWorldError::InvalidSupportPlane)?;
     let support = vec![RigidGeometry {
@@ -267,13 +297,13 @@ pub fn scene_from_collision_world(
         owner_body: world.support_id.clone(),
         local_pose: support_pose,
         shape: PrimitiveShape::Box {
-            half_extents: [extent, extent, thick],
+            half_extents: support_half_extents,
         },
         collision_role: CollisionRole::Collision,
         semantic_role: SemanticRole::Support,
         provenance: Provenance::UserDeclared,
-        approximation: ApproximationClass::ConservativeApproximation,
-        source: "scene.support_slab".into(),
+        approximation,
+        source: support_source.into(),
     }];
     let obstacles = world
         .obstacles
@@ -1218,6 +1248,7 @@ mod tests {
             support_id: "table".into(),
             support_origin: [object_center[0], object_center[1], -0.05],
             support_normal: [0.0, 0.0, 1.0],
+            support_half_extents: None,
             intended_tool_bodies: vec!["tool".into()],
             robot_volumes: vec![],
             obstacles: vec![],
@@ -1226,6 +1257,29 @@ mod tests {
             tool_offset_ee: [0.0, 0.0, 0.0],
             declared_geoms: vec![],
         }
+    }
+
+    #[test]
+    fn finite_support_geometry_preserves_declared_table_footprint_and_top() {
+        let model = synth_planar_two_link();
+        let mut world = world_at([0.45, 0.0, 0.458]);
+        world.support_origin = [0.45, 0.0, 0.42];
+        world.support_half_extents = Some([0.25, 0.25, 0.02]);
+
+        let scene = scene_from_collision_world(&model, "ee", &world).unwrap();
+        assert!((scene.support[0].local_pose.xyz[2] - 0.4).abs() < 1e-12);
+        assert!(matches!(
+            scene.support[0].shape,
+            PrimitiveShape::Box {
+                half_extents: [0.25, 0.25, 0.02]
+            }
+        ));
+
+        world.support_half_extents = Some([0.25, f64::NAN, 0.02]);
+        assert!(matches!(
+            scene_from_collision_world(&model, "ee", &world),
+            Err(CollisionWorldError::InvalidSupportPlane)
+        ));
     }
 
     fn executable_witness(model: &EmbodimentModel) -> ExecutableContactManeuver {

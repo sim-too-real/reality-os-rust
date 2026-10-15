@@ -1034,6 +1034,7 @@ fn collision_world_of(
         support_id: spec.support_body.clone(),
         support_origin: support.origin,
         support_normal: support.normal,
+        support_half_extents: None,
         intended_tool_bodies: intended,
         robot_volumes,
         obstacles: spec.obstacle_boxes.clone(),

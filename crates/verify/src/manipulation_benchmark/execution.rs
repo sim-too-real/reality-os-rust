@@ -38,7 +38,8 @@ use std::time::Instant;
 
 const MU_REQUIRED: f64 = 0.3;
 const MAX_ACTIONS: usize = 6;
-const CONTROL_STEPS_PER_SEGMENT: u32 = 100;
+const CONTROL_STEPS_PER_SEGMENT: u32 = 500;
+const CONTROL_CONVERGENCE_CHECK_STEPS: u32 = 100;
 const GRASP_CLOSE_SETTLE_STEPS: u32 = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -695,10 +696,12 @@ fn execute_push_witness(
     let transit = witness_joint_line(contents, "q_transit_bits=");
     let contact = witness_joint_line(contents, "q_contact_bits=");
     let end = witness_joint_line(contents, "q_end_bits=");
+    let retract = witness_joint_line(contents, "q_retract_bits=");
     if q0.is_empty()
         || transit.len() != q0.len()
         || contact.len() != q0.len()
         || end.len() != q0.len()
+        || (!retract.is_empty() && retract.len() != q0.len())
         || q0.len() != request.scene.joint_names.len()
         || ![&q0, &transit, &contact, &end]
             .iter()
@@ -716,7 +719,10 @@ fn execute_push_witness(
     }
 
     let actuator_map = position_actuator_map(manifest, &request.scene.joint_names)?;
-    let targets = [transit, contact, end];
+    let mut targets = vec![transit, contact, end];
+    if !retract.is_empty() {
+        targets.push(retract);
+    }
     for target in targets {
         let now = simulator_now(worker)?;
         let now_s = 10.0 + now;
@@ -754,11 +760,21 @@ fn execute_push_witness(
         worker.set_ctrl(&next).map_err(|error| {
             BenchmarkError::Simulation(format!("authorized_control_write:{error}"))
         })?;
-        worker
-            .step(CONTROL_STEPS_PER_SEGMENT)
-            .map_err(|error| BenchmarkError::Simulation(format!("action_step:{error}")))?;
-        let observed = read_named_joints(worker, manifest, &request.scene.joint_names)?;
-        if !vectors_near(&observed, &target, 0.08) {
+        let mut converged = false;
+        let mut remaining_steps = CONTROL_STEPS_PER_SEGMENT;
+        while remaining_steps > 0 {
+            let steps = remaining_steps.min(CONTROL_CONVERGENCE_CHECK_STEPS);
+            worker
+                .step(steps)
+                .map_err(|error| BenchmarkError::Simulation(format!("action_step:{error}")))?;
+            remaining_steps -= steps;
+            let observed = read_named_joints(worker, manifest, &request.scene.joint_names)?;
+            if vectors_near(&observed, &target, 0.08) {
+                converged = true;
+                break;
+            }
+        }
+        if !converged {
             return Ok(WitnessExecution::Diverged);
         }
     }
@@ -1303,7 +1319,7 @@ fn build_push_reasoning_request(
         .ok_or_else(|| BenchmarkError::InvalidTrial("scenario has no table support".into()))?;
     let table_center = value_vec3(&support_spec["pos"])
         .ok_or_else(|| BenchmarkError::InvalidTrial("table support pose is invalid".into()))?;
-    let _ = object_half_extents(support_spec)?;
+    let support_half_extents = object_half_extents(support_spec)?;
     let obstacles = scenario
         .objects
         .iter()
@@ -1335,11 +1351,15 @@ fn build_push_reasoning_request(
             object_center: center,
             object_half: half,
             object_quat: quat,
-            // The planner's support plane is anchored at the support body's
-            // declared origin; its collision proxy uses the tool radius to
-            // prove clearance above that plane.
-            support_origin: table_center,
+            // Collision checking uses the exact finite table box. Anchor its
+            // declared top face instead of approximating it as a large slab.
+            support_origin: [
+                table_center[0],
+                table_center[1],
+                table_center[2] + support_half_extents[2],
+            ],
             support_normal: [0.0, 0.0, 1.0],
+            support_half_extents: Some(support_half_extents),
             obstacles,
             arm_q,
             joint_names: joints,
@@ -1484,6 +1504,7 @@ fn build_grasp_reasoning_request(
             // the robot pedestal below the tabletop as an intersection.
             support_origin: [0.0, 0.0, 0.0],
             support_normal: [0.0, 0.0, 1.0],
+            support_half_extents: None,
             obstacles,
             arm_q,
             joint_names,

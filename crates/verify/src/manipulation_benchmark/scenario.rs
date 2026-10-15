@@ -493,6 +493,15 @@ fn sample_initial_qpos(
     manifest: &RobotManifest,
     rng: &mut StdRng,
 ) -> Result<Vec<f64>, BenchmarkError> {
+    let expected_nq = usize::try_from(manifest.nq)
+        .map_err(|_| BenchmarkError::InvalidManifest("negative nq".into()))?;
+    if manifest.qpos0.len() != expected_nq || manifest.qpos0.iter().any(|value| !value.is_finite())
+    {
+        return Err(BenchmarkError::InvalidManifest(format!(
+            "qpos0 dimension or value invalid: nq={expected_nq}, qpos={}",
+            manifest.qpos0.len()
+        )));
+    }
     let mut qpos = manifest.qpos0.clone();
     for joint in &manifest.joints {
         if !joint.limited || joint.qpos_dim != 1 {
@@ -514,16 +523,10 @@ fn sample_initial_qpos(
                 joint.name
             )));
         }
-        // Avoid putting every pilot on a joint-limit singularity while still
-        // drawing a seeded configuration over a broad, declared-valid band.
-        // Holdout diversity is supplied by the independent seed strata.
-        let margin = (upper - lower) * 0.20;
-        let sample_lower = lower + margin;
-        let sample_upper = upper - margin;
-        *value = if sample_lower >= sample_upper {
-            (lower + upper) * 0.5
+        *value = if lower >= upper {
+            lower
         } else {
-            rng.gen_range(sample_lower..=sample_upper)
+            rng.gen_range(lower..=upper)
         };
     }
     Ok(qpos)
