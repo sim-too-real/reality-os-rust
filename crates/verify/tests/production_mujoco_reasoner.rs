@@ -1230,6 +1230,10 @@ fn declared_ee_cross_section_radius(
                     .map(|extent| extent.abs())
                     .fold(0.0, f64::max),
             ),
+            realityos_semantics::geometry::PrimitiveShape::ConvexMesh { vertices } => vertices
+                .iter()
+                .map(|vertex| vertex[0].hypot(vertex[1]).hypot(vertex[2]))
+                .reduce(f64::max),
             realityos_semantics::geometry::PrimitiveShape::Plane { .. }
             | realityos_semantics::geometry::PrimitiveShape::Unsupported { .. } => None,
         })

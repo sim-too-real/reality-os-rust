@@ -70,6 +70,11 @@ fn ur5e_bundle() -> RobotBundle {
     RobotBundle::load(root).expect("checked-in UR5e bundle with mesh assets")
 }
 
+fn wx250s_bundle() -> RobotBundle {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../robots/external/wx250s");
+    RobotBundle::load(root).expect("checked-in WX250S holdout bundle with mesh assets")
+}
+
 fn relative_mesh_asset(bundle: &RobotBundle, path: &std::path::Path) -> String {
     path.strip_prefix(bundle.model_path.parent().expect("model directory"))
         .expect("asset belongs to model directory")
@@ -1713,9 +1718,9 @@ fn geometry_digest_covers_mesh_assets_and_pair_rules() {
                 {"name":"shoulder_link", "mass":1.0, "inertia":[1.0,1.0,1.0], "parent":"base", "pos":[0.0,0.0,0.0], "quat":[1.0,0.0,0.0,0.0]}
             ],
             "geoms": [
-                {"id":0, "name":"base_mesh", "body":"base", "type_name":"mesh", "size":[1.0,1.0,1.0], "pos":[0.0,0.0,0.0], "quat":[1.0,0.0,0.0,0.0], "friction":[1.0,0.005,0.0001], "contype":1, "conaffinity":1, "mesh_asset":mesh_a},
-                {"id":1, "name":"shoulder_mesh", "body":"shoulder_link", "type_name":"mesh", "size":[1.0,1.0,1.0], "pos":[0.0,0.0,0.0], "quat":[1.0,0.0,0.0,0.0], "friction":[1.0,0.005,0.0001], "contype":1, "conaffinity":1, "mesh_asset":mesh_b},
-                {"id":2, "name":"wrist_mesh", "body":"shoulder_link", "type_name":"mesh", "size":[1.0,1.0,1.0], "pos":[0.0,0.0,0.0], "quat":[1.0,0.0,0.0,0.0], "friction":[1.0,0.005,0.0001], "contype":1, "conaffinity":1, "mesh_asset":mesh_a}
+                {"id":0, "name":"base_mesh", "body":"base", "type_name":"mesh", "size":[1.0,1.0,1.0], "pos":[0.0,0.0,0.0], "quat":[1.0,0.0,0.0,0.0], "friction":[1.0,0.005,0.0001], "contype":1, "conaffinity":1, "mesh_asset":mesh_a, "mesh_vertices":[[0.0,0.0,0.0],[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]]},
+                {"id":1, "name":"shoulder_mesh", "body":"shoulder_link", "type_name":"mesh", "size":[1.0,1.0,1.0], "pos":[0.0,0.0,0.0], "quat":[1.0,0.0,0.0,0.0], "friction":[1.0,0.005,0.0001], "contype":1, "conaffinity":1, "mesh_asset":mesh_b, "mesh_vertices":[[0.0,0.0,0.0],[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]]},
+                {"id":2, "name":"wrist_mesh", "body":"shoulder_link", "type_name":"mesh", "size":[1.0,1.0,1.0], "pos":[0.0,0.0,0.0], "quat":[1.0,0.0,0.0,0.0], "friction":[1.0,0.005,0.0001], "contype":1, "conaffinity":1, "mesh_asset":mesh_a, "mesh_vertices":[[0.0,0.0,0.0],[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]]}
             ],
             "contact_pairs": [{"geom1_id":0,"geom2_id":1}],
             "excluded_body_pairs": [{"body1":"base","body2":"shoulder_link"}]
@@ -1739,8 +1744,26 @@ fn geometry_digest_covers_mesh_assets_and_pair_rules() {
         .unwrap()
         .digest;
 
+    let mut hull_changed = manifest.clone();
+    hull_changed.geoms[0].mesh_vertices[1][0] += 0.25;
+    let hull_model = embodiment_from_manifest(&bundle, &hull_changed);
+    let changed_hull = validate_collision_geometry(&bundle, &hull_changed, &hull_model).unwrap();
+
     assert_ne!(baseline.digest, changed_pair_digest);
     assert_ne!(baseline.digest, changed_asset_digest);
+    assert_ne!(baseline.digest, changed_hull.digest);
+    assert_ne!(
+        baseline.geoms[0]
+            .mesh_asset
+            .as_ref()
+            .unwrap()
+            .query_vertices_sha256,
+        changed_hull.geoms[0]
+            .mesh_asset
+            .as_ref()
+            .unwrap()
+            .query_vertices_sha256
+    );
 
     let mut reversed_pair = manifest.clone();
     reversed_pair.contact_pairs[0].geom1_id = 1;
@@ -1814,7 +1837,55 @@ fn worker_inspection_preserves_source_geometry_and_contact_rules() {
         .mesh_asset
         .as_deref()
         .is_some_and(|asset| !asset.is_empty())));
+    assert!(inspected_meshes
+        .iter()
+        .all(|geom| geom.mesh_vertices.len() >= 4));
     assert_eq!(geometry.result, GeometryGateResult::Complete);
+}
+
+#[test]
+fn wx250s_compiled_convex_meshes_are_complete_queryable_and_hashed() {
+    let _mujoco_guard = lock_mujoco_test();
+    let bundle = wx250s_bundle();
+    let (inst, manifest) = load_and_normalize(&bundle, &[], 0)
+        .expect("MuJoCo loads WX250S and its compiled collision meshes");
+    let model = embodiment_from_manifest(&bundle, &manifest);
+    let geometry = validate_collision_geometry(&bundle, &manifest, &model)
+        .expect("compiled WX250S collision hulls pass strict admission");
+
+    assert_eq!(geometry.result, GeometryGateResult::Complete);
+    let collision_meshes = manifest
+        .geoms
+        .iter()
+        .filter(|geom| geom.geom_type == "mesh" && (geom.contype != 0 || geom.conaffinity != 0))
+        .collect::<Vec<_>>();
+    assert_eq!(collision_meshes.len(), 10);
+    for geom in &collision_meshes {
+        let lowered = model
+            .collision_geoms
+            .iter()
+            .find(|lowered| lowered.id == geom.name)
+            .expect("collision mesh is retained in the semantic model");
+        assert!(matches!(
+            &lowered.shape,
+            realityos_semantics::geometry::PrimitiveShape::ConvexMesh { .. }
+        ));
+        assert!(lowered.shape.query_supported());
+        assert_eq!(
+            geometry
+                .geoms
+                .iter()
+                .find(|record| record.name == geom.name)
+                .expect("admitted mesh has a manifest record")
+                .mesh_asset
+                .as_ref()
+                .map(|mesh| mesh.query_vertices_sha256.len()),
+            Some(64)
+        );
+        assert!(geom.mesh_vertices.len() <= 230);
+    }
+
+    checkin_worker(inst);
 }
 
 #[test]

@@ -2015,6 +2015,10 @@ fn declared_ee_radius(
                     .map(|value| value.abs())
                     .fold(0.0, f64::max),
             ),
+            PrimitiveShape::ConvexMesh { vertices } => vertices
+                .iter()
+                .map(|vertex| vertex[0].hypot(vertex[1]).hypot(vertex[2]))
+                .reduce(f64::max),
             PrimitiveShape::Plane { .. } | PrimitiveShape::Unsupported { .. } => None,
         })
         .reduce(f64::max)

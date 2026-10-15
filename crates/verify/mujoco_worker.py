@@ -90,6 +90,55 @@ class Instance:
     def inspect(self) -> dict[str, Any]:
         m, d = self.model, self.data
         assert m is not None and d is not None
+
+        def compiled_mesh_vertices(geom_id: int, mesh_id: int) -> list[list[float]]:
+            if mesh_id < 0 or mesh_id >= m.nmesh:
+                raise RuntimeError(f"mesh geom references invalid compiled mesh id {mesh_id}")
+            start = int(m.mesh_vertadr[mesh_id])
+            count = int(m.mesh_vertnum[mesh_id])
+            if count < 4 or start < 0 or start + count > len(m.mesh_vert):
+                raise RuntimeError(
+                    f"compiled mesh {mesh_id} has invalid vertex range {start}:{start + count}"
+                )
+            vertices = np.asarray(m.mesh_vert[start : start + count], dtype=np.float64)
+            if vertices.shape != (count, 3) or not np.isfinite(vertices).all():
+                raise RuntimeError(f"compiled mesh {mesh_id} has invalid vertices")
+
+            # MuJoCo stores the collision hull as a graph when the compiler
+            # produced one. Its vertex ids index the mesh's compiled vertices.
+            graph_start = int(m.mesh_graphadr[mesh_id])
+            if graph_start >= 0:
+                if graph_start + 2 > len(m.mesh_graph):
+                    raise RuntimeError(f"compiled mesh {mesh_id} has an invalid hull graph")
+                hull_count = int(m.mesh_graph[graph_start])
+                face_count = int(m.mesh_graph[graph_start + 1])
+                ids_start = graph_start + 2 + hull_count
+                ids_end = ids_start + hull_count
+                graph_end = graph_start + 2 + 3 * hull_count + 6 * face_count
+                if (
+                    hull_count < 4
+                    or face_count < 4
+                    or graph_end > len(m.mesh_graph)
+                    or ids_end > graph_end
+                ):
+                    raise RuntimeError(f"compiled mesh {mesh_id} has an incomplete hull graph")
+                vertex_ids = np.asarray(m.mesh_graph[ids_start:ids_end], dtype=np.int64)
+                if np.any(vertex_ids < 0) or np.any(vertex_ids >= count):
+                    raise RuntimeError(f"compiled mesh {mesh_id} hull references invalid vertices")
+                vertices = vertices[vertex_ids]
+
+            # mesh_vert is already in the compiled mesh frame. The compiler
+            # compensates mesh alignment in geom_pos/geom_quat, which the
+            # inspector also retains; reapplying mesh_pos/mesh_quat here would
+            # apply the same offset twice.
+            radius = float(np.linalg.norm(vertices, axis=1).max())
+            geom_radius = float(m.geom_rbound[geom_id])
+            if not math.isfinite(geom_radius) or radius > geom_radius + max(1e-9, geom_radius * 1e-6):
+                raise RuntimeError(
+                    f"compiled mesh {mesh_id} vertices exceed geom {geom_id} bounding radius"
+                )
+            return vertices.tolist()
+
         joints = []
         for i in range(m.njnt):
             j = m.joint(i)
@@ -236,6 +285,7 @@ class Instance:
                     "type": gtype,
                     "type_name": _geom_names.get(gtype, f"type_{gtype}"),
                     "mesh_asset": self.mesh_asset_by_id.get(mesh_id),
+                    "mesh_vertices": compiled_mesh_vertices(i, mesh_id) if gtype == 7 else [],
                 }
             )
         contact_pairs = []

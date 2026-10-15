@@ -6,6 +6,9 @@ use crate::provenance::Provenance;
 use crate::transform::Se3;
 use serde::{Deserialize, Serialize};
 
+/// Bound work and memory used to reconstruct an exact convex collision hull.
+pub const MAX_CONVEX_MESH_VERTICES: usize = 100_000;
+
 /// How a geometric representation relates to declared physical geometry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -44,12 +47,30 @@ pub enum SemanticRole {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrimitiveShape {
-    Sphere { radius: f64 },
-    Box { half_extents: [f64; 3] },
-    Capsule { radius: f64, half_length: f64 },
-    Cylinder { radius: f64, half_length: f64 },
-    Plane { normal: [f64; 3] },
-    Unsupported { kind: String },
+    Sphere {
+        radius: f64,
+    },
+    Box {
+        half_extents: [f64; 3],
+    },
+    Capsule {
+        radius: f64,
+        half_length: f64,
+    },
+    Cylinder {
+        radius: f64,
+        half_length: f64,
+    },
+    Plane {
+        normal: [f64; 3],
+    },
+    /// Exact convex collision hull emitted by a model compiler such as MuJoCo.
+    ConvexMesh {
+        vertices: Vec<[f64; 3]>,
+    },
+    Unsupported {
+        kind: String,
+    },
 }
 
 impl PrimitiveShape {
@@ -60,17 +81,25 @@ impl PrimitiveShape {
             Self::Capsule { .. } => "capsule",
             Self::Cylinder { .. } => "cylinder",
             Self::Plane { .. } => "plane",
+            Self::ConvexMesh { .. } => "convex_mesh",
             Self::Unsupported { kind } => kind.as_str(),
         }
     }
 
     pub fn query_supported(&self) -> bool {
-        !matches!(self, Self::Unsupported { .. })
+        match self {
+            Self::Unsupported { .. } => false,
+            Self::ConvexMesh { vertices } => {
+                (4..=MAX_CONVEX_MESH_VERTICES).contains(&vertices.len())
+                    && vertices.iter().flatten().all(|value| value.is_finite())
+            }
+            _ => true,
+        }
     }
 
     /// Characteristic half-size used for motion-bounded subdivision.
     pub fn characteristic_radius(&self) -> f64 {
-        match *self {
+        match self {
             Self::Sphere { radius } => radius.abs(),
             Self::Box { half_extents } => half_extents[0]
                 .abs()
@@ -85,6 +114,10 @@ impl PrimitiveShape {
                 half_length,
             } => radius.abs() + half_length.abs(),
             Self::Plane { .. } => 0.0,
+            Self::ConvexMesh { vertices } => vertices
+                .iter()
+                .map(|vertex| vertex[0].hypot(vertex[1]).hypot(vertex[2]))
+                .fold(0.0, f64::max),
             Self::Unsupported { .. } => 0.0,
         }
     }

@@ -104,6 +104,9 @@ fn map_shape(rec: &GeomRecord) -> PrimitiveShape {
         "plane" => PrimitiveShape::Plane {
             normal: [0.0, 0.0, 1.0],
         },
+        "mesh" if !rec.mesh_vertices.is_empty() => PrimitiveShape::ConvexMesh {
+            vertices: rec.mesh_vertices.clone(),
+        },
         other => PrimitiveShape::Unsupported {
             kind: other.to_string(),
         },
@@ -551,6 +554,7 @@ mod tests {
             contype: 1,
             conaffinity: 1,
             mesh_asset: None,
+            mesh_vertices: Vec::new(),
         });
         man.geoms.push(crate::normalize::GeomRecord {
             geom_id: 1,
@@ -565,6 +569,7 @@ mod tests {
             contype: 0,
             conaffinity: 0,
             mesh_asset: None,
+            mesh_vertices: Vec::new(),
         });
         let m = embodiment_from_manifest(&bundle, &man);
         assert_eq!(m.collision_geoms.len(), 2);

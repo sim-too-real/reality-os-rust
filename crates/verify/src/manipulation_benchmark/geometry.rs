@@ -10,12 +10,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const GEOMETRY_SCHEMA_VERSION: u32 = 1;
+pub const GEOMETRY_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MeshAssetDigest {
     pub reference: String,
     pub sha256: String,
+    pub query_vertices_sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -191,9 +192,9 @@ pub fn validate_collision_geometry(
         let mesh_asset = if geom.geom_type == "mesh" {
             Some(hash_mesh_asset(bundle, geom)?)
         } else {
-            if geom.mesh_asset.is_some() {
+            if geom.mesh_asset.is_some() || !geom.mesh_vertices.is_empty() {
                 return Err(BenchmarkError::Geometry(format!(
-                    "non-mesh geom {} declares a mesh asset",
+                    "non-mesh geom {} declares mesh data",
                     geom.name
                 )));
             }
@@ -235,7 +236,7 @@ pub fn validate_collision_geometry(
     };
     let canonical = serde_json::to_vec(&admitted)?;
     let mut digest = Sha256::new();
-    digest.update(b"realityos.manipulation_benchmark/collision_geometry/1\0");
+    digest.update(b"realityos.manipulation_benchmark/collision_geometry/2\0");
     digest.update(canonical);
     admitted.digest = hex::encode(digest.finalize());
     Ok(admitted)
@@ -288,9 +289,29 @@ fn hash_mesh_asset(
             geom.name, reference
         ))
     })?;
+    if geom.mesh_vertices.len() < 4
+        || geom
+            .mesh_vertices
+            .iter()
+            .flatten()
+            .any(|coordinate| !coordinate.is_finite())
+    {
+        return Err(BenchmarkError::Geometry(format!(
+            "collision mesh {} has missing or invalid compiled hull vertices",
+            geom.name
+        )));
+    }
+    let mut hull_hasher = Sha256::new();
+    hull_hasher.update((geom.mesh_vertices.len() as u64).to_le_bytes());
+    for vertex in &geom.mesh_vertices {
+        for coordinate in vertex {
+            hull_hasher.update(coordinate.to_bits().to_le_bytes());
+        }
+    }
     Ok(MeshAssetDigest {
         reference: normalize_asset_reference(reference),
         sha256: hex::encode(Sha256::digest(bytes)),
+        query_vertices_sha256: hex::encode(hull_hasher.finalize()),
     })
 }
 
@@ -421,6 +442,14 @@ fn same_shape(record: &GeomRecord, shape: &PrimitiveShape) -> bool {
             },
         ) => close(record.size[0], *radius) && close(record.size[1], *half_length),
         ("plane", PrimitiveShape::Plane { .. }) => true,
+        ("mesh", PrimitiveShape::ConvexMesh { vertices }) => {
+            record.mesh_vertices.len() == vertices.len()
+                && record
+                    .mesh_vertices
+                    .iter()
+                    .zip(vertices)
+                    .all(|(left, right)| left == right)
+        }
         (kind, PrimitiveShape::Unsupported { kind: unsupported }) => kind == unsupported,
         _ => false,
     }

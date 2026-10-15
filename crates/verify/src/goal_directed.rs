@@ -2895,6 +2895,9 @@ mod tests {
     }
 
     fn geom_local_points(shape: &PrimitiveShape) -> Vec<[f64; 3]> {
+        if let PrimitiveShape::ConvexMesh { vertices } = shape {
+            return vertices.clone();
+        }
         match *shape {
             PrimitiveShape::Box { half_extents } => {
                 let h = half_extents;
@@ -2932,6 +2935,7 @@ mod tests {
             PrimitiveShape::Plane { .. } | PrimitiveShape::Unsupported { .. } => {
                 vec![[0.0, 0.0, 0.0]]
             }
+            PrimitiveShape::ConvexMesh { .. } => unreachable!("handled above"),
         }
     }
 

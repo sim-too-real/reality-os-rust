@@ -1,11 +1,18 @@
 //! Reality OS geometry queries. Computational geometry is behind this
 //! interface so a library can be swapped without leaking into skill policy.
 
-use crate::geometry::{PrimitiveShape, RigidGeometry};
+use crate::geometry::{PrimitiveShape, RigidGeometry, MAX_CONVEX_MESH_VERTICES};
 use crate::transform::{norm3, Se3};
 use parry3d_f64::math::{Pose, Vector};
 use parry3d_f64::query::{self, ShapeCastOptions};
-use parry3d_f64::shape::{Ball, Capsule, Cuboid, Cylinder, HalfSpace, Shape};
+use parry3d_f64::shape::{Ball, Capsule, ConvexPolyhedron, Cuboid, Cylinder, HalfSpace, Shape};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
+const MAX_CACHED_CONVEX_MESHES: usize = 32;
+static CONVEX_MESH_CACHE: OnceLock<Mutex<HashMap<[u8; 32], Arc<ConvexPolyhedron>>>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryStatus {
@@ -88,12 +95,12 @@ fn with_shape<R>(
     shape: &PrimitiveShape,
     f: impl FnOnce(&dyn Shape) -> R,
 ) -> Result<R, QueryStatus> {
-    match *shape {
+    match shape {
         PrimitiveShape::Sphere { radius } => {
-            if !(radius.is_finite() && radius > 0.0) {
+            if !(radius.is_finite() && *radius > 0.0) {
                 return Err(QueryStatus::Unknown);
             }
-            Ok(f(&Ball::new(radius)))
+            Ok(f(&Ball::new(*radius)))
         }
         PrimitiveShape::Box { half_extents } => {
             if !half_extents.iter().all(|v| v.is_finite() && *v > 0.0) {
@@ -110,25 +117,28 @@ fn with_shape<R>(
             half_length,
         } => {
             if !(radius.is_finite()
-                && radius > 0.0
+                && *radius > 0.0
                 && half_length.is_finite()
-                && half_length >= 0.0)
+                && *half_length >= 0.0)
             {
                 return Err(QueryStatus::Unknown);
             }
-            let a = Vector::new(0.0, 0.0, -half_length);
-            let b = Vector::new(0.0, 0.0, half_length);
-            Ok(f(&Capsule::new(a, b, radius)))
+            let a = Vector::new(0.0, 0.0, -*half_length);
+            let b = Vector::new(0.0, 0.0, *half_length);
+            Ok(f(&Capsule::new(a, b, *radius)))
         }
         PrimitiveShape::Cylinder {
             radius,
             half_length,
         } => {
-            if !(radius.is_finite() && radius > 0.0 && half_length.is_finite() && half_length > 0.0)
+            if !(radius.is_finite()
+                && *radius > 0.0
+                && half_length.is_finite()
+                && *half_length > 0.0)
             {
                 return Err(QueryStatus::Unknown);
             }
-            Ok(f(&Cylinder::new(half_length, radius)))
+            Ok(f(&Cylinder::new(*half_length, *radius)))
         }
         PrimitiveShape::Plane { normal } => {
             // Reality OS plane normal is outward from the solid (table +Z).
@@ -140,8 +150,47 @@ fn with_shape<R>(
             };
             Ok(f(&HalfSpace::new(unit)))
         }
+        PrimitiveShape::ConvexMesh { vertices } => {
+            let mesh = convex_mesh_shape(vertices)?;
+            Ok(f(mesh.as_ref()))
+        }
         PrimitiveShape::Unsupported { .. } => Err(QueryStatus::Unsupported),
     }
+}
+
+fn convex_mesh_shape(vertices: &[[f64; 3]]) -> Result<Arc<ConvexPolyhedron>, QueryStatus> {
+    if vertices.len() < 4
+        || vertices.len() > MAX_CONVEX_MESH_VERTICES
+        || vertices.iter().flatten().any(|value| !value.is_finite())
+    {
+        return Err(QueryStatus::Unknown);
+    }
+    let mut hasher = Sha256::new();
+    hasher.update((vertices.len() as u64).to_le_bytes());
+    for vertex in vertices {
+        for value in vertex {
+            hasher.update(value.to_bits().to_le_bytes());
+        }
+    }
+    let key: [u8; 32] = hasher.finalize().into();
+    let cache = CONVEX_MESH_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(cache) = cache.lock() {
+        if let Some(mesh) = cache.get(&key) {
+            return Ok(Arc::clone(mesh));
+        }
+    }
+
+    let points = vertices
+        .iter()
+        .map(|vertex| Vector::new(vertex[0], vertex[1], vertex[2]))
+        .collect::<Vec<_>>();
+    let mesh = Arc::new(ConvexPolyhedron::from_convex_hull(&points).ok_or(QueryStatus::Unknown)?);
+    if let Ok(mut cache) = cache.lock() {
+        if cache.len() < MAX_CACHED_CONVEX_MESHES {
+            cache.insert(key, Arc::clone(&mesh));
+        }
+    }
+    Ok(mesh)
 }
 
 /// Intersection / contact between two posed primitives.
@@ -366,6 +415,76 @@ mod tests {
         let ball = PrimitiveShape::Sphere { radius: 0.1 };
         let q = query_contact(Se3::identity(), &mesh, Se3::identity(), &ball);
         assert_eq!(q.status, QueryStatus::Unsupported);
+    }
+
+    fn compiled_cube_mesh() -> PrimitiveShape {
+        serde_json::from_value(serde_json::json!({
+            "convex_mesh": {
+                "vertices": [
+                    [-0.1, -0.1, -0.1], [0.1, -0.1, -0.1],
+                    [-0.1, 0.1, -0.1], [0.1, 0.1, -0.1],
+                    [-0.1, -0.1, 0.1], [0.1, -0.1, 0.1],
+                    [-0.1, 0.1, 0.1], [0.1, 0.1, 0.1]
+                ]
+            }
+        }))
+        .expect("compiled convex mesh shape")
+    }
+
+    #[test]
+    fn compiled_convex_mesh_queries_contact_and_separation() {
+        let mesh = compiled_cube_mesh();
+        let probe = PrimitiveShape::Sphere { radius: 0.01 };
+        let inside = query_contact(Se3::identity(), &mesh, Se3::identity(), &probe);
+        assert_eq!(inside.status, QueryStatus::Intersection);
+
+        let far = query_contact(
+            Se3::identity(),
+            &mesh,
+            Se3::translation([1.0, 0.0, 0.0]).unwrap(),
+            &probe,
+        );
+        assert_eq!(far.status, QueryStatus::Separated);
+    }
+
+    #[test]
+    fn compiled_convex_mesh_cast_detects_thin_collision_path() {
+        let mesh = compiled_cube_mesh();
+        let probe = PrimitiveShape::Sphere { radius: 0.01 };
+        let hit = cast_linear(
+            Se3::translation([-0.5, 0.0, 0.0]).unwrap(),
+            Se3::translation([0.5, 0.0, 0.0]).unwrap(),
+            &probe,
+            Se3::identity(),
+            &mesh,
+        )
+        .expect("mesh cast query is supported")
+        .expect("moving probe must hit the compiled hull");
+        assert!(hit.time_of_impact > 0.0 && hit.time_of_impact < 1.0);
+    }
+
+    #[test]
+    fn degenerate_convex_mesh_is_unknown_not_clear() {
+        let mesh: PrimitiveShape = serde_json::from_value(serde_json::json!({
+            "convex_mesh": {
+                "vertices": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+            }
+        }))
+        .expect("compiled convex mesh shape");
+        let probe = PrimitiveShape::Sphere { radius: 0.01 };
+        let result = query_contact(Se3::identity(), &mesh, Se3::identity(), &probe);
+        assert_eq!(result.status, QueryStatus::Unknown);
+    }
+
+    #[test]
+    fn oversized_convex_mesh_is_unknown_not_clear() {
+        let mesh = PrimitiveShape::ConvexMesh {
+            vertices: vec![[0.0, 0.0, 0.0]; MAX_CONVEX_MESH_VERTICES + 1],
+        };
+        assert!(!mesh.query_supported());
+        let probe = PrimitiveShape::Sphere { radius: 0.01 };
+        let result = query_contact(Se3::identity(), &mesh, Se3::identity(), &probe);
+        assert_eq!(result.status, QueryStatus::Unknown);
     }
 
     #[test]

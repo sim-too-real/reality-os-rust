@@ -89,6 +89,9 @@ pub struct GeomRecord {
     pub conaffinity: i32,
     #[serde(default)]
     pub mesh_asset: Option<String>,
+    /// Compiled collision query vertices in the frame used by the geom pose.
+    #[serde(default)]
+    pub mesh_vertices: Vec<[f64; 3]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -362,6 +365,7 @@ impl RobotManifest {
                                 .get("mesh_asset")
                                 .and_then(|value| value.as_str())
                                 .map(str::to_owned),
+                            mesh_vertices: vec3_list(&g["mesh_vertices"]),
                         }
                     })
                     .collect()
@@ -672,6 +676,12 @@ fn vec3_opt(v: &serde_json::Value) -> Option<[f64; 3]> {
         return None;
     }
     Some([arr[0].as_f64()?, arr[1].as_f64()?, arr[2].as_f64()?])
+}
+
+fn vec3_list(v: &serde_json::Value) -> Vec<[f64; 3]> {
+    v.as_array()
+        .and_then(|vertices| vertices.iter().map(vec3_opt).collect())
+        .unwrap_or_default()
 }
 
 fn vec4_opt(v: &serde_json::Value) -> Option<[f64; 4]> {
