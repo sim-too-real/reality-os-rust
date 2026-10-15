@@ -2,9 +2,9 @@
 
 **Date:** 2026-10-15
 
-**Status:** approved; benchmark implementation complete with baseline, frozen holdout, and physical-transfer gates open
+**Status:** approved; benchmark implementation complete with baseline, full holdout, and physical-transfer gates open
 
-**Implementation status:** The strict MuJoCo runner, complete-geometry admission, shared bridge campaign, report/CLI, development embodiment registry, and physical sensor-provenance validator are implemented. A six-trial strict smoke completed with zero infrastructure, invalid, or unaccounted trials and passed the safety gate; task success was 0/2 and correct refusal was 4/4, with two false refusals and no false acceptances or unauthorized writes. Positive grasp labels now require the same conservative worst-case hold-force proof used by the reasoner. The 20-seed pilot was started but interrupted after roughly 12 minutes on the Windows host. The paired legacy baseline has not been executed, and the frozen holdout has not been opened; run holdout only after the candidate commit is clean. Physical evidence remains `UNVERIFIED` until an identified robot cell supplies real sensor data and independent outcome measurements.
+**Implementation status:** The strict MuJoCo runner, complete-geometry admission, shared bridge campaign, report/CLI, development embodiment registry, and physical sensor-provenance validator are implemented. Candidate `6e73a87e36b01c207f600229525945ea62a35aef` was committed and pushed cleanly. Its six-trial development smoke completed with zero infrastructure, invalid, or unaccounted trials and passed the safety gate; task success was 0/2 and correct refusal was 4/4, with two false refusals and no false acceptances or unauthorized writes. A two-seed holdout smoke also passed its hard gates (0/1 task successes, 1/1 correct refusals); this is not the planned 100-seed holdout score. Positive grasp labels require the same conservative worst-case hold-force proof used by the reasoner. The 20-seed pilot was started but interrupted after roughly 12 minutes on the Windows host. The paired legacy baseline has not been executed. Physical evidence remains `UNVERIFIED` until an identified robot cell supplies real sensor data and independent outcome measurements.
 
 **Repository baseline:** `c38a52a4d8ace0e70e6d144b20b91ff4e0a738eb` (`main`)
 
