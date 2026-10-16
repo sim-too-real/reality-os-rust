@@ -1,0 +1,118 @@
+# Force-Aware Manipulation Probing Design
+
+**Status:** Architecture brief approved; detailed specification prepared for user review
+
+**Date:** 2026-10-17
+
+**Scope:** Typed force/torque evidence for conservative push-probe reasoning and benchmark evaluation
+
+## Problem
+
+The current push-probe path decides whether a probe was informative from object displacement divided by commanded stroke. In the paired 20-seed pilot, the 8 mm and 16 mm runs used the same 60 trial IDs. Both produced 0/11 UR5e expected-success trials, narrowed the support-friction interval in 0/9 executed probes, and authorized no follow-up push. Increasing stroke increased mean object displacement from 2.506 mm to 4.301 mm, but also increased mean lateral displacement from 0.074 mm to 0.228 mm and runtime divergences from one to two. The 16 mm change was rejected; the paired data and raw traces are in `docs/superpowers/evidence/probe-stroke-paired-198b5de/`.
+
+The current `ReasoningRequest` includes object pose, mass, friction belief, and safety alerts, but no measured contact wrench. Planner geometry deliberately excludes privileged simulator contacts. The physical sensor evidence adapter validates sensor identity and provenance, but `ObservationFrame` carries no force/torque sample values. Consequently, a small object displacement cannot distinguish a missed contact from compliance, insufficient applied force, or static friction.
+
+## Goals
+
+- Carry calibrated, time-stamped six-axis force/torque samples with sensor identity, units, frame, sequence, digest, and bounded measurement uncertainty.
+- Keep hardware, simulator-derived, and synthetic evidence distinguishable through parsing, estimation, planning, audit output, and scoring.
+- Use force and object-motion evidence to narrow support-friction belief only when the physical assumptions and measurement bounds justify a conservative interval.
+- Bind maximum allowed contact force and torque into exact linear-action authority and stop simulation execution before exceeding either limit.
+- Preserve the existing geometry proof, stroke bound, lateral-drift limit, stale-observation refusal, fresh reauthorization, and zero-unauthorized-write requirements.
+- Keep the physical-transfer gate `UNVERIFIED` until a real calibrated sensor trace and independent outcome measurement are supplied.
+
+## Non-goals
+
+- This change does not add a real arm driver, enable hardware writes, or claim physical manipulation success.
+- It does not use randomized simulator friction, hidden model state, or evaluator labels as estimator inputs.
+- It does not lower existing displacement, collision, authority, or refusal thresholds to improve benchmark scores.
+- It does not require wrench evidence as a friction-learning input when support mechanics are already proven. Every linear action still requires a separately declared force ceiling and a qualified force-limit monitor; unknown mechanics without admissible wrench evidence remain unproven.
+- It does not add tactile-array or vision-based force inference in this iteration.
+
+## Alternatives considered
+
+1. **Continue displacement-only inference.** This has the lowest implementation cost, but the paired pilot produced no useful friction update at either stroke length. It cannot tell whether the pusher made valid contact or how much force reached the object.
+2. **Add a contact-present bit.** This can distinguish no contact from contact, but cannot bound support friction when the object remains still. It is insufficient to justify the next push.
+3. **Add calibrated wrench traces and combine them with object motion.** This is the recommended option. It is more work across sensor, semantics, authority, and benchmark layers, but supplies the missing measured quantity while preserving explicit uncertainty and evidence origin.
+
+## Design
+
+### Sensor evidence contract
+
+Add `WrenchSample` to `ObservationFrame` in SI units: force `[N]` and torque `[N·m]`. Each sample contains six signed values, per-axis absolute error bounds, sensor ID, sensor frame, transform epoch, capture and receive timestamps, monotonic sequence, clock domain, and a canonical digest over all fields. `SensorObservation` supplies the sensor class, device/model identity, calibration hash, declared frame/units, and expiry. The trace includes an ordered pre-contact baseline and contact/probe samples so bias or gravity-compensation assumptions are visible and auditable. `PhysicalSensorRequirement` and `PhysicalSensorIdentity` must include sensor class; the required class for wrench data is exactly `ForceTorque`. The digest is domain-separated and versioned, hashes finite IEEE-754 values by their little-endian bit patterns, and encodes strings as length-prefixed UTF-8 in fixed field order. Sensor identity and units are included in the digest.
+
+Physical sensor requirements must declare the expected `ForceTorque` class, serial/model, calibration hash, frame, units, and maximum age. Validation rejects missing or duplicate samples, non-finite values, invalid uncertainty bounds, unit/frame/calibration mismatches, stale or out-of-order samples, invalid digests, simulation clocks, and non-hardware origins. A valid trace remains `UNVERIFIED` until independently measured task outcome evidence is attached.
+
+Sample digests provide integrity and binding, not device authenticity. Hardware origin may only be asserted by a trusted hardware adapter after the configured device identity is probed; caller-supplied origin labels alone do not establish a physical measurement. Until that adapter and an independent outcome record exist, evidence status remains `UNVERIFIED`.
+
+The simulator adapter may produce an equivalent typed wrench trace from MuJoCo contact forces for development tests only. It models the complete wrench seen by the instrumented tool: sum all contacts and inertial/gravity terms affecting the sensor, transform the wrench (including its moment arm) into the declared sensor frame, then apply the registered sensor model's rate, delay, resolution, bias, bounded uncertainty, and deterministic trial-seeded noise. Safety monitoring uses this total sensor response, so an unexpected collision cannot be hidden by filtering to the intended object. The estimator separately requires exactly one intended tool-to-target contact set and refuses inference on any additional or ambiguous contact. Privileged simulator contact records stay inside the sensor adapter; the estimator and reasoner receive only typed wrench samples, ordinary scene observations, and a collision-model digest. Eligibility rejects any alternate contact that the complete geometry makes plausible, and never receives ground-truth contact-pair identities. The adapter must not read object material/friction fields or feed privileged contact geometry into the planner. Its enclosing `ProbePhysicsMeasurement` origin is `Simulation`; it cannot pass physical evidence validation or change a hardware-provenance status. Synthetic values remain separately tagged and cannot be treated as a sensor sample. Emit samples at the declared profile rate and preserve the configured delay and inter-sample gaps; the monitor must refuse or abort on a stale sample or a gap beyond policy limits.
+
+### Probe evidence and friction inference
+
+After a collision-proved probe, the runner forms a `PushProbeMeasurement` from the validated wrench window, calibrated transform and compensation-model digest, synchronized object displacement/velocity window, object mass interval, support normal, unique intended-contact evidence derived only from observed scene and collision-model data, and explicit evidence origin. It never uses simulator contact identities or evaluator labels as estimator inputs. A single estimator converts this input into a conservative friction interval or a typed no-inference reason. The belief update appends a structured lineage reference containing the measurement digest and origin. The next `ReasoningRequest` consumes only the updated belief; its proof-dependency digest must include the lineage reference as well as the interval and status. This keeps raw sensor streams out of unrelated reasoning calls while binding any decision that uses the derived friction evidence to its exact source samples.
+
+The estimator transforms the measured wrench into the support frame using a calibrated rigid transform, including the wrench moment-arm term, applies a declared bias/gravity compensation model whose digest is recorded, and propagates sensor, mass, and timing uncertainty. Its force sign convention is the wrench acting on the target object; action-reaction conversion from a tool-mounted sensor is explicit in the compensation/transform record. The safety monitor uses absolute wrench magnitudes in the sensor frame, with residual compensation error included in each axis bound. The estimator supports level planar support and one intended tool-to-target contact set in this iteration. It may narrow friction only when all of these conditions hold:
+
+- the pusher-to-object contact is observed over a contiguous sample interval;
+- a fresh scene and the complete collision model establish a unique intended contact; any plausible alternate or unmodeled contact prevents inference;
+- the object is observed to stick or begin sliding under a bounded tangential load;
+- object motion, contact force, mass, gravity, and support-normal bounds are finite and time-aligned;
+- no unmodeled object/obstacle contact or actuator saturation invalidates the single-contact assumption; and
+- the resulting interval is non-empty and conservative under all declared error bounds.
+
+In the support frame, let `F_t = sqrt(F_x² + F_y²)` be the tangential pusher force and `N = m*g - F_z` the support-normal load, with `F_z` positive upward on the object and standard gravity fixed at `g = 9.80665 m/s²`. Bounds are computed by conservative interval arithmetic from per-axis sensor error, compensation error, mass uncertainty, and timestamp skew. For each transformed force interval `[F_i^-,F_i^+]`, its magnitude interval is `[0,max(|F_i^-|,|F_i^+|)]` if it contains zero, otherwise `[min(|F_i^-|,|F_i^+|),max(|F_i^-|,|F_i^+|)]`. Combine the squared lower magnitudes and squared upper magnitudes of the x and y intervals to bound `F_t`. For mass interval `[m^-,m^+]` and vertical force interval `[F_z^-,F_z^+]`, use `[N^-,N^+] = [m^-*g - F_z^+, m^+*g - F_z^-]`. Require `N^- > 0` for either inference mode. For a sticking interval, the observation implies `mu_s >= lower(F_t) / N^+`; intersect the prior admissible interval with `[that lower bound, +infinity)`. For slip onset, the estimator uses only the synchronized sample window that brackets the first object motion above the declared pose-resolution threshold and derives `[lower(F_t)/N^+, upper(F_t)/N^-]`; it requires a contiguous valid sample window and quasi-static applicability. Intersect this interval with the prior admissible interval and make no update if the intersection is empty. If force and normal-load uncertainty do not yield an identifiable interval, it records no inference. Continued dynamic sliding alone does not identify static support friction.
+
+The estimator records its assumptions, input digests, interval before/after, and refusal reason. No contact, stale evidence, unbounded compensation error, excessive dynamics, unknown mass, competing contact, or inconsistent samples produce no friction update. A missing or invalid wrench leaves mechanics unknown and preserves the existing safe refusal behavior.
+
+### Action authority and execution
+
+Add an axis-wise maximum contact-wrench envelope in SI units and a wrench-limit-policy digest to linear push/probe authority. Axes are ordered `[Fx,Fy,Fz,Tx,Ty,Tz]`; force caps use `[N]`, torque caps use `[N·m]`, and all values are expressed in the exact named sensor frame. The policy digest binds these caps, sensor identity/calibration, sample rate and maximum gap, maximum age and cross-sensor skew, six per-axis maximum wrench-rise rates, maximum sensing and abort latencies, compensation-model digest, monitor identity, and the pre-authorized abort contract. The envelope, policy digest, and exact values are part of the action witness, scoped grant, and audit record; a candidate without finite positive caps and an identified policy is not executable. The simulation embodiment manifest supplies its test limits. A future physical workcell policy must supply the hardware limits and a qualified monitoring source. There is no global or inferred default.
+
+The policy declares maximum sensing latency, maximum abort latency, and a validated per-axis upper bound on wrench rise during that interval. Sensing latency covers sample phase, acquisition, transport, and monitor scheduling from a physical load change to evaluation. `measured_i` is the compensated contact-wrench estimate at the named sensor origin; `error_i` includes sensor uncertainty and the bounded residual of compensation and frame transformation. For axis `i`, the monitor stops when `abs(measured_i) + error_i + max_rise_rate_i * (sensing_latency + abort_latency) >= cap_i`. This uses the sample's conservative measurement bound and covers both signs of force and torque. If any required quantity is unavailable, non-finite, stale, or inconsistent with the policy digest, the action is not executable. During simulation execution, evaluate each sensor sample and each physics integration step against its timestamp, age, and maximum-gap limits; a missing or late sample triggers the abort contract. When the stop threshold is reached, only the exact pre-authorized abort contract may issue the safe-hold command; the abort contract binds the safe-hold target, allowed stop-write set, and maximum time-to-stop. It must halt the commanded approach within its declared bound and be recorded as an authorized stop write. If the stop cannot be verified, latch a safety fault and prohibit reauthorization. The old grant cannot authorize another motion. This bridge remains simulation-only and exposes no hardware writer. Any future physical linear-action bridge must refuse unless a qualified monitor and abort path enforce the scoped wrench limits at the required rate.
+
+### Interfaces and data flow
+
+The implementation is expected to touch these boundaries:
+
+- `crates/semantics/src/sensor.rs` and `crates/semantics/src/observation.rs`: typed wrench samples, bounded uncertainty, digest, and epoch/freshness validation.
+- `crates/verify/src/manipulation_benchmark/physical_evidence.rs`: declared force/torque class and hardware-origin validation.
+- `crates/kernel/src/physical_action.rs`, `crates/reasoner-bridge/src/lib.rs`, and the session scope: exact six-axis contact-wrench ceiling and policy digest for linear action authority.
+- `crates/semantics/src/physical_reasoner.rs`: typed probe measurement dependency and conservative friction update.
+- `crates/verify/src/manipulation_benchmark/execution.rs`: simulation wrench trace capture, per-step force stop, observation/reasoner input, and trial audit.
+- `robots/benchmarks/manipulation/embodiments.json`: per-embodiment simulation sensor profile and force-limit policy identifier/digest.
+- `crates/verify/tests/manipulation_benchmark.rs`, `crates/verify/tests/production_mujoco_reasoner.rs`, and semantics/bridge tests: unit, boundary, integration, and safety regressions.
+
+Each trial audit records the `paired_trial_key`, sensor and compensation digests, sample count and freshness/gap extrema, per-axis peak conservative wrench bounds, scoped caps and minimum cap margin, any abort-trigger axis and stop latency, refusal/no-inference reason, and friction belief before and after. Aggregate reports include paired deltas for expected-success rate, information-bearing probe rate, and justified-follow-up rate, plus wrench-limit trips, stale/missing telemetry aborts, and unauthorized post-abort writes.
+
+The 8 mm stroke remains unchanged during initial implementation. Any later stroke tuning is a separate candidate change evaluated on the same frozen trial IDs.
+
+New benchmark and trial records use schema version 6 because they add wrench samples, evidence lineage references, and wrench limits. Existing version-5 records remain immutable historical evidence and remain readable for reporting. They are not upgraded, labeled as wrench-supported, or treated as version-6 execution inputs. Schema-6 trial IDs may differ from version 5; a schema-independent `paired_trial_key` is SHA-256 over a versioned canonical encoding of role, robot ID, model hash, task, seed, scenario index/stratum, expectation label, normalized resolved scenario, exact goal, and exact initial joint state. It excludes record schema, candidate SHA, action trace, sensor trace, and outcome so the same randomized input has one key across candidate runs. A key mismatch invalidates a paired comparison rather than silently dropping the trial.
+
+## Failure handling
+
+Missing or invalid wrench evidence must not be replaced with simulator friction labels, actuator commands, or assumed forces. The runner records a typed reason and refuses to use that observation for friction narrowing. Approaching any force or torque cap, losing sensor freshness, seeing an unexpected contact, or observing excessive lateral/vertical motion invokes the scoped abort contract before a new motion write. The independent evaluator continues to score valid refusals, false refusals, false acceptances, and unauthorized writes separately.
+
+## Verification and acceptance
+
+Before pilot execution, tests must prove:
+
+- valid calibrated hardware traces pass provenance validation but remain `UNVERIFIED` pending independent measurement;
+- simulator and synthetic traces cannot pass the physical evidence boundary;
+- stale, replayed, wrong-frame, wrong-unit, wrong-class, wrong-calibration, invalid-digest, and excessive-uncertainty traces are rejected;
+- a known single-contact stick/slip trace narrows friction to an interval containing the true test value without reading the simulator's friction parameter;
+- no-contact, extra-contact, saturation, unknown-mass, or unbounded-error cases do not narrow the interval;
+- all six wrench caps, wrench-limit policy digest, sensing/abort latencies, and abort contract are present in the action envelope and exact grant; threshold crossing issues only the pre-authorized safe-hold stop and prohibits follow-up motion;
+- mixed-sign load, all six individual axes, an unexpected second contact, stale/missing samples, and a threshold crossing during a delayed sample all stop within the bound encoded by the policy; no motion write occurs after the stop without fresh evidence and a different grant;
+- stale grants and epochs cannot continue after a probe; the existing lateral-drift and complete-geometry gates still pass.
+
+Then run the strict MuJoCo 20-seed pilot on the same 60 randomized scenarios as the 8 mm and 16 mm pilots, paired by a schema-independent key over role, robot, task, seed, scenario index/stratum, normalized resolved scene, goal, and initial joint state. Require zero infrastructure, invalid, or unaccounted trials; zero false acceptances, unauthorized writes, geometry omissions, or stale-authority continuations; and a paired point-estimate improvement of at least 10 percentage points in one predeclared availability measure (UR5e expected-success rate, information-bearing probe rate, or justified follow-up rate), with no more than a 5-point regression in any other measure. Publish paired denominators and 95% uncertainty intervals; this pilot is a candidate-screening gate, not a competitive claim. If the gate fails, do not tune on or inspect holdout results. Do not run the holdout until a candidate commit is frozen and the public safety gate passes.
+
+Physical transfer remains open. It requires a named robot/cell, declared calibrated force/torque sensor, fresh hardware-origin trace, and independent task outcome measurement; simulation evidence cannot satisfy this requirement.
+
+## Fixed implementation choices
+
+- Use per-axis absolute error bounds and conservative interval arithmetic; do not use covariance estimates in this iteration. The safety monitor bounds absolute value on both polarities for all three force and three torque axes.
+- Each sensor requirement declares minimum sample rate, maximum inter-sample gap, maximum age, maximum cross-sensor timestamp skew, calibration hash, frame, and canonical SI units `N,N*m`. Missing rate, latency, synchronization, or freshness requirements invalidate the trace; no global defaults are inferred.
+- The simulation embodiment manifest supplies six wrench caps and their policy digest. A future physical workcell policy must supply the corresponding caps, digest, and qualified monitor. No force/torque ceiling may be inferred from actuator commands or simulator labels.
+- Accept only level planar support, a known support normal, one intended tool-to-target contact set, and a bounded quasi-static sample window. Moving supports, non-planar supports, competing/ambiguous contact sets, or samples outside the declared quasi-static window produce no friction update.
+- For a sticking observation, derive only a lower bound from the lower tangential-force bound and upper normal-load bound. For a slip-onset observation, derive an interval only when the synchronized onset window and normal-load bounds make it identifiable. Continued dynamic sliding alone does not identify static support friction.
