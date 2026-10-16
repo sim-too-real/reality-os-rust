@@ -271,6 +271,7 @@ fn physical_trace(origin: SensorOrigin) -> (PhysicalSensorTrace, Vec<PhysicalSen
             "calibration-1",
             "epoch-1",
         )],
+        wrench_samples: vec![],
         as_of_s: 10.02,
     };
     let policy_observation = realityos_verify::observation::PolicyObservation {

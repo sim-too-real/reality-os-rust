@@ -487,6 +487,7 @@ pub(crate) fn zero_joint_obs(model: &EmbodimentModel, epoch: &str, now_s: f64) -
                 JointStateSample::new(&j.name, 0.0, Some(0.0), now_s, now_s, "enc", "cal", epoch)
             })
             .collect(),
+        wrench_samples: vec![],
         as_of_s: now_s,
     }
 }

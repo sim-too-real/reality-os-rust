@@ -481,6 +481,7 @@ fn build_observation_frame(
             expires_at_s,
         )],
         joint_state,
+        wrench_samples: vec![],
         as_of_s: receive_s,
     }
 }

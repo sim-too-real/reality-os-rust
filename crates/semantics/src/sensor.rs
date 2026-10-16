@@ -15,6 +15,24 @@ pub enum SensorClass {
     Other,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WrenchSampleOrigin {
+    Hardware,
+    Simulation,
+    Synthetic,
+}
+
+impl WrenchSampleOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hardware => "hardware",
+            Self::Simulation => "simulation",
+            Self::Synthetic => "synthetic",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SensorModel {
     pub sensor_id: String,

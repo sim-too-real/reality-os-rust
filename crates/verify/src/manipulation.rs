@@ -3126,6 +3126,7 @@ fn obs_frame(
                 ))
             })
             .collect(),
+        wrench_samples: vec![],
         as_of_s: now_s - if freshness_s <= 0.0 { 10.0 } else { 0.0 },
     }
 }
