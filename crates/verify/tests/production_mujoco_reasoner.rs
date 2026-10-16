@@ -35,6 +35,159 @@ const TRUE_FRICTION: f64 = 0.85;
 const MU_REQUIRED: f64 = 0.3;
 
 #[test]
+fn menagerie_ur5e_declared_body_transforms_match_mujoco_geometry() {
+    if !ensure_mujoco_or_skip() {
+        return;
+    }
+    let bundle_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../robots/external/ur5e");
+    let bundle = RobotBundle::load(&bundle_path).expect("UR5e bundle");
+    let (mut worker, manifest) = load_and_normalize(&bundle, &[], 17).expect("load UR5e");
+    let model = embodiment_from_manifest(&bundle, &manifest);
+    let chain = model.ee_joint_chain("tool0").expect("tool chain");
+    let q = [-6.0626, 4.6069, -1.4816, 1.2369, -2.5153, -2.213];
+    let mut qpos = manifest.qpos0.clone();
+    for (name, value) in chain.iter().zip(q) {
+        let joint = manifest
+            .joints
+            .iter()
+            .find(|joint| joint.name == *name)
+            .expect("inspected chain joint");
+        qpos[joint.qpos_address as usize] = value;
+    }
+    worker
+        .reset(Some(&qpos), None)
+        .expect("set diagnostic pose");
+    let snapshot = worker.step(0).expect("MuJoCo state");
+    let state = snapshot.get("state").unwrap_or(&snapshot);
+    let joint_state = chain.iter().cloned().zip(q).collect::<Vec<_>>();
+    let bodies = realityos_semantics::geometry_fk::body_world_transforms(&model, &joint_state)
+        .expect("semantic body transforms");
+
+    for body_name in [
+        "shoulder_link",
+        "upper_arm_link",
+        "forearm_link",
+        "wrist_1_link",
+        "wrist_2_link",
+        "wrist_3_link",
+    ] {
+        let expected = state["xpos"][body_name]
+            .as_array()
+            .map(|xyz| {
+                [
+                    xyz[0].as_f64().unwrap(),
+                    xyz[1].as_f64().unwrap(),
+                    xyz[2].as_f64().unwrap(),
+                ]
+            })
+            .expect("MuJoCo body position");
+        let actual = bodies.get(body_name).expect("semantic body position").xyz;
+        let error = ((expected[0] - actual[0]).powi(2)
+            + (expected[1] - actual[1]).powi(2)
+            + (expected[2] - actual[2]).powi(2))
+        .sqrt();
+        assert!(
+            error < 1e-5,
+            "{body_name} FK error {error}: expected {expected:?}, actual {actual:?}"
+        );
+    }
+    let actual_site = state["sites"]["attachment_site"]
+        .as_array()
+        .map(|xyz| {
+            [
+                xyz[0].as_f64().unwrap(),
+                xyz[1].as_f64().unwrap(),
+                xyz[2].as_f64().unwrap(),
+            ]
+        })
+        .expect("MuJoCo tool site position");
+    let semantic_site =
+        realityos_semantics::kinematics::forward_kinematics(&model, &chain, "tool0", &q)
+            .expect("semantic tool site")
+            .ee
+            .xyz;
+    let site_error = ((actual_site[0] - semantic_site[0]).powi(2)
+        + (actual_site[1] - semantic_site[1]).powi(2)
+        + (actual_site[2] - semantic_site[2]).powi(2))
+    .sqrt();
+    assert!(
+        site_error < 1e-5,
+        "tool site FK error {site_error}: MuJoCo {actual_site:?}, semantic {semantic_site:?}"
+    );
+    checkin_worker(worker);
+}
+
+#[test]
+fn ur5e_finds_a_collision_checked_push_from_a_side_precontact_pose() {
+    if !ensure_mujoco_or_skip() {
+        return;
+    }
+    let bundle_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../robots/external/ur5e");
+    let bundle = RobotBundle::load(&bundle_path).expect("UR5e bundle");
+    let (worker, manifest) = load_and_normalize(&bundle, &[], 17).expect("load UR5e");
+    checkin_worker(worker);
+    let model = embodiment_from_manifest(&bundle, &manifest);
+    let chain = model.ee_joint_chain("tool0").expect("tool chain");
+    let mut reasoner = PhysicalReasoner::new(model.clone());
+    let request = ReasoningRequest {
+        scene: TableScene {
+            object_id: "obj0".into(),
+            object_center: [
+                0.4049284358754865,
+                0.018913550624106795,
+                0.45849492823038374,
+            ],
+            object_half: [0.03849492823038377; 3],
+            object_quat: [1.0, 0.0, 0.0, 0.0],
+            support_origin: [0.45, 0.0, 0.42],
+            support_normal: [0.0, 0.0, 1.0],
+            support_half_extents: Some([0.25, 0.25, 0.02]),
+            obstacles: Vec::new(),
+            arm_q: vec![2.56, 4.1, 2.04, 4.83, -1.04, -1.88],
+            joint_names: chain,
+            ee: "tool0".into(),
+            tool_radius_m: 0.04,
+            observation_epoch: "ur5e-safe-standoff".into(),
+            held: false,
+            finger_names: Vec::new(),
+            finger_q: Vec::new(),
+        },
+        belief: PhysicalParameterBelief::declared_point(
+            PhysicalParameter::SupportFriction,
+            0.8,
+            "test_prior",
+        ),
+        objective: PhysicalObjective::PlanarTranslation {
+            target_xy: [0.48, 0.0286],
+        },
+        mu_required: MU_REQUIRED,
+        goal_stroke_m: 0.025,
+        probe_stroke_m: 0.008,
+        grants: Vec::new(),
+        now_s: 10.0,
+        evidence_fresh: true,
+        safety_faults: Vec::new(),
+        mass_kg: Some(0.238493207014167),
+        gripper_force_n: None,
+        gripper_resource: None,
+        linear_execution_bound_m: None,
+        gravity_m_s2: [0.0, 0.0, -9.81],
+    };
+
+    let report = reasoner.consider(&request);
+    let push = report
+        .candidates
+        .iter()
+        .find(|candidate| candidate.action_key == "push:+x")
+        .expect("positive-x push candidate");
+    assert_eq!(
+        push.status, "PROVED",
+        "{push:?}; decision={:?}",
+        report.decision
+    );
+}
+
+#[test]
 fn production_reasoner_push_probe_and_replan_in_mujoco() {
     if !ensure_mujoco_or_skip() {
         return;

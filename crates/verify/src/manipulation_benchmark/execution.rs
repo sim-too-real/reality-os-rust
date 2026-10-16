@@ -841,6 +841,17 @@ fn decode_push_witness(
     let transit = strict_witness_joint_line(contents, "q_transit_bits=")?;
     let contact = strict_witness_joint_line(contents, "q_contact_bits=")?;
     let end = strict_witness_joint_line(contents, "q_end_bits=")?;
+    let stroke_count = contents
+        .lines()
+        .find_map(|line| line.strip_prefix("stroke_state_count="))?
+        .parse::<usize>()
+        .ok()?;
+    if stroke_count == 0 || stroke_count > 64 {
+        return None;
+    }
+    let stroke_states = (0..stroke_count)
+        .map(|index| strict_witness_joint_line(contents, &format!("stroke_state_{index}=")))
+        .collect::<Option<Vec<_>>>()?;
     let retract = strict_witness_joint_line(contents, "q_retract_bits=");
     let valid = |values: &[f64]| {
         values.len() == joint_count && values.iter().all(|value| value.is_finite())
@@ -850,11 +861,21 @@ fn decode_push_witness(
         || !valid(&transit)
         || !valid(&contact)
         || !valid(&end)
+        || stroke_states.iter().any(|state| !valid(state))
         || (is_probe && !retract.as_deref().is_some_and(valid))
     {
         return None;
     }
-    let mut targets = vec![transit, contact, end];
+    let final_stroke_state = stroke_states.last()?;
+    if !final_stroke_state
+        .iter()
+        .zip(&end)
+        .all(|(state, end)| state.to_bits() == end.to_bits())
+    {
+        return None;
+    }
+    let mut targets = vec![transit, contact];
+    targets.extend(stroke_states);
     if is_probe {
         targets.push(retract?);
     }
@@ -2083,6 +2104,9 @@ mod witness_tests {
         contents.push_str(&line("q_transit_bits", &[0.2, 0.3]));
         contents.push_str(&line("q_contact_bits", &[0.3, 0.4]));
         contents.push_str(&line("q_end_bits", &[0.4, 0.5]));
+        contents.push_str("stroke_state_count=2\n");
+        contents.push_str(&line("stroke_state_0", &[0.35, 0.45]));
+        contents.push_str(&line("stroke_state_1", &[0.4, 0.5]));
         if include_retract {
             contents.push_str(&line("q_retract_bits", &[0.2, 0.3]));
         }
@@ -2109,7 +2133,24 @@ mod witness_tests {
     #[test]
     fn non_probe_push_witness_does_not_require_retreat() {
         let decoded = decode_push_witness(&witness(false), 2, false)
-            .expect("ordinary push witnesses have three checked motion targets");
-        assert_eq!(decoded.1.len(), 3);
+            .expect("ordinary push witnesses have checked stroke waypoints");
+        assert_eq!(decoded.1.len(), 4);
+        assert_eq!(decoded.1[2], vec![0.35, 0.45]);
+        assert_eq!(decoded.1[3], vec![0.4, 0.5]);
+    }
+
+    #[test]
+    fn push_witness_rejects_end_state_not_matching_last_checked_waypoint() {
+        let malformed = witness(false).replace(
+            &line("stroke_state_1", &[0.4, 0.5]),
+            &line("stroke_state_1", &[0.39, 0.5]),
+        );
+        assert!(decode_push_witness(&malformed, 2, false).is_none());
+    }
+
+    #[test]
+    fn push_witness_rejects_invalid_stroke_waypoint_count() {
+        let malformed = witness(false).replace("stroke_state_count=2", "stroke_state_count=65");
+        assert!(decode_push_witness(&malformed, 2, false).is_none());
     }
 }

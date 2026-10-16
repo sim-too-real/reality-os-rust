@@ -788,16 +788,57 @@ fn push_raw(
     } else {
         request.scene.object_half[1]
     };
-    let target = sub3(
+    let mut target = sub3(
         request.scene.object_center,
         scale3(direction, extent + request.scene.tool_radius_m),
     );
+    let radius = request.scene.tool_radius_m.max(0.0);
+    if direction[2].abs() <= 1e-9
+        && request.scene.support_normal[0].abs() <= 1e-9
+        && request.scene.support_normal[1].abs() <= 1e-9
+        && request.scene.support_normal[2] >= 1.0 - 1e-9
+        && request.scene.support_origin[2].is_finite()
+        && radius.is_finite()
+    {
+        // A sphere-sized tool cannot be centered at the object's mid-plane
+        // when that would put its lower hemisphere through the support. Move
+        // its contact center up to the support clearance and shorten the
+        // horizontal standoff by the corresponding sphere/AABB cross-section.
+        let min_center_z = request.scene.support_origin[2] + radius + 0.001;
+        target[2] = target[2].max(min_center_z);
+        let vertical_excess =
+            (target[2] - request.scene.object_center[2]).abs() - request.scene.object_half[2].abs();
+        let vertical_excess = vertical_excess.max(0.0);
+        let cross_section = (radius * radius - vertical_excess * vertical_excess)
+            .max(0.0)
+            .sqrt();
+        target[0] = request.scene.object_center[0] - direction[0] * (extent + cross_section);
+        target[1] = request.scene.object_center[1] - direction[1] * (extent + cross_section);
+    }
     RawCandidate {
         action_key: key.into(),
         direction,
         stroke_m: stroke,
         target_xyz: target,
         probe,
+    }
+}
+
+fn push_approach_standoff(request: &ReasoningRequest, candidate: &RawCandidate) -> [f64; 3] {
+    if candidate.direction[2].abs() <= 1e-9
+        && request.scene.support_normal[0].abs() <= 1e-9
+        && request.scene.support_normal[1].abs() <= 1e-9
+        && request.scene.support_normal[2] >= 1.0 - 1e-9
+        && request.scene.object_center[2].is_finite()
+        && request.scene.object_half[2].is_finite()
+        && request.scene.tool_radius_m.is_finite()
+    {
+        // Keep the tool outside the object's side while descending. An
+        // above-object approach at the contact x-coordinate sweeps across the
+        // object's upper edge before reaching the intended side contact.
+        sub3(candidate.target_xyz, scale3(candidate.direction, 0.01))
+    } else {
+        sub3(candidate.target_xyz, scale3(candidate.direction, 0.02))
     }
 }
 
@@ -1191,6 +1232,7 @@ struct SolvedPose {
     q0: Vec<f64>,
     q_transit: Vec<f64>,
     q_contact: Vec<f64>,
+    stroke_states: Vec<Vec<f64>>,
     q_end: Vec<f64>,
     q_retract: Option<Vec<f64>>,
     finger_q: Vec<f64>,
@@ -1215,7 +1257,7 @@ fn prove_arm_path(
             scale3(request.scene.support_normal, 0.02),
         )
     } else {
-        sub3(candidate.target_xyz, scale3(candidate.direction, 0.02))
+        push_approach_standoff(request, candidate)
     };
     const MAX_COLLISION_ALTERNATIVES: usize = 8;
     let q_transit_candidates = solve_precise_candidates(
@@ -1291,55 +1333,76 @@ fn prove_arm_path(
             }
 
             let mut q_end = q_contact.clone();
+            let mut stroke_states = Vec::new();
             if !grasp && candidate.stroke_m > 1e-9 {
-                let end_xyz = add3(
-                    candidate.target_xyz,
-                    scale3(candidate.direction, candidate.stroke_m),
-                );
-                let mut stroke_scene = request.scene.clone();
-                stroke_scene.arm_q = q_contact.clone();
-                let q_end_candidates = match solve_precise_candidates(
-                    model,
-                    &stroke_scene,
-                    end_xyz,
-                    MAX_COLLISION_ALTERNATIVES,
-                ) {
-                    Ok(candidates) => candidates,
-                    Err(reason) => {
-                        last_refusal = Some(reason);
-                        continue;
-                    }
-                };
-                let mut clear_end = None;
-                for q_candidate_end in q_end_candidates {
-                    if let Err(reason) = arm_motion_clear(
+                const MAX_CONTACT_STEP_M: f64 = 0.005;
+                let segment_count =
+                    (candidate.stroke_m / MAX_CONTACT_STEP_M).ceil().max(1.0) as usize;
+                let mut segment_start_q = q_contact.clone();
+                let mut segment_clear = true;
+                for segment_index in 1..=segment_count {
+                    let start_distance =
+                        candidate.stroke_m * (segment_index - 1) as f64 / segment_count as f64;
+                    let end_distance =
+                        candidate.stroke_m * segment_index as f64 / segment_count as f64;
+                    let end_xyz = add3(
+                        candidate.target_xyz,
+                        scale3(candidate.direction, end_distance),
+                    );
+                    let mut stroke_scene = request.scene.clone();
+                    stroke_scene.arm_q = segment_start_q.clone();
+                    let q_candidates = match solve_precise_candidates(
                         model,
-                        request,
-                        &q_candidate_end,
-                        &q_candidate_end,
-                        ContactPhase::ContactStroke,
+                        &stroke_scene,
+                        end_xyz,
+                        MAX_COLLISION_ALTERNATIVES,
                     ) {
-                        last_refusal = Some(reason);
-                        continue;
-                    }
-                    match arm_motion_clear(
-                        model,
-                        request,
-                        &q_contact,
-                        &q_candidate_end,
-                        ContactPhase::ContactStroke,
-                    ) {
-                        Ok(()) => {
-                            clear_end = Some(q_candidate_end);
+                        Ok(candidates) => candidates,
+                        Err(reason) => {
+                            last_refusal = Some(reason);
+                            segment_clear = false;
                             break;
                         }
-                        Err(reason) => last_refusal = Some(reason),
+                    };
+                    let mut next_q = None;
+                    for q_candidate in q_candidates {
+                        let mut clear = true;
+                        for object_fraction in [0.0, 0.5, 1.0] {
+                            let object_distance =
+                                start_distance + (end_distance - start_distance) * object_fraction;
+                            let mut stroke_request = request.clone();
+                            stroke_request.scene.object_center = add3(
+                                request.scene.object_center,
+                                scale3(candidate.direction, object_distance),
+                            );
+                            if let Err(reason) = arm_motion_clear(
+                                model,
+                                &stroke_request,
+                                &segment_start_q,
+                                &q_candidate,
+                                ContactPhase::ContactStroke,
+                            ) {
+                                last_refusal = Some(reason);
+                                clear = false;
+                                break;
+                            }
+                        }
+                        if clear {
+                            next_q = Some(q_candidate);
+                            break;
+                        }
                     }
+                    let Some(next_q) = next_q else {
+                        segment_clear = false;
+                        break;
+                    };
+                    segment_start_q = next_q.clone();
+                    stroke_states.push(next_q);
                 }
-                let Some(end) = clear_end else {
+                if !segment_clear {
                     continue;
-                };
-                q_end = end;
+                }
+                q_end = segment_start_q;
             }
 
             let q_retract = if candidate.probe {
@@ -1468,6 +1531,7 @@ fn prove_arm_path(
                 q0: request.scene.arm_q.clone(),
                 q_transit,
                 q_contact,
+                stroke_states,
                 q_end,
                 q_retract,
                 finger_q,
@@ -2453,7 +2517,7 @@ fn joint_margin(model: &EmbodimentModel, names: &[String], q: &[f64]) -> f64 {
     }
 }
 
-const PROOF_ALGORITHM: &str = "physical-proof/5";
+const PROOF_ALGORITHM: &str = "physical-proof/6";
 
 fn witness_text(
     family: &str,
@@ -2465,7 +2529,7 @@ fn witness_text(
 ) -> String {
     let dependency = proof_dependency_digest(family, model, request, candidate);
     let mut witness = format!(
-        "algorithm={PROOF_ALGORITHM}\nfamily={family}\nkey={}\npush_bits={}\nstroke_bits={}\nq0_bits={}\nq_transit_bits={}\nq_contact_bits={}\nq_end_bits={}\nq_retract_bits={}\nfinger_bits={}\naction_envelope={}\nlift_trajectory_digest={}\ndependency={dependency}\nsegments=transit,approach,contact,stroke,retreat,close,lift\ncontact_observed=false\n",
+        "algorithm={PROOF_ALGORITHM}\nfamily={family}\nkey={}\npush_bits={}\nstroke_bits={}\nq0_bits={}\nq_transit_bits={}\nq_contact_bits={}\nq_end_bits={}\nstroke_state_count={}\nq_retract_bits={}\nfinger_bits={}\naction_envelope={}\nlift_trajectory_digest={}\ndependency={dependency}\nsegments=transit,approach,contact,stroke,retreat,close,lift\ncontact_observed=false\n",
         hex::encode(candidate.action_key.as_bytes()),
         bits3(candidate.direction),
         candidate.stroke_m.to_bits(),
@@ -2473,11 +2537,15 @@ fn witness_text(
         bits_q(&solved.q_transit),
         bits_q(&solved.q_contact),
         bits_q(&solved.q_end),
+        solved.stroke_states.len(),
         solved.q_retract.as_deref().map(bits_q).unwrap_or_else(|| "none".into()),
         bits_q(&solved.finger_q),
         action_envelope_witness(action_envelope),
         solved.lift_trajectory_digest.as_deref().unwrap_or("none"),
     );
+    for (index, state) in solved.stroke_states.iter().enumerate() {
+        witness.push_str(&format!("stroke_state_{index}={}\n", bits_q(state)));
+    }
     for (index, state) in solved.lift_states.iter().enumerate() {
         let arm = request
             .scene
@@ -3272,6 +3340,48 @@ mod tests {
             (face_delta[0] * candidate.direction[1] - face_delta[1] * candidate.direction[0]).abs()
                 < 1e-12
         );
+    }
+
+    #[test]
+    fn push_contact_clears_support_while_preserving_sphere_contact() {
+        let (_, mut request) = benchmark_scene();
+        request.scene.object_center = [0.3, 0.0, 0.12];
+        request.scene.object_half = [0.02, 0.02, 0.02];
+        request.scene.support_origin = [0.3, 0.0, 0.10];
+        request.scene.tool_radius_m = 0.06;
+
+        let candidate = push_candidates(&request)
+            .into_iter()
+            .find(|candidate| candidate.action_key == "push:+x")
+            .expect("positive local-x push");
+
+        assert!((candidate.target_xyz[2] - 0.161).abs() < 1e-12);
+        let horizontal_gap =
+            request.scene.object_center[0] - request.scene.object_half[0] - candidate.target_xyz[0];
+        let vertical_excess =
+            candidate.target_xyz[2] - request.scene.object_center[2] - request.scene.object_half[2];
+        assert!(
+            (horizontal_gap.hypot(vertical_excess) - request.scene.tool_radius_m).abs() < 1e-12
+        );
+    }
+
+    #[test]
+    fn push_approach_standoff_clears_object_before_side_contact() {
+        let (_, mut request) = benchmark_scene();
+        request.scene.object_center = [0.3, 0.0, 0.12];
+        request.scene.object_half = [0.02, 0.02, 0.02];
+        request.scene.support_origin = [0.3, 0.0, 0.10];
+        request.scene.tool_radius_m = 0.06;
+        let candidate = push_candidates(&request)
+            .into_iter()
+            .find(|candidate| candidate.action_key == "push:+x")
+            .expect("positive local-x push");
+
+        let standoff = push_approach_standoff(&request, &candidate);
+
+        assert!((standoff[0] - (candidate.target_xyz[0] - 0.01)).abs() < 1e-12);
+        assert_eq!(standoff[1], candidate.target_xyz[1]);
+        assert_eq!(standoff[2], candidate.target_xyz[2]);
     }
 
     fn qualified_grasp_fixture() -> (EmbodimentModel, ReasoningRequest) {
