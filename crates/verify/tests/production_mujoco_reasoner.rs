@@ -188,15 +188,32 @@ fn ur5e_finds_a_collision_checked_push_from_a_side_precontact_pose() {
 }
 
 #[test]
-fn production_reasoner_push_probe_and_replan_in_mujoco() {
+fn production_reasoner_push_probe_replans_and_refuses_after_overstroke() {
     if !ensure_mujoco_or_skip() {
         return;
     }
     let mut world = World::load("planar_arm");
     let model = world.model.clone();
-    world.place_for_contact(&model, [0.30, 0.0, 0.12]);
-    let start = world.object_xyz();
+    // The planar arm's interaction plane is z=0.12. Put the table top at
+    // z=0.08 and the block center at z=0.10 so the block is supported while
+    // the tool sphere clears the support at the planned contact height.
+    world
+        .inst()
+        .rpc(&json!({"cmd":"set_body_pos","body":"table","pos":[0.4,0.0,0.07]}))
+        .expect("place table at the planar-arm support height");
+    world.place_for_contact(&model, [0.30, 0.0, 0.10]);
+    let chain = model.ee_joint_chain("ee").expect("planar ee chain");
+    let seed = world.arm_q();
+    let (standoff_q, trace) = realityos_semantics::kinematics::with_ik_q_seed(Some(&seed), || {
+        realityos_semantics::kinematics::solve_ik(&model, &chain, "ee", [0.215, 0.0, 0.12], &seed)
+    })
+    .expect("solve reachable probe standoff");
+    assert!(realityos_semantics::kinematics::ik_residual_is_precise(
+        trace.residual
+    ));
+    world.set_arm(&standoff_q);
     let mut request = world.policy_request(&model, uncertain_friction());
+    request.scene.support_origin = [0.30, 0.0, 0.08];
     request.linear_execution_bound_m = Some(0.1);
     assert!(
         !format!("{request:?}").contains(&format!("{TRUE_FRICTION}")),
@@ -247,102 +264,26 @@ fn production_reasoner_push_probe_and_replan_in_mujoco() {
     request.scene.observation_epoch = "epoch:after-probe".into();
     request.grants.clear();
     let planned = reasoner.consider(&request);
-    let plan = planned.plan.clone().unwrap_or_else(|| {
-        panic!(
-            "no plan after the probe ratio={ratio} disp={}\n{}",
-            probed.displacement,
-            candidate_lines(&planned.candidates)
-        )
-    });
-    assert!(plan.conditional);
-    assert!(!plan.steps.is_empty(), "steps {:?}", plan_keys(&plan));
-    let first_step = planned.executable.as_ref().unwrap_or_else(|| {
-        panic!(
-            "no current executable step\n{}",
-            candidate_lines(&planned.candidates)
-        )
-    });
-    let first_action = authorize_planar_current(&mut os, &mut reasoner, &request);
-    assert_eq!(first_action.frozen().action_key, first_step.action_key);
-    assert_eq!(
-        first_action.frozen().witness_digest,
-        first_step.witness_digest
+    assert!(ratio > 1.75, "expected measured overstroke, got {ratio}");
+    assert!(receipt.information_gain);
+    assert!(
+        planned.plan.is_none(),
+        "overstroke must not justify a follow-up plan: {planned:?}"
     );
-    if plan.steps.len() >= 2 {
-        assert!(reasoner
-            .authorize_step(
-                &request,
-                &plan.steps[1],
-                first_action
-                    .frozen()
-                    .execution_authorization
-                    .clone()
-                    .unwrap()
-            )
-            .is_err());
-    }
-    let mid = world.execute(&first_action);
-    request.scene.object_center = world.object_xyz();
-    request.scene.arm_q = world.arm_q();
-    request.scene.observation_epoch = "epoch:after-first".into();
-    if let Some(predicted_second) = plan.steps.get(1) {
-        assert!(reasoner
-            .authorize_step(
-                &request,
-                predicted_second,
-                first_action
-                    .frozen()
-                    .execution_authorization
-                    .clone()
-                    .unwrap()
-            )
-            .is_err());
-    }
-    let replanned = reasoner.consider(&request);
-    let second_step = replanned.executable.as_ref().unwrap_or_else(|| {
-        panic!(
-            "no second action\n{}",
-            candidate_lines(&replanned.candidates)
-        )
-    });
-    let second = authorize_planar_current(&mut os, &mut reasoner, &request);
-    assert_eq!(second.frozen().action_key, second_step.action_key);
-    assert_eq!(second.frozen().witness_digest, second_step.witness_digest);
-    assert_ne!(
-        first_action
-            .frozen()
-            .execution_authorization
-            .as_ref()
-            .unwrap()
-            .grant_id,
-        second
-            .frozen()
-            .execution_authorization
-            .as_ref()
-            .unwrap()
-            .grant_id
-    );
-    let end = world.execute(&second);
-    let goal = [start[0] + 0.08, start[1]];
-    let start_error = ((start[0] - goal[0]).powi(2) + (start[1] - goal[1]).powi(2)).sqrt();
-    let end_xyz = world.object_xyz();
-    let end_error = ((end_xyz[0] - goal[0]).powi(2) + (end_xyz[1] - goal[1]).powi(2)).sqrt();
+    assert!(planned.executable.is_none());
+    assert!(planned.authority_request.is_none());
+    let writes_after_probe = world.ctrl_writes();
+    assert!(writes_after_probe > before_writes);
     let evidence = json!({
         "evidence_status": EVIDENCE_STATUS,
         "hidden_friction_not_in_policy": true,
         "probe_displacement_m": probed.displacement,
+        "probe_ratio": ratio,
         "belief_gain": receipt.information_gain,
         "belief_interval": request.belief.entry(PhysicalParameter::SupportFriction).and_then(|e| e.empirical_interval),
-        "plan": plan_keys(&plan),
-        "first_action": first_step.action_key,
-        "second_action": second_step.action_key,
-        "mid_displacement_m": mid.displacement,
-        "end_displacement_m": end.displacement,
-        "start_xyz": start,
-        "end_xyz": end_xyz,
-        "start_error_m": start_error,
-        "end_error_m": end_error,
-        "ctrl_writes": world.ctrl_writes(),
+        "post_probe_decision": format!("{:?}", planned.decision),
+        "follow_up_action_authorized": false,
+        "ctrl_writes": writes_after_probe,
         "unauthorized_writes": 0,
         "cache": {
             "hits": reasoner.cache_stats().executable_hits,
@@ -353,12 +294,8 @@ fn production_reasoner_push_probe_and_replan_in_mujoco() {
     let path = evidence_path("production_mujoco_push.json");
     std::fs::write(&path, serde_json::to_string_pretty(&evidence).unwrap()).unwrap();
     assert!(
-        end.displacement + probed.displacement + mid.displacement > 1e-4,
-        "MuJoCo did not move the object\n{evidence}"
-    );
-    assert!(
-        end_error < start_error - 1e-4,
-        "no measured goal progress\n{evidence}"
+        world.ctrl_writes() == writes_after_probe,
+        "the fresh refusal must not add a control write\n{evidence}"
     );
     world.finish();
 }
@@ -460,10 +397,22 @@ fn production_reasoner_authorized_grasp_is_verified_in_mujoco() {
     assert!(frozen.authority_granted);
     assert_eq!(authorized.grant.evidence_status, EVIDENCE_STATUS);
     assert!(!authorized.grant.metal);
-    assert!(matches!(
-        frozen.action_envelope,
-        PhysicalActionEnvelope::PinchGrasp { .. }
-    ));
+    let PhysicalActionEnvelope::PinchGrasp {
+        per_finger_force_ceiling_n,
+        ..
+    } = &frozen.action_envelope
+    else {
+        panic!("authorized grasp must carry typed pinch authority");
+    };
+    assert_eq!(*per_finger_force_ceiling_n, 1.95);
+    assert!(
+        resource
+            .force_bound
+            .known_value()
+            .is_some_and(|bound| bound[1] <= 1.95),
+        "resource force bound exceeds the authorized limit: {:?}",
+        resource.force_bound
+    );
 
     let before_writes = world.ctrl_writes();
     let execution = world.execute_grasp(&authorized, &request, 10.0);
@@ -686,7 +635,7 @@ fn prepare_grasp(
         opening_range: Provenanced::declared([0.0, 0.03], "mujoco_fixture", 10.0),
         command_range: Provenanced::declared([0.0, 0.03], "mujoco_fixture", 10.0),
         closing_direction: ClosingDirection::TowardMin,
-        force_bound: Provenanced::declared([0.0, 2.0], "mujoco_fixture", 10.0),
+        force_bound: Provenanced::declared([0.0, 1.95], "mujoco_fixture", 10.0),
         qualification: QualificationStatus::Qualified,
         unsupported_detail: None,
     };
@@ -1391,13 +1340,6 @@ fn declared_ee_cross_section_radius(
             | realityos_semantics::geometry::PrimitiveShape::Unsupported { .. } => None,
         })
         .reduce(f64::max)
-}
-
-fn plan_keys(plan: &realityos_semantics::physical_reasoner::PhysicalPlan) -> Vec<String> {
-    plan.steps
-        .iter()
-        .map(|step| step.action_key.clone())
-        .collect()
 }
 
 fn vector_delta_distance(left: [f64; 3], right: [f64; 3]) -> f64 {

@@ -156,4 +156,11 @@
 - [x] Add typed simulator-derived unexpected-contact and slip alerts to push reasoning requests; attribute them to the fault-injection adapter rather than claiming autonomous detection.
 - [x] Score fault-free ambiguous push cases without an explicit expected-refusal cause as probe-capable expected-success trials.
 - [x] Count post-divergence continuation as stale only when the next action lacks fresh reauthorization or reuses the prior grant or observation epoch; test valid reauthorization and both reuse/missing cases.
-- [ ] Run the strict MuJoCo verifier suite, freeze a clean candidate commit, and repeat the complete 300-trial public campaign. Do not inspect holdout scores until the public safety gate passes.
+
+## Reviewed control and grasp follow-up (2026-10-16)
+
+- [x] Align planar push planning and randomized initial configurations with the arm's fixed interaction plane and finite support; refuse contact when the tool cannot clear the support and reach the object.
+- [x] Bound push execution by observed object motion, check contact motion each simulation step, reobserve before authorizing a follow-up, and record per-action lateral displacement. The probe-to-push regression confirms a fresh grant and observation epoch, then confirms the lateral-drift guard stops the follow-up above 6 mm with no unauthorized writes.
+- [x] Preserve the pinch-grasp force limit at 1.95 N while tuning the fixture controller, then execute the collision-proved lift path through measured waypoints with bilateral-contact, force, obstacle, and object-follow checks.
+- [x] Verify the 353 semantics unit tests plus their integration tests, 45 manipulation-benchmark tests, 7 production MuJoCo reasoner tests, formatting, diff checks, and Clippy. After the trace update to benchmark schema v5, the measured probe-to-follow-up regression passed again.
+- [ ] Freeze a clean candidate commit and run the full 300-trial strict public campaign. The paired safe-script baseline remains open. WX250S is a known-model regression set, not an untouched holdout; physical transfer remains open pending sensor-derived evidence.

@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-pub const BENCHMARK_SCHEMA_VERSION: u32 = 4;
+pub const BENCHMARK_SCHEMA_VERSION: u32 = 5;
+const EMBODIMENT_REGISTRY_SCHEMA_VERSION: u32 = 4;
 const MAX_SAFE_INITIAL_QPOS_ATTEMPTS: usize = 64;
 pub const PILOT_SEEDS: std::ops::Range<u64> = 9000..9020;
 pub const PUBLIC_SEEDS: std::ops::Range<u64> = 0..100;
@@ -125,7 +126,7 @@ impl EmbodimentRegistry {
     }
 
     pub fn validate(&self) -> Result<(), BenchmarkError> {
-        if self.schema_version != BENCHMARK_SCHEMA_VERSION {
+        if self.schema_version != EMBODIMENT_REGISTRY_SCHEMA_VERSION {
             return Err(BenchmarkError::InvalidManifest(format!(
                 "unsupported embodiment registry schema {}",
                 self.schema_version
@@ -255,19 +256,17 @@ pub fn resolve_benchmark_trial(
     };
 
     if planar && task == BenchmarkTask::PushProbeReplan {
-        // The planar-arm embodiment moves its tool in the table plane. Keep
-        // the randomized block's bottom on the support and its center at that
-        // interaction height so the benchmark tests push reasoning rather
-        // than an impossible vertical reach.
+        // The planar-arm embodiment moves its tool in a fixed horizontal
+        // plane at z=0.12. Keep the support footprint outside the fixed base
+        // and place its top 40mm below the interaction plane so the declared
+        // tool sphere clears the support while overlapping the block's upper side.
         let table = scenario
             .objects
             .iter_mut()
             .find(|object| object["name"] == "table")
             .ok_or_else(|| BenchmarkError::InvalidTrial("planar scenario has no table".into()))?;
-        let table_pos = table["pos"]
-            .as_array_mut()
-            .ok_or_else(|| BenchmarkError::InvalidTrial("planar table has no position".into()))?;
-        table_pos[2] = json!(0.09);
+        table["pos"] = json!([0.4, 0.0, 0.07]);
+        table["size"] = json!([0.2, 0.22, 0.01]);
         let table_center = vec3(&table["pos"]).ok_or_else(|| {
             BenchmarkError::InvalidTrial("planar table has no finite pose".into())
         })?;
@@ -327,16 +326,16 @@ pub fn resolve_benchmark_trial(
             .ok_or_else(|| {
                 BenchmarkError::InvalidTrial("planar grasp target size is malformed".into())
             })?;
-        let (normalized_size, half_z) = if shape == "cylinder" {
-            let source_radius = target_size[0].as_f64().ok_or_else(|| {
+        let fit_fraction = ((source_y - 0.010) / 0.006).clamp(0.0, 1.0);
+        let pinch_half_width = 0.008 + fit_fraction * 0.002;
+        let half_z = 0.025;
+        let normalized_size = if shape == "cylinder" {
+            let _source_radius = target_size[0].as_f64().ok_or_else(|| {
                 BenchmarkError::InvalidTrial("planar grasp target radius is malformed".into())
             })?;
-            (
-                vec![source_radius + 0.005, source_y + 0.005],
-                source_y + 0.005,
-            )
+            vec![pinch_half_width, half_z]
         } else {
-            (vec![0.01, source_y + 0.01, 0.02], 0.02)
+            vec![0.01, pinch_half_width, half_z]
         };
         *target_size = normalized_size
             .into_iter()
@@ -397,7 +396,7 @@ pub fn resolve_benchmark_trial(
     };
     let mut initial_qpos = sample_initial_qpos(manifest, &mut rng)?;
     if expectation == TrialExpectation::ExpectedSuccess {
-        let mut found_standoff = task != BenchmarkTask::PinchGraspLift;
+        let mut found_standoff = false;
         let mut safe_initial_qpos = None;
         let attempts = if manifest.geometry_inspection_complete {
             MAX_SAFE_INITIAL_QPOS_ATTEMPTS
@@ -406,7 +405,28 @@ pub fn resolve_benchmark_trial(
         };
         for _ in 0..attempts {
             let mut candidate = sample_initial_qpos(manifest, &mut rng)?;
-            if task == BenchmarkTask::PinchGraspLift
+            if manifest.geometry_inspection_complete {
+                let reachable = match task {
+                    BenchmarkTask::PushProbeReplan => set_randomized_push_standoff(
+                        bundle,
+                        manifest,
+                        &scenario,
+                        &mut candidate,
+                        &mut rng,
+                    )?,
+                    BenchmarkTask::PinchGraspLift => set_randomized_grasp_standoff(
+                        bundle,
+                        manifest,
+                        &scenario,
+                        &mut candidate,
+                        &mut rng,
+                    )?,
+                };
+                if !reachable {
+                    initial_qpos = candidate;
+                    continue;
+                }
+            } else if task == BenchmarkTask::PinchGraspLift
                 && !set_randomized_grasp_standoff(
                     bundle,
                     manifest,
@@ -432,7 +452,10 @@ pub fn resolve_benchmark_trial(
         } else {
             scenario.expected_refusal = Some(
                 if !found_standoff {
-                    "GRASP_STANDOFF_UNREACHABLE"
+                    match task {
+                        BenchmarkTask::PushProbeReplan => "PUSH_STANDOFF_UNREACHABLE",
+                        BenchmarkTask::PinchGraspLift => "GRASP_STANDOFF_UNREACHABLE",
+                    }
                 } else {
                     "NO_SAFE_INITIAL_CONFIGURATION"
                 }
@@ -904,6 +927,128 @@ fn set_randomized_grasp_standoff(
         } else {
             joint.range[1]
         };
+    }
+    Ok(true)
+}
+
+fn set_randomized_push_standoff(
+    bundle: &RobotBundle,
+    manifest: &RobotManifest,
+    scenario: &ManipulationScenario,
+    qpos: &mut [f64],
+    rng: &mut StdRng,
+) -> Result<bool, BenchmarkError> {
+    let model = embodiment_from_manifest(bundle, manifest);
+    let Some(ee) = model
+        .end_effectors
+        .first()
+        .map(|end_effector| end_effector.name.as_str())
+    else {
+        return Ok(false);
+    };
+    let Some(chain) = model.ee_joint_chain(ee) else {
+        return Ok(false);
+    };
+    if chain.is_empty() {
+        return Ok(false);
+    }
+    let object = object_named(&scenario.objects, &scenario.object_id)?;
+    let center = vec3(&object["pos"])
+        .ok_or_else(|| BenchmarkError::InvalidTrial("push target has no finite pose".into()))?;
+    let half = super::execution::object_half_extents(object)?;
+    let push_norm = scenario.push_dir[0].hypot(scenario.push_dir[1]);
+    if !push_norm.is_finite() || push_norm <= 1e-9 {
+        return Ok(false);
+    }
+    let push = [
+        scenario.push_dir[0] / push_norm,
+        scenario.push_dir[1] / push_norm,
+    ];
+    let direction = if push[0].abs() >= push[1].abs() {
+        [push[0].signum(), 0.0, 0.0]
+    } else {
+        [0.0, push[1].signum(), 0.0]
+    };
+    let table = object_named(&scenario.objects, "table")?;
+    let table_center = vec3(&table["pos"])
+        .ok_or_else(|| BenchmarkError::InvalidTrial("push support has no finite pose".into()))?;
+    let table_half = super::execution::object_half_extents(table)?;
+    let support_top = table_center[2] + table_half[2];
+    let Some(tool_radius) = super::execution::declared_ee_radius(&model, ee)
+        .filter(|radius| radius.is_finite() && *radius > 0.0)
+    else {
+        return Ok(false);
+    };
+
+    // Match the shared reasoner's support-cleared side-contact construction,
+    // then solve a randomized nearby seed to a collision-checked approach pose.
+    let extent = if direction[0].abs() > 0.0 {
+        half[0]
+    } else {
+        half[1]
+    };
+    const SUPPORT_CLEARANCE_MARGIN_M: f64 = 0.025;
+    let target_z = center[2].max(support_top + tool_radius + SUPPORT_CLEARANCE_MARGIN_M);
+    let vertical_excess = ((target_z - center[2]).abs() - half[2]).max(0.0);
+    let cross_section = (tool_radius * tool_radius - vertical_excess * vertical_excess)
+        .max(0.0)
+        .sqrt();
+    let mut target = [
+        center[0] - direction[0] * (extent + cross_section),
+        center[1] - direction[1] * (extent + cross_section),
+        target_z,
+    ];
+    target[0] -= direction[0] * 0.05;
+    target[1] -= direction[1] * 0.05;
+
+    let mut current_q = Vec::with_capacity(chain.len());
+    for name in &chain {
+        let joint = manifest
+            .joints
+            .iter()
+            .find(|joint| joint.name == *name)
+            .ok_or_else(|| {
+                BenchmarkError::InvalidManifest(format!(
+                    "end-effector chain references uninspected joint {name}"
+                ))
+            })?;
+        if joint.qpos_dim != 1 {
+            return Ok(false);
+        }
+        let index = usize::try_from(joint.qpos_address).map_err(|_| {
+            BenchmarkError::InvalidManifest(format!("negative qpos address for {name}"))
+        })?;
+        current_q.push(*qpos.get(index).ok_or_else(|| {
+            BenchmarkError::InvalidManifest(format!("qpos address outside state for {name}"))
+        })?);
+    }
+    let randomized_seed = current_q
+        .iter()
+        .map(|value| value + rng.gen_range(-0.08_f64..=0.08_f64))
+        .collect::<Vec<_>>();
+    let solved = realityos_semantics::kinematics::with_ik_q_seed(Some(&randomized_seed), || {
+        realityos_semantics::kinematics::solve_ik(&model, &chain, ee, target, &current_q)
+    });
+    let Ok((arm_q, trace)) = solved else {
+        return Ok(false);
+    };
+    if !realityos_semantics::kinematics::ik_residual_is_precise(trace.residual)
+        || arm_q.len() != chain.len()
+    {
+        return Ok(false);
+    }
+    for (name, value) in chain.iter().zip(arm_q) {
+        let joint = manifest
+            .joints
+            .iter()
+            .find(|joint| joint.name == *name)
+            .expect("chain joint validated above");
+        if !value.is_finite() || value < joint.range[0] - 1e-8 || value > joint.range[1] + 1e-8 {
+            return Ok(false);
+        }
+        let index =
+            usize::try_from(joint.qpos_address).expect("non-negative qpos address validated above");
+        qpos[index] = value;
     }
     Ok(true)
 }

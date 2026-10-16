@@ -48,7 +48,7 @@
     <position name="act2" joint="joint2" kp="30" ctrlrange="-2.0 2.0" forcerange="-8 8"/>
     <position name="act3" joint="joint3" kp="20" ctrlrange="-2.0 2.0" forcerange="-4 4"/>
     <position name="lift_z_act" joint="lift_z" kp="500" kv="20" ctrlrange="-0.02 0.05" forcerange="-10 10"/>
-    <position name="grip_l" joint="finger_l" kp="4000" ctrlrange="0 0.03" forcerange="-1.95 1.95"/>
-    <position name="grip_r" joint="finger_r" kp="4000" ctrlrange="0 0.03" forcerange="-1.95 1.95"/>
+    <position name="grip_l" joint="finger_l" kp="500" ctrlrange="0 0.03" forcerange="-1.95 1.95"/>
+    <position name="grip_r" joint="finger_r" kp="500" ctrlrange="0 0.03" forcerange="-1.95 1.95"/>
   </actuator>
 </mujoco>

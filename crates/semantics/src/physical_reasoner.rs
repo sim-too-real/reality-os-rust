@@ -806,7 +806,11 @@ fn push_raw(
         // when that would put its lower hemisphere through the support. Move
         // its contact center up to the support clearance and shorten the
         // horizontal standoff by the corresponding sphere/AABB cross-section.
-        let min_center_z = request.scene.support_origin[2] + radius + 0.001;
+        // Preserve vertical clearance through joint-space interpolation. A
+        // small clearance is consumed by model/contact approximation near the
+        // support edge and caused otherwise valid pushes to be rejected.
+        const SUPPORT_CLEARANCE_MARGIN_M: f64 = 0.025;
+        let min_center_z = request.scene.support_origin[2] + radius + SUPPORT_CLEARANCE_MARGIN_M;
         target[2] = target[2].max(min_center_z);
         let vertical_excess =
             (target[2] - request.scene.object_center[2]).abs() - request.scene.object_half[2].abs();
@@ -827,6 +831,7 @@ fn push_raw(
 }
 
 fn push_approach_standoff(request: &ReasoningRequest, candidate: &RawCandidate) -> [f64; 3] {
+    const PUSH_APPROACH_STANDOFF_M: f64 = 0.05;
     if candidate.direction[2].abs() <= 1e-9
         && request.scene.support_normal[0].abs() <= 1e-9
         && request.scene.support_normal[1].abs() <= 1e-9
@@ -838,10 +843,32 @@ fn push_approach_standoff(request: &ReasoningRequest, candidate: &RawCandidate) 
         // Keep the tool outside the object's side while descending. An
         // above-object approach at the contact x-coordinate sweeps across the
         // object's upper edge before reaching the intended side contact.
-        sub3(candidate.target_xyz, scale3(candidate.direction, 0.01))
+        sub3(
+            candidate.target_xyz,
+            scale3(candidate.direction, PUSH_APPROACH_STANDOFF_M),
+        )
     } else {
-        sub3(candidate.target_xyz, scale3(candidate.direction, 0.02))
+        sub3(
+            candidate.target_xyz,
+            scale3(candidate.direction, PUSH_APPROACH_STANDOFF_M),
+        )
     }
+}
+
+fn support_cleared_contact_possible(request: &ReasoningRequest, candidate: &RawCandidate) -> bool {
+    let radius = request.scene.tool_radius_m;
+    if candidate.direction[2].abs() > 1e-9
+        || request.scene.support_normal[0].abs() > 1e-9
+        || request.scene.support_normal[1].abs() > 1e-9
+        || request.scene.support_normal[2] < 1.0 - 1e-9
+        || !radius.is_finite()
+        || radius <= 0.0
+    {
+        return true;
+    }
+    let vertical_excess = (candidate.target_xyz[2] - request.scene.object_center[2]).abs()
+        - request.scene.object_half[2].abs();
+    vertical_excess.max(0.0) < radius - 1e-6
 }
 
 fn grasp_candidates(request: &ReasoningRequest) -> Vec<RawCandidate> {
@@ -886,6 +913,14 @@ fn prove_push(
             PUSH_FAMILY,
             candidate,
             "LINEAR_EXECUTION_BOUND_TOO_SMALL",
+            MechanicsStatus::Unknown,
+        );
+    }
+    if !support_cleared_contact_possible(request, candidate) {
+        return rejected(
+            PUSH_FAMILY,
+            candidate,
+            "SUPPORT_CLEARANCE_PREVENTS_CONTACT",
             MechanicsStatus::Unknown,
         );
     }
@@ -1417,9 +1452,13 @@ fn prove_arm_path(
                 let mut retreat_scene = request.scene.clone();
                 retreat_scene.object_center = predicted_center;
                 retreat_scene.arm_q = q_end.clone();
+                const PROBE_RETREAT_CLEARANCE_M: f64 = 0.03;
                 let retreat_target = add3(
                     candidate.target_xyz,
-                    scale3(candidate.direction, candidate.stroke_m - 0.03),
+                    scale3(
+                        candidate.direction,
+                        candidate.stroke_m - PROBE_RETREAT_CLEARANCE_M,
+                    ),
                 );
                 let retreat_candidates = match solve_precise_candidates(
                     model,
@@ -3390,7 +3429,9 @@ mod tests {
             .find(|candidate| candidate.action_key == "push:+x")
             .expect("positive local-x push");
 
-        assert!((candidate.target_xyz[2] - 0.161).abs() < 1e-12);
+        let minimum_center_z =
+            request.scene.support_origin[2] + request.scene.tool_radius_m + 0.025;
+        assert!((candidate.target_xyz[2] - minimum_center_z).abs() < 1e-12);
         let horizontal_gap =
             request.scene.object_center[0] - request.scene.object_half[0] - candidate.target_xyz[0];
         let vertical_excess =
@@ -3398,6 +3439,25 @@ mod tests {
         assert!(
             (horizontal_gap.hypot(vertical_excess) - request.scene.tool_radius_m).abs() < 1e-12
         );
+    }
+
+    #[test]
+    fn thin_object_without_support_cleared_tool_contact_is_refused() {
+        let (model, mut request) = benchmark_scene();
+        request.scene.object_center = [0.3, 0.0, 0.085];
+        request.scene.object_half = [0.02, 0.02, 0.005];
+        request.scene.support_origin = [0.3, 0.0, 0.08];
+        request.scene.tool_radius_m = 0.06;
+        let candidate = push_candidates(&request)
+            .into_iter()
+            .find(|candidate| candidate.action_key == "push:+x")
+            .expect("positive local-x push candidate");
+
+        let action = prove_push(&model, &request, &candidate);
+
+        assert_eq!(action.summary.status, "SUPPORT_CLEARANCE_PREVENTS_CONTACT");
+        assert!(action.step.is_none());
+        assert!(action.evidence.is_none());
     }
 
     #[test]
@@ -3414,7 +3474,7 @@ mod tests {
 
         let standoff = push_approach_standoff(&request, &candidate);
 
-        assert!((standoff[0] - (candidate.target_xyz[0] - 0.01)).abs() < 1e-12);
+        assert!((standoff[0] - (candidate.target_xyz[0] - 0.05)).abs() < 1e-12);
         assert_eq!(standoff[1], candidate.target_xyz[1]);
         assert_eq!(standoff[2], candidate.target_xyz[2]);
     }

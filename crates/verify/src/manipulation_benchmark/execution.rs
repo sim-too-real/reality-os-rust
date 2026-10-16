@@ -41,6 +41,7 @@ use std::time::Instant;
 const MU_REQUIRED: f64 = 0.3;
 const MAX_ACTIONS: usize = 6;
 const CONTROL_STEPS_PER_SEGMENT: u32 = 500;
+const PUSH_STEPS_PER_WAYPOINT: u32 = 500;
 const CONTROL_CONVERGENCE_CHECK_STEPS: u32 = 100;
 const CONTROL_AUTHORITY_CHECK_STEPS: u32 = 10;
 const GRASP_CLOSE_SETTLE_STEPS: u32 = 200;
@@ -83,6 +84,7 @@ pub struct ActionTrace {
     pub writes_before: u64,
     pub writes_after: u64,
     pub displacement_m: f64,
+    pub lateral_displacement_m: Option<f64>,
     pub reauthorized_after_observation: bool,
     pub runtime_divergence: bool,
 }
@@ -375,8 +377,11 @@ pub fn run_benchmark_trial(
         }
         let preview = reasoner.consider_excluding(&request, &blocked_action_keys);
         episode.decision_audits.push(format!(
-            "decision={:?};candidates={}",
+            "decision={:?};support_friction_interval={:?};candidates={}",
             preview.decision,
+            belief
+                .entry(PhysicalParameter::SupportFriction)
+                .and_then(|entry| entry.empirical_interval),
             preview
                 .candidates
                 .iter()
@@ -515,6 +520,9 @@ pub fn run_benchmark_trial(
                 };
                 let result =
                     execute_grasp_witness(&mut worker, &manifest, &request, &authorized, resource)?;
+                episode
+                    .grasp_contact_audits
+                    .extend(result.lift_contact_audits.iter().cloned());
                 (
                     result.execution,
                     result.hold_start,
@@ -531,6 +539,10 @@ pub fn run_benchmark_trial(
         let after_state = state_payload(&mut worker)?;
         let object_after = body_position(&after_state, &trial.scenario.object_id)?;
         let displacement_m = distance3(object_before, object_after);
+        let object_delta = sub3(object_after, object_before);
+        let lateral_displacement_m = action_direction(&action_key).map(|direction| {
+            (object_delta[0] * direction[1] - object_delta[1] * direction[0]).abs()
+        });
         let writes_after_action = worker
             .peek_ctrl()
             .map_err(|error| BenchmarkError::Simulation(error.to_string()))?
@@ -549,6 +561,7 @@ pub fn run_benchmark_trial(
             writes_before: writes_before_action,
             writes_after: writes_after_action,
             displacement_m,
+            lateral_displacement_m,
             reauthorized_after_observation: !previous_epoch.is_empty()
                 && previous_epoch != frozen.observation_epoch,
             runtime_divergence: exec == WitnessExecution::Diverged,
@@ -559,6 +572,9 @@ pub fn run_benchmark_trial(
             episode.outcome = TrialOutcome::ActionFailed;
             previous_epoch = frozen.observation_epoch.clone();
             previous_action_was_probe = false;
+            if !blocked_action_keys.contains(&action_key) {
+                blocked_action_keys.push(action_key.clone());
+            }
             recovery_pending = true;
             continue;
         }
@@ -677,8 +693,12 @@ pub fn run_benchmark_trial(
             episode.recovery_count = episode.recovery_count.saturating_add(1);
         }
         if is_probe {
+            let delta = sub3(object_after, object_before);
+            let observed_stroke = action_direction(&action_key)
+                .map(|axis| delta[0] * axis[0] + delta[1] * axis[1])
+                .unwrap_or(displacement_m);
             let ratio = if request.probe_stroke_m > 1e-9 {
-                displacement_m / request.probe_stroke_m
+                observed_stroke / request.probe_stroke_m
             } else {
                 0.0
             };
@@ -756,6 +776,7 @@ fn execute_push_witness(
     else {
         return Ok(WitnessExecution::WroteNothing);
     };
+    let last_target_index = targets.len().saturating_sub(1);
     if !authorized_covers_now(worker, authorized, request.now_s)? {
         return Ok(WitnessExecution::WroteNothing);
     }
@@ -766,7 +787,13 @@ fn execute_push_witness(
 
     let actuator_map = position_actuator_map(manifest, &request.scene.joint_names)?;
     let mut has_written = false;
-    for target in targets {
+    let direction = action_direction(&frozen.action_key);
+    let mut stroke_completed_by_observation = false;
+    let observed_completion_distance = if is_probe { requested * 0.8 } else { requested };
+    for (target_index, target) in targets.into_iter().enumerate() {
+        if stroke_completed_by_observation && target_index != last_target_index {
+            continue;
+        }
         let now = simulator_now(worker)?;
         let now_s = 10.0 + now;
         if !authorized_covers_now(worker, authorized, now_s)? {
@@ -809,23 +836,94 @@ fn execute_push_witness(
         })?;
         has_written = true;
         let mut converged = false;
-        let mut remaining_steps = CONTROL_STEPS_PER_SEGMENT;
+        let mut remaining_steps = PUSH_STEPS_PER_WAYPOINT;
         while remaining_steps > 0 {
-            let steps = remaining_steps.min(CONTROL_AUTHORITY_CHECK_STEPS);
+            // Sample contact motion every simulator step so a small bounded
+            // probe cannot overshoot between observations. Transit remains
+            // batched because it must be object-motion-free.
+            let check_steps = if target_index == 0 {
+                CONTROL_AUTHORITY_CHECK_STEPS
+            } else {
+                1
+            };
+            let steps = remaining_steps.min(check_steps);
             if !step_with_authority(worker, authorized, request.now_s, steps)? {
                 return Ok(WitnessExecution::AuthorityExpired);
             }
             remaining_steps -= steps;
+            let state = state_payload(worker)?;
+            let displacement = sub3(
+                body_position(&state, &request.scene.object_id)?,
+                request.scene.object_center,
+            );
+            let planar_displacement = displacement[0].hypot(displacement[1]);
+            // Transit must not move the object. The bounded contact phase can
+            // begin the authorized stroke before the final stroke waypoint,
+            // so allow only the requested displacement plus a small model
+            // tolerance once contact has been intentionally established.
+            let permitted_planar_displacement = if target_index == 0 {
+                0.005
+            } else {
+                requested + 0.005
+            };
+            let permitted_along_displacement = if target_index == 0 {
+                0.005
+            } else {
+                requested + 0.003
+            };
+            let along = direction.map(|axis| displacement[0] * axis[0] + displacement[1] * axis[1]);
+            let lateral =
+                direction.map(|axis| (displacement[0] * axis[1] - displacement[1] * axis[0]).abs());
+            if planar_displacement > permitted_planar_displacement
+                || displacement[2].abs() > 0.01
+                || along.is_some_and(|value| value < -0.005 || value > permitted_along_displacement)
+                || lateral.is_some_and(|value| value > 0.006)
+            {
+                return Ok(WitnessExecution::Diverged);
+            }
+            if !stroke_completed_by_observation
+                && target_index > 0
+                && along.is_some_and(|value| value >= observed_completion_distance)
+            {
+                if is_probe {
+                    // The measured effect completed the authorized probe.
+                    // Skip its remaining stroke waypoints, but execute the
+                    // already-authorized retreat before reobserving.
+                    stroke_completed_by_observation = true;
+                    converged = true;
+                    break;
+                }
+                // The measured object effect completed the authorized goal
+                // stroke. Stop issuing the frozen remainder and let the outer
+                // loop reobserve and obtain fresh authority.
+                return Ok(WitnessExecution::Wrote);
+            }
             if remaining_steps > 0 && remaining_steps % CONTROL_CONVERGENCE_CHECK_STEPS != 0 {
                 continue;
             }
             let observed = read_named_joints(worker, manifest, &request.scene.joint_names)?;
-            if vectors_near(&observed, &target, 0.08) {
+            if vectors_near(&observed, &target, 0.02) {
                 converged = true;
                 break;
             }
         }
         if !converged {
+            return Ok(WitnessExecution::Diverged);
+        }
+    }
+    if is_probe {
+        let state = state_payload(worker)?;
+        let object = body_position(&state, &request.scene.object_id)?;
+        let displacement = sub3(object, request.scene.object_center);
+        let planar_displacement = displacement[0].hypot(displacement[1]);
+        let along = direction.map(|axis| displacement[0] * axis[0] + displacement[1] * axis[1]);
+        let lateral =
+            direction.map(|axis| (displacement[0] * axis[1] - displacement[1] * axis[0]).abs());
+        if planar_displacement > requested + 0.005
+            || along.is_some_and(|value| value > requested + 0.003)
+            || lateral.is_some_and(|value| value > 0.006)
+            || displacement[2].abs() > 0.01
+        {
             return Ok(WitnessExecution::Diverged);
         }
     }
@@ -899,6 +997,7 @@ struct GraspWitnessExecution {
     execution: WitnessExecution,
     hold_start: Option<VerifierTruth>,
     phase_object_positions: Vec<[f64; 3]>,
+    lift_contact_audits: Vec<GraspContactAudit>,
 }
 
 fn execute_grasp_witness(
@@ -923,12 +1022,14 @@ fn execute_grasp_witness(
             execution: WitnessExecution::WroteNothing,
             hold_start: None,
             phase_object_positions: Vec::new(),
+            lift_contact_audits: Vec::new(),
         });
     };
     let rejection = || GraspWitnessExecution {
         execution: WitnessExecution::WroteNothing,
         hold_start: None,
         phase_object_positions: Vec::new(),
+        lift_contact_audits: Vec::new(),
     };
     let contents = &frozen.witness_contents;
     let q0 = witness_joint_line(contents, "q0_bits=");
@@ -986,6 +1087,7 @@ fn execute_grasp_witness(
             execution: WitnessExecution::Diverged,
             hold_start: None,
             phase_object_positions: Vec::new(),
+            lift_contact_audits: Vec::new(),
         });
     }
 
@@ -1014,6 +1116,7 @@ fn execute_grasp_witness(
                     execution: WitnessExecution::AuthorityExpired,
                     hold_start,
                     phase_object_positions,
+                    lift_contact_audits: Vec::new(),
                 });
             }
         }
@@ -1023,6 +1126,7 @@ fn execute_grasp_witness(
                 execution: WitnessExecution::Diverged,
                 hold_start,
                 phase_object_positions,
+                lift_contact_audits: Vec::new(),
             });
         }
         if phase == "close" {
@@ -1034,6 +1138,7 @@ fn execute_grasp_witness(
                     execution: WitnessExecution::AuthorityExpired,
                     hold_start,
                     phase_object_positions,
+                    lift_contact_audits: Vec::new(),
                 });
             }
             let settled = read_named_joints(worker, manifest, &request.scene.joint_names)?;
@@ -1042,6 +1147,7 @@ fn execute_grasp_witness(
                     execution: WitnessExecution::Diverged,
                     hold_start,
                     phase_object_positions,
+                    lift_contact_audits: Vec::new(),
                 });
             }
             let state = state_payload(worker)?;
@@ -1053,19 +1159,35 @@ fn execute_grasp_witness(
         }
     }
 
+    let mut lift_contact_audits = Vec::new();
     for pair in lift_states.windows(2) {
         let (start_arm, start_fingers) = &pair[0];
         let (end_arm, end_fingers) = &pair[1];
         if !exact_finite_vec(start_fingers, end_fingers) {
             return Ok(rejection());
         }
-        // Use small, settled waypoints for the lifted hold check. Large
-        // controller jumps can drag a partly secured object out of the jaws
-        // before the force-limited gripper reaches its static contact state.
-        const LIFT_SETTLE_SUBSTEPS: u32 = 20;
-        for step in 1..=LIFT_SETTLE_SUBSTEPS {
-            let fraction = step as f64 / f64::from(LIFT_SETTLE_SUBSTEPS);
-            let arm = start_arm
+        // Execute the same joint-space samples used by the collision proof,
+        // observing finger contact, force, and object motion at each waypoint.
+        const LIFT_STEPS_PER_WAYPOINT: u32 = 50;
+        if !exact_finite_vec(start_arm, &contact) || end_arm.len() != start_arm.len() {
+            return Ok(rejection());
+        }
+        let sample_count =
+            realityos_semantics::maneuver_witness::interpolation_count(start_arm, end_arm);
+        let hold_truth = hold_start.as_ref().ok_or_else(|| {
+            BenchmarkError::Simulation("post_close_measurement_missing_before_lift".into())
+        })?;
+        let start_object =
+            truth_position(hold_truth, &request.scene.object_id).ok_or_else(|| {
+                BenchmarkError::Simulation("post_close_object_pose_unavailable".into())
+            })?;
+        let start_ee = truth_position(hold_truth, &request.scene.ee).ok_or_else(|| {
+            BenchmarkError::Simulation("post_close_end_effector_pose_unavailable".into())
+        })?;
+        let start_relative = sub3(start_object, start_ee);
+        for waypoint in 1..sample_count {
+            let fraction = waypoint as f64 / (sample_count - 1) as f64;
+            let target = start_arm
                 .iter()
                 .zip(end_arm)
                 .map(|(start, end)| start + fraction * (end - start))
@@ -1076,9 +1198,9 @@ fn execute_grasp_witness(
                 request,
                 authorized,
                 resource,
-                &arm,
+                &target,
                 end_fingers,
-                CONTROL_STEPS_PER_SEGMENT,
+                LIFT_STEPS_PER_WAYPOINT,
             )? {
                 GraspControlStatus::Written => {}
                 GraspControlStatus::Rejected => return Ok(rejection()),
@@ -1087,25 +1209,65 @@ fn execute_grasp_witness(
                         execution: WitnessExecution::AuthorityExpired,
                         hold_start,
                         phase_object_positions,
+                        lift_contact_audits,
                     });
                 }
             }
             let measured = read_named_joints(worker, manifest, &request.scene.joint_names)?;
-            if !vectors_near(&measured, &arm, 0.08) {
+            if !vectors_near(&measured, &target, 0.08) {
                 return Ok(GraspWitnessExecution {
                     execution: WitnessExecution::Diverged,
                     hold_start,
                     phase_object_positions,
+                    lift_contact_audits,
                 });
             }
             let state = state_payload(worker)?;
-            phase_object_positions.push(body_position(&state, &request.scene.object_id)?);
+            let object_position = body_position(&state, &request.scene.object_id)?;
+            phase_object_positions.push(object_position);
+            let truth = VerifierTruth::from_mujoco_state(&state);
+            let audits = grasp_contact_audits(
+                &format!("lift_waypoint_{waypoint}"),
+                &truth,
+                &request.scene.object_id,
+                resource,
+            );
+            let force_safe = audits.len() == resource.finger_bodies.len()
+                && audits.iter().all(|audit| {
+                    audit.force_available
+                        && audit.normal_force_n.is_some_and(|force| {
+                            force.is_finite() && force <= *per_finger_force_ceiling_n + 1e-6
+                        })
+                });
+            lift_contact_audits.extend(audits);
+            let object_hits_obstacle = request.scene.obstacles.iter().any(|obstacle| {
+                truth.contacts.iter().any(|contact| {
+                    contact_pair_has(contact, &request.scene.object_id, &obstacle.name)
+                })
+            });
+            let relative_pose_error = truth_position(&truth, &request.scene.ee)
+                .map(|ee| distance3(sub3(object_position, ee), start_relative))
+                .unwrap_or(f64::INFINITY);
+            if !bilateral_finger_contact(&truth, &request.scene.object_id, resource)
+                || !force_safe
+                || object_hits_obstacle
+                || !relative_pose_error.is_finite()
+                || relative_pose_error > 0.02
+            {
+                return Ok(GraspWitnessExecution {
+                    execution: WitnessExecution::Diverged,
+                    hold_start,
+                    phase_object_positions,
+                    lift_contact_audits,
+                });
+            }
         }
     }
     Ok(GraspWitnessExecution {
         execution: WitnessExecution::Wrote,
         hold_start,
         phase_object_positions,
+        lift_contact_audits,
     })
 }
 
@@ -1962,7 +2124,7 @@ fn value_vec3(value: &Value) -> Option<[f64; 3]> {
     point.iter().all(|value| value.is_finite()).then_some(point)
 }
 
-fn object_half_extents(object: &Value) -> Result<[f64; 3], BenchmarkError> {
+pub(super) fn object_half_extents(object: &Value) -> Result<[f64; 3], BenchmarkError> {
     let size = object["size"]
         .as_array()
         .ok_or_else(|| BenchmarkError::InvalidTrial("box geometry has no size".into()))?;
@@ -2021,7 +2183,7 @@ fn obstacle_half_extents(object: &Value) -> Result<[f64; 3], BenchmarkError> {
     }
 }
 
-fn declared_ee_radius(
+pub(super) fn declared_ee_radius(
     model: &realityos_semantics::embodiment::EmbodimentModel,
     ee_name: &str,
 ) -> Option<f64> {
@@ -2077,6 +2239,16 @@ fn vectors_near(left: &[f64], right: &[f64], tolerance: f64) -> bool {
 
 fn xy_distance(position: [f64; 3], goal: [f64; 3]) -> f64 {
     ((position[0] - goal[0]).powi(2) + (position[1] - goal[1]).powi(2)).sqrt()
+}
+
+fn action_direction(action_key: &str) -> Option<[f64; 2]> {
+    match action_key.rsplit(':').next()? {
+        "+x" => Some([1.0, 0.0]),
+        "-x" => Some([-1.0, 0.0]),
+        "+y" => Some([0.0, 1.0]),
+        "-y" => Some([0.0, -1.0]),
+        _ => None,
+    }
 }
 
 fn distance3(left: [f64; 3], right: [f64; 3]) -> f64 {

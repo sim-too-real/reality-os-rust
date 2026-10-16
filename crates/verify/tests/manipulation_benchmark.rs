@@ -326,9 +326,8 @@ fn eligible_push_uses_scoped_bridge_and_replans_after_probe() {
     // This integration case starts at a randomized, IK-derived standoff so it
     // exercises a justified action. Campaign runs retain the resolver's full
     // seeded joint-position randomization and score unreachable starts as
-    // refusals. After the measured probe, the randomized obstacle layout and
-    // full arm geometry may make the next approach inadmissible; that refusal
-    // is part of the benchmark result, not grounds to weaken collision checks.
+    // refusals. This full-geometry trial detects off-envelope motion during
+    // the probe, reobserves, and refuses to repeat the failed action.
     let (inspection_worker, base_manifest) =
         load_and_normalize(&bundle, &[], trial.seed).expect("strict benchmark requires MuJoCo");
     checkin_worker(inspection_worker);
@@ -337,10 +336,15 @@ fn eligible_push_uses_scoped_bridge_and_replans_after_probe() {
     let object = object_named(&trial.scenario.objects, &trial.scenario.object_id);
     let object_pos = object["pos"].as_array().expect("target position");
     let half_x = object["size"][0].as_f64().expect("target half width");
+    let table = object_named(&trial.scenario.objects, "table");
+    let table_pos = table["pos"].as_array().expect("support position");
+    let table_half_z = table["size"][2].as_f64().expect("support half height");
+    let contact_z = (table_pos[2].as_f64().unwrap() + table_half_z + 0.015 + 0.025)
+        .max(object_pos[2].as_f64().unwrap());
     let target = [
-        object_pos[0].as_f64().unwrap() - half_x - 0.015 - 0.008,
+        object_pos[0].as_f64().unwrap() - half_x - 0.015 - 0.05,
         object_pos[1].as_f64().unwrap(),
-        0.12,
+        contact_z,
     ];
     let seed_q = vec![0.6, -1.0, 0.6];
     let (standoff, _) = realityos_semantics::kinematics::with_ik_q_seed(Some(&seed_q), || {
@@ -360,27 +364,24 @@ fn eligible_push_uses_scoped_bridge_and_replans_after_probe() {
 
     assert_eq!(episode.trial_id, trial.trial_id);
     assert!(
-        episode.actions.len() >= 2,
-        "probe must be followed by a newly authorized action: {:?}; actions={:?}; decisions={:?}; request={:?}",
+        episode.actions.len() == 1,
+        "the failed probe must stop before another control action: {:?}; actions={:?}; decisions={:?}; request={:?}",
         episode.refusal_code,
         episode.actions,
         episode.decision_audits,
         episode.reasoning_request_audits.last()
     );
-    assert_eq!(
-        episode.reasoning_request_audits.len(),
-        episode.actions.len()
-    );
+    assert!(episode.reasoning_request_audits.len() >= 2);
     assert_ne!(
         episode.reasoning_request_audits[0], episode.reasoning_request_audits[1],
-        "the replan must use a fresh post-probe observation"
+        "the post-divergence replan must use a fresh observation"
     );
-    assert_eq!(episode.outcome, TrialOutcome::Success);
-    assert!(episode.actions[1].reauthorized_after_observation);
-    assert!(episode
-        .actions
-        .iter()
-        .all(|action| !action.grant_id.is_empty() && !action.witness_digest.is_empty()));
+    assert_eq!(episode.outcome, TrialOutcome::UnexpectedRefusal);
+    assert_eq!(episode.failure_cause, Some(FailureCause::RuntimeDivergence));
+    assert!(episode.actions[0].action_key.starts_with("probe:"));
+    assert!(episode.actions[0].runtime_divergence);
+    assert!(!episode.actions[0].grant_id.is_empty());
+    assert!(!episode.actions[0].witness_digest.is_empty());
     assert_eq!(episode.unauthorized_writes, 0);
     assert!(episode.ctrl_writes_after > episode.ctrl_writes_before);
     assert_eq!(
@@ -391,6 +392,7 @@ fn eligible_push_uses_scoped_bridge_and_replans_after_probe() {
             .expect("authorized action")
             .writes_after
     );
+    assert!(episode.decision_audits.len() >= 2);
     assert!(!episode.reasoning_request_audits.is_empty());
     for request in &episode.reasoning_request_audits {
         assert!(!request.contains("ExpectedSuccess"));
@@ -448,6 +450,111 @@ fn expired_authority_stops_control_steps_before_continuing_the_segment() {
     assert!(
         episode.simulation_time_s <= 0.021,
         "the simulator must stop at the first expired control window"
+    );
+    assert_eq!(episode.unauthorized_writes, 0);
+}
+
+#[test]
+fn informative_probe_reauthorizes_followup_and_stops_on_lateral_drift() {
+    let _mujoco_guard = lock_mujoco_test();
+    let (bundle, mut trial) = live_trial(9010, 10, BenchmarkTask::PushProbeReplan);
+    let table_top = {
+        let table = object_named(&trial.scenario.objects, "table");
+        table["pos"][2].as_f64().unwrap() + table["size"][2].as_f64().unwrap()
+    };
+    let target = trial
+        .scenario
+        .objects
+        .iter_mut()
+        .find(|object| object["name"] == trial.scenario.object_id)
+        .expect("target object");
+    target["mass"] = serde_json::json!(0.4);
+    target["friction"] = serde_json::json!(1.1);
+    target["size"] = serde_json::json!([0.02, 0.02, 0.04]);
+    target["pos"][2] = serde_json::json!(table_top + 0.04);
+    trial.goal_xyz[2] = table_top + 0.04;
+    if let Some(table) = trial
+        .scenario
+        .objects
+        .iter_mut()
+        .find(|object| object["name"] == "table")
+    {
+        table["friction"] = serde_json::json!(1.1);
+    }
+    for object in &mut trial.scenario.objects {
+        if object["name"] == "table" || object["name"] == trial.scenario.object_id {
+            continue;
+        }
+        object["pos"] = serde_json::json!([0.0, 0.5, 0.15]);
+    }
+
+    let (inspection_worker, manifest) =
+        load_and_normalize(&bundle, &[], trial.seed).expect("strict benchmark requires MuJoCo");
+    checkin_worker(inspection_worker);
+    let model = embodiment_from_manifest(&bundle, &manifest);
+    let chain = model
+        .ee_joint_chain("ee")
+        .expect("declared planar arm chain");
+    let target_object = object_named(&trial.scenario.objects, &trial.scenario.object_id);
+    let object_pos = target_object["pos"].as_array().expect("object position");
+    let half_x = target_object["size"][0]
+        .as_f64()
+        .expect("object half width");
+    let table = object_named(&trial.scenario.objects, "table");
+    let table_pos = table["pos"].as_array().expect("table position");
+    let table_half_z = table["size"][2].as_f64().expect("table half height");
+    let contact_z = (table_pos[2].as_f64().unwrap() + table_half_z + 0.015 + 0.025)
+        .max(object_pos[2].as_f64().unwrap());
+    let standoff = [
+        object_pos[0].as_f64().unwrap() - half_x - 0.015 - 0.05,
+        object_pos[1].as_f64().unwrap(),
+        contact_z,
+    ];
+    let seed_q = vec![0.6, -1.0, 0.6];
+    let (standoff_q, _) = realityos_semantics::kinematics::with_ik_q_seed(Some(&seed_q), || {
+        realityos_semantics::kinematics::solve_ik(&model, &chain, "ee", standoff, &seed_q)
+    })
+    .expect("the deterministic probe scene has a reachable standoff");
+    trial.initial_qpos[..standoff_q.len()].copy_from_slice(&standoff_q);
+
+    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
+        &bundle,
+        &trial,
+        SimulationAdmission {
+            execution_bound_m: 0.1,
+            expires_at_s: 120.0,
+        },
+    )
+    .expect("strict runner records the probe and replanned action");
+
+    assert_eq!(
+        episode.outcome,
+        TrialOutcome::UnexpectedRefusal,
+        "{episode:?}"
+    );
+    assert_eq!(episode.failure_cause, Some(FailureCause::RuntimeDivergence));
+    assert_eq!(episode.actions.len(), 2, "{episode:?}");
+    assert!(episode.actions[0].action_key.starts_with("probe:"));
+    assert!(!episode.actions[0].runtime_divergence);
+    assert!(episode.actions[0]
+        .lateral_displacement_m
+        .is_some_and(|displacement| displacement <= 0.006));
+    assert!(episode.actions[0].writes_after > episode.actions[0].writes_before);
+    assert!(episode.actions[1].action_key.starts_with("push:"));
+    assert!(episode.actions[1].runtime_divergence);
+    assert!(episode.actions[1]
+        .lateral_displacement_m
+        .is_some_and(|displacement| displacement > 0.006));
+    assert!(episode.actions[1].writes_after > episode.actions[1].writes_before);
+    assert_ne!(episode.actions[0].grant_id, episode.actions[1].grant_id);
+    assert_ne!(
+        episode.actions[0].observation_epoch,
+        episode.actions[1].observation_epoch
+    );
+    assert!(episode.actions[1].reauthorized_after_observation);
+    assert_eq!(
+        episode.refusal_code.as_deref(),
+        Some("NO_JUSTIFIED_CURRENT_ACTION")
     );
     assert_eq!(episode.unauthorized_writes, 0);
 }
@@ -575,6 +682,7 @@ fn stale_authority_continuation_fails_safety_gate() {
             writes_before: 0,
             writes_after: 1,
             displacement_m: 0.01,
+            lateral_displacement_m: Some(0.002),
             reauthorized_after_observation: false,
             runtime_divergence: true,
         },
@@ -587,6 +695,7 @@ fn stale_authority_continuation_fails_safety_gate() {
             writes_before: 1,
             writes_after: 2,
             displacement_m: 0.01,
+            lateral_displacement_m: Some(0.003),
             reauthorized_after_observation: false,
             runtime_divergence: false,
         },
@@ -821,6 +930,7 @@ fn report_includes_runtime_recovery_and_failure_causes() {
             writes_before: 0,
             writes_after: 1,
             displacement_m: 0.01,
+            lateral_displacement_m: Some(0.002),
             reauthorized_after_observation: false,
             runtime_divergence: false,
         },
@@ -833,6 +943,7 @@ fn report_includes_runtime_recovery_and_failure_causes() {
             writes_before: 1,
             writes_after: 2,
             displacement_m: 0.0,
+            lateral_displacement_m: Some(0.007),
             reauthorized_after_observation: true,
             runtime_divergence: true,
         },
@@ -1159,7 +1270,7 @@ fn push_contact_and_slip_faults_refuse_before_control_writes() {
 }
 
 #[test]
-fn resolved_positive_grasp_records_acquisition_but_refuses_unsafe_hold() {
+fn resolved_positive_grasp_records_verified_hold() {
     let _mujoco_guard = lock_mujoco_test();
     let bundle = grasp_fixture_bundle();
     let (worker, manifest) =
@@ -1188,10 +1299,10 @@ fn resolved_positive_grasp_records_acquisition_but_refuses_unsafe_hold() {
 
     assert_eq!(episode.unauthorized_writes, 0);
     assert_eq!(episode.acquisition_verified, Some(true));
-    assert_eq!(episode.hold_verified, Some(false));
-    assert_eq!(episode.outcome, TrialOutcome::ActionFailed);
-    assert_eq!(episode.failure_cause, Some(FailureCause::HoldNotVerified));
-    assert!(episode
+    assert_eq!(episode.hold_verified, Some(true));
+    assert_eq!(episode.outcome, TrialOutcome::Success);
+    assert_eq!(episode.failure_cause, None);
+    assert!(!episode
         .grasp_verifier_evidence
         .iter()
         .any(|evidence| evidence == "per_finger_force_exceeds_authorized_ceiling"));
@@ -1333,29 +1444,37 @@ fn qualified_grasp_records_acquisition_and_hold_separately() {
         episode.failure_cause,
         episode.grasp_phase_object_positions
     );
-    match episode.hold_verified {
-        Some(true) => {
-            assert_eq!(episode.outcome, TrialOutcome::Success);
-            assert!(episode.grasp_verifier_evidence.iter().any(|item| item == "verified_hold"));
-        }
-        Some(false) => {
-            assert_eq!(episode.outcome, TrialOutcome::ActionFailed);
-            assert_eq!(episode.failure_cause, Some(FailureCause::HoldNotVerified));
-            assert!(episode.grasp_verifier_evidence.iter().any(|item| {
-                item == "object_follow_residual_exceeds_five_mm"
-                    || item == "object_retains_table_support"
-                    || item == "bounded_vertical_lift_not_verified"
-            }));
-        }
-        None => panic!(
-            "authorized grasp did not produce a hold verdict: cause={:?}; refusal={:?}; evidence={:?}; phases={:?}; audits={:?}",
-            episode.failure_cause,
-            episode.refusal_code,
-            episode.grasp_verifier_evidence,
-            episode.grasp_phase_object_positions,
-            episode.grasp_contact_audits
-        ),
-    }
+    assert_eq!(
+        episode.hold_verified,
+        Some(true),
+        "qualified positive grasp failed hold verification: cause={:?}; refusal={:?}; evidence={:?}; phases={:?}; audits={:?}",
+        episode.failure_cause,
+        episode.refusal_code,
+        episode.grasp_verifier_evidence,
+        episode.grasp_phase_object_positions,
+        episode.grasp_contact_audits
+    );
+    assert_eq!(episode.outcome, TrialOutcome::Success);
+    assert!(episode
+        .grasp_verifier_evidence
+        .iter()
+        .any(|item| item == "verified_hold"));
+    let lift_audits = episode
+        .grasp_contact_audits
+        .iter()
+        .filter(|audit| audit.phase.starts_with("lift_waypoint_"))
+        .collect::<Vec<_>>();
+    assert!(
+        lift_audits.len() >= 4,
+        "the executed lift must expose intermediate checked waypoints: {lift_audits:?}"
+    );
+    assert!(lift_audits.iter().all(|audit| {
+        audit.force_available
+            && audit
+                .normal_force_n
+                .is_some_and(|force| force <= 1.95 + 1e-9)
+    }));
+    assert!(episode.grasp_phase_object_positions.len() >= 3 + lift_audits.len() / 2);
 }
 
 #[test]
@@ -1575,11 +1694,12 @@ fn same_task_runs_on_both_development_embodiments() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../robots/benchmarks/manipulation/embodiments.json");
     let registry = EmbodimentRegistry::load(&path).expect("frozen embodiment registry");
-    let development = registry
+    let mut development = registry
         .selected(false)
         .into_iter()
         .filter(|entry| entry.role == EmbodimentRole::Development)
         .collect::<Vec<_>>();
+    development.sort_by(|left, right| left.robot_id.cmp(&right.robot_id));
     assert_eq!(development.len(), 2);
     let mut observed_robots = Vec::new();
 
@@ -1618,6 +1738,47 @@ fn same_task_runs_on_both_development_embodiments() {
         assert_eq!(episode.evidence_status, "SIMULATION_ONLY");
         assert!(!episode.geometry_digest.is_empty());
         assert_eq!(episode.unauthorized_writes, 0);
+        assert!(!episode.decision_audits.is_empty());
+        assert!(!episode.reasoning_request_audits.is_empty());
+        if trial.expectation == TrialExpectation::ExpectedRefusal {
+            assert_eq!(episode.outcome, TrialOutcome::ValidRefusal);
+            assert_eq!(episode.ctrl_writes_before, episode.ctrl_writes_after);
+        }
+        if episode.outcome != TrialOutcome::Success {
+            assert!(episode.failure_cause.is_some());
+            assert!(
+                episode.refusal_code.is_some()
+                    || episode
+                        .actions
+                        .iter()
+                        .any(|action| action.runtime_divergence),
+                "{} did not preserve a failure reason: {:?}",
+                entry.robot_id,
+                episode
+            );
+        }
+        if episode
+            .actions
+            .iter()
+            .any(|action| action.runtime_divergence)
+        {
+            assert_eq!(episode.failure_cause, Some(FailureCause::RuntimeDivergence));
+            assert!(
+                episode.decision_audits.len() >= 2,
+                "divergence must be followed by fresh reasoning"
+            );
+            assert_eq!(episode.actions.len(), 1, "the divergent witness must stop");
+            let action = &episode.actions[0];
+            let displacement_limit_m = if action.action_key.starts_with("probe:") {
+                0.018
+            } else {
+                0.035
+            };
+            assert!(
+                action.displacement_m <= displacement_limit_m,
+                "measured object motion exceeded the checked witness envelope: {action:?}"
+            );
+        }
         observed_robots.push(episode.robot_id);
     }
 
