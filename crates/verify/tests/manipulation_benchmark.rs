@@ -576,7 +576,7 @@ fn stale_authority_continuation_fails_safety_gate() {
             writes_after: 1,
             displacement_m: 0.01,
             reauthorized_after_observation: false,
-            runtime_divergence: false,
+            runtime_divergence: true,
         },
         realityos_verify::manipulation_benchmark::ActionTrace {
             action_key: "push:+x".into(),
@@ -844,9 +844,22 @@ fn report_includes_runtime_recovery_and_failure_causes() {
     let report = score_campaign(&config, &records).expect("valid report");
 
     assert_eq!(report.recovery_trials, 1);
+    assert_eq!(report.stale_authority_continuations, 0);
     assert_eq!(report.failure_causes.get("runtime_divergence"), Some(&1));
     assert_eq!(report.wall_time_p50_s, Some(1.5));
     assert_eq!(report.wall_time_p95_s, Some(1.5));
+
+    let mut stale_episode = records[0].episode.clone().expect("completed episode");
+    stale_episode.actions[0].runtime_divergence = true;
+    stale_episode.actions[1].grant_id = stale_episode.actions[0].grant_id.clone();
+    stale_episode.actions[1].observation_epoch = stale_episode.actions[0].observation_epoch.clone();
+    stale_episode.actions[1].reauthorized_after_observation = true;
+    let stale_records = vec![BenchmarkTrialRecord::completed(
+        records[0].trial.clone().expect("resolved trial"),
+        stale_episode,
+    )];
+    let stale_report = score_campaign(&config, &stale_records).expect("valid stale report");
+    assert_eq!(stale_report.stale_authority_continuations, 1);
 }
 
 #[test]
@@ -1074,6 +1087,74 @@ fn faulted_grasp_observations_are_refused_before_control_writes() {
                 "slip sensor interval should reflect low simulated friction"
             );
         }
+    }
+}
+
+#[test]
+fn push_contact_and_slip_faults_refuse_before_control_writes() {
+    let _mujoco_guard = lock_mujoco_test();
+    let cases = [
+        (
+            3,
+            "UNEXPECTED_CONTACT",
+            "UnexpectedContact",
+            "UNEXPECTED_CONTACT_REPORTED",
+            "mujoco_fault_injection_adapter.unexpected_contact",
+        ),
+        (
+            4,
+            "SLIP",
+            "SlipDetected",
+            "SLIP_DETECTED",
+            "mujoco_fault_injection_adapter.slip_detected",
+        ),
+    ];
+
+    for (index, fault, kind, refusal, source) in cases {
+        let (bundle, trial) = live_trial(42, index, BenchmarkTask::PushProbeReplan);
+        assert_eq!(trial.expectation, TrialExpectation::ExpectedRefusal);
+        assert_eq!(trial.scenario.neg.map(|neg| neg.as_str()), Some(fault));
+        let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
+            &bundle,
+            &trial,
+            SimulationAdmission {
+                execution_bound_m: 0.1,
+                expires_at_s: 120.0,
+            },
+        )
+        .expect("strict runner records injected contact/slip refusal");
+
+        assert_eq!(episode.outcome, TrialOutcome::ValidRefusal, "{fault}");
+        assert_eq!(
+            episode.ctrl_writes_before, episode.ctrl_writes_after,
+            "{fault}"
+        );
+        assert_eq!(episode.unauthorized_writes, 0, "{fault}");
+        assert!(
+            episode.refusal_code.is_some(),
+            "the bridge must persist its refusal code for {fault}"
+        );
+        assert!(
+            episode
+                .decision_audits
+                .iter()
+                .any(|audit| audit.contains(refusal)),
+            "the reasoner decision must preserve typed refusal {refusal}: {:?}",
+            episode.decision_audits
+        );
+        assert_eq!(episode.safety_fault_observations.len(), 1, "{fault}");
+        assert_eq!(
+            format!("{:?}", episode.safety_fault_observations[0].kind),
+            kind
+        );
+        assert_eq!(episode.safety_fault_observations[0].asserted.source, source);
+        assert_eq!(episode.reasoning_request_audits.len(), 1, "{fault}");
+        let request = &episode.reasoning_request_audits[0];
+        assert!(request.contains(source), "{fault}: {request}");
+        assert!(
+            !request.contains(fault),
+            "evaluator fault label leaked: {fault}"
+        );
     }
 }
 
@@ -2083,6 +2164,15 @@ fn trial_label_is_frozen_before_execution() {
         &manifest,
     )
     .unwrap();
+    let probe_capable_ambiguous = resolve_benchmark_trial(
+        7,
+        12,
+        BenchmarkTask::PushProbeReplan,
+        EmbodimentRole::Development,
+        &bundle,
+        &manifest,
+    )
+    .unwrap();
 
     assert_eq!(
         expected_success.expectation,
@@ -2093,6 +2183,16 @@ fn trial_label_is_frozen_before_execution() {
         TrialExpectation::ExpectedRefusal
     );
     assert!(expected_refusal.scenario.expected_refusal.is_some());
+    assert_eq!(
+        probe_capable_ambiguous.scenario.polarity,
+        realityos_verify::manipulation_scenarios::Polarity::Ambiguous
+    );
+    assert!(probe_capable_ambiguous.scenario.expected_refusal.is_none());
+    assert_eq!(
+        probe_capable_ambiguous.expectation,
+        TrialExpectation::ExpectedSuccess,
+        "ambiguous scenarios with no explicit refusal permit a safe probe"
+    );
 }
 
 #[test]

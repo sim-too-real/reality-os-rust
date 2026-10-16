@@ -384,7 +384,11 @@ pub fn resolve_benchmark_trial(
     {
         scenario.expected_refusal = Some("HOLD_MECHANICS_UNPROVEN".into());
     }
-    let mut expectation = if scenario.polarity == crate::manipulation_scenarios::Polarity::Positive
+    let probe_capable_ambiguous_push = task == BenchmarkTask::PushProbeReplan
+        && scenario.polarity == crate::manipulation_scenarios::Polarity::Ambiguous;
+    let mut expectation = if (scenario.polarity
+        == crate::manipulation_scenarios::Polarity::Positive
+        || probe_capable_ambiguous_push)
         && scenario.expected_refusal.is_none()
     {
         TrialExpectation::ExpectedSuccess

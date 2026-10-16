@@ -310,21 +310,19 @@ pub fn score_campaign(
     let stale_authority_continuations = episodes
         .iter()
         .map(|episode| {
-            let reauthorization_missing = episode
-                .actions
-                .iter()
-                .skip(1)
-                .filter(|action| !action.reauthorized_after_observation)
-                .count() as u64;
-            let continued_after_divergence = episode
+            episode
                 .actions
                 .iter()
                 .enumerate()
+                .skip(1)
                 .filter(|(index, action)| {
-                    action.runtime_divergence && *index + 1 < episode.actions.len()
+                    let previous = &episode.actions[*index - 1];
+                    !action.reauthorized_after_observation
+                        || (previous.runtime_divergence
+                            && (action.grant_id == previous.grant_id
+                                || action.observation_epoch == previous.observation_epoch))
                 })
-                .count() as u64;
-            reauthorization_missing + continued_after_divergence
+                .count() as u64
         })
         .sum();
     let recovery_opportunities = episodes

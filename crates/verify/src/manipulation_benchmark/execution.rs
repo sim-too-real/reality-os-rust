@@ -1783,6 +1783,14 @@ fn injected_safety_fault_alerts(
             SafetyFaultKind::GripperForceBoundUnavailable,
             "mujoco_fault_injection_adapter.force_bound_unavailable",
         ),
+        Some(NegKind::UnexpectedContact) => (
+            SafetyFaultKind::UnexpectedContact,
+            "mujoco_fault_injection_adapter.unexpected_contact",
+        ),
+        Some(NegKind::Slip) => (
+            SafetyFaultKind::SlipDetected,
+            "mujoco_fault_injection_adapter.slip_detected",
+        ),
         _ => return Vec::new(),
     };
     vec![SafetyFaultObservation {
@@ -2087,7 +2095,10 @@ fn truth_position(truth: &VerifierTruth, name: &str) -> Option<[f64; 3]> {
 
 #[cfg(test)]
 mod witness_tests {
-    use super::decode_push_witness;
+    use super::{decode_push_witness, injected_safety_fault_alerts};
+    use crate::manipulation_scenarios::{push_scenario, NegKind};
+    use realityos_semantics::physical_reasoner::SafetyFaultKind;
+    use realityos_semantics::provenance::Provenance;
 
     fn line(name: &str, values: &[f64]) -> String {
         let bits = values
@@ -2152,5 +2163,32 @@ mod witness_tests {
     fn push_witness_rejects_invalid_stroke_waypoint_count() {
         let malformed = witness(false).replace("stroke_state_count=2", "stroke_state_count=65");
         assert!(decode_push_witness(&malformed, 2, false).is_none());
+    }
+
+    #[test]
+    fn injected_contact_and_slip_faults_are_typed_simulator_observations() {
+        for (index, expected_neg, expected_kind, expected_source) in [
+            (
+                3,
+                NegKind::UnexpectedContact,
+                SafetyFaultKind::UnexpectedContact,
+                "mujoco_fault_injection_adapter.unexpected_contact",
+            ),
+            (
+                4,
+                NegKind::Slip,
+                SafetyFaultKind::SlipDetected,
+                "mujoco_fault_injection_adapter.slip_detected",
+            ),
+        ] {
+            let scenario = push_scenario(42, false, index);
+            assert_eq!(scenario.neg, Some(expected_neg));
+            let alerts = injected_safety_fault_alerts(&scenario, 1.0);
+            assert_eq!(alerts.len(), 1);
+            assert_eq!(alerts[0].kind, expected_kind);
+            assert_eq!(alerts[0].asserted.source, expected_source);
+            assert_eq!(alerts[0].asserted.provenance, Provenance::SimulatorDerived);
+            assert_eq!(alerts[0].asserted.value, Some(true));
+        }
     }
 }

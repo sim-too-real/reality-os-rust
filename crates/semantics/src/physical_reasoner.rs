@@ -109,6 +109,8 @@ pub enum SafetyFaultKind {
     GripperUnavailable,
     UnsupportedGripperCoupling,
     GripperForceBoundUnavailable,
+    UnexpectedContact,
+    SlipDetected,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1083,6 +1085,8 @@ fn safety_fault_refusal(request: &ReasoningRequest) -> Option<&'static str> {
             SafetyFaultKind::GripperUnavailable => "GRIPPER_RESOURCE_UNKNOWN",
             SafetyFaultKind::UnsupportedGripperCoupling => "GRIPPER_RESOURCE_UNSUPPORTED",
             SafetyFaultKind::GripperForceBoundUnavailable => "GRIPPER_FORCE_BOUND_UNKNOWN",
+            SafetyFaultKind::UnexpectedContact => "UNEXPECTED_CONTACT_REPORTED",
+            SafetyFaultKind::SlipDetected => "SLIP_DETECTED",
         });
     }
     None
@@ -2941,6 +2945,37 @@ mod tests {
             .find(|candidate| candidate.action_key == "push:+x")
             .expect("push candidate");
         assert_eq!(push.status, "SAFETY_FAULT_EVIDENCE_INVALID");
+    }
+
+    #[test]
+    fn unexpected_contact_and_slip_faults_refuse_push_candidates() {
+        let (model, base_request) = benchmark_scene();
+        for (kind, source, expected) in [
+            (
+                SafetyFaultKind::UnexpectedContact,
+                "mujoco_fault_injection_adapter.unexpected_contact",
+                "UNEXPECTED_CONTACT_REPORTED",
+            ),
+            (
+                SafetyFaultKind::SlipDetected,
+                "mujoco_fault_injection_adapter.slip_detected",
+                "SLIP_DETECTED",
+            ),
+        ] {
+            let mut request = base_request.clone();
+            request.safety_faults.push(SafetyFaultObservation {
+                kind,
+                asserted: Provenanced::simulator_derived(true, source, request.now_s),
+            });
+            let report = PhysicalReasoner::new(model.clone()).consider(&request);
+            let push = report
+                .candidates
+                .iter()
+                .find(|candidate| candidate.action_key == "push:+x")
+                .expect("push candidate");
+            assert_eq!(push.status, expected);
+            assert!(push.witness_digest.is_none());
+        }
     }
 
     #[test]
