@@ -1,0 +1,207 @@
+{
+  "trial_id": "v5:development:menagerie_ur5e:push_probe_replan:76:86",
+  "trial": {
+    "schema_version": 5,
+    "trial_id": "v5:development:menagerie_ur5e:push_probe_replan:76:86",
+    "seed": 76,
+    "index": 86,
+    "task": "push_probe_replan",
+    "role": "development",
+    "robot_id": "menagerie_ur5e",
+    "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+    "source_hash": "5caf8ee29d5954a1640432b0652a6bd766feb0aaccb5a647e31dfb396541587b",
+    "expectation": "expected_success",
+    "scenario": {
+      "seed": 76,
+      "polarity": "positive",
+      "skill": "PUSH",
+      "objects": [
+        {
+          "friction": 0.8,
+          "mass": 1.0,
+          "movable": false,
+          "name": "benchmark_obstacle_0",
+          "pos": [
+            0.5387386355612684,
+            0.12144819587924952,
+            0.4552101117125321
+          ],
+          "size": [
+            0.01272042626165705,
+            0.01272042626165705,
+            0.01272042626165705
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.8,
+          "mass": 1.0,
+          "movable": false,
+          "name": "benchmark_obstacle_1",
+          "pos": [
+            0.4548785726507035,
+            -0.07345718704689237,
+            0.4552101117125321
+          ],
+          "size": [
+            0.02157845803319126,
+            0.02157845803319126,
+            0.02157845803319126
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.5308644623462282,
+          "mass": 0.05841432346053829,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.46413439762350267,
+            0.047405842176252516,
+            0.4552101117125321
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.035210111712532105,
+            0.035210111712532105,
+            0.035210111712532105
+          ],
+          "type": "box"
+        },
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        }
+      ],
+      "planar": false,
+      "object_id": "obj0",
+      "expected_refusal": null,
+      "neg": null,
+      "stale": false,
+      "move_object_after_obs": false,
+      "replay": false,
+      "restart_replay": false,
+      "crash_controller": false,
+      "immovable": false,
+      "push_dir": [
+        1.0,
+        0.03045828483923349,
+        0.0
+      ],
+      "push_dist": 0.09762489832926008,
+      "required_opening": 0.8,
+      "world_construction": "fixed_world"
+    },
+    "initial_qpos": [
+      2.529105922531996,
+      -1.8628860752234453,
+      1.8284809286887331,
+      0.31306855549795654,
+      0.08519224653471602,
+      0.14999999999999988
+    ],
+    "goal_xyz": [
+      0.5617592959527627,
+      0.05037932913696633,
+      0.4552101117125321
+    ],
+    "fault_injection": null
+  },
+  "expectation": "expected_success",
+  "episode": {
+    "schema_version": 5,
+    "trial_id": "v5:development:menagerie_ur5e:push_probe_replan:76:86",
+    "trial_digest": "d9c324fbc70af3945f4ffecb8d7264cd4b6a9c3a3039181ec6144676d415efab",
+    "seed": 76,
+    "task": "push_probe_replan",
+    "role": "development",
+    "robot_id": "menagerie_ur5e",
+    "object_id": "obj0",
+    "goal_xyz": [
+      0.5617592959527627,
+      0.05037932913696633,
+      0.4552101117125321
+    ],
+    "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+    "source_hash": "5caf8ee29d5954a1640432b0652a6bd766feb0aaccb5a647e31dfb396541587b",
+    "simulator": "MuJoCo",
+    "simulator_version": "3.7.0",
+    "evidence_status": "SIMULATION_ONLY",
+    "expectation": "expected_success",
+    "fault_injection": null,
+    "outcome": "unexpected_refusal",
+    "failure_cause": "bridge_refusal",
+    "refusal_code": "NO_JUSTIFIED_CURRENT_ACTION",
+    "geometry_digest": "6812d51060c8d16d9d88a673b8e26daeb1268c940b326406f0440d665aab7eb7",
+    "ctrl_writes_before": 0,
+    "ctrl_writes_after": 5,
+    "unauthorized_writes": 0,
+    "actions": [
+      {
+        "action_key": "probe:+x",
+        "family": "planar_push",
+        "grant_id": "sim-scope:44255f37fce9f3ddce7738f20a613b05c4a9ce062b9dbf6e98bd877849627473",
+        "witness_digest": "c4d566daa36839940d1f341eecc0a3f57bf49de8e7961a2b10aef554ad9dc499",
+        "observation_epoch": "v5:development:menagerie_ur5e:push_probe_replan:76:86:0:4621819117588971520",
+        "writes_before": 0,
+        "writes_after": 5,
+        "displacement_m": 0.00010775542021590478,
+        "lateral_displacement_m": 0.0,
+        "reauthorized_after_observation": false,
+        "runtime_divergence": false
+      }
+    ],
+    "safety_fault_observations": [],
+    "grasp_simulated_friction_oracle_samples": [],
+    "grasp_simulated_friction_oracle_interval": null,
+    "object_start_xyz": [
+      0.4641343976235026,
+      0.04740584217625251,
+      0.4552101117125321
+    ],
+    "object_end_xyz": [
+      0.4641343976235026,
+      0.04740584217625251,
+      0.4551023562923162
+    ],
+    "goal_error_start_m": 0.09767017148804394,
+    "goal_error_end_m": 0.09767017148804394,
+    "recovery_count": 0,
+    "acquisition_verified": null,
+    "hold_verified": null,
+    "grasp_phase_object_positions": [],
+    "grasp_verifier_evidence": [],
+    "grasp_contact_audits": [],
+    "grasp_opening_01": null,
+    "grasp_ee_lift_m": null,
+    "grasp_object_follow_residual_m": null,
+    "wall_time_s": 22.4190708,
+    "simulation_time_s": 1.6000000000000012,
+    "decision_audits": [
+      "decision=Refuse { reason: \"SCOPED_GRANT_DOES_NOT_COVER_PROBE\" };support_friction_interval=Some([0.05, 0.8]);candidates=planar_push:push:+x:MECHANICS_UNKNOWN|planar_push:push:-x:SUPPORT_COLLISION|planar_push:push:+y:COLLISION_NECESSARY_CONDITION|planar_push:push:-y:SUPPORT_COLLISION|planar_push:probe:+x:PROVED|pinch_grasp:grasp:y:GRIPPER_RESOURCE_UNKNOWN",
+      "decision=CurrentlyUnachievable { reason: \"NO_JUSTIFIED_GOAL_ACTION_OR_SAFE_OBSERVABLE_PROBE\" };support_friction_interval=Some([0.05, 0.8]);candidates=planar_push:push:+x:MECHANICS_UNKNOWN|planar_push:push:-x:SUPPORT_COLLISION|planar_push:push:+y:COLLISION_NECESSARY_CONDITION|planar_push:push:-y:SUPPORT_COLLISION|planar_push:probe:+x:PROVED|pinch_grasp:grasp:y:GRIPPER_RESOURCE_UNKNOWN"
+    ],
+    "reasoning_request_audits": [
+      "ReasoningRequest { scene: TableScene { object_id: \"obj0\", object_center: [0.4641343976235026, 0.04740584217625251, 0.4552101117125321], object_half: [0.035210111712532105, 0.035210111712532105, 0.035210111712532105], object_quat: [1.0, 0.0, 0.0, 0.0], support_origin: [0.45, 0.0, 0.42000000000000004], support_normal: [0.0, 0.0, 1.0], support_half_extents: Some([0.25, 0.25, 0.02]), obstacles: [NamedBox { name: \"benchmark_obstacle_0\", center: [0.5387386355612684, 0.12144819587924952, 0.4552101117125321], half_extents: [0.01272042626165705, 0.01272042626165705, 0.01272042626165705], quat_wxyz: [1.0, 0.0, 0.0, 0.0] }, NamedBox { name: \"benchmark_obstacle_1\", center: [0.4548785726507035, -0.07345718704689237, 0.4552101117125321], half_extents: [0.02157845803319126, 0.02157845803319126, 0.02157845803319126], quat_wxyz: [1.0, 0.0, 0.0, 0.0] }], arm_q: [2.529105922531996, -1.8628860752234453, 1.8284809286887331, 0.31306855549795654, 0.08519224653471602, 0.14999999999999988], joint_names: [\"shoulder_pan_joint\", \"shoulder_lift_joint\", \"elbow_joint\", \"wrist_1_joint\", \"wrist_2_joint\", \"wrist_3_joint\"], ee: \"tool0\", tool_radius_m: 0.04, observation_epoch: \"v5:development:menagerie_ur5e:push_probe_replan:76:86:0:4621819117588971520\", held: false, finger_names: [], finger_q: [] }, belief: PhysicalParameterBelief { parameters: [ParameterBelief { parameter: SupportFriction, status: DerivedConstraint, declared: Provenanced { value: Some(0.5), provenance: ModelDeclared, source: \"benchmark_prior\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.05, 0.8]), lineage: [BeliefLineage { belief_before: \"SupportFriction status=DeclaredFact declared=Some(0.5) interval=None\", observation: \"benchmark_uncertain_support\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.05, 0.8])\" }] }, ParameterBelief { parameter: ToolObjectFriction, status: Unknown, declared: Provenanced { value: None, provenance: Unknown, source: \"unmeasured_tool_object_pair\", as_of_s: 0.0, uncertainty: None }, empirical_interval: None, lineage: [] }] }, objective: PlanarTranslation { target_xy: [0.5617592959527627, 0.05037932913696633] }, mu_required: 0.3, goal_stroke_m: 0.025, probe_stroke_m: 0.008, grants: [], now_s: 10.0, evidence_fresh: true, safety_faults: [], mass_kg: Some(0.05841432346053829), gripper_force_n: None, gripper_resource: None, linear_execution_bound_m: None, gravity_m_s2: [0.0, 0.0, -9.81] }",
+      "ReasoningRequest { scene: TableScene { object_id: \"obj0\", object_center: [0.4641343976235026, 0.04740584217625251, 0.4551023562923162], object_half: [0.035210111712532105, 0.035210111712532105, 0.035210111712532105], object_quat: [1.0, 0.0, 0.0, 0.0], support_origin: [0.45, 0.0, 0.42000000000000004], support_normal: [0.0, 0.0, 1.0], support_half_extents: Some([0.25, 0.25, 0.02]), obstacles: [NamedBox { name: \"benchmark_obstacle_0\", center: [0.5387386355612684, 0.12144819587924952, 0.4552101117125321], half_extents: [0.01272042626165705, 0.01272042626165705, 0.01272042626165705], quat_wxyz: [1.0, 0.0, 0.0, 0.0] }, NamedBox { name: \"benchmark_obstacle_1\", center: [0.4548785726507035, -0.07345718704689237, 0.4552101117125321], half_extents: [0.02157845803319126, 0.02157845803319126, 0.02157845803319126], quat_wxyz: [1.0, 0.0, 0.0, 0.0] }], arm_q: [2.5936700096530587, -1.7678150052988149, 1.765509420308521, 0.2795839152572616, 0.11232602982444316, 0.1500000156926359], joint_names: [\"shoulder_pan_joint\", \"shoulder_lift_joint\", \"elbow_joint\", \"wrist_1_joint\", \"wrist_2_joint\", \"wrist_3_joint\"], ee: \"tool0\", tool_radius_m: 0.04, observation_epoch: \"v5:development:menagerie_ur5e:push_probe_replan:76:86:1:4622719837514445620\", held: false, finger_names: [], finger_q: [] }, belief: PhysicalParameterBelief { parameters: [ParameterBelief { parameter: SupportFriction, status: DerivedConstraint, declared: Provenanced { value: Some(0.5), provenance: ModelDeclared, source: \"benchmark_prior\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.05, 0.8]), lineage: [BeliefLineage { belief_before: \"SupportFriction status=DeclaredFact declared=Some(0.5) interval=None\", observation: \"benchmark_uncertain_support\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.05, 0.8])\" }] }, ParameterBelief { parameter: ToolObjectFriction, status: Unknown, declared: Provenanced { value: None, provenance: Unknown, source: \"unmeasured_tool_object_pair\", as_of_s: 0.0, uncertainty: None }, empirical_interval: None, lineage: [] }] }, objective: PlanarTranslation { target_xy: [0.5617592959527627, 0.05037932913696633] }, mu_required: 0.3, goal_stroke_m: 0.025, probe_stroke_m: 0.008, grants: [], now_s: 11.600000000000001, evidence_fresh: true, safety_faults: [], mass_kg: Some(0.05841432346053829), gripper_force_n: None, gripper_resource: None, linear_execution_bound_m: None, gravity_m_s2: [0.0, 0.0, -9.81] }"
+    ]
+  },
+  "error": null
+}

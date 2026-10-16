@@ -1,0 +1,185 @@
+{
+  "trial_id": "v5:development:menagerie_ur5e:push_probe_replan:73:83",
+  "trial": {
+    "schema_version": 5,
+    "trial_id": "v5:development:menagerie_ur5e:push_probe_replan:73:83",
+    "seed": 73,
+    "index": 83,
+    "task": "push_probe_replan",
+    "role": "development",
+    "robot_id": "menagerie_ur5e",
+    "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+    "source_hash": "5caf8ee29d5954a1640432b0652a6bd766feb0aaccb5a647e31dfb396541587b",
+    "expectation": "expected_refusal",
+    "scenario": {
+      "seed": 73,
+      "polarity": "negative",
+      "skill": "PUSH",
+      "objects": [
+        {
+          "friction": 0.8,
+          "mass": 1.0,
+          "movable": false,
+          "name": "benchmark_obstacle_0",
+          "pos": [
+            0.45315523928309615,
+            0.11728480223279134,
+            0.45525344025963094
+          ],
+          "size": [
+            0.014588753426757601,
+            0.014588753426757601,
+            0.014588753426757601
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.691261012646653,
+          "mass": 0.23085885739413914,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.4245819816706179,
+            0.040694189517663654,
+            0.45525344025963094
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.035253440259630967,
+            0.035253440259630967,
+            0.035253440259630967
+          ],
+          "type": "box"
+        },
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        }
+      ],
+      "planar": false,
+      "object_id": "obj0",
+      "expected_refusal": "OBJECT_MOVED",
+      "neg": "object_moved",
+      "stale": false,
+      "move_object_after_obs": true,
+      "replay": false,
+      "restart_replay": false,
+      "crash_controller": false,
+      "immovable": false,
+      "push_dir": [
+        1.0,
+        -0.18115425161431986,
+        0.0
+      ],
+      "push_dist": 0.0736642173177895,
+      "required_opening": 0.8,
+      "world_construction": "fixed_world"
+    },
+    "initial_qpos": [
+      1.8527271615964098,
+      2.149947873331322,
+      0.3015553734603147,
+      3.1779970319006994,
+      -2.2130605096766205,
+      -2.252329881002252
+    ],
+    "goal_xyz": [
+      0.4982461989884074,
+      0.02734960335870488,
+      0.45525344025963094
+    ],
+    "fault_injection": "OBJECT_MOVED"
+  },
+  "expectation": "expected_refusal",
+  "episode": {
+    "schema_version": 5,
+    "trial_id": "v5:development:menagerie_ur5e:push_probe_replan:73:83",
+    "trial_digest": "900fe6e77f913aeb9b7d3f02a4d0e2adcd761dbc7f0059ca83402b064a31f2dc",
+    "seed": 73,
+    "task": "push_probe_replan",
+    "role": "development",
+    "robot_id": "menagerie_ur5e",
+    "object_id": "obj0",
+    "goal_xyz": [
+      0.4982461989884074,
+      0.02734960335870488,
+      0.45525344025963094
+    ],
+    "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+    "source_hash": "5caf8ee29d5954a1640432b0652a6bd766feb0aaccb5a647e31dfb396541587b",
+    "simulator": "MuJoCo",
+    "simulator_version": "3.7.0",
+    "evidence_status": "SIMULATION_ONLY",
+    "expectation": "expected_refusal",
+    "fault_injection": "OBJECT_MOVED",
+    "outcome": "valid_refusal",
+    "failure_cause": "bridge_refusal",
+    "refusal_code": "SENSOR_EVIDENCE_MISSING",
+    "geometry_digest": "4bccf83ea550f46b6a460d9df09715f43b710396df5a9c17bcec9b070915c5c1",
+    "ctrl_writes_before": 0,
+    "ctrl_writes_after": 0,
+    "unauthorized_writes": 0,
+    "actions": [],
+    "safety_fault_observations": [
+      {
+        "kind": "STALE_OBSERVATION",
+        "asserted": {
+          "value": true,
+          "provenance": "SIMULATOR_DERIVED",
+          "source": "mujoco_fault_injection_adapter.stale_observation",
+          "as_of_s": 10.0,
+          "uncertainty": null
+        }
+      }
+    ],
+    "grasp_simulated_friction_oracle_samples": [],
+    "grasp_simulated_friction_oracle_interval": null,
+    "object_start_xyz": [
+      0.4245819816706179,
+      0.040694189517663654,
+      0.45525344025963094
+    ],
+    "object_end_xyz": [
+      0.6045819816706179,
+      0.18069418951766367,
+      0.45525344025963094
+    ],
+    "goal_error_start_m": 0.07486317447715125,
+    "goal_error_end_m": 0.18660616491129292,
+    "recovery_count": 0,
+    "acquisition_verified": null,
+    "hold_verified": null,
+    "grasp_phase_object_positions": [],
+    "grasp_verifier_evidence": [],
+    "grasp_contact_audits": [],
+    "grasp_opening_01": null,
+    "grasp_ee_lift_m": null,
+    "grasp_object_follow_residual_m": null,
+    "wall_time_s": 14.2560592,
+    "simulation_time_s": 0.0,
+    "decision_audits": [
+      "decision=InsufficientEvidence { reason: \"POLICY_OBSERVATION_STALE_OR_UNAVAILABLE\" };support_friction_interval=Some([0.05, 0.8]);candidates=planar_push:push:+x:OBSERVATION_STALE_OR_INVALID|planar_push:push:-x:OBSERVATION_STALE_OR_INVALID|planar_push:push:+y:OBSERVATION_STALE_OR_INVALID|planar_push:push:-y:OBSERVATION_STALE_OR_INVALID|planar_push:probe:+x:OBSERVATION_STALE_OR_INVALID|pinch_grasp:grasp:y:OBSERVATION_STALE_OR_INVALID"
+    ],
+    "reasoning_request_audits": [
+      "ReasoningRequest { scene: TableScene { object_id: \"obj0\", object_center: [0.4245819816706179, 0.040694189517663654, 0.45525344025963094], object_half: [0.035253440259630967, 0.035253440259630967, 0.035253440259630967], object_quat: [1.0, 0.0, 0.0, 0.0], support_origin: [0.45, 0.0, 0.42000000000000004], support_normal: [0.0, 0.0, 1.0], support_half_extents: Some([0.25, 0.25, 0.02]), obstacles: [NamedBox { name: \"benchmark_obstacle_0\", center: [0.45315523928309615, 0.11728480223279134, 0.45525344025963094], half_extents: [0.014588753426757601, 0.014588753426757601, 0.014588753426757601], quat_wxyz: [1.0, 0.0, 0.0, 0.0] }], arm_q: [1.8527271615964096, 2.149947873331322, 0.3015553734603147, 3.1779970319006994, -2.2130605096766205, -2.252329881002252], joint_names: [\"shoulder_pan_joint\", \"shoulder_lift_joint\", \"elbow_joint\", \"wrist_1_joint\", \"wrist_2_joint\", \"wrist_3_joint\"], ee: \"tool0\", tool_radius_m: 0.04, observation_epoch: \"v5:development:menagerie_ur5e:push_probe_replan:73:83:0:4621819117588971520\", held: false, finger_names: [], finger_q: [] }, belief: PhysicalParameterBelief { parameters: [ParameterBelief { parameter: SupportFriction, status: DerivedConstraint, declared: Provenanced { value: Some(0.5), provenance: ModelDeclared, source: \"benchmark_prior\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.05, 0.8]), lineage: [BeliefLineage { belief_before: \"SupportFriction status=DeclaredFact declared=Some(0.5) interval=None\", observation: \"benchmark_uncertain_support\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.05, 0.8])\" }] }, ParameterBelief { parameter: ToolObjectFriction, status: Unknown, declared: Provenanced { value: None, provenance: Unknown, source: \"unmeasured_tool_object_pair\", as_of_s: 0.0, uncertainty: None }, empirical_interval: None, lineage: [] }] }, objective: PlanarTranslation { target_xy: [0.4982461989884074, 0.02734960335870488] }, mu_required: 0.3, goal_stroke_m: 0.025, probe_stroke_m: 0.008, grants: [], now_s: 10.0, evidence_fresh: false, safety_faults: [SafetyFaultObservation { kind: StaleObservation, asserted: Provenanced { value: Some(true), provenance: SimulatorDerived, source: \"mujoco_fault_injection_adapter.stale_observation\", as_of_s: 10.0, uncertainty: None } }], mass_kg: Some(0.23085885739413914), gripper_force_n: None, gripper_resource: None, linear_execution_bound_m: None, gravity_m_s2: [0.0, 0.0, -9.81] }"
+    ]
+  },
+  "error": null
+}
