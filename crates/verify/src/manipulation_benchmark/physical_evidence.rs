@@ -3,8 +3,8 @@
 use super::scenario::BENCHMARK_SCHEMA_VERSION;
 use super::BenchmarkError;
 use crate::observation::{PolicyObservation, VisionMode};
-use realityos_semantics::observation::{joint_sample_digest, ObservationFrame};
-use realityos_semantics::sensor::SensorClass;
+use realityos_semantics::observation::{joint_sample_digest, ObservationFrame, WrenchSample};
+use realityos_semantics::sensor::{SensorClass, WrenchSampleOrigin};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,17 +12,22 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PhysicalSensorRequirement {
     pub sensor_id: String,
+    pub class: SensorClass,
     pub device_serial: String,
     pub model_id: String,
     pub calibration_hash: String,
     pub frame: String,
     pub units: String,
+    pub min_sample_rate_hz: f64,
+    pub max_inter_sample_gap_s: f64,
     pub max_age_s: f64,
+    pub max_cross_sensor_skew_s: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PhysicalSensorIdentity {
     pub sensor_id: String,
+    pub class: SensorClass,
     pub device_serial: String,
     pub model_id: String,
     pub calibration_hash: String,
@@ -138,8 +143,15 @@ pub fn validate_physical_observation(
             || requirement.calibration_hash.trim().is_empty()
             || requirement.frame.trim().is_empty()
             || requirement.units.trim().is_empty()
+            || !requirement.min_sample_rate_hz.is_finite()
+            || requirement.min_sample_rate_hz <= 0.0
+            || !requirement.max_inter_sample_gap_s.is_finite()
+            || requirement.max_inter_sample_gap_s <= 0.0
             || !requirement.max_age_s.is_finite()
             || requirement.max_age_s <= 0.0
+            || !requirement.max_cross_sensor_skew_s.is_finite()
+            || requirement.max_cross_sensor_skew_s < 0.0
+            || (requirement.class == SensorClass::ForceTorque && requirement.units != "N,N*m")
             || required_by_id
                 .insert(requirement.sensor_id.as_str(), requirement)
                 .is_some()
@@ -162,6 +174,7 @@ pub fn validate_physical_observation(
             return Err(reject("trace contains an undeclared sensor"));
         };
         if identity.device_serial != requirement.device_serial
+            || identity.class != requirement.class
             || identity.model_id != requirement.model_id
             || identity.calibration_hash != requirement.calibration_hash
             || identity.frame != requirement.frame
@@ -185,6 +198,7 @@ pub fn validate_physical_observation(
             return Err(reject("observation contains an undeclared sensor"));
         };
         if !seen_observations.insert(observation.sensor_id.as_str())
+            || observation.class != requirement.class
             || observation.robot_frame != requirement.frame
             || observation.calibration_hash != requirement.calibration_hash
             || !observation.capture_s.is_finite()
@@ -203,6 +217,15 @@ pub fn validate_physical_observation(
                 "sensor observation is stale, malformed, or untrusted",
             ));
         }
+        if requirement.class == SensorClass::ForceTorque
+            && (observation.device_serial.as_deref() != Some(requirement.device_serial.as_str())
+                || observation.model_id.as_deref() != Some(requirement.model_id.as_str())
+                || observation.units.as_deref() != Some(requirement.units.as_str()))
+        {
+            return Err(reject(
+                "force/torque observation identity or units mismatch",
+            ));
+        }
         min_capture = min_capture.min(observation.capture_s);
         max_receive = max_receive.max(observation.receive_s);
         observation_class_by_id.insert(observation.sensor_id.as_str(), observation.class);
@@ -210,6 +233,15 @@ pub fn validate_physical_observation(
     if seen_observations.len() != required_by_id.len() {
         return Err(reject("one or more required sensor channels are missing"));
     }
+
+    validate_wrench_channels(
+        trace,
+        &required_by_id,
+        now_s,
+        &mut min_capture,
+        &mut max_receive,
+    )
+    .map_err(reject)?;
 
     let mut seen_joints = BTreeSet::new();
     for sample in &trace.observation.joint_state {
@@ -307,6 +339,129 @@ pub fn validate_physical_observation(
         captured_at_s: min_capture,
         received_at_s: max_receive,
     })
+}
+
+fn validate_wrench_channels(
+    trace: &PhysicalSensorTrace,
+    required_by_id: &BTreeMap<&str, &PhysicalSensorRequirement>,
+    now_s: f64,
+    min_capture_s: &mut f64,
+    max_receive_s: &mut f64,
+) -> Result<(), &'static str> {
+    let wrench_requirements = required_by_id
+        .values()
+        .copied()
+        .filter(|requirement| requirement.class == SensorClass::ForceTorque)
+        .collect::<Vec<_>>();
+    if wrench_requirements.is_empty() {
+        return if trace.observation.wrench_samples.is_empty() {
+            Ok(())
+        } else {
+            Err("wrench samples have no declared force/torque sensor")
+        };
+    }
+
+    let max_age_s = wrench_requirements
+        .iter()
+        .map(|requirement| requirement.max_age_s)
+        .fold(f64::INFINITY, f64::min);
+    trace
+        .observation
+        .validate_wrench_samples(now_s, max_age_s)
+        .map_err(|_| "wrench sample digest, epoch, timestamp, or sequence is invalid")?;
+
+    let mut samples_by_sensor = BTreeMap::<&str, Vec<&WrenchSample>>::new();
+    for sample in &trace.observation.wrench_samples {
+        let Some(requirement) = required_by_id.get(sample.sensor_id.as_str()).copied() else {
+            return Err("wrench sample belongs to an undeclared sensor");
+        };
+        if requirement.class != SensorClass::ForceTorque {
+            return Err("wrench sample belongs to a non-force/torque sensor");
+        }
+        if sample.origin != WrenchSampleOrigin::Hardware {
+            return Err("wrench sample origin is not hardware");
+        }
+        if sample.sensor_frame != requirement.frame || sample.units != requirement.units {
+            return Err("wrench sample frame or units mismatch");
+        }
+        let sensor_observation = trace
+            .observation
+            .observations
+            .iter()
+            .find(|observation| observation.sensor_id == sample.sensor_id)
+            .ok_or("wrench sample has no matching sensor observation")?;
+        if sample.clock_domain != sensor_observation.clock_domain {
+            return Err("wrench sample and sensor observation use different clocks");
+        }
+        if now_s - sample.receive_s > requirement.max_age_s
+            || is_simulation_clock(&sample.clock_domain)
+        {
+            return Err("wrench sample is stale or has an untrusted clock");
+        }
+        *min_capture_s = min_capture_s.min(sample.capture_s);
+        *max_receive_s = max_receive_s.max(sample.receive_s);
+        samples_by_sensor
+            .entry(sample.sensor_id.as_str())
+            .or_default()
+            .push(sample);
+    }
+
+    for requirement in &wrench_requirements {
+        let Some(samples) = samples_by_sensor.get(requirement.sensor_id.as_str()) else {
+            return Err("required force/torque channel has no wrench samples");
+        };
+        if samples.len() < 2 {
+            return Err("force/torque channel needs a baseline and probe sample");
+        }
+        let first = samples.first().expect("length was checked");
+        let last = samples.last().expect("length was checked");
+        let elapsed_s = last.capture_s - first.capture_s;
+        if !elapsed_s.is_finite() || elapsed_s <= 0.0 {
+            return Err("force/torque sample rate cannot be established");
+        }
+        let sample_rate_hz = (samples.len() - 1) as f64 / elapsed_s;
+        if sample_rate_hz < requirement.min_sample_rate_hz {
+            return Err("force/torque sample rate is below the declared minimum");
+        }
+        if samples
+            .windows(2)
+            .any(|pair| pair[1].capture_s - pair[0].capture_s > requirement.max_inter_sample_gap_s)
+        {
+            return Err("force/torque inter-sample gap exceeds the declared maximum");
+        }
+    }
+
+    for left_index in 0..wrench_requirements.len() {
+        for right_index in left_index + 1..wrench_requirements.len() {
+            let left_requirement = wrench_requirements[left_index];
+            let right_requirement = wrench_requirements[right_index];
+            let left = samples_by_sensor
+                .get(left_requirement.sensor_id.as_str())
+                .ok_or("required force/torque channel has no wrench samples")?;
+            let right = samples_by_sensor
+                .get(right_requirement.sensor_id.as_str())
+                .ok_or("required force/torque channel has no wrench samples")?;
+            if left[0].clock_domain != right[0].clock_domain {
+                return Err("force/torque channels do not share a clock domain");
+            }
+            let max_skew_s = left_requirement
+                .max_cross_sensor_skew_s
+                .min(right_requirement.max_cross_sensor_skew_s);
+            let nearest_within_skew = |source: &[&WrenchSample], target: &[&WrenchSample]| {
+                source.iter().all(|sample| {
+                    target
+                        .iter()
+                        .map(|other| (sample.capture_s - other.capture_s).abs())
+                        .fold(f64::INFINITY, f64::min)
+                        <= max_skew_s
+                })
+            };
+            if !nearest_within_skew(left, right) || !nearest_within_skew(right, left) {
+                return Err("force/torque channels exceed declared cross-sensor skew");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn is_simulation_clock(clock_domain: &str) -> bool {

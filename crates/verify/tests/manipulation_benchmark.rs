@@ -1,5 +1,8 @@
 use realityos_reasoner_bridge::SimulationAdmission;
-use realityos_semantics::observation::{JointStateSample, ObservationFrame, SensorObservation};
+use realityos_semantics::observation::{
+    wrench_sample_digest, JointStateSample, ObservationFrame, SensorObservation, WrenchSample,
+};
+use realityos_semantics::sensor::{SensorClass, WrenchSampleOrigin};
 use realityos_verify::bundle::RobotBundle;
 use realityos_verify::manipulation_benchmark::{
     resolve_benchmark_trial, score_campaign, trial_digest, validate_collision_geometry,
@@ -298,6 +301,7 @@ fn physical_trace(origin: SensorOrigin) -> (PhysicalSensorTrace, Vec<PhysicalSen
         observation,
         sensors: vec![PhysicalSensorIdentity {
             sensor_id: "encoder-1".into(),
+            class: SensorClass::JointEncoder,
             device_serial: "ENC-SN-001".into(),
             model_id: "encoder-v2".into(),
             calibration_hash: "calibration-1".into(),
@@ -310,14 +314,266 @@ fn physical_trace(origin: SensorOrigin) -> (PhysicalSensorTrace, Vec<PhysicalSen
     };
     let requirements = vec![PhysicalSensorRequirement {
         sensor_id: "encoder-1".into(),
+        class: SensorClass::JointEncoder,
         device_serial: "ENC-SN-001".into(),
         model_id: "encoder-v2".into(),
         calibration_hash: "calibration-1".into(),
         frame: "joint-1".into(),
         units: "rad".into(),
+        min_sample_rate_hz: 1.0,
+        max_inter_sample_gap_s: 1.0,
         max_age_s: 0.1,
+        max_cross_sensor_skew_s: 0.02,
     }];
     (trace, requirements)
+}
+
+fn force_torque_trace(
+    origins: [WrenchSampleOrigin; 2],
+) -> (PhysicalSensorTrace, Vec<PhysicalSensorRequirement>) {
+    let (mut trace, mut requirements) = physical_trace(SensorOrigin::Hardware);
+    trace.observation.observations.push(SensorObservation {
+        sensor_id: "ft-1".into(),
+        class: SensorClass::ForceTorque,
+        robot_frame: "tool0".into(),
+        calibration_hash: "ft-cal-1".into(),
+        device_serial: Some("FT-SN-001".into()),
+        model_id: Some("ft-model-1".into()),
+        units: Some("N,N*m".into()),
+        capture_s: 10.01,
+        receive_s: 10.011,
+        sequence: 2,
+        clock_domain: "robot_clock".into(),
+        digest: "ft-observation-digest".into(),
+        expires_at_s: 10.2,
+    });
+    trace.sensors.push(PhysicalSensorIdentity {
+        sensor_id: "ft-1".into(),
+        class: SensorClass::ForceTorque,
+        device_serial: "FT-SN-001".into(),
+        model_id: "ft-model-1".into(),
+        calibration_hash: "ft-cal-1".into(),
+        frame: "tool0".into(),
+        units: "N,N*m".into(),
+    });
+    trace.observation.wrench_samples = (0..2)
+        .map(|index| {
+            let sequence = index + 1;
+            let mut sample = WrenchSample {
+                sensor_id: "ft-1".into(),
+                sensor_frame: "tool0".into(),
+                transform_epoch: "epoch-1".into(),
+                units: "N,N*m".into(),
+                wrench: [0.0, 0.0, 2.0, 0.0, 0.0, 0.0],
+                error_bounds: [0.02; 6],
+                capture_s: 10.0 + index as f64 * 0.01,
+                receive_s: 10.001 + index as f64 * 0.01,
+                sequence,
+                clock_domain: "robot_clock".into(),
+                origin: origins[index as usize],
+                digest: String::new(),
+            };
+            sample.digest = wrench_sample_digest(&sample);
+            sample
+        })
+        .collect();
+    requirements.push(PhysicalSensorRequirement {
+        sensor_id: "ft-1".into(),
+        class: SensorClass::ForceTorque,
+        device_serial: "FT-SN-001".into(),
+        model_id: "ft-model-1".into(),
+        calibration_hash: "ft-cal-1".into(),
+        frame: "tool0".into(),
+        units: "N,N*m".into(),
+        min_sample_rate_hz: 90.0,
+        max_inter_sample_gap_s: 0.02,
+        max_age_s: 0.1,
+        max_cross_sensor_skew_s: 0.02,
+    });
+    (trace, requirements)
+}
+
+#[test]
+fn physical_evidence_force_torque_trace_requires_declared_class_and_identity() {
+    let (trace, requirements) = force_torque_trace([WrenchSampleOrigin::Hardware; 2]);
+    validate_physical_observation(&trace, &requirements, 10.05)
+        .expect("matching force/torque sensor identity is accepted");
+
+    let mut wrong_observation_class = trace.clone();
+    wrong_observation_class.observation.observations[1].class = SensorClass::Other;
+    assert!(validate_physical_observation(&wrong_observation_class, &requirements, 10.05).is_err());
+
+    let mut wrong_identity_class = trace.clone();
+    wrong_identity_class.sensors[1].class = SensorClass::Other;
+    assert!(validate_physical_observation(&wrong_identity_class, &requirements, 10.05).is_err());
+
+    let mut wrong_serial = trace.clone();
+    wrong_serial.observation.observations[1].device_serial = Some("other-serial".into());
+    assert!(validate_physical_observation(&wrong_serial, &requirements, 10.05).is_err());
+
+    let mut missing_requirement = requirements.clone();
+    missing_requirement[1].class = SensorClass::Other;
+    assert!(validate_physical_observation(&trace, &missing_requirement, 10.05).is_err());
+
+    let mut missing_samples = trace.clone();
+    missing_samples.observation.wrench_samples.clear();
+    assert!(validate_physical_observation(&missing_samples, &requirements, 10.05).is_err());
+
+    let mut duplicate_channel = trace.clone();
+    duplicate_channel
+        .observation
+        .observations
+        .push(duplicate_channel.observation.observations[1].clone());
+    assert!(validate_physical_observation(&duplicate_channel, &requirements, 10.05).is_err());
+
+    let mut undeclared_sample = trace.clone();
+    undeclared_sample.observation.wrench_samples[0].sensor_id = "undeclared".into();
+    undeclared_sample.observation.wrench_samples[0].digest =
+        wrench_sample_digest(&undeclared_sample.observation.wrench_samples[0]);
+    assert!(validate_physical_observation(&undeclared_sample, &requirements, 10.05).is_err());
+}
+
+#[test]
+fn physical_evidence_rejects_simulation_and_synthetic_wrench_origins() {
+    for origin in [
+        WrenchSampleOrigin::Simulation,
+        WrenchSampleOrigin::Synthetic,
+    ] {
+        let (trace, requirements) = force_torque_trace([origin, WrenchSampleOrigin::Hardware]);
+        assert!(validate_physical_observation(&trace, &requirements, 10.05).is_err());
+    }
+    let (mut trace, requirements) = force_torque_trace([WrenchSampleOrigin::Hardware; 2]);
+    trace.origin = SensorOrigin::Simulation;
+    assert!(validate_physical_observation(&trace, &requirements, 10.05).is_err());
+}
+
+#[test]
+fn physical_evidence_wrench_trace_rejects_bad_digest_or_replayed_sequence() {
+    let (trace, requirements) = force_torque_trace([WrenchSampleOrigin::Hardware; 2]);
+    let mut bad_digest = trace.clone();
+    let first_digest_char = if bad_digest.observation.wrench_samples[0]
+        .digest
+        .starts_with('0')
+    {
+        "1"
+    } else {
+        "0"
+    };
+    bad_digest.observation.wrench_samples[0]
+        .digest
+        .replace_range(..1, first_digest_char);
+    assert!(validate_physical_observation(&bad_digest, &requirements, 10.05).is_err());
+
+    let mut replayed = trace.clone();
+    replayed.observation.wrench_samples[1].sequence = 1;
+    replayed.observation.wrench_samples[1].digest =
+        wrench_sample_digest(&replayed.observation.wrench_samples[1]);
+    assert!(validate_physical_observation(&replayed, &requirements, 10.05).is_err());
+
+    let mut wrong_clock = trace;
+    wrong_clock.observation.wrench_samples[0].clock_domain = "other_hardware_clock".into();
+    wrong_clock.observation.wrench_samples[0].digest =
+        wrench_sample_digest(&wrong_clock.observation.wrench_samples[0]);
+    assert!(validate_physical_observation(&wrong_clock, &requirements, 10.05).is_err());
+}
+
+#[test]
+fn physical_evidence_wrench_trace_rejects_rate_gap_age_and_cross_sensor_skew() {
+    let (trace, mut requirements) = force_torque_trace([WrenchSampleOrigin::Hardware; 2]);
+    requirements[1].min_sample_rate_hz = 150.0;
+    assert!(validate_physical_observation(&trace, &requirements, 10.05).is_err());
+
+    let (trace, mut requirements) = force_torque_trace([WrenchSampleOrigin::Hardware; 2]);
+    requirements[1].max_inter_sample_gap_s = 0.005;
+    assert!(validate_physical_observation(&trace, &requirements, 10.05).is_err());
+
+    let (trace, mut requirements) = force_torque_trace([WrenchSampleOrigin::Hardware; 2]);
+    requirements[1].max_age_s = 0.01;
+    assert!(validate_physical_observation(&trace, &requirements, 10.05).is_err());
+
+    let (mut trace, mut requirements) = force_torque_trace([WrenchSampleOrigin::Hardware; 2]);
+    trace.observation.as_of_s = 10.06;
+    trace.policy_observation.timestamp_s = 10.06;
+    trace.observation.observations[1].capture_s = 10.05;
+    trace.observation.observations[1].receive_s = 10.051;
+    trace.observation.observations[1].sequence = 3;
+    for index in 0..2 {
+        let sequence = (index + 1) as u64;
+        let mut sample = WrenchSample {
+            sensor_id: "ft-2".into(),
+            sensor_frame: "tool0".into(),
+            transform_epoch: "epoch-1".into(),
+            units: "N,N*m".into(),
+            wrench: [0.0; 6],
+            error_bounds: [0.02; 6],
+            capture_s: 10.04 + index as f64 * 0.01,
+            receive_s: 10.041 + index as f64 * 0.01,
+            sequence,
+            clock_domain: "robot_clock".into(),
+            origin: WrenchSampleOrigin::Hardware,
+            digest: String::new(),
+        };
+        sample.digest = wrench_sample_digest(&sample);
+        trace.observation.wrench_samples.push(sample);
+    }
+    trace.sensors.push(PhysicalSensorIdentity {
+        sensor_id: "ft-2".into(),
+        class: SensorClass::ForceTorque,
+        device_serial: "FT-SN-002".into(),
+        model_id: "ft-model-1".into(),
+        calibration_hash: "ft-cal-1".into(),
+        frame: "tool0".into(),
+        units: "N,N*m".into(),
+    });
+    requirements.push(PhysicalSensorRequirement {
+        sensor_id: "ft-2".into(),
+        class: SensorClass::ForceTorque,
+        device_serial: "FT-SN-002".into(),
+        model_id: "ft-model-1".into(),
+        calibration_hash: "ft-cal-1".into(),
+        frame: "tool0".into(),
+        units: "N,N*m".into(),
+        min_sample_rate_hz: 90.0,
+        max_inter_sample_gap_s: 0.02,
+        max_age_s: 0.1,
+        max_cross_sensor_skew_s: 0.02,
+    });
+    trace.observation.observations.push(SensorObservation {
+        sensor_id: "ft-2".into(),
+        class: SensorClass::ForceTorque,
+        robot_frame: "tool0".into(),
+        calibration_hash: "ft-cal-1".into(),
+        device_serial: Some("FT-SN-002".into()),
+        model_id: Some("ft-model-1".into()),
+        units: Some("N,N*m".into()),
+        capture_s: 10.05,
+        receive_s: 10.051,
+        sequence: 3,
+        clock_domain: "robot_clock".into(),
+        digest: "ft-observation-2".into(),
+        expires_at_s: 10.2,
+    });
+    assert!(validate_physical_observation(&trace, &requirements, 10.08).is_err());
+}
+
+#[test]
+fn physical_evidence_valid_hardware_wrench_trace_stays_unverified_without_outcome_measurement() {
+    let (trace, requirements) = force_torque_trace([WrenchSampleOrigin::Hardware; 2]);
+    let evidence = validate_physical_observation(&trace, &requirements, 10.05)
+        .expect("valid hardware provenance is accepted for review");
+    assert_eq!(evidence.status, PhysicalEvidenceStatus::Unverified);
+    assert!(evidence.sensor_provenance_valid);
+    assert!(evidence.requires_independent_measurement);
+    assert_eq!(evidence.sensor_ids, ["encoder-1", "ft-1"]);
+
+    let mut different_trace = trace;
+    different_trace.observation.wrench_samples[0].wrench[0] += 0.1;
+    different_trace.observation.wrench_samples[0].digest =
+        wrench_sample_digest(&different_trace.observation.wrench_samples[0]);
+    let different = validate_physical_observation(&different_trace, &requirements, 10.05)
+        .expect("changed valid measurement remains provenance-valid");
+    assert_ne!(different.trace_digest, evidence.trace_digest);
+    assert_eq!(different.status, PhysicalEvidenceStatus::Unverified);
 }
 
 #[test]

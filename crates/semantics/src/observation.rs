@@ -9,6 +9,12 @@ pub struct SensorObservation {
     pub class: SensorClass,
     pub robot_frame: String,
     pub calibration_hash: String,
+    #[serde(default)]
+    pub device_serial: Option<String>,
+    #[serde(default)]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub units: Option<String>,
     pub capture_s: f64,
     pub receive_s: f64,
     pub sequence: u64,
@@ -35,6 +41,9 @@ impl SensorObservation {
             class: SensorClass::JointEncoder,
             robot_frame: robot_frame.into(),
             calibration_hash: calibration_hash.into(),
+            device_serial: None,
+            model_id: None,
+            units: None,
             capture_s,
             receive_s,
             sequence,
