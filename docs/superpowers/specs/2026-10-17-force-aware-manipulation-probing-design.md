@@ -1,6 +1,6 @@
 # Force-Aware Manipulation Probing Design
 
-**Status:** Architecture brief approved; detailed specification prepared for user review
+**Status:** Architecture brief and written specification approved; implementation plan in review
 
 **Date:** 2026-10-17
 
