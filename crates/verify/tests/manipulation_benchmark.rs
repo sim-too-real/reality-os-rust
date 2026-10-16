@@ -1729,6 +1729,84 @@ fn geometry_digest_covers_mesh_assets_and_pair_rules() {
     let model = embodiment_from_manifest(&bundle, &manifest);
     let baseline = validate_collision_geometry(&bundle, &manifest, &model).unwrap();
 
+    let mut coplanar_mesh = manifest.clone();
+    coplanar_mesh.geoms[0].mesh_vertices[3] = [1.0, 1.0, 0.0];
+    let coplanar_model = embodiment_from_manifest(&bundle, &coplanar_mesh);
+    let coplanar_result =
+        validate_collision_geometry(&bundle, &coplanar_mesh, &coplanar_model).unwrap();
+    assert_eq!(
+        coplanar_result.result,
+        GeometryGateResult::UnsupportedPresent {
+            geom_names: vec!["base_mesh".into()]
+        }
+    );
+    let coplanar_asset = coplanar_result.geoms[0]
+        .mesh_asset
+        .as_ref()
+        .expect("unsupported query geometry still authenticates its source asset");
+    assert_eq!(coplanar_asset.sha256.len(), 64);
+    assert!(serde_json::to_value(coplanar_asset).unwrap()["query_vertices_sha256"].is_null());
+
+    let mut oversized_mesh = manifest.clone();
+    oversized_mesh.geoms[0].mesh_vertices = vec![
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ];
+    oversized_mesh.geoms[0]
+        .mesh_vertices
+        .resize(100_001, [0.0, 0.0, 0.0]);
+    let oversized_model = embodiment_from_manifest(&bundle, &oversized_mesh);
+    assert!(validate_collision_geometry(&bundle, &oversized_mesh, &oversized_model).is_err());
+
+    let mut omitted_mesh = manifest.clone();
+    omitted_mesh.geoms[0].mesh_vertices.clear();
+    omitted_mesh.geoms[0].mesh_vertices_omitted_reason =
+        Some("compiled_hull_vertex_limit_exceeded".into());
+    let omitted_model = embodiment_from_manifest(&bundle, &omitted_mesh);
+    let omitted_result =
+        validate_collision_geometry(&bundle, &omitted_mesh, &omitted_model).unwrap();
+    let omitted_asset = omitted_result.geoms[0]
+        .mesh_asset
+        .as_ref()
+        .expect("omitted query vertices still authenticate their source asset");
+    assert_eq!(omitted_asset.sha256.len(), 64);
+    assert!(serde_json::to_value(omitted_asset).unwrap()["query_vertices_sha256"].is_null());
+    assert_eq!(
+        omitted_result.geoms[0].mesh_unsupported_reason.as_deref(),
+        Some("compiled_hull_vertex_limit_exceeded")
+    );
+
+    let mut missing_unsupported_asset = omitted_mesh.clone();
+    missing_unsupported_asset.geoms[0].mesh_asset = None;
+    let missing_unsupported_model = embodiment_from_manifest(&bundle, &missing_unsupported_asset);
+    assert!(validate_collision_geometry(
+        &bundle,
+        &missing_unsupported_asset,
+        &missing_unsupported_model
+    )
+    .is_err());
+
+    let mut unsupported_asset_unlisted_bundle = bundle.clone();
+    unsupported_asset_unlisted_bundle.asset_files.clear();
+    assert!(validate_collision_geometry(
+        &unsupported_asset_unlisted_bundle,
+        &omitted_mesh,
+        &omitted_model
+    )
+    .is_err());
+
+    let mut unreported_omission = omitted_mesh.clone();
+    unreported_omission.geoms[0].mesh_vertices_omitted_reason = None;
+    let unreported_model = embodiment_from_manifest(&bundle, &unreported_omission);
+    assert!(validate_collision_geometry(&bundle, &unreported_omission, &unreported_model).is_err());
+
+    let mut unknown_omission = omitted_mesh.clone();
+    unknown_omission.geoms[0].mesh_vertices_omitted_reason = Some("anything_goes".into());
+    let unknown_model = embodiment_from_manifest(&bundle, &unknown_omission);
+    assert!(validate_collision_geometry(&bundle, &unknown_omission, &unknown_model).is_err());
+
     let mut pair_changed = manifest.clone();
     pair_changed.contact_pairs[0].geom1_id = 1;
     pair_changed.contact_pairs[0].geom2_id = 2;
@@ -1879,7 +1957,7 @@ fn wx250s_compiled_convex_meshes_are_complete_queryable_and_hashed() {
                 .expect("admitted mesh has a manifest record")
                 .mesh_asset
                 .as_ref()
-                .map(|mesh| mesh.query_vertices_sha256.len()),
+                .and_then(|mesh| mesh.query_vertices_sha256.as_ref().map(String::len)),
             Some(64)
         );
         assert!(geom.mesh_vertices.len() <= 230);

@@ -20,6 +20,8 @@ robots/external/iiwa14/model/
 robots/external/wx250s/model/
 MUJOCO_LOG.TXT
 **/MUJOCO_LOG.TXT
+__pycache__/
+*.py[cod]
 crates/plant/wip/
 crates/governor/wip/
 crates/reality-os/wip/

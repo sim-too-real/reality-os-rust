@@ -16,9 +16,11 @@
 - Do not clear collision geometry to simplify planning; any unaccounted collision-enabled geometry invalidates the run.
 - MuJoCo episodes remain `SIMULATION_ONLY`; simulator state cannot satisfy the physical observation track.
 - Any unauthorized write, false acceptance in a must-refuse trial, collision-geometry omission, or stale-authority continuation fails the benchmark.
-- Run the same bridge API and push/probe task on `menagerie_ur5e` and `menagerie_iiwa14` as development embodiments and `menagerie_wx250s` as the frozen model holdout, without robot-name branches or holdout-tuned thresholds.
+- Run the same bridge API and push/probe task on `menagerie_ur5e` and `menagerie_iiwa14` as development embodiments and `menagerie_wx250s` as a historical regression embodiment, without robot-name branches.
 - Label physical results `MEASURED` only with actual sensor provenance and independent ground truth; otherwise keep them `UNVERIFIED`.
 - Use 20 pilot seeds (`9000..9020`) to record runtime and refusal strata, then exclude them from the frozen 100 public seeds (`0..100`) and 100 holdout seeds (`10000..10100`). Freeze code, bundles, randomization ranges, labels, and acceptance rules before opening holdout results.
+
+**Holdout integrity update (2026-10-16):** WX250S has prior benchmark scores, and development used its collision geometry plus seed `10000`, index `10` to diagnose a colliding initial state. The seed range is also present in this repository. Keep WX250S as a known-model regression set; do not call a new score an untouched holdout. A fresh model bundle and a seed set kept private until candidate freeze are required for independent model-generalization evidence.
 
 ## Review Focus
 

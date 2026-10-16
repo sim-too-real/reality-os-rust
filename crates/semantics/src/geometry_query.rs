@@ -11,8 +11,15 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 const MAX_CACHED_CONVEX_MESHES: usize = 32;
-static CONVEX_MESH_CACHE: OnceLock<Mutex<HashMap<[u8; 32], Arc<ConvexPolyhedron>>>> =
-    OnceLock::new();
+const MAX_CACHED_CONVEX_MESH_VERTICES: usize = 16_384;
+
+#[derive(Default)]
+struct ConvexMeshCache {
+    entries: HashMap<[u8; 32], (Arc<ConvexPolyhedron>, usize)>,
+    source_vertex_count: usize,
+}
+
+static CONVEX_MESH_CACHE: OnceLock<Mutex<ConvexMeshCache>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryStatus {
@@ -162,6 +169,7 @@ fn convex_mesh_shape(vertices: &[[f64; 3]]) -> Result<Arc<ConvexPolyhedron>, Que
     if vertices.len() < 4
         || vertices.len() > MAX_CONVEX_MESH_VERTICES
         || vertices.iter().flatten().any(|value| !value.is_finite())
+        || !has_three_dimensional_volume(vertices)
     {
         return Err(QueryStatus::Unknown);
     }
@@ -173,9 +181,9 @@ fn convex_mesh_shape(vertices: &[[f64; 3]]) -> Result<Arc<ConvexPolyhedron>, Que
         }
     }
     let key: [u8; 32] = hasher.finalize().into();
-    let cache = CONVEX_MESH_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = CONVEX_MESH_CACHE.get_or_init(|| Mutex::new(ConvexMeshCache::default()));
     if let Ok(cache) = cache.lock() {
-        if let Some(mesh) = cache.get(&key) {
+        if let Some((mesh, _)) = cache.entries.get(&key) {
             return Ok(Arc::clone(mesh));
         }
     }
@@ -186,11 +194,86 @@ fn convex_mesh_shape(vertices: &[[f64; 3]]) -> Result<Arc<ConvexPolyhedron>, Que
         .collect::<Vec<_>>();
     let mesh = Arc::new(ConvexPolyhedron::from_convex_hull(&points).ok_or(QueryStatus::Unknown)?);
     if let Ok(mut cache) = cache.lock() {
-        if cache.len() < MAX_CACHED_CONVEX_MESHES {
-            cache.insert(key, Arc::clone(&mesh));
+        if cache.entries.len() < MAX_CACHED_CONVEX_MESHES
+            && cache.source_vertex_count.saturating_add(vertices.len())
+                <= MAX_CACHED_CONVEX_MESH_VERTICES
+        {
+            cache.source_vertex_count += vertices.len();
+            cache
+                .entries
+                .insert(key, (Arc::clone(&mesh), vertices.len()));
         }
     }
     Ok(mesh)
+}
+
+pub(crate) fn convex_mesh_query_supported(vertices: &[[f64; 3]]) -> bool {
+    convex_mesh_shape(vertices).is_ok()
+}
+
+fn has_three_dimensional_volume(vertices: &[[f64; 3]]) -> bool {
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for vertex in vertices {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(vertex[axis]);
+            max[axis] = max[axis].max(vertex[axis]);
+        }
+    }
+    let scale = (0..3).map(|axis| max[axis] - min[axis]).fold(0.0, f64::max);
+    if !scale.is_finite() || scale <= 0.0 {
+        return false;
+    }
+
+    let origin = vertices[0];
+    let tolerance = 128.0 * f64::EPSILON;
+    let Some(first) = vertices
+        .iter()
+        .map(|point| {
+            [
+                point[0] - origin[0],
+                point[1] - origin[1],
+                point[2] - origin[2],
+            ]
+        })
+        .find(|vector| norm3(*vector) > scale * tolerance)
+    else {
+        return false;
+    };
+    let Some(normal) = vertices
+        .iter()
+        .map(|point| {
+            [
+                point[0] - origin[0],
+                point[1] - origin[1],
+                point[2] - origin[2],
+            ]
+        })
+        .map(|vector| cross3(first, vector))
+        .find(|normal| norm3(*normal) > scale * scale * tolerance)
+    else {
+        return false;
+    };
+    vertices.iter().any(|point| {
+        let offset = [
+            point[0] - origin[0],
+            point[1] - origin[1],
+            point[2] - origin[2],
+        ];
+        dot3(normal, offset).abs() > scale * scale * scale * tolerance
+    })
+}
+
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
 /// Intersection / contact between two posed primitives.

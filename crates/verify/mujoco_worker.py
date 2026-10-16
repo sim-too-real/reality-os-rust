@@ -32,6 +32,12 @@ os.environ.setdefault("MUJOCO_LOG_FILE", os.devnull)
 try:
     import mujoco
     import numpy as np
+    from mujoco_mesh_graph import (
+        MAX_COMPILED_MESH_QUERY_VERTICES,
+        MeshHullTooLarge,
+        compiled_mesh_hull_vertex_ids,
+        require_supported_mesh_graph_version,
+    )
 except Exception as exc:  # pragma: no cover
     print(json.dumps({"ok": False, "error": f"MUJOCO_UNAVAILABLE:{exc}"}), flush=True)
     sys.exit(2)
@@ -91,41 +97,54 @@ class Instance:
         m, d = self.model, self.data
         assert m is not None and d is not None
 
-        def compiled_mesh_vertices(geom_id: int, mesh_id: int) -> list[list[float]]:
+        def compiled_mesh_vertices(
+            geom_id: int, mesh_id: int
+        ) -> tuple[list[list[float]], str | None]:
             if mesh_id < 0 or mesh_id >= m.nmesh:
                 raise RuntimeError(f"mesh geom references invalid compiled mesh id {mesh_id}")
             start = int(m.mesh_vertadr[mesh_id])
             count = int(m.mesh_vertnum[mesh_id])
-            if count < 4 or start < 0 or start + count > len(m.mesh_vert):
+            if count < 0 or start < 0 or start + count > len(m.mesh_vert):
                 raise RuntimeError(
                     f"compiled mesh {mesh_id} has invalid vertex range {start}:{start + count}"
                 )
-            vertices = np.asarray(m.mesh_vert[start : start + count], dtype=np.float64)
-            if vertices.shape != (count, 3) or not np.isfinite(vertices).all():
-                raise RuntimeError(f"compiled mesh {mesh_id} has invalid vertices")
+            if count < 4:
+                return [], "compiled_mesh_has_fewer_than_four_vertices"
 
             # MuJoCo stores the collision hull as a graph when the compiler
-            # produced one. Its vertex ids index the mesh's compiled vertices.
+            # produced one. Validate the local packed record and its face
+            # indices before materializing only the hull vertices.
             graph_start = int(m.mesh_graphadr[mesh_id])
             if graph_start >= 0:
-                if graph_start + 2 > len(m.mesh_graph):
-                    raise RuntimeError(f"compiled mesh {mesh_id} has an invalid hull graph")
-                hull_count = int(m.mesh_graph[graph_start])
-                face_count = int(m.mesh_graph[graph_start + 1])
-                ids_start = graph_start + 2 + hull_count
-                ids_end = ids_start + hull_count
-                graph_end = graph_start + 2 + 3 * hull_count + 6 * face_count
-                if (
-                    hull_count < 4
-                    or face_count < 4
-                    or graph_end > len(m.mesh_graph)
-                    or ids_end > graph_end
-                ):
-                    raise RuntimeError(f"compiled mesh {mesh_id} has an incomplete hull graph")
-                vertex_ids = np.asarray(m.mesh_graph[ids_start:ids_end], dtype=np.int64)
-                if np.any(vertex_ids < 0) or np.any(vertex_ids >= count):
-                    raise RuntimeError(f"compiled mesh {mesh_id} hull references invalid vertices")
-                vertices = vertices[vertex_ids]
+                try:
+                    require_supported_mesh_graph_version(mujoco.__version__)
+                except ValueError as exc:
+                    raise RuntimeError(str(exc)) from exc
+                graph_starts = [int(value) for value in m.mesh_graphadr if int(value) >= 0]
+                graph_end = min(
+                    (value for value in graph_starts if value > graph_start),
+                    default=len(m.mesh_graph),
+                )
+                try:
+                    vertex_ids = compiled_mesh_hull_vertex_ids(
+                        m.mesh_graph, graph_start, graph_end, count
+                    )
+                except MeshHullTooLarge:
+                    return [], "compiled_hull_vertex_limit_exceeded"
+                except ValueError as exc:
+                    raise RuntimeError(
+                        f"compiled mesh {mesh_id} has an invalid hull graph: {exc}"
+                    ) from exc
+                vertices = np.asarray(
+                    m.mesh_vert[start + np.asarray(vertex_ids, dtype=np.int64)],
+                    dtype=np.float64,
+                )
+            else:
+                if count > MAX_COMPILED_MESH_QUERY_VERTICES:
+                    return [], "compiled_mesh_vertex_limit_exceeded_without_hull_graph"
+                vertices = np.asarray(m.mesh_vert[start : start + count], dtype=np.float64)
+            if vertices.ndim != 2 or vertices.shape[1] != 3 or not np.isfinite(vertices).all():
+                raise RuntimeError(f"compiled mesh {mesh_id} has invalid vertices")
 
             # mesh_vert is already in the compiled mesh frame. The compiler
             # compensates mesh alignment in geom_pos/geom_quat, which the
@@ -137,7 +156,7 @@ class Instance:
                 raise RuntimeError(
                     f"compiled mesh {mesh_id} vertices exceed geom {geom_id} bounding radius"
                 )
-            return vertices.tolist()
+            return vertices.tolist(), None
 
         joints = []
         for i in range(m.njnt):
@@ -270,6 +289,12 @@ class Instance:
         for i in range(m.ngeom):
             gtype = int(m.geom_type[i])
             mesh_id = int(m.geom_dataid[i]) if gtype == 7 else -1
+            mesh_vertices: list[list[float]] = []
+            mesh_vertices_omitted_reason = None
+            if gtype == 7:
+                mesh_vertices, mesh_vertices_omitted_reason = compiled_mesh_vertices(
+                    i, mesh_id
+                )
             geoms.append(
                 {
                     "id": i,
@@ -285,7 +310,8 @@ class Instance:
                     "type": gtype,
                     "type_name": _geom_names.get(gtype, f"type_{gtype}"),
                     "mesh_asset": self.mesh_asset_by_id.get(mesh_id),
-                    "mesh_vertices": compiled_mesh_vertices(i, mesh_id) if gtype == 7 else [],
+                    "mesh_vertices": mesh_vertices,
+                    "mesh_vertices_omitted_reason": mesh_vertices_omitted_reason,
                 }
             )
         contact_pairs = []

@@ -90,8 +90,7 @@ impl PrimitiveShape {
         match self {
             Self::Unsupported { .. } => false,
             Self::ConvexMesh { vertices } => {
-                (4..=MAX_CONVEX_MESH_VERTICES).contains(&vertices.len())
-                    && vertices.iter().flatten().all(|value| value.is_finite())
+                crate::geometry_query::convex_mesh_query_supported(vertices)
             }
             _ => true,
         }
@@ -386,6 +385,19 @@ mod tests {
         };
         assert!(!s.query_supported());
         assert_eq!(s.kind_name(), "mesh");
+    }
+
+    #[test]
+    fn coplanar_compiled_mesh_is_not_queryable() {
+        let mesh = PrimitiveShape::ConvexMesh {
+            vertices: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],
+            ],
+        };
+        assert!(!mesh.query_supported());
     }
 
     #[test]

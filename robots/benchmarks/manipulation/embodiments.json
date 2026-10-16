@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "registrations": [
     {
       "robot_id": "menagerie_ur5e",

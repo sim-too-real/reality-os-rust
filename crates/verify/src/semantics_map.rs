@@ -555,6 +555,7 @@ mod tests {
             conaffinity: 1,
             mesh_asset: None,
             mesh_vertices: Vec::new(),
+            mesh_vertices_omitted_reason: None,
         });
         man.geoms.push(crate::normalize::GeomRecord {
             geom_id: 1,
@@ -570,6 +571,7 @@ mod tests {
             conaffinity: 0,
             mesh_asset: None,
             mesh_vertices: Vec::new(),
+            mesh_vertices_omitted_reason: None,
         });
         let m = embodiment_from_manifest(&bundle, &man);
         assert_eq!(m.collision_geoms.len(), 2);

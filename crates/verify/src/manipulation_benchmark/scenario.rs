@@ -7,11 +7,17 @@ use crate::normalize::RobotManifest;
 use crate::semantics_map::embodiment_from_manifest;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use realityos_semantics::allowed_contact::ContactPhase;
+use realityos_semantics::contact_collision::{
+    policy_from_scene_model, scene_from_collision_world, CollisionWorld, NamedBox,
+};
+use realityos_semantics::transition_validity::{validate_transition, GeometryVerdict};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-pub const BENCHMARK_SCHEMA_VERSION: u32 = 3;
+pub const BENCHMARK_SCHEMA_VERSION: u32 = 4;
+const MAX_SAFE_INITIAL_QPOS_ATTEMPTS: usize = 64;
 pub const PILOT_SEEDS: std::ops::Range<u64> = 9000..9020;
 pub const PUBLIC_SEEDS: std::ops::Range<u64> = 0..100;
 pub const HOLDOUT_SEEDS: std::ops::Range<u64> = 10000..10100;
@@ -386,12 +392,50 @@ pub fn resolve_benchmark_trial(
         TrialExpectation::ExpectedRefusal
     };
     let mut initial_qpos = sample_initial_qpos(manifest, &mut rng)?;
-    if task == BenchmarkTask::PinchGraspLift
-        && expectation == TrialExpectation::ExpectedSuccess
-        && !set_randomized_grasp_standoff(bundle, manifest, &scenario, &mut initial_qpos, &mut rng)?
-    {
-        scenario.expected_refusal = Some("GRASP_STANDOFF_UNREACHABLE".into());
-        expectation = TrialExpectation::ExpectedRefusal;
+    if expectation == TrialExpectation::ExpectedSuccess {
+        let mut found_standoff = task != BenchmarkTask::PinchGraspLift;
+        let mut safe_initial_qpos = None;
+        let attempts = if manifest.geometry_inspection_complete {
+            MAX_SAFE_INITIAL_QPOS_ATTEMPTS
+        } else {
+            1
+        };
+        for _ in 0..attempts {
+            let mut candidate = sample_initial_qpos(manifest, &mut rng)?;
+            if task == BenchmarkTask::PinchGraspLift
+                && !set_randomized_grasp_standoff(
+                    bundle,
+                    manifest,
+                    &scenario,
+                    &mut candidate,
+                    &mut rng,
+                )?
+            {
+                initial_qpos = candidate;
+                continue;
+            }
+            found_standoff = true;
+            initial_qpos = candidate.clone();
+            if !manifest.geometry_inspection_complete
+                || initial_configuration_is_clear(bundle, manifest, &scenario, &candidate)?
+            {
+                safe_initial_qpos = Some(candidate);
+                break;
+            }
+        }
+        if let Some(candidate) = safe_initial_qpos {
+            initial_qpos = candidate;
+        } else {
+            scenario.expected_refusal = Some(
+                if !found_standoff {
+                    "GRASP_STANDOFF_UNREACHABLE"
+                } else {
+                    "NO_SAFE_INITIAL_CONFIGURATION"
+                }
+                .into(),
+            );
+            expectation = TrialExpectation::ExpectedRefusal;
+        }
     }
     let task_name = task.as_str();
     let role_name = role.as_str();
@@ -604,6 +648,163 @@ fn sample_initial_qpos(
     Ok(qpos)
 }
 
+fn initial_configuration_is_clear(
+    bundle: &RobotBundle,
+    manifest: &RobotManifest,
+    scenario: &ManipulationScenario,
+    qpos: &[f64],
+) -> Result<bool, BenchmarkError> {
+    let model = embodiment_from_manifest(bundle, manifest);
+    let Some(ee) = model.end_effectors.first() else {
+        return Ok(false);
+    };
+    if model.collision_geoms.is_empty() {
+        return Ok(false);
+    }
+    if manifest.joints.iter().any(|joint| joint.qpos_dim != 1) {
+        return Ok(false);
+    }
+    let joint_names = manifest
+        .joints
+        .iter()
+        .map(|joint| joint.name.clone())
+        .collect::<Vec<_>>();
+    if joint_names.is_empty() {
+        return Ok(false);
+    }
+    let mut arm_q = Vec::with_capacity(joint_names.len());
+    for name in &joint_names {
+        let joint = manifest
+            .joints
+            .iter()
+            .find(|joint| joint.name == *name)
+            .ok_or_else(|| {
+                BenchmarkError::InvalidManifest(format!(
+                    "end-effector chain references uninspected joint {name}"
+                ))
+            })?;
+        let index = usize::try_from(joint.qpos_address).map_err(|_| {
+            BenchmarkError::InvalidManifest(format!("negative qpos address for {name}"))
+        })?;
+        arm_q.push(*qpos.get(index).ok_or_else(|| {
+            BenchmarkError::InvalidManifest(format!("qpos address outside state for {name}"))
+        })?);
+    }
+
+    let object = object_named(&scenario.objects, &scenario.object_id)?;
+    let object_center = vec3(&object["pos"])
+        .ok_or_else(|| BenchmarkError::InvalidTrial("target object pose is invalid".into()))?;
+    let object_half = scenario_half_extents(object)?;
+    let object_quat = scenario_quaternion(object);
+    let table = object_named(&scenario.objects, "table")?;
+    let table_center = vec3(&table["pos"])
+        .ok_or_else(|| BenchmarkError::InvalidTrial("table support pose is invalid".into()))?;
+    let table_half = scenario_half_extents(table)?;
+    let obstacles = scenario
+        .objects
+        .iter()
+        .filter(|candidate| {
+            candidate["name"].as_str() != Some(&scenario.object_id)
+                && candidate["name"].as_str() != Some("table")
+        })
+        .map(|candidate| {
+            let name = candidate["name"]
+                .as_str()
+                .ok_or_else(|| BenchmarkError::InvalidTrial("obstacle has no name".into()))?;
+            let center = vec3(&candidate["pos"]).ok_or_else(|| {
+                BenchmarkError::InvalidTrial(format!("obstacle {name} pose is invalid"))
+            })?;
+            Ok(NamedBox::aabb(
+                name,
+                center,
+                scenario_half_extents(candidate)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, BenchmarkError>>()?;
+    let world = CollisionWorld {
+        object_id: scenario.object_id.clone(),
+        object_center,
+        object_half,
+        object_quat,
+        support_id: "table".into(),
+        support_origin: [
+            table_center[0],
+            table_center[1],
+            table_center[2] + table_half[2],
+        ],
+        support_normal: [0.0, 0.0, 1.0],
+        support_half_extents: Some(table_half),
+        intended_tool_bodies: Vec::new(),
+        robot_volumes: Vec::new(),
+        obstacles,
+        ee_radius: 0.01,
+        object_probe_radius: object_half.into_iter().fold(0.0, f64::max),
+        tool_offset_ee: [0.0; 3],
+        declared_geoms: model.collision_geoms.clone(),
+    };
+    let scene = match scene_from_collision_world(&model, &ee.name, &world) {
+        Ok(scene) => scene,
+        Err(_) => return Ok(false),
+    };
+    let policy = policy_from_scene_model(Some(&model), &scene);
+    let report = validate_transition(
+        &model,
+        &joint_names,
+        &arm_q,
+        &arm_q,
+        &scene,
+        &policy,
+        ContactPhase::CurrentToApproach,
+    );
+    Ok(report.execution_refusal().is_none()
+        && matches!(
+            report.verdict,
+            GeometryVerdict::ClearUnderCompleteDeclared
+                | GeometryVerdict::NoCollisionInProxy
+                | GeometryVerdict::AllowedPhaseContact
+        ))
+}
+
+fn scenario_half_extents(object: &Value) -> Result<[f64; 3], BenchmarkError> {
+    let size = object["size"]
+        .as_array()
+        .ok_or_else(|| BenchmarkError::InvalidTrial("scenario geometry has no size".into()))?;
+    let x = size
+        .first()
+        .and_then(Value::as_f64)
+        .unwrap_or(f64::NAN)
+        .abs();
+    let y = size.get(1).and_then(Value::as_f64).unwrap_or(x).abs();
+    let z = size.get(2).and_then(Value::as_f64).unwrap_or(y).abs();
+    let half = match object["type"].as_str().unwrap_or("box") {
+        "sphere" => [x, x, x],
+        "cylinder" => [x, x, y],
+        "capsule" => [x, x, y + x],
+        "box" => [x, y, z],
+        kind => {
+            return Err(BenchmarkError::InvalidTrial(format!(
+                "unsupported scenario collision geometry {kind}"
+            )))
+        }
+    };
+    if half.iter().all(|value| value.is_finite() && *value > 0.0) {
+        Ok(half)
+    } else {
+        Err(BenchmarkError::InvalidTrial(
+            "scenario collision geometry has invalid extents".into(),
+        ))
+    }
+}
+
+fn scenario_quaternion(object: &Value) -> [f64; 4] {
+    object["quat"]
+        .as_array()
+        .and_then(|values| values.iter().map(Value::as_f64).collect::<Option<Vec<_>>>())
+        .filter(|values| values.len() == 4 && values.iter().all(|value| value.is_finite()))
+        .map(|values| [values[0], values[1], values[2], values[3]])
+        .unwrap_or([1.0, 0.0, 0.0, 0.0])
+}
+
 fn set_randomized_grasp_standoff(
     bundle: &RobotBundle,
     manifest: &RobotManifest,
@@ -694,7 +895,11 @@ fn set_randomized_grasp_standoff(
         let value = qpos.get_mut(index).ok_or_else(|| {
             BenchmarkError::InvalidManifest(format!("qpos address outside state for {name}"))
         })?;
-        *value = joint.range[1];
+        *value = if joint.range[0].abs() > joint.range[1].abs() {
+            joint.range[0]
+        } else {
+            joint.range[1]
+        };
     }
     Ok(true)
 }

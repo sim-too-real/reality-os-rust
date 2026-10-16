@@ -2,7 +2,9 @@ use super::BenchmarkError;
 use crate::bundle::RobotBundle;
 use crate::normalize::{ContactPairRecord, ExcludedBodyPairRecord, GeomRecord, RobotManifest};
 use realityos_semantics::embodiment::EmbodimentModel;
-use realityos_semantics::geometry::{CollisionRole, PrimitiveShape, RigidGeometry};
+use realityos_semantics::geometry::{
+    CollisionRole, PrimitiveShape, RigidGeometry, MAX_CONVEX_MESH_VERTICES,
+};
 use realityos_semantics::transform::Se3;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -10,13 +12,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const GEOMETRY_SCHEMA_VERSION: u32 = 2;
+pub const GEOMETRY_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MeshAssetDigest {
     pub reference: String,
     pub sha256: String,
-    pub query_vertices_sha256: String,
+    pub query_vertices_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -31,6 +33,8 @@ pub struct CollisionGeomRecord {
     pub contype: i32,
     pub conaffinity: i32,
     pub mesh_asset: Option<MeshAssetDigest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_unsupported_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,18 +190,38 @@ pub fn validate_collision_geometry(
                 geom.name
             )));
         }
-        if !semantic_geom.shape.query_supported() {
+        let geometry_supported = semantic_geom.shape.query_supported();
+        if !geometry_supported {
             unsupported.push(geom.name.clone());
         }
         let mesh_asset = if geom.geom_type == "mesh" {
-            Some(hash_mesh_asset(bundle, geom)?)
+            validate_mesh_query_evidence(geom)?;
+            Some(hash_mesh_asset(bundle, geom, geometry_supported)?)
         } else {
-            if geom.mesh_asset.is_some() || !geom.mesh_vertices.is_empty() {
+            if geom.mesh_asset.is_some()
+                || !geom.mesh_vertices.is_empty()
+                || geom.mesh_vertices_omitted_reason.is_some()
+            {
                 return Err(BenchmarkError::Geometry(format!(
                     "non-mesh geom {} declares mesh data",
                     geom.name
                 )));
             }
+            None
+        };
+        if geom.mesh_vertices_omitted_reason.is_some() && !geom.mesh_vertices.is_empty() {
+            return Err(BenchmarkError::Geometry(format!(
+                "collision mesh {} both omits and supplies query vertices",
+                geom.name
+            )));
+        }
+        let mesh_unsupported_reason = if geom.geom_type == "mesh" && !geometry_supported {
+            Some(
+                geom.mesh_vertices_omitted_reason
+                    .clone()
+                    .unwrap_or_else(|| "compiled_hull_not_queryable".into()),
+            )
+        } else {
             None
         };
         geometry_records.push(CollisionGeomRecord {
@@ -211,6 +235,7 @@ pub fn validate_collision_geometry(
             contype: geom.contype,
             conaffinity: geom.conaffinity,
             mesh_asset,
+            mesh_unsupported_reason,
         });
     }
 
@@ -236,7 +261,7 @@ pub fn validate_collision_geometry(
     };
     let canonical = serde_json::to_vec(&admitted)?;
     let mut digest = Sha256::new();
-    digest.update(b"realityos.manipulation_benchmark/collision_geometry/2\0");
+    digest.update(b"realityos.manipulation_benchmark/collision_geometry/4\0");
     digest.update(canonical);
     admitted.digest = hex::encode(digest.finalize());
     Ok(admitted)
@@ -245,6 +270,7 @@ pub fn validate_collision_geometry(
 fn hash_mesh_asset(
     bundle: &RobotBundle,
     geom: &GeomRecord,
+    include_query_vertices: bool,
 ) -> Result<MeshAssetDigest, BenchmarkError> {
     let reference = geom
         .mesh_asset
@@ -289,30 +315,66 @@ fn hash_mesh_asset(
             geom.name, reference
         ))
     })?;
-    if geom.mesh_vertices.len() < 4
-        || geom
-            .mesh_vertices
-            .iter()
-            .flatten()
-            .any(|coordinate| !coordinate.is_finite())
-    {
-        return Err(BenchmarkError::Geometry(format!(
-            "collision mesh {} has missing or invalid compiled hull vertices",
-            geom.name
-        )));
-    }
-    let mut hull_hasher = Sha256::new();
-    hull_hasher.update((geom.mesh_vertices.len() as u64).to_le_bytes());
-    for vertex in &geom.mesh_vertices {
-        for coordinate in vertex {
-            hull_hasher.update(coordinate.to_bits().to_le_bytes());
+    let query_vertices_sha256 = if include_query_vertices {
+        let mut hull_hasher = Sha256::new();
+        hull_hasher.update((geom.mesh_vertices.len() as u64).to_le_bytes());
+        for vertex in &geom.mesh_vertices {
+            for coordinate in vertex {
+                hull_hasher.update(coordinate.to_bits().to_le_bytes());
+            }
         }
-    }
+        Some(hex::encode(hull_hasher.finalize()))
+    } else {
+        None
+    };
     Ok(MeshAssetDigest {
         reference: normalize_asset_reference(reference),
         sha256: hex::encode(Sha256::digest(bytes)),
-        query_vertices_sha256: hex::encode(hull_hasher.finalize()),
+        query_vertices_sha256,
     })
+}
+
+fn validate_mesh_query_evidence(geom: &GeomRecord) -> Result<(), BenchmarkError> {
+    const VALID_OMISSION_REASONS: [&str; 3] = [
+        "compiled_mesh_has_fewer_than_four_vertices",
+        "compiled_hull_vertex_limit_exceeded",
+        "compiled_mesh_vertex_limit_exceeded_without_hull_graph",
+    ];
+
+    if geom.mesh_vertices_omitted_reason.is_some() && !geom.mesh_vertices.is_empty() {
+        return Err(BenchmarkError::Geometry(format!(
+            "collision mesh {} both omits and supplies query vertices",
+            geom.name
+        )));
+    }
+    if let Some(reason) = geom.mesh_vertices_omitted_reason.as_deref() {
+        if !VALID_OMISSION_REASONS.contains(&reason) {
+            return Err(BenchmarkError::Geometry(format!(
+                "collision mesh {} has an unknown query vertex omission reason {}",
+                geom.name, reason
+            )));
+        }
+    } else if geom.mesh_vertices.is_empty() {
+        return Err(BenchmarkError::Geometry(format!(
+            "collision mesh {} has no query vertices or omission reason",
+            geom.name
+        )));
+    }
+
+    if !geom.mesh_vertices.is_empty()
+        && (!(4..=MAX_CONVEX_MESH_VERTICES).contains(&geom.mesh_vertices.len())
+            || geom
+                .mesh_vertices
+                .iter()
+                .flatten()
+                .any(|coordinate| !coordinate.is_finite()))
+    {
+        return Err(BenchmarkError::Geometry(format!(
+            "collision mesh {} has invalid compiled hull vertices",
+            geom.name
+        )));
+    }
+    Ok(())
 }
 
 fn normalize_asset_reference(reference: &str) -> String {

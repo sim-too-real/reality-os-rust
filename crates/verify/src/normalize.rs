@@ -92,6 +92,10 @@ pub struct GeomRecord {
     /// Compiled collision query vertices in the frame used by the geom pose.
     #[serde(default)]
     pub mesh_vertices: Vec<[f64; 3]>,
+    /// Why compiled mesh query vertices were omitted when a safe size bound or
+    /// hull validation prevented materialization.
+    #[serde(default)]
+    pub mesh_vertices_omitted_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -366,6 +370,10 @@ impl RobotManifest {
                                 .and_then(|value| value.as_str())
                                 .map(str::to_owned),
                             mesh_vertices: vec3_list(&g["mesh_vertices"]),
+                            mesh_vertices_omitted_reason: g
+                                .get("mesh_vertices_omitted_reason")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_owned),
                         }
                     })
                     .collect()
