@@ -456,6 +456,7 @@ mod tests {
                 declared: crate::provenance::Provenanced::declared(1.0, "regime", 0.0),
                 empirical_interval: None,
                 lineage: Vec::new(),
+                evidence: Vec::new(),
             });
         let report = hypothesize(&large_slip());
         let before = rank_goal_or_probe(&candidates, &report.kinds, LIMIT);

@@ -44,6 +44,7 @@ pub mod planar_goal;
 pub mod probe_selection;
 pub mod provenance;
 pub mod push;
+pub mod push_probe;
 pub mod reach;
 pub mod recoverability;
 pub mod release;

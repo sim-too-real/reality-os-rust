@@ -263,6 +263,7 @@ mod tests {
                 declared: Provenanced::declared(value, source, 0.0),
                 empirical_interval: None,
                 lineage: Vec::new(),
+                evidence: Vec::new(),
             },
             None => ParameterBelief {
                 parameter,
@@ -270,6 +271,7 @@ mod tests {
                 declared: Provenanced::unknown(source, 0.0),
                 empirical_interval: None,
                 lineage: Vec::new(),
+                evidence: Vec::new(),
             },
         }
     }

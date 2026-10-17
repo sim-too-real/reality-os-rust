@@ -809,6 +809,7 @@ mod tests {
                 ),
                 empirical_interval: None,
                 lineage: Vec::new(),
+                evidence: Vec::new(),
             });
         let revised = apply_probe_observation(
             &with_regime,

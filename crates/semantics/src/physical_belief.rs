@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::provenance::Provenanced;
+use crate::sensor::WrenchSampleOrigin;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -37,6 +38,12 @@ pub struct BeliefLineage {
     pub belief_after: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BeliefEvidenceReference {
+    pub measurement_digest: String,
+    pub origin: WrenchSampleOrigin,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParameterBelief {
     pub parameter: PhysicalParameter,
@@ -45,6 +52,28 @@ pub struct ParameterBelief {
     pub declared: Provenanced<f64>,
     pub empirical_interval: Option<[f64; 2]>,
     pub lineage: Vec<BeliefLineage>,
+    #[serde(default)]
+    pub evidence: Vec<BeliefEvidenceReference>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum BeliefUpdateError {
+    #[error("parameter is missing from the belief")]
+    MissingParameter,
+    #[error("parameter has no finite empirical prior interval")]
+    MissingEmpiricalPrior,
+    #[error("prior or evidence interval is invalid")]
+    InvalidInterval,
+    #[error("evidence digest is invalid")]
+    InvalidEvidenceDigest,
+    #[error("synthetic evidence cannot update physical friction")]
+    SyntheticEvidence,
+    #[error("measurement evidence was already applied")]
+    DuplicateEvidence,
+    #[error("contradicted belief cannot be narrowed by this update")]
+    ContradictedBelief,
+    #[error("evidence interval does not intersect the empirical prior")]
+    EmptyIntersection,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -65,6 +94,7 @@ impl PhysicalParameterBelief {
                 declared: Provenanced::declared(value, source, 0.0),
                 empirical_interval: None,
                 lineage: Vec::new(),
+                evidence: Vec::new(),
             }],
         }
     }
@@ -76,6 +106,7 @@ impl PhysicalParameterBelief {
             declared: Provenanced::unknown(source, 0.0),
             empirical_interval: None,
             lineage: Vec::new(),
+            evidence: Vec::new(),
         });
         self
     }
@@ -153,6 +184,80 @@ impl PhysicalParameterBelief {
             inference: "EMPIRICAL_INTERVAL_NARROWED".into(),
             belief_after: after,
         });
+    }
+
+    /// Intersect one evidence-derived constraint with an existing finite prior.
+    /// The original declared value remains immutable and every source is retained.
+    pub fn intersect_interval_with_evidence(
+        &mut self,
+        parameter: PhysicalParameter,
+        interval: [f64; 2],
+        reference: BeliefEvidenceReference,
+    ) -> Result<[f64; 2], BeliefUpdateError> {
+        let Some(entry) = self.entry_mut(parameter) else {
+            return Err(BeliefUpdateError::MissingParameter);
+        };
+        if reference.measurement_digest.len() != 64
+            || !reference
+                .measurement_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(BeliefUpdateError::InvalidEvidenceDigest);
+        }
+        if reference.origin == WrenchSampleOrigin::Synthetic {
+            return Err(BeliefUpdateError::SyntheticEvidence);
+        }
+        if entry.evidence.contains(&reference) {
+            return Err(BeliefUpdateError::DuplicateEvidence);
+        }
+        if entry.status == BeliefEpistemicStatus::Contradicted {
+            return Err(BeliefUpdateError::ContradictedBelief);
+        }
+        let prior = entry
+            .empirical_interval
+            .ok_or(BeliefUpdateError::MissingEmpiricalPrior)?;
+        let valid_interval = |bounds: [f64; 2]| {
+            bounds[0].is_finite()
+                && bounds[1].is_finite()
+                && bounds[0] >= 0.0
+                && bounds[0] <= bounds[1]
+        };
+        if !valid_interval(prior) || !valid_interval(interval) {
+            return Err(BeliefUpdateError::InvalidInterval);
+        }
+        let intersection = [prior[0].max(interval[0]), prior[1].min(interval[1])];
+        if intersection[0] > intersection[1] {
+            return Err(BeliefUpdateError::EmptyIntersection);
+        }
+
+        let before = format!(
+            "{parameter:?} status={:?} declared={:?} interval={:?}",
+            entry.status, entry.declared.value, entry.empirical_interval
+        );
+        let declared_value = entry.declared.value;
+        entry.empirical_interval = Some(intersection);
+        if matches!(
+            entry.status,
+            BeliefEpistemicStatus::DeclaredFact | BeliefEpistemicStatus::Unknown
+        ) {
+            entry.status = BeliefEpistemicStatus::DerivedConstraint;
+        }
+        let after = format!(
+            "{parameter:?} status={:?} declared={:?} interval={:?}",
+            entry.status, entry.declared.value, entry.empirical_interval
+        );
+        let origin = reference.origin.as_str();
+        let observation = reference.measurement_digest.clone();
+        entry.evidence.push(reference);
+        entry.lineage.push(BeliefLineage {
+            belief_before: before,
+            observation,
+            inference: format!("WRENCH_EVIDENCE_INTERVAL_INTERSECTED:{origin}"),
+            belief_after: after,
+        });
+        entry.declared.value = declared_value;
+        Ok(intersection)
     }
 
     /// Two measurements that cannot both be true. No replacement value is invented.

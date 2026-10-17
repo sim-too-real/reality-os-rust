@@ -2821,6 +2821,11 @@ fn proof_dependency_digest(
             }
             None => bytes.push(0),
         }
+        bytes.extend_from_slice(&(entry.evidence.len() as u64).to_le_bytes());
+        for evidence in &entry.evidence {
+            push_str(&mut bytes, &evidence.measurement_digest);
+            push_str(&mut bytes, evidence.origin.as_str());
+        }
     }
     push_str(
         &mut bytes,
@@ -2995,6 +3000,62 @@ mod tests {
     use crate::hardware_boundary::{HardwareActionScope, HardwareAuthority, UnconfiguredHardware};
     use crate::maneuver_witness::TransitionKind;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn probe_lineage_changes_proof_dependency_digest() {
+        use crate::physical_belief::BeliefEvidenceReference;
+        use crate::push_probe::WrenchEvidenceOrigin;
+
+        let (model, mut base_request) = benchmark_scene();
+        base_request.belief.narrow_interval(
+            PhysicalParameter::SupportFriction,
+            [0.1, 0.8],
+            "probe-lineage-prior",
+        );
+        let candidates = push_candidates(&base_request);
+        let candidate = candidates
+            .iter()
+            .find(|candidate| candidate.action_key == "probe:+x")
+            .expect("probe candidate");
+        let baseline = proof_dependency_digest(PUSH_FAMILY, &model, &base_request, candidate);
+
+        let mut first_evidence = base_request.clone();
+        first_evidence
+            .belief
+            .intersect_interval_with_evidence(
+                PhysicalParameter::SupportFriction,
+                [0.2, 0.7],
+                BeliefEvidenceReference {
+                    measurement_digest: "a".repeat(64),
+                    origin: WrenchEvidenceOrigin::Simulation,
+                },
+            )
+            .expect("valid evidence interval");
+        let mut second_evidence = base_request;
+        second_evidence
+            .belief
+            .intersect_interval_with_evidence(
+                PhysicalParameter::SupportFriction,
+                [0.2, 0.7],
+                BeliefEvidenceReference {
+                    measurement_digest: "b".repeat(64),
+                    origin: WrenchEvidenceOrigin::Simulation,
+                },
+            )
+            .expect("valid evidence interval");
+        let first = proof_dependency_digest(PUSH_FAMILY, &model, &first_evidence, candidate);
+        let second = proof_dependency_digest(PUSH_FAMILY, &model, &second_evidence, candidate);
+        assert_ne!(baseline, first);
+        assert_ne!(first, second);
+        assert_eq!(
+            first_evidence
+                .belief
+                .entry(PhysicalParameter::SupportFriction)
+                .unwrap()
+                .empirical_interval,
+            Some([0.2, 0.7])
+        );
+    }
 
     #[test]
     fn typed_safety_fault_observations_refuse_and_require_provenance() {
