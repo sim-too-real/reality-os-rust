@@ -5,9 +5,10 @@
 
 use super::geometry::{validate_collision_geometry, GeometryGateResult};
 use super::scenario::{
-    simulated_grasp_friction_oracle_input, trial_digest, BenchmarkTask, ResolvedBenchmarkTrial,
-    TrialExpectation,
+    paired_trial_key, simulated_grasp_friction_oracle_input, trial_digest, BenchmarkTask,
+    ResolvedBenchmarkTrial, TrialExpectation, BENCHMARK_SCHEMA_VERSION,
 };
+use super::wrench_sensor::{SimulationWrenchSensorProfile, WrenchAbortEvent, WrenchAbortReason};
 use super::BenchmarkError;
 use crate::bundle::RobotBundle;
 use crate::manipulation_scenarios::{ManipulationScenario, NegKind};
@@ -19,19 +20,26 @@ use crate::resource_qualify::qualify_on;
 use crate::semantics_map::embodiment_from_manifest;
 use realityos_core::RealityOs;
 use realityos_kernel::physical_action::PhysicalActionEnvelope;
+use realityos_kernel::physical_action::WrenchLimitPolicy;
 use realityos_reasoner_bridge::{
     authorize_current_action, AuthorizedReasonerAction, SimulationAdmission,
 };
 use realityos_semantics::contact_collision::NamedBox;
+use realityos_semantics::observation::WrenchSample;
 use realityos_semantics::physical_belief::{PhysicalParameter, PhysicalParameterBelief};
 use realityos_semantics::physical_reasoner::{
-    integrate_support_friction, PhysicalObjective, PhysicalReasoner, ReasoningRequest,
-    SafetyFaultKind, SafetyFaultObservation, TableScene,
+    PhysicalObjective, PhysicalReasoner, ReasoningRequest, SafetyFaultKind, SafetyFaultObservation,
+    TableScene,
 };
 use realityos_semantics::provenance::Provenanced;
+use realityos_semantics::push_probe::{
+    infer_support_friction, FrictionInferenceResult, IntendedContactEvidence, ProbeMotionWindow,
+    PushProbeMeasurement, WrenchTransform,
+};
 use realityos_semantics::resource::{
     ControlledResource, QualificationStatus, ResourceKind, ResourceTopology,
 };
+use realityos_semantics::sensor::WrenchSampleOrigin;
 use realityos_session::grant_covers;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -42,6 +50,7 @@ const MU_REQUIRED: f64 = 0.3;
 const MAX_ACTIONS: usize = 6;
 const CONTROL_STEPS_PER_SEGMENT: u32 = 500;
 const PUSH_STEPS_PER_WAYPOINT: u32 = 500;
+const PROBE_CONTACT_RAMP_STEPS: u32 = 3_000;
 const CONTROL_CONVERGENCE_CHECK_STEPS: u32 = 100;
 const CONTROL_AUTHORITY_CHECK_STEPS: u32 = 10;
 const GRASP_CLOSE_SETTLE_STEPS: u32 = 200;
@@ -71,6 +80,7 @@ pub enum FailureCause {
     ActionEnvelopeMismatch,
     AcquisitionNotVerified,
     HoldNotVerified,
+    ForceMonitorAbort,
     AuthorityExpired,
 }
 
@@ -104,6 +114,8 @@ pub struct GraspContactAudit {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkEpisode {
     pub schema_version: u32,
+    #[serde(default)]
+    pub paired_trial_key: Option<String>,
     pub trial_id: String,
     pub trial_digest: String,
     pub seed: u64,
@@ -149,14 +161,71 @@ pub struct BenchmarkEpisode {
     /// Debug-only serialized request payloads for auditing the label boundary.
     /// The request type has no expectation, verifier truth, or outcome fields.
     pub reasoning_request_audits: Vec<String>,
+    #[serde(default)]
+    pub wrench_sensor_profile_digest: Option<String>,
+    #[serde(default)]
+    pub wrench_compensation_digest: Option<String>,
+    #[serde(default)]
+    pub wrench_inference_compensation_digest: Option<String>,
+    #[serde(default)]
+    pub wrench_inference_measurement_digest: Option<String>,
+    #[serde(default)]
+    pub wrench_precontact_baseline: Option<WrenchSample>,
+    #[serde(default)]
+    pub wrench_monitor_gravity_reference: Option<WrenchSample>,
+    #[serde(default)]
+    pub wrench_monitor_gravity_reference_position: Option<[f64; 3]>,
+    #[serde(default)]
+    pub wrench_monitor_gravity_reference_orientation: Option<[f64; 4]>,
+    #[serde(default)]
+    pub wrench_sample_count: u64,
+    #[serde(default)]
+    pub wrench_max_sample_age_s: Option<f64>,
+    #[serde(default)]
+    pub wrench_max_inter_sample_gap_s: Option<f64>,
+    #[serde(default)]
+    pub wrench_max_object_speed_m_s: Option<f64>,
+    #[serde(default)]
+    pub wrench_peak_conservative_bounds: Option<[f64; 6]>,
+    #[serde(default)]
+    pub wrench_caps: Option<[f64; 6]>,
+    #[serde(default)]
+    pub wrench_minimum_margin: Option<f64>,
+    #[serde(default)]
+    pub wrench_abort: Option<WrenchAbortEvent>,
+    #[serde(default)]
+    pub wrench_abort_axis: Option<usize>,
+    #[serde(default)]
+    pub wrench_abort_result: Option<String>,
+    #[serde(default)]
+    pub wrench_inference_interval: Option<[f64; 2]>,
+    #[serde(default)]
+    pub wrench_inference_reason: Option<String>,
+    #[serde(default)]
+    pub prior_support_friction_interval: Option<[f64; 2]>,
+    #[serde(default)]
+    pub posterior_support_friction_interval: Option<[f64; 2]>,
 }
 
 pub fn run_benchmark_trial(
     bundle: &RobotBundle,
     trial: &ResolvedBenchmarkTrial,
     admission: SimulationAdmission,
+    wrench_profile: Option<&SimulationWrenchSensorProfile>,
 ) -> Result<BenchmarkEpisode, BenchmarkError> {
     let wall = Instant::now();
+    if trial.schema_version != BENCHMARK_SCHEMA_VERSION {
+        return Err(BenchmarkError::InvalidTrial(format!(
+            "schema-v{} trial cannot be executed by schema-v{}",
+            trial.schema_version, BENCHMARK_SCHEMA_VERSION
+        )));
+    }
+    let computed_paired_key = paired_trial_key(trial)?;
+    if trial.paired_trial_key.as_deref() != Some(computed_paired_key.as_str()) {
+        return Err(BenchmarkError::InvalidTrial(
+            "schema-v6 trial is missing or has a mismatched paired_trial_key".into(),
+        ));
+    }
     let mut worker = MujocoInstance::spawn()
         .map_err(|error| BenchmarkError::Simulation(format!("MUJOCO_REQUIRED:{error}")))?;
     let base_load = worker
@@ -177,6 +246,37 @@ pub fn run_benchmark_trial(
             trial.initial_qpos.len(),
             base_manifest.nq
         )));
+    }
+    match (trial.task, wrench_profile) {
+        (BenchmarkTask::PushProbeReplan, Some(profile)) => {
+            profile
+                .validate_for_timestep(base_manifest.timestep)
+                .map_err(|error| BenchmarkError::InvalidTrial(error.to_string()))?;
+            admission
+                .wrench_limit_policy
+                .validate()
+                .map_err(|error| BenchmarkError::InvalidTrial(error.to_string()))?;
+            if admission.wrench_limit_policy != profile.limit_policy
+                || admission.wrench_limit_policy.digest() != profile.limit_policy.digest()
+            {
+                return Err(BenchmarkError::InvalidTrial(
+                    "simulation admission wrench policy must exactly match the registered profile"
+                        .into(),
+                ));
+            }
+        }
+        (BenchmarkTask::PushProbeReplan, None) => {
+            return Err(BenchmarkError::InvalidTrial(
+                "push/probe execution requires an explicit registered simulation wrench profile"
+                    .into(),
+            ));
+        }
+        (BenchmarkTask::PinchGraspLift, Some(_)) => {
+            return Err(BenchmarkError::InvalidTrial(
+                "grasp-only execution must not receive a push wrench profile".into(),
+            ));
+        }
+        (BenchmarkTask::PinchGraspLift, None) => {}
     }
 
     let mut qualified_resources = Vec::new();
@@ -199,9 +299,16 @@ pub fn run_benchmark_trial(
         apply_grasp_fault_observation(&trial.scenario, &mut qualified_resources);
     }
 
-    let loaded = worker
-        .load_bundle(bundle, &trial.scenario.objects, trial.seed)
-        .map_err(|error| BenchmarkError::Simulation(format!("trial_model_load:{error}")))?;
+    let loaded = match wrench_profile {
+        Some(profile) => worker.load_bundle_with_wrench_profile(
+            bundle,
+            &trial.scenario.objects,
+            trial.seed,
+            profile,
+        ),
+        None => worker.load_bundle(bundle, &trial.scenario.objects, trial.seed),
+    }
+    .map_err(|error| BenchmarkError::Simulation(format!("trial_model_load:{error}")))?;
     let manifest = RobotManifest::from_inspect(bundle, &loaded["inspect"]);
     ensure_robot_prefix(&base_manifest, &manifest)?;
     let mut qpos = manifest.qpos0.clone();
@@ -231,6 +338,7 @@ pub fn run_benchmark_trial(
 
     let mut episode = BenchmarkEpisode {
         schema_version: super::scenario::BENCHMARK_SCHEMA_VERSION,
+        paired_trial_key: trial.paired_trial_key.clone(),
         trial_id: trial.trial_id.clone(),
         trial_digest: trial_digest(trial)?,
         seed: trial.seed,
@@ -279,6 +387,32 @@ pub fn run_benchmark_trial(
         simulation_time_s: 0.0,
         decision_audits: Vec::new(),
         reasoning_request_audits: Vec::new(),
+        wrench_sensor_profile_digest: wrench_profile
+            .map(SimulationWrenchSensorProfile::digest)
+            .transpose()
+            .map_err(|error| BenchmarkError::InvalidTrial(error.to_string()))?,
+        wrench_compensation_digest: wrench_profile
+            .map(|profile| profile.limit_policy.compensation_digest.clone()),
+        wrench_inference_compensation_digest: None,
+        wrench_inference_measurement_digest: None,
+        wrench_precontact_baseline: None,
+        wrench_monitor_gravity_reference: None,
+        wrench_monitor_gravity_reference_position: None,
+        wrench_monitor_gravity_reference_orientation: None,
+        wrench_sample_count: 0,
+        wrench_max_sample_age_s: None,
+        wrench_max_inter_sample_gap_s: None,
+        wrench_max_object_speed_m_s: None,
+        wrench_peak_conservative_bounds: None,
+        wrench_caps: wrench_profile.map(|profile| profile.limit_policy.scope.caps),
+        wrench_minimum_margin: None,
+        wrench_abort: None,
+        wrench_abort_axis: None,
+        wrench_abort_result: None,
+        wrench_inference_interval: None,
+        wrench_inference_reason: None,
+        prior_support_friction_interval: None,
+        posterior_support_friction_interval: None,
     };
 
     if let GeometryGateResult::UnsupportedPresent { geom_names } = &geometry.result {
@@ -473,41 +607,26 @@ pub fn run_benchmark_trial(
                     "runtime_divergence injection is only defined for push execution".into(),
                 ));
             }
-            let final_joint = request.scene.joint_names.last().ok_or_else(|| {
-                BenchmarkError::InvalidTrial(
-                    "runtime_divergence injection needs an end-effector joint".into(),
-                )
-            })?;
-            let body = manifest
-                .joints
-                .iter()
-                .find(|joint| &joint.name == final_joint)
-                .map(|joint| joint.child_body.as_str())
-                .filter(|body| !body.is_empty())
-                .ok_or_else(|| {
-                    BenchmarkError::InvalidTrial(
-                        "runtime_divergence end-effector body is unmapped".into(),
-                    )
-                })?;
-            worker
-                .apply_force(body, [0.0, 25.0, 0.0])
-                .map_err(|error| {
-                    BenchmarkError::Simulation(format!("runtime_divergence_injection:{error}"))
-                })?;
             divergence_fault_pending = false;
         }
+        let mut push_witness_audit = None;
         let (exec, grasp_hold_start, grasp_phase_positions) = match trial.task {
-            BenchmarkTask::PushProbeReplan => (
-                execute_push_witness(
+            BenchmarkTask::PushProbeReplan => {
+                let profile = wrench_profile.expect("push profile was validated above");
+                let result = execute_push_witness(
                     &mut worker,
                     &manifest,
                     &request,
                     &authorized,
                     admission.execution_bound_m,
-                )?,
-                None,
-                Vec::new(),
-            ),
+                    profile,
+                    &admission.wrench_limit_policy,
+                    divergence_injected,
+                )?;
+                let execution = result.execution;
+                push_witness_audit = Some(result);
+                (execution, None, Vec::new())
+            }
             BenchmarkTask::PinchGraspLift => {
                 let Some(resource) = grasp_resource.as_ref() else {
                     episode.failure_cause = Some(FailureCause::UnsupportedTask);
@@ -527,11 +646,6 @@ pub fn run_benchmark_trial(
                 )
             }
         };
-        if divergence_injected {
-            worker.clear_forces().map_err(|error| {
-                BenchmarkError::Simulation(format!("clear_runtime_divergence_injection:{error}"))
-            })?;
-        }
         episode.grasp_phase_object_positions = grasp_phase_positions;
         let after_state = state_payload(&mut worker)?;
         let object_after = body_position(&after_state, &trial.scenario.object_id)?;
@@ -544,6 +658,9 @@ pub fn run_benchmark_trial(
             .peek_ctrl()
             .map_err(|error| BenchmarkError::Simulation(error.to_string()))?
             .1;
+        if let Some(audit) = push_witness_audit.as_ref() {
+            update_wrench_episode_audit(&mut episode, audit, wrench_profile.expect("profile"));
+        }
         episode.ctrl_writes_after = writes_after_action;
         episode.actions.push(ActionTrace {
             action_key: action_key.clone(),
@@ -585,6 +702,29 @@ pub fn run_benchmark_trial(
             episode.failure_cause = Some(FailureCause::UnsupportedControlMapping);
             episode.refusal_code = Some("NO_AUTHORIZED_CONTROL_MAPPING".into());
             episode.outcome = TrialOutcome::ActionFailed;
+            break;
+        }
+        if exec == WitnessExecution::WrenchAborted {
+            episode.failure_cause = Some(FailureCause::ForceMonitorAbort);
+            episode.refusal_code = Some("WRENCH_MONITOR_ABORTED_ACTION".into());
+            episode.wrench_abort_result = Some(
+                if episode
+                    .wrench_abort
+                    .as_ref()
+                    .is_some_and(|event| event.stop_verified)
+                {
+                    "preauthorized_hold_verified"
+                } else {
+                    "preauthorized_hold_unverified_fault_latched"
+                }
+                .into(),
+            );
+            episode.outcome = TrialOutcome::ActionFailed;
+            let state = state_payload(&mut worker)?;
+            let object = body_position(&state, &trial.scenario.object_id)?;
+            episode.object_end_xyz = object;
+            episode.goal_error_end_m = xy_distance(object, trial.goal_xyz);
+            episode.simulation_time_s = state["time"].as_f64().unwrap_or(0.0);
             break;
         }
         if recovery_pending {
@@ -690,27 +830,56 @@ pub fn run_benchmark_trial(
             episode.recovery_count = episode.recovery_count.saturating_add(1);
         }
         if is_probe {
-            let delta = sub3(object_after, object_before);
-            let observed_stroke = action_direction(&action_key)
-                .map(|axis| delta[0] * axis[0] + delta[1] * axis[1])
-                .unwrap_or(displacement_m);
-            let ratio = if request.probe_stroke_m > 1e-9 {
-                observed_stroke / request.probe_stroke_m
-            } else {
-                0.0
-            };
-            let receipt = integrate_support_friction(
-                &belief,
-                ratio,
-                request.mu_required,
-                &format!("benchmark-probe:{}", trial.trial_id),
-            );
-            belief = receipt.belief_after;
-            if !receipt.information_gain && !blocked_action_keys.contains(&action_key) {
-                // A probe with no bounded inference cannot justify repeating
-                // the same physical interaction. Reobserve once, then let the
-                // shared selector choose a different proved action or refuse.
-                blocked_action_keys.push(action_key.clone());
+            let profile = wrench_profile.expect("push profile was validated above");
+            let audit = push_witness_audit.as_ref().ok_or_else(|| {
+                BenchmarkError::Simulation("push execution omitted wrench audit".into())
+            })?;
+            let prior = belief
+                .entry(PhysicalParameter::SupportFriction)
+                .and_then(|entry| entry.empirical_interval)
+                .unwrap_or([0.05, 0.8]);
+            episode.prior_support_friction_interval = Some(prior);
+            let measurement = push_probe_measurement(
+                &manifest,
+                &request,
+                profile,
+                audit,
+                &geometry.digest,
+                &after_state,
+            )?;
+            episode.wrench_precontact_baseline = measurement.precontact_baseline.clone();
+            episode.wrench_inference_compensation_digest =
+                Some(inference_compensation_digest(&measurement));
+            episode.wrench_inference_measurement_digest = Some(measurement.digest());
+            match infer_support_friction(&measurement) {
+                FrictionInferenceResult::Updated { interval, mode } => {
+                    episode.wrench_inference_interval = Some(interval);
+                    episode.wrench_inference_reason = Some(format!("updated:{mode:?}"));
+                    match belief.intersect_support_friction_with_probe(interval, &measurement) {
+                        Ok(posterior) => {
+                            episode.posterior_support_friction_interval = Some(posterior);
+                            if posterior == prior && !blocked_action_keys.contains(&action_key) {
+                                blocked_action_keys.push(action_key.clone());
+                            }
+                        }
+                        Err(error) => {
+                            episode.wrench_inference_reason =
+                                Some(format!("belief_update_rejected:{error:?}"));
+                            if !blocked_action_keys.contains(&action_key) {
+                                blocked_action_keys.push(action_key.clone());
+                            }
+                        }
+                    }
+                }
+                FrictionInferenceResult::NoInference(reason) => {
+                    episode.wrench_inference_reason = Some(format!("no_inference:{reason:?}"));
+                    episode.posterior_support_friction_interval = Some(prior);
+                    if !blocked_action_keys.contains(&action_key) {
+                        // Without a strict evidence-derived narrowing, this
+                        // interaction cannot justify repeating the same probe.
+                        blocked_action_keys.push(action_key.clone());
+                    }
+                }
             }
         }
         previous_action_was_probe = is_probe;
@@ -741,7 +910,47 @@ enum WitnessExecution {
     Wrote,
     WroteNothing,
     Diverged,
+    WrenchAborted,
     AuthorityExpired,
+}
+
+struct PushMotionAudit {
+    started: bool,
+    start_s: f64,
+    end_s: f64,
+    start_position: [f64; 3],
+    end_position: [f64; 3],
+    max_speed_m_s: f64,
+    first_motion_s: Option<f64>,
+}
+
+impl Default for PushMotionAudit {
+    fn default() -> Self {
+        Self {
+            started: false,
+            start_s: 0.0,
+            end_s: 0.0,
+            start_position: [0.0; 3],
+            end_position: [0.0; 3],
+            max_speed_m_s: 0.0,
+            first_motion_s: None,
+        }
+    }
+}
+
+struct PushWitnessAudit {
+    execution: WitnessExecution,
+    samples: Vec<WrenchSample>,
+    sensor_positions: Vec<[f64; 3]>,
+    sensor_orientations: Vec<[f64; 4]>,
+    precontact_baseline: Option<WrenchSample>,
+    precontact_baseline_position: Option<[f64; 3]>,
+    precontact_baseline_orientation: Option<[f64; 4]>,
+    monitor_gravity_reference: Option<WrenchSample>,
+    monitor_gravity_reference_position: Option<[f64; 3]>,
+    monitor_gravity_reference_orientation: Option<[f64; 4]>,
+    abort: Option<WrenchAbortEvent>,
+    motion: PushMotionAudit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -757,29 +966,48 @@ fn execute_push_witness(
     request: &ReasoningRequest,
     authorized: &AuthorizedReasonerAction,
     execution_bound_m: f64,
-) -> Result<WitnessExecution, BenchmarkError> {
+    profile: &SimulationWrenchSensorProfile,
+    policy: &WrenchLimitPolicy,
+    inject_runtime_divergence: bool,
+) -> Result<PushWitnessAudit, BenchmarkError> {
+    let mut divergence_injection_pending = inject_runtime_divergence;
+    let mut audit = PushWitnessAudit {
+        execution: WitnessExecution::WroteNothing,
+        samples: Vec::new(),
+        sensor_positions: Vec::new(),
+        sensor_orientations: Vec::new(),
+        precontact_baseline: None,
+        precontact_baseline_position: None,
+        precontact_baseline_orientation: None,
+        monitor_gravity_reference: None,
+        monitor_gravity_reference_position: None,
+        monitor_gravity_reference_orientation: None,
+        abort: None,
+        motion: PushMotionAudit::default(),
+    };
     let frozen = authorized.action.frozen();
     let (requested, maximum) = frozen
         .action_envelope
         .linear_stroke_bounds()
         .ok_or_else(|| BenchmarkError::Simulation("expected linear-stroke action".into()))?;
     if requested > maximum || maximum > execution_bound_m + 1e-9 {
-        return Ok(WitnessExecution::WroteNothing);
+        return Ok(audit);
     }
     let contents = &frozen.witness_contents;
     let is_probe = frozen.action_key.starts_with("probe:");
     let Some((q0, targets)) =
         decode_push_witness(contents, request.scene.joint_names.len(), is_probe)
     else {
-        return Ok(WitnessExecution::WroteNothing);
+        return Ok(audit);
     };
     let last_target_index = targets.len().saturating_sub(1);
     if !authorized_covers_now(worker, authorized, request.now_s)? {
-        return Ok(WitnessExecution::WroteNothing);
+        return Ok(audit);
     }
     let measured = read_named_joints(worker, manifest, &request.scene.joint_names)?;
     if !vectors_near(&measured, &q0, 0.04) {
-        return Ok(WitnessExecution::Diverged);
+        audit.execution = WitnessExecution::Diverged;
+        return Ok(audit);
     }
 
     let actuator_map = position_actuator_map(manifest, &request.scene.joint_names)?;
@@ -788,25 +1016,36 @@ fn execute_push_witness(
     let mut stroke_completed_by_observation = false;
     let observed_completion_distance = if is_probe { requested * 0.8 } else { requested };
     for (target_index, target) in targets.into_iter().enumerate() {
+        let motion_phase = target_index > 0 && (!is_probe || target_index < last_target_index);
         if stroke_completed_by_observation && target_index != last_target_index {
             continue;
         }
+        let motion_reference = if motion_phase && !audit.motion.started {
+            let state = state_payload(worker)?;
+            Some((
+                state["time"].as_f64().unwrap_or(0.0),
+                body_position(&state, &request.scene.object_id)?,
+            ))
+        } else {
+            None
+        };
         let now = simulator_now(worker)?;
         let now_s = 10.0 + now;
         if !authorized_covers_now(worker, authorized, now_s)? {
-            return Ok(if has_written {
+            audit.execution = if has_written {
                 WitnessExecution::AuthorityExpired
             } else {
                 WitnessExecution::WroteNothing
-            });
+            };
+            return Ok(audit);
         }
         let (ctrl, _) = worker
             .peek_ctrl()
             .map_err(|error| BenchmarkError::Simulation(error.to_string()))?;
         if ctrl.len() != manifest.nu.max(0) as usize {
-            return Ok(WitnessExecution::WroteNothing);
+            return Ok(audit);
         }
-        let mut next = ctrl;
+        let mut next = ctrl.clone();
         for (joint, value) in request.scene.joint_names.iter().zip(target.iter()) {
             let index = *actuator_map.get(joint).ok_or_else(|| {
                 BenchmarkError::InvalidTrial(format!(
@@ -818,37 +1057,169 @@ fn execute_push_witness(
                 || *value < actuator.ctrlrange[0] - 1e-8
                 || *value > actuator.ctrlrange[1] + 1e-8
             {
-                return Ok(WitnessExecution::WroteNothing);
+                return Ok(audit);
             }
             next[index] = *value;
         }
         if next.iter().any(|value| !value.is_finite()) {
-            return Ok(WitnessExecution::WroteNothing);
+            return Ok(audit);
         }
         if !authorized_covers_now(worker, authorized, now_s)? {
-            return Ok(WitnessExecution::WroteNothing);
+            return Ok(audit);
         }
-        worker.set_ctrl(&next).map_err(|error| {
-            BenchmarkError::Simulation(format!("authorized_control_write:{error}"))
-        })?;
-        has_written = true;
+        let probe_motion_ramp = is_probe && motion_phase;
+        let ramp_target = next.clone();
+        if !probe_motion_ramp {
+            worker.set_ctrl(&next).map_err(|error| {
+                BenchmarkError::Simulation(format!("authorized_control_write:{error}"))
+            })?;
+            has_written = true;
+        }
         let mut converged = false;
-        let mut remaining_steps = PUSH_STEPS_PER_WAYPOINT;
+        let total_steps = if probe_motion_ramp {
+            PROBE_CONTACT_RAMP_STEPS
+        } else {
+            PUSH_STEPS_PER_WAYPOINT
+        };
+        let mut remaining_steps = total_steps;
+        let mut elapsed_steps = 0_u32;
         while remaining_steps > 0 {
             // Sample contact motion every simulator step so a small bounded
             // probe cannot overshoot between observations. Transit remains
             // batched because it must be object-motion-free.
-            let check_steps = if target_index == 0 {
+            let check_steps = if target_index == 0 && is_probe {
+                CONTROL_AUTHORITY_CHECK_STEPS.min(4)
+            } else if target_index == 0 {
                 CONTROL_AUTHORITY_CHECK_STEPS
+            } else if probe_motion_ramp {
+                CONTROL_AUTHORITY_CHECK_STEPS.min(4)
             } else {
                 1
             };
-            let steps = remaining_steps.min(check_steps);
-            if !step_with_authority(worker, authorized, request.now_s, steps)? {
-                return Ok(WitnessExecution::AuthorityExpired);
+            let runtime_now_s = 10.0 + simulator_now(worker)?;
+            if !authorization_covers_at(authorized, runtime_now_s) {
+                audit.execution = WitnessExecution::AuthorityExpired;
+                return Ok(audit);
             }
+            // Never batch physics across the grant's expiry boundary. A check
+            // only before a 10-step batch could otherwise let the simulation
+            // keep executing an already expired action for several frames.
+            let steps_until_expiry = ((authorized.grant.scope.expires_at_s - runtime_now_s + 1e-9)
+                / manifest.timestep)
+                .floor()
+                .max(0.0) as u32;
+            if steps_until_expiry == 0 {
+                audit.execution = WitnessExecution::AuthorityExpired;
+                return Ok(audit);
+            }
+            let steps = remaining_steps.min(check_steps).min(steps_until_expiry);
+            if probe_motion_ramp {
+                let progress = f64::from(elapsed_steps + steps) / f64::from(total_steps);
+                let ramped_ctrl = ctrl
+                    .iter()
+                    .zip(&ramp_target)
+                    .map(|(start, end)| start + (end - start) * progress)
+                    .collect::<Vec<_>>();
+                worker.set_ctrl(&ramped_ctrl).map_err(|error| {
+                    BenchmarkError::Simulation(format!("authorized_probe_ramp_write:{error}"))
+                })?;
+                has_written = true;
+            }
+            let monitor = worker
+                .step_monitored(
+                    steps,
+                    profile,
+                    policy,
+                    &authorized.grant,
+                    is_probe && probe_motion_ramp && elapsed_steps == 0,
+                )
+                .map_err(|error| {
+                    BenchmarkError::Simulation(format!("wrench_monitored_step:{error}"))
+                })?;
+            if audit.precontact_baseline.is_none() {
+                audit.precontact_baseline = monitor.wrench_window.precontact_baseline.clone();
+                audit.precontact_baseline_position =
+                    monitor.wrench_window.precontact_baseline_position;
+                audit.precontact_baseline_orientation =
+                    monitor.wrench_window.precontact_baseline_orientation;
+            }
+            if audit.monitor_gravity_reference.is_none() {
+                audit.monitor_gravity_reference =
+                    monitor.wrench_window.monitor_gravity_reference.clone();
+                audit.monitor_gravity_reference_position =
+                    monitor.wrench_window.monitor_gravity_reference_position;
+                audit.monitor_gravity_reference_orientation =
+                    monitor.wrench_window.monitor_gravity_reference_orientation;
+            }
+            audit
+                .sensor_positions
+                .extend(monitor.wrench_window.sensor_positions);
+            audit
+                .sensor_orientations
+                .extend(monitor.wrench_window.sensor_orientations);
+            audit.samples.extend(monitor.wrench_window.samples);
             remaining_steps -= steps;
-            let state = state_payload(worker)?;
+            elapsed_steps += steps;
+            let mut inject_now = false;
+            if divergence_injection_pending && elapsed_steps == steps {
+                let direction = direction.ok_or_else(|| {
+                    BenchmarkError::InvalidTrial(
+                        "runtime_divergence injection needs a planar action direction".into(),
+                    )
+                })?;
+                let mut position = body_position(&monitor.state, &request.scene.object_id)?;
+                position[0] += -direction[1] * 0.02;
+                position[1] += direction[0] * 0.02;
+                worker
+                    .set_body_pos(&request.scene.object_id, position)
+                    .map_err(|error| {
+                        BenchmarkError::Simulation(format!("runtime_divergence_injection:{error}"))
+                    })?;
+                inject_now = true;
+                divergence_injection_pending = false;
+            }
+            let state = if inject_now {
+                state_payload(worker)?
+            } else {
+                monitor.state
+            };
+            let time_s = state["time"].as_f64().unwrap_or(0.0);
+            if motion_phase {
+                if !audit.motion.started {
+                    let (start_s, start_position) = motion_reference.unwrap_or((
+                        time_s - f64::from(steps) * manifest.timestep,
+                        request.scene.object_center,
+                    ));
+                    audit.motion.started = true;
+                    audit.motion.start_s = start_s;
+                    audit.motion.end_s = audit.motion.start_s;
+                    audit.motion.start_position = start_position;
+                    audit.motion.end_position = start_position;
+                }
+                let prior_position = audit.motion.end_position;
+                let current_position = body_position(&state, &request.scene.object_id)?;
+                let step_delta = sub3(current_position, prior_position);
+                let start_delta = sub3(current_position, audit.motion.start_position);
+                if audit.motion.first_motion_s.is_none()
+                    && start_delta[0].hypot(start_delta[1]) > 0.0001
+                {
+                    audit.motion.first_motion_s = Some(time_s);
+                }
+                let elapsed_s = f64::from(steps) * manifest.timestep;
+                if elapsed_s > 0.0 {
+                    audit.motion.max_speed_m_s = audit
+                        .motion
+                        .max_speed_m_s
+                        .max(step_delta[0].hypot(step_delta[1]) / elapsed_s);
+                }
+                audit.motion.end_s = time_s;
+                audit.motion.end_position = current_position;
+            }
+            if let Some(abort) = monitor.abort {
+                audit.execution = WitnessExecution::WrenchAborted;
+                audit.abort = Some(abort);
+                return Ok(audit);
+            }
             let displacement = sub3(
                 body_position(&state, &request.scene.object_id)?,
                 request.scene.object_center,
@@ -876,7 +1247,8 @@ fn execute_push_witness(
                 || along.is_some_and(|value| value < -0.005 || value > permitted_along_displacement)
                 || lateral.is_some_and(|value| value > 0.006)
             {
-                return Ok(WitnessExecution::Diverged);
+                audit.execution = WitnessExecution::Diverged;
+                return Ok(audit);
             }
             if !stroke_completed_by_observation
                 && target_index > 0
@@ -893,9 +1265,12 @@ fn execute_push_witness(
                 // The measured object effect completed the authorized goal
                 // stroke. Stop issuing the frozen remainder and let the outer
                 // loop reobserve and obtain fresh authority.
-                return Ok(WitnessExecution::Wrote);
+                audit.execution = WitnessExecution::Wrote;
+                return Ok(audit);
             }
-            if remaining_steps > 0 && remaining_steps % CONTROL_CONVERGENCE_CHECK_STEPS != 0 {
+            if remaining_steps > 0
+                && (probe_motion_ramp || remaining_steps % CONTROL_CONVERGENCE_CHECK_STEPS != 0)
+            {
                 continue;
             }
             let observed = read_named_joints(worker, manifest, &request.scene.joint_names)?;
@@ -905,7 +1280,8 @@ fn execute_push_witness(
             }
         }
         if !converged {
-            return Ok(WitnessExecution::Diverged);
+            audit.execution = WitnessExecution::Diverged;
+            return Ok(audit);
         }
     }
     if is_probe {
@@ -921,10 +1297,405 @@ fn execute_push_witness(
             || lateral.is_some_and(|value| value > 0.006)
             || displacement[2].abs() > 0.01
         {
-            return Ok(WitnessExecution::Diverged);
+            audit.execution = WitnessExecution::Diverged;
+            return Ok(audit);
         }
     }
-    Ok(WitnessExecution::Wrote)
+    audit.execution = WitnessExecution::Wrote;
+    Ok(audit)
+}
+
+fn update_wrench_episode_audit(
+    episode: &mut BenchmarkEpisode,
+    audit: &PushWitnessAudit,
+    profile: &SimulationWrenchSensorProfile,
+) {
+    episode.wrench_max_object_speed_m_s = Some(
+        episode
+            .wrench_max_object_speed_m_s
+            .unwrap_or(0.0)
+            .max(audit.motion.max_speed_m_s),
+    );
+    let Ok(profile_digest) = profile.digest() else {
+        episode.wrench_abort_result = Some("profile_digest_invalid".into());
+        return;
+    };
+    episode.wrench_sensor_profile_digest = Some(profile_digest);
+    episode.wrench_compensation_digest = Some(profile.limit_policy.compensation_digest.clone());
+    episode.wrench_monitor_gravity_reference = audit.monitor_gravity_reference.clone();
+    episode.wrench_monitor_gravity_reference_position = audit.monitor_gravity_reference_position;
+    episode.wrench_monitor_gravity_reference_orientation =
+        audit.monitor_gravity_reference_orientation;
+    episode.wrench_sample_count = episode
+        .wrench_sample_count
+        .saturating_add(audit.samples.len() as u64);
+    if !audit.samples.is_empty() {
+        let mut peaks = [0.0_f64; 6];
+        let mut minimum_margin = f64::INFINITY;
+        let mut max_age_s = 0.0_f64;
+        let mut max_gap_s = 0.0_f64;
+        let mut previous_capture_s = None;
+        for (index, sample) in audit.samples.iter().enumerate() {
+            max_age_s = max_age_s.max((sample.receive_s - sample.capture_s).max(0.0));
+            if let Some(previous) = previous_capture_s {
+                max_gap_s = max_gap_s.max(sample.capture_s - previous);
+            }
+            previous_capture_s = Some(sample.capture_s);
+            let age_at_receive = (sample.receive_s - sample.capture_s).max(0.0);
+            let sample_position = audit
+                .sensor_positions
+                .get(index)
+                .copied()
+                .unwrap_or([0.0; 3]);
+            let sample_orientation = audit
+                .sensor_orientations
+                .get(index)
+                .copied()
+                .unwrap_or([1.0, 0.0, 0.0, 0.0]);
+            let reference = audit
+                .monitor_gravity_reference
+                .as_ref()
+                .zip(audit.monitor_gravity_reference_position)
+                .zip(audit.monitor_gravity_reference_orientation)
+                .map(|((sample, position), orientation)| (sample, position, orientation));
+            let (compensated, compensated_error) =
+                match super::wrench_sensor::gravity_compensated_wrench(
+                    sample,
+                    sample_position,
+                    sample_orientation,
+                    profile.bias,
+                    reference,
+                ) {
+                    Ok(compensated) => compensated,
+                    Err(_) => {
+                        episode.wrench_abort_result =
+                            Some("monitor_compensation_audit_invalid".into());
+                        continue;
+                    }
+                };
+            for (axis, peak) in peaks.iter_mut().enumerate() {
+                let upper = compensated[axis].abs()
+                    + compensated_error[axis]
+                    + profile.limit_policy.max_rise_rate[axis]
+                        * (age_at_receive
+                            + profile.limit_policy.max_sensing_latency_s
+                            + profile.limit_policy.max_abort_latency_s);
+                *peak = peak.max(upper);
+                minimum_margin = minimum_margin.min(profile.limit_policy.scope.caps[axis] - upper);
+            }
+        }
+        episode.wrench_max_sample_age_s = Some(max_age_s);
+        episode.wrench_max_inter_sample_gap_s = Some(max_gap_s);
+        episode.wrench_peak_conservative_bounds = Some(peaks);
+        episode.wrench_minimum_margin = Some(minimum_margin);
+    }
+    if let Some(abort) = &audit.abort {
+        episode.wrench_abort_axis = match abort.reason {
+            WrenchAbortReason::Limit { axis, .. } => Some(axis),
+            _ => None,
+        };
+        episode.wrench_abort_result = Some(if abort.stop_verified {
+            "preauthorized_hold_verified".into()
+        } else {
+            "preauthorized_hold_unverified_fault_latched".into()
+        });
+        episode.wrench_abort = Some(abort.clone());
+    }
+}
+
+fn push_probe_measurement(
+    manifest: &RobotManifest,
+    request: &ReasoningRequest,
+    profile: &SimulationWrenchSensorProfile,
+    audit: &PushWitnessAudit,
+    geometry_digest: &str,
+    state: &Value,
+) -> Result<PushProbeMeasurement, BenchmarkError> {
+    let frame = profile.sensor_frame.as_str();
+    let site = manifest.site_records.iter().find(|site| site.name == frame);
+    let body_id = site
+        .map(|site| site.body.as_str())
+        .or_else(|| {
+            manifest
+                .bodies
+                .iter()
+                .find(|body| body.name == frame)
+                .map(|body| body.name.as_str())
+        })
+        .ok_or_else(|| {
+            BenchmarkError::InvalidTrial(format!(
+                "wrench sensor frame {frame} has no mapped tool body"
+            ))
+        })?;
+    let (sensor_position, sensor_quaternion) = if site.is_some() {
+        (
+            value_vec3(&state["sites"][frame]).ok_or_else(|| {
+                BenchmarkError::InvalidTrial(format!("wrench site pose {frame} is missing"))
+            })?,
+            value_quaternion(&state["site_xquat"][frame]).ok_or_else(|| {
+                BenchmarkError::InvalidTrial(format!("wrench site orientation {frame} is missing"))
+            })?,
+        )
+    } else {
+        (
+            value_vec3(&state["xpos"][frame]).ok_or_else(|| {
+                BenchmarkError::InvalidTrial(format!("wrench body pose {frame} is missing"))
+            })?,
+            value_quaternion(&state["xquat"][frame]).ok_or_else(|| {
+                BenchmarkError::InvalidTrial(format!("wrench body orientation {frame} is missing"))
+            })?,
+        )
+    };
+    let rotation_to_support = quaternion_rotation(sensor_quaternion);
+    let translation_to_support_m = [
+        sensor_position[0] - request.scene.support_origin[0],
+        sensor_position[1] - request.scene.support_origin[1],
+        sensor_position[2] - request.scene.support_origin[2],
+    ];
+    let start_s = audit.motion.start_s;
+    let end_s = audit.motion.end_s.max(start_s + f64::EPSILON);
+    if audit.samples.len() != audit.sensor_positions.len()
+        || audit.samples.len() != audit.sensor_orientations.len()
+    {
+        return Err(BenchmarkError::Simulation(
+            "wrench_sample_pose_alignment_mismatch".into(),
+        ));
+    }
+    let mut aligned_samples = audit
+        .samples
+        .iter()
+        .zip(&audit.sensor_positions)
+        .zip(&audit.sensor_orientations)
+        .filter(|((sample, _), _)| {
+            sample.capture_s >= start_s
+                && sample.capture_s <= end_s
+                && audit
+                    .precontact_baseline
+                    .as_ref()
+                    .map_or(true, |baseline| sample.sequence != baseline.sequence)
+        })
+        .map(|((sample, position), quaternion)| {
+            let transform =
+                wrench_transform_for_pose(*position, *quaternion, request.scene.support_origin);
+            (sample.clone(), transform)
+        })
+        .collect::<Vec<_>>();
+    aligned_samples.sort_by(|left, right| {
+        left.0
+            .capture_s
+            .total_cmp(&right.0.capture_s)
+            .then_with(|| left.0.sequence.cmp(&right.0.sequence))
+    });
+    let samples = aligned_samples
+        .iter()
+        .map(|(sample, _)| sample.clone())
+        .collect::<Vec<_>>();
+    let sample_sensor_transforms = aligned_samples
+        .iter()
+        .map(|(_, transform)| transform.clone())
+        .collect::<Vec<_>>();
+    let evidence_ready_s = samples
+        .iter()
+        .map(|sample| sample.receive_s)
+        .fold(end_s, f64::max);
+    let mass_kg = request
+        .mass_kg
+        .map(|mass| [mass, mass])
+        .unwrap_or([0.0, 0.0]);
+    let mut compensation = profile.compensation();
+    compensation.gravity_wrench = [0.0; 6];
+    compensation.residual_error = audit
+        .precontact_baseline
+        .as_ref()
+        .map(|baseline| baseline.error_bounds)
+        .unwrap_or(profile.error_bounds);
+    compensation.digest = compensation.digest();
+    let sample_gravity_wrenches = audit
+        .precontact_baseline
+        .as_ref()
+        .map(|baseline| {
+            let baseline_position = audit.precontact_baseline_position.ok_or_else(|| {
+                BenchmarkError::Simulation("wrench_baseline_position_missing".into())
+            })?;
+            let baseline_orientation = audit.precontact_baseline_orientation.ok_or_else(|| {
+                BenchmarkError::Simulation("wrench_baseline_orientation_missing".into())
+            })?;
+            let baseline_transform = wrench_transform_for_pose(
+                baseline_position,
+                baseline_orientation,
+                request.scene.support_origin,
+            );
+            let unbiased_baseline =
+                std::array::from_fn(|axis| baseline.wrench[axis] - profile.bias[axis]);
+            let support_baseline = wrench_to_support_axes(&unbiased_baseline, &baseline_transform);
+            Ok::<Vec<[f64; 6]>, BenchmarkError>(
+                sample_sensor_transforms
+                    .iter()
+                    .map(|transform| wrench_from_support_axes(&support_baseline, transform))
+                    .collect(),
+            )
+        })
+        .transpose()?
+        .unwrap_or_default();
+    Ok(PushProbeMeasurement {
+        samples,
+        precontact_baseline: audit.precontact_baseline.clone(),
+        sample_gravity_wrenches,
+        sample_sensor_transforms,
+        sensor_to_support: WrenchTransform {
+            rotation_to_support,
+            translation_to_support_m,
+        },
+        compensation,
+        mass_kg,
+        support_normal_world: request.scene.support_normal,
+        motion: ProbeMotionWindow {
+            start_s,
+            end_s,
+            displacement_m: sub3(audit.motion.end_position, audit.motion.start_position),
+            max_speed_m_s: audit.motion.max_speed_m_s,
+            max_quasi_static_speed_m_s: 0.02,
+            pose_resolution_m: 0.0001,
+            first_motion_s: audit.motion.first_motion_s,
+        },
+        prior_support_friction: request
+            .belief
+            .entry(PhysicalParameter::SupportFriction)
+            .and_then(|entry| entry.empirical_interval)
+            .unwrap_or([0.05, 0.8]),
+        current_observation_epoch: request.scene.observation_epoch.clone(),
+        current_collision_model_digest: geometry_digest.into(),
+        now_s: evidence_ready_s,
+        max_sample_age_s: profile.limit_policy.max_sample_age_s,
+        max_inter_sample_gap_s: profile.limit_policy.max_inter_sample_gap_s,
+        max_sample_motion_skew_s: profile.limit_policy.max_inter_sample_gap_s,
+        max_wrench_rise_rate: profile.limit_policy.max_rise_rate,
+        intended_contact: IntendedContactEvidence {
+            observation_epoch: request.scene.observation_epoch.clone(),
+            collision_model_digest: geometry_digest.into(),
+            tool_body_id: body_id.into(),
+            target_body_id: request.scene.object_id.clone(),
+            // This pair is derived from the frozen collision-checked push
+            // witness; raw MuJoCo contact identities never enter inference.
+            plausible_contact_sets: vec![vec![body_id.into(), request.scene.object_id.clone()]],
+        },
+        saturated: false,
+        origin: WrenchSampleOrigin::Simulation,
+    })
+}
+
+fn wrench_transform_for_pose(
+    sensor_position: [f64; 3],
+    sensor_quaternion: [f64; 4],
+    support_origin: [f64; 3],
+) -> WrenchTransform {
+    WrenchTransform {
+        rotation_to_support: quaternion_rotation(sensor_quaternion),
+        translation_to_support_m: [
+            sensor_position[0] - support_origin[0],
+            sensor_position[1] - support_origin[1],
+            sensor_position[2] - support_origin[2],
+        ],
+    }
+}
+
+fn wrench_to_support_axes(wrench: &[f64; 6], transform: &WrenchTransform) -> [f64; 6] {
+    let mut output = [0.0; 6];
+    for axis in 0..3 {
+        output[axis] = (0..3)
+            .map(|source| transform.rotation_to_support[axis][source] * wrench[source])
+            .sum();
+        output[axis + 3] = (0..3)
+            .map(|source| transform.rotation_to_support[axis][source] * wrench[source + 3])
+            .sum();
+    }
+    let moment_arm = cross3(
+        transform.translation_to_support_m,
+        [output[0], output[1], output[2]],
+    );
+    for axis in 0..3 {
+        output[axis + 3] += moment_arm[axis];
+    }
+    output
+}
+
+fn wrench_from_support_axes(wrench: &[f64; 6], transform: &WrenchTransform) -> [f64; 6] {
+    let mut output = [0.0; 6];
+    let moment_arm = cross3(
+        transform.translation_to_support_m,
+        [wrench[0], wrench[1], wrench[2]],
+    );
+    let torque_at_sensor = [
+        wrench[3] - moment_arm[0],
+        wrench[4] - moment_arm[1],
+        wrench[5] - moment_arm[2],
+    ];
+    for axis in 0..3 {
+        output[axis] = (0..3)
+            .map(|source| transform.rotation_to_support[source][axis] * wrench[source])
+            .sum();
+        output[axis + 3] = (0..3)
+            .map(|source| transform.rotation_to_support[source][axis] * torque_at_sensor[source])
+            .sum();
+    }
+    output
+}
+
+fn cross3(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
+    [
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    ]
+}
+
+fn inference_compensation_digest(measurement: &PushProbeMeasurement) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"realityos.simulated_probe_compensation/1\0");
+    digest.update(measurement.compensation.digest.as_bytes());
+    if let Some(baseline) = &measurement.precontact_baseline {
+        digest.update(baseline.digest.as_bytes());
+    }
+    for wrench in &measurement.sample_gravity_wrenches {
+        for value in wrench {
+            digest.update(value.to_bits().to_le_bytes());
+        }
+    }
+    hex::encode(digest.finalize())
+}
+
+fn value_quaternion(value: &Value) -> Option<[f64; 4]> {
+    let values = value.as_array()?;
+    if values.len() != 4 {
+        return None;
+    }
+    Some([
+        values[0].as_f64()?,
+        values[1].as_f64()?,
+        values[2].as_f64()?,
+        values[3].as_f64()?,
+    ])
+}
+
+fn quaternion_rotation([w, x, y, z]: [f64; 4]) -> [[f64; 3]; 3] {
+    [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - z * w),
+            2.0 * (x * z + y * w),
+        ],
+        [
+            2.0 * (x * y + z * w),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - x * w),
+        ],
+        [
+            2.0 * (x * z - y * w),
+            2.0 * (y * z + x * w),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ]
 }
 
 fn decode_push_witness(
@@ -1520,13 +2291,16 @@ fn authorized_covers_now(
     authorized: &AuthorizedReasonerAction,
     now_s: f64,
 ) -> Result<bool, BenchmarkError> {
+    let runtime_now = 10.0 + simulator_now(worker)?;
+    Ok(authorization_covers_at(authorized, now_s.max(runtime_now)))
+}
+
+fn authorization_covers_at(authorized: &AuthorizedReasonerAction, now: f64) -> bool {
     let frozen = authorized.action.frozen();
     let Some(authorization) = frozen.execution_authorization.as_ref() else {
-        return Ok(false);
+        return false;
     };
-    let runtime_now = 10.0 + simulator_now(worker)?;
-    let now = now_s.max(runtime_now);
-    Ok(frozen.authority_granted
+    frozen.authority_granted
         && authorization.covers(frozen, now)
         && authorization.grant_id == authorized.grant.command_id
         && authorized
@@ -1534,7 +2308,7 @@ fn authorized_covers_now(
             .scope
             .action_envelope
             .exactly_matches(&frozen.action_envelope)
-        && grant_covers(&authorized.grant, &authorized.grant.scope, now).is_ok())
+        && grant_covers(&authorized.grant, &authorized.grant.scope, now).is_ok()
 }
 
 fn position_actuator_map(

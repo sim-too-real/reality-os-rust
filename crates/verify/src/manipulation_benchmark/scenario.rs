@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-pub const BENCHMARK_SCHEMA_VERSION: u32 = 5;
+pub const BENCHMARK_SCHEMA_VERSION: u32 = 6;
 const EMBODIMENT_REGISTRY_SCHEMA_VERSION: u32 = 5;
 const MAX_SAFE_INITIAL_QPOS_ATTEMPTS: usize = 64;
 pub const PILOT_SEEDS: std::ops::Range<u64> = 9000..9020;
@@ -234,6 +234,9 @@ impl EmbodimentRegistry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedBenchmarkTrial {
     pub schema_version: u32,
+    /// Persisted schema-independent key used to pair randomized candidate runs.
+    #[serde(default)]
+    pub paired_trial_key: Option<String>,
     pub trial_id: String,
     pub seed: u64,
     pub index: u32,
@@ -506,8 +509,9 @@ pub fn resolve_benchmark_trial(
         None
     };
 
-    Ok(ResolvedBenchmarkTrial {
+    let mut resolved = ResolvedBenchmarkTrial {
         schema_version: BENCHMARK_SCHEMA_VERSION,
+        paired_trial_key: None,
         trial_id,
         seed,
         index,
@@ -521,7 +525,9 @@ pub fn resolve_benchmark_trial(
         initial_qpos,
         goal_xyz,
         fault_injection,
-    })
+    };
+    resolved.paired_trial_key = Some(paired_trial_key(&resolved)?);
+    Ok(resolved)
 }
 
 fn grasp_hold_is_conservatively_provable(
@@ -639,6 +645,104 @@ pub fn trial_digest(trial: &ResolvedBenchmarkTrial) -> Result<String, BenchmarkE
     });
     let bytes = serde_json::to_vec(&canonical)?;
     Ok(hex::encode(Sha256::digest(bytes)))
+}
+
+/// Hash only resolved scenario inputs so the same randomized trial pairs across
+/// schema versions, source revisions, sensor traces, action traces, and outcomes.
+pub fn paired_trial_key(trial: &ResolvedBenchmarkTrial) -> Result<String, BenchmarkError> {
+    let mut scenario = serde_json::to_value(&trial.scenario)?;
+    if let Some(objects) = scenario.get_mut("objects").and_then(Value::as_array_mut) {
+        objects.sort_by(|left, right| {
+            left.get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .cmp(right.get("name").and_then(Value::as_str).unwrap_or(""))
+        });
+    }
+    let canonical = json!({
+        "role": trial.role.as_str(),
+        "robot_id": trial.robot_id,
+        "model_hash": trial.model_hash,
+        "task": trial.task.as_str(),
+        "seed": trial.seed,
+        "scenario_index": trial.index,
+        "expectation": trial.expectation,
+        "scenario": scenario,
+        "fault_injection": trial.fault_injection,
+        "goal_xyz_bits": trial.goal_xyz.map(f64::to_bits),
+        "initial_qpos_bits": trial.initial_qpos.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+    });
+    let mut bytes = b"realityos.manipulation.paired_trial_key/2\0".to_vec();
+    push_canonical_json(&canonical, &mut bytes)?;
+    Ok(hex::encode(Sha256::digest(bytes)))
+}
+
+/// Create schema-v6 execution metadata around an immutable schema-v5 input.
+/// Every randomized field is preserved byte-for-byte so the candidate pilot
+/// executes the exact saved baseline scenario rather than re-sampling it.
+pub fn upgrade_v5_trial_for_v6(
+    legacy: &ResolvedBenchmarkTrial,
+) -> Result<ResolvedBenchmarkTrial, BenchmarkError> {
+    if legacy.schema_version != 5 {
+        return Err(BenchmarkError::InvalidTrial(format!(
+            "only schema-v5 historical inputs can be paired into schema-v{} execution",
+            BENCHMARK_SCHEMA_VERSION
+        )));
+    }
+    let mut trial = legacy.clone();
+    trial.schema_version = BENCHMARK_SCHEMA_VERSION;
+    trial.trial_id = format!(
+        "v{}:{}:{}:{}:{}:{}",
+        BENCHMARK_SCHEMA_VERSION,
+        trial.role.as_str(),
+        trial.robot_id,
+        trial.task.as_str(),
+        trial.seed,
+        trial.index
+    );
+    trial.paired_trial_key = None;
+    trial.paired_trial_key = Some(paired_trial_key(&trial)?);
+    Ok(trial)
+}
+
+fn push_canonical_json(value: &Value, bytes: &mut Vec<u8>) -> Result<(), BenchmarkError> {
+    match value {
+        Value::Null => bytes.push(b'n'),
+        Value::Bool(value) => bytes.push(if *value { b't' } else { b'f' }),
+        Value::Number(value) => {
+            bytes.push(b'#');
+            push_key_bytes(bytes, value.to_string().as_bytes());
+        }
+        Value::String(value) => {
+            bytes.push(b's');
+            push_key_bytes(bytes, value.as_bytes());
+        }
+        Value::Array(values) => {
+            bytes.push(b'[');
+            bytes.extend_from_slice(&(values.len() as u64).to_le_bytes());
+            for value in values {
+                push_canonical_json(value, bytes)?;
+            }
+            bytes.push(b']');
+        }
+        Value::Object(values) => {
+            bytes.push(b'{');
+            bytes.extend_from_slice(&(values.len() as u64).to_le_bytes());
+            let mut entries = values.iter().collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(right.0));
+            for (key, value) in entries {
+                push_key_bytes(bytes, key.as_bytes());
+                push_canonical_json(value, bytes)?;
+            }
+            bytes.push(b'}');
+        }
+    }
+    Ok(())
+}
+
+fn push_key_bytes(bytes: &mut Vec<u8>, value: &[u8]) {
+    bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(value);
 }
 
 fn end_effector_axes(manifest: &RobotManifest) -> Vec<[f64; 3]> {

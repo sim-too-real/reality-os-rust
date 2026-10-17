@@ -2343,7 +2343,16 @@ fn frozen_from_step(
         observation_epoch: request.scene.observation_epoch.clone(),
         actuator_id: "tool".into(),
         observation_contract_id: format!("sensors:{}", request.scene.observation_epoch),
-        abort_contract_id: "abort-and-reobserve".into(),
+        abort_contract_id: match &step.action_envelope {
+            PhysicalActionEnvelope::LinearStroke {
+                wrench_limit: Some(scope),
+                ..
+            } => scope.abort_contract_id.clone(),
+            PhysicalActionEnvelope::LinearStroke {
+                wrench_limit: None, ..
+            }
+            | PhysicalActionEnvelope::PinchGrasp { .. } => "abort-and-reobserve".into(),
+        },
         authority_granted: false,
         execution_authorization: None,
     }

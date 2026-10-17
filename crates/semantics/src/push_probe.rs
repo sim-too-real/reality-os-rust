@@ -88,6 +88,14 @@ pub struct IntendedContactEvidence {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PushProbeMeasurement {
     pub samples: Vec<WrenchSample>,
+    #[serde(default)]
+    pub precontact_baseline: Option<WrenchSample>,
+    /// Optional per-sample gravity wrench in that sample's sensor frame.
+    /// Simulated probes derive these values from the ordered no-contact baseline.
+    #[serde(default)]
+    pub sample_gravity_wrenches: Vec<[f64; 6]>,
+    #[serde(default)]
+    pub sample_sensor_transforms: Vec<WrenchTransform>,
     pub sensor_to_support: WrenchTransform,
     pub compensation: WrenchCompensation,
     pub mass_kg: [f64; 2],
@@ -109,10 +117,28 @@ pub struct PushProbeMeasurement {
 impl PushProbeMeasurement {
     /// Digest all inputs in fixed order so a belief reference identifies the exact evidence.
     pub fn digest(&self) -> String {
-        let mut bytes = b"realityos.push_probe_measurement/1\0".to_vec();
+        let mut bytes = b"realityos.push_probe_measurement/2\0".to_vec();
         bytes.extend_from_slice(&(self.samples.len() as u64).to_le_bytes());
         for sample in &self.samples {
             push_string(&mut bytes, &sample.digest);
+        }
+        match &self.precontact_baseline {
+            Some(sample) => {
+                bytes.push(1);
+                push_string(&mut bytes, &sample.digest);
+            }
+            None => bytes.push(0),
+        }
+        bytes.extend_from_slice(&(self.sample_gravity_wrenches.len() as u64).to_le_bytes());
+        for gravity_wrench in &self.sample_gravity_wrenches {
+            push_f64s(&mut bytes, gravity_wrench);
+        }
+        bytes.extend_from_slice(&(self.sample_sensor_transforms.len() as u64).to_le_bytes());
+        for transform in &self.sample_sensor_transforms {
+            for row in transform.rotation_to_support {
+                push_f64s(&mut bytes, &row);
+            }
+            push_f64s(&mut bytes, &transform.translation_to_support_m);
         }
         for row in self.sensor_to_support.rotation_to_support {
             push_f64s(&mut bytes, &row);
@@ -185,6 +211,7 @@ pub enum FrictionNoInferenceReason {
     OriginMismatch,
     InvalidSample,
     InsufficientSamples,
+    PrecontactBaselineMissing,
     NonMonotonicSamples,
     SampleGapExceeded,
     StaleSample,
@@ -401,6 +428,21 @@ pub fn infer_support_friction(measurement: &PushProbeMeasurement) -> FrictionInf
     if measurement.samples.len() < 2 {
         return fail(FrictionNoInferenceReason::InsufficientSamples);
     }
+    if measurement.precontact_baseline.is_none() {
+        return fail(FrictionNoInferenceReason::PrecontactBaselineMissing);
+    }
+    if (!measurement.sample_gravity_wrenches.is_empty()
+        && measurement.sample_gravity_wrenches.len() != measurement.samples.len())
+        || (!measurement.sample_sensor_transforms.is_empty()
+            && measurement.sample_sensor_transforms.len() != measurement.samples.len())
+        || measurement
+            .sample_gravity_wrenches
+            .iter()
+            .flatten()
+            .any(|value| !value.is_finite())
+    {
+        return fail(FrictionNoInferenceReason::InvalidMeasurement);
+    }
     if let Err(reason) = validate_samples(measurement) {
         return fail(reason);
     }
@@ -414,10 +456,18 @@ pub fn infer_support_friction(measurement: &PushProbeMeasurement) -> FrictionInf
             if skew_s > measurement.max_sample_motion_skew_s {
                 return fail(FrictionNoInferenceReason::TimeSkewExceeded);
             }
+            let compensation = match compensation_for_sample(measurement, sample) {
+                Ok(compensation) => compensation,
+                Err(reason) => return fail(reason),
+            };
+            let transform = match transform_for_sample(measurement, sample) {
+                Ok(transform) => transform,
+                Err(reason) => return fail(reason),
+            };
             let wrench = match transform_sensor_wrench_to_support(
                 sample,
-                &measurement.sensor_to_support,
-                &measurement.compensation,
+                &transform,
+                &compensation,
                 skew_s,
                 measurement.max_wrench_rise_rate,
             ) {
@@ -458,10 +508,26 @@ pub fn infer_support_friction(measurement: &PushProbeMeasurement) -> FrictionInf
             {
                 return fail(FrictionNoInferenceReason::TimeSkewExceeded);
             }
+            let before_compensation = match compensation_for_sample(measurement, before) {
+                Ok(compensation) => compensation,
+                Err(reason) => return fail(reason),
+            };
+            let after_compensation = match compensation_for_sample(measurement, after) {
+                Ok(compensation) => compensation,
+                Err(reason) => return fail(reason),
+            };
+            let before_transform = match transform_for_sample(measurement, before) {
+                Ok(transform) => transform,
+                Err(reason) => return fail(reason),
+            };
+            let after_transform = match transform_for_sample(measurement, after) {
+                Ok(transform) => transform,
+                Err(reason) => return fail(reason),
+            };
             let before_wrench = match transform_sensor_wrench_to_support(
                 before,
-                &measurement.sensor_to_support,
-                &measurement.compensation,
+                &before_transform,
+                &before_compensation,
                 before_skew_s,
                 measurement.max_wrench_rise_rate,
             ) {
@@ -470,8 +536,8 @@ pub fn infer_support_friction(measurement: &PushProbeMeasurement) -> FrictionInf
             };
             let after_wrench = match transform_sensor_wrench_to_support(
                 after,
-                &measurement.sensor_to_support,
-                &measurement.compensation,
+                &after_transform,
+                &after_compensation,
                 after_skew_s,
                 measurement.max_wrench_rise_rate,
             ) {
@@ -507,6 +573,40 @@ pub fn infer_support_friction(measurement: &PushProbeMeasurement) -> FrictionInf
     FrictionInferenceResult::Updated { interval, mode }
 }
 
+fn compensation_for_sample(
+    measurement: &PushProbeMeasurement,
+    sample: &WrenchSample,
+) -> Result<WrenchCompensation, FrictionNoInferenceReason> {
+    let mut compensation = measurement.compensation.clone();
+    if !measurement.sample_gravity_wrenches.is_empty() {
+        let index = measurement
+            .samples
+            .iter()
+            .position(|candidate| candidate.sequence == sample.sequence)
+            .ok_or(FrictionNoInferenceReason::InvalidSample)?;
+        compensation.gravity_wrench = measurement.sample_gravity_wrenches[index];
+        compensation.digest = compensation.digest();
+    }
+    Ok(compensation)
+}
+
+fn transform_for_sample(
+    measurement: &PushProbeMeasurement,
+    sample: &WrenchSample,
+) -> Result<WrenchTransform, FrictionNoInferenceReason> {
+    if measurement.sample_sensor_transforms.is_empty() {
+        return Ok(measurement.sensor_to_support.clone());
+    }
+    let index = measurement
+        .samples
+        .iter()
+        .position(|candidate| candidate.sequence == sample.sequence)
+        .ok_or(FrictionNoInferenceReason::InvalidSample)?;
+    let transform = measurement.sample_sensor_transforms[index].clone();
+    validate_transform(&transform)?;
+    Ok(transform)
+}
+
 impl PhysicalParameterBelief {
     /// Apply only a validated estimator result and retain its exact evidence lineage.
     pub fn intersect_support_friction_with_probe(
@@ -529,6 +629,31 @@ fn validate_samples(measurement: &PushProbeMeasurement) -> Result<(), FrictionNo
     if measurement.samples.is_empty() {
         return Err(FrictionNoInferenceReason::InsufficientSamples);
     }
+    let baseline = measurement
+        .precontact_baseline
+        .as_ref()
+        .ok_or(FrictionNoInferenceReason::PrecontactBaselineMissing)?;
+    baseline
+        .validate()
+        .map_err(|_| FrictionNoInferenceReason::InvalidSample)?;
+    if baseline.origin != measurement.origin {
+        return Err(FrictionNoInferenceReason::OriginMismatch);
+    }
+    if baseline.transform_epoch != measurement.current_observation_epoch {
+        return Err(FrictionNoInferenceReason::StaleEvidence);
+    }
+    if let Some(first) = measurement.samples.first() {
+        if baseline.sensor_id != first.sensor_id
+            || baseline.sensor_frame != first.sensor_frame
+            || baseline.units != first.units
+            || baseline.clock_domain != first.clock_domain
+            || baseline.sequence >= first.sequence
+            || baseline.capture_s >= first.capture_s
+            || first.capture_s - baseline.capture_s > measurement.max_inter_sample_gap_s
+        {
+            return Err(FrictionNoInferenceReason::StaleEvidence);
+        }
+    }
     let mut prior: Option<&WrenchSample> = None;
     for sample in &measurement.samples {
         sample
@@ -546,7 +671,7 @@ fn validate_samples(measurement: &PushProbeMeasurement) -> Result<(), FrictionNo
         if sample.capture_s < measurement.motion.start_s
             || sample.capture_s > measurement.motion.end_s
             || sample.receive_s > measurement.now_s
-            || measurement.now_s - sample.receive_s > measurement.max_sample_age_s
+            || sample.receive_s - sample.capture_s > measurement.max_sample_age_s
         {
             return Err(FrictionNoInferenceReason::StaleSample);
         }
@@ -567,6 +692,11 @@ fn validate_samples(measurement: &PushProbeMeasurement) -> Result<(), FrictionNo
             }
         }
         prior = Some(sample);
+    }
+    if prior
+        .is_some_and(|sample| measurement.now_s - sample.receive_s > measurement.max_sample_age_s)
+    {
+        return Err(FrictionNoInferenceReason::StaleSample);
     }
     Ok(())
 }

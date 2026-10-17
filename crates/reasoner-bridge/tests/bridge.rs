@@ -208,6 +208,25 @@ fn safe_probe_is_scoped_then_reselected_before_authorization() {
 }
 
 #[test]
+fn push_authority_preserves_registered_abort_contract_id() {
+    let (mut os, mut reasoner, request) = fixture();
+    let mut registered = admission();
+    registered.wrench_limit_policy.scope.abort_contract_id = "registered-stop-contract-v7".into();
+    registered.wrench_limit_policy.abort_contract.contract_id =
+        "registered-stop-contract-v7".into();
+    registered.wrench_limit_policy.scope.policy_digest = registered.wrench_limit_policy.digest();
+
+    let admitted = authorize_current_action(&mut os, &mut reasoner, &request, &registered, &[])
+        .expect("push authority must preserve the registered abort contract");
+    let frozen = admitted.action.frozen();
+    assert_eq!(frozen.abort_contract_id, "registered-stop-contract-v7");
+    assert_eq!(
+        admitted.grant.scope.abort_contract_id,
+        "registered-stop-contract-v7"
+    );
+}
+
+#[test]
 fn supported_grasp_is_granted_only_after_exact_reselection() {
     let (mut os, mut reasoner, request) = grasp_fixture();
     let result = authorize_current_action(&mut os, &mut reasoner, &request, &admission(), &[]);

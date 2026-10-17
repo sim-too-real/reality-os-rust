@@ -2,6 +2,7 @@
 //! It does not mint one. Evidence stays SIMULATION_ONLY.
 
 use realityos_core::{PolicyProposal, RealityOs};
+use realityos_kernel::physical_action::WrenchLimitScope;
 use realityos_semantics::execution_envelope::ExecutionAuthorization;
 use realityos_semantics::physical_reasoner::{benchmark_scene, PhysicalReasoner, EVIDENCE_STATUS};
 use realityos_session::{issue_scoped_simulation_grant, PhysicalActionScope, ScopeRefusal};
@@ -10,6 +11,13 @@ use realityos_session::{issue_scoped_simulation_grant, PhysicalActionScope, Scop
 fn production_reasoner_binds_only_an_independently_issued_grant() {
     let (model, mut request) = benchmark_scene();
     request.linear_execution_bound_m = Some(0.02);
+    request.linear_wrench_limit = Some(WrenchLimitScope {
+        sensor_id: "test-ft-tool".into(),
+        sensor_frame: "tool0".into(),
+        caps: [20.0, 20.0, 30.0, 2.0, 2.0, 2.0],
+        policy_digest: "a".repeat(64),
+        abort_contract_id: "abort-and-reobserve".into(),
+    });
     let mut reasoner = PhysicalReasoner::new(model);
     let report = reasoner.consider(&request);
     assert_eq!(report.evidence_status, EVIDENCE_STATUS);

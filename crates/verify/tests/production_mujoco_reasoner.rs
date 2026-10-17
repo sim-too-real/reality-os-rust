@@ -253,6 +253,8 @@ fn production_reasoner_push_probe_replans_and_refuses_after_overstroke() {
     let mut request = world.policy_request(&model, uncertain_friction());
     request.scene.support_origin = [0.30, 0.0, 0.08];
     request.linear_execution_bound_m = Some(0.1);
+    request.linear_wrench_limit =
+        Some(simulation_admission(40.0).wrench_limit_policy.scope.clone());
     assert!(
         !format!("{request:?}").contains(&format!("{TRUE_FRICTION}")),
         "the policy request must not carry the hidden friction"

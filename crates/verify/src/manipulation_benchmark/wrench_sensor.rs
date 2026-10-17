@@ -5,6 +5,7 @@
 
 use realityos_kernel::physical_action::WrenchLimitPolicy;
 use realityos_semantics::observation::{wrench_sample_digest, WrenchSample};
+use realityos_semantics::push_probe::WrenchCompensation;
 use realityos_semantics::sensor::WrenchSampleOrigin;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -40,6 +41,23 @@ pub struct SimulationWrenchSensorProfile {
 }
 
 impl SimulationWrenchSensorProfile {
+    pub fn compensation_policy_digest_for(
+        model_id: &str,
+        compensation: &WrenchCompensation,
+    ) -> String {
+        let mut hash = Sha256::new();
+        hash.update(b"realityos.simulation_wrench_compensation/1\0");
+        hash.update((model_id.len() as u64).to_le_bytes());
+        hash.update(model_id.as_bytes());
+        hash.update((compensation.digest.len() as u64).to_le_bytes());
+        hash.update(compensation.digest.as_bytes());
+        hex::encode(hash.finalize())
+    }
+
+    pub fn compensation_policy_digest(&self) -> String {
+        Self::compensation_policy_digest_for(&self.model_id, &self.compensation())
+    }
+
     pub fn validate(&self) -> Result<(), WrenchSensorError> {
         if self.sensor_id.trim().is_empty()
             || self.model_id.trim().is_empty()
@@ -85,6 +103,9 @@ impl SimulationWrenchSensorProfile {
         self.limit_policy
             .validate()
             .map_err(|_| WrenchSensorError::Profile("limit_policy"))?;
+        if self.limit_policy.compensation_digest != self.compensation_policy_digest() {
+            return Err(WrenchSensorError::Profile("compensation_digest_mismatch"));
+        }
         if self.limit_policy.scope.sensor_id != self.sensor_id
             || self.limit_policy.scope.sensor_frame != self.sensor_frame
             || self.limit_policy.sensor_calibration_hash != self.calibration_hash
@@ -98,6 +119,20 @@ impl SimulationWrenchSensorProfile {
             return Err(WrenchSensorError::Profile("sample_gap_below_period"));
         }
         Ok(())
+    }
+
+    /// Static sensor bias and residual uncertainty. The sensor model's dynamic
+    /// stationary-load compensation is separately bound by `model_id` in the
+    /// policy compensation digest.
+    pub fn compensation(&self) -> WrenchCompensation {
+        let mut compensation = WrenchCompensation {
+            bias: self.bias,
+            gravity_wrench: [0.0; 6],
+            residual_error: self.error_bounds,
+            digest: String::new(),
+        };
+        compensation.digest = compensation.digest();
+        compensation
     }
 
     /// Require exact integration-step representation for sampling and declared
@@ -172,8 +207,311 @@ fn is_integral_step_count(value: f64) -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SimulationWrenchWindow {
     pub samples: Vec<WrenchSample>,
+    #[serde(default)]
+    pub sensor_positions: Vec<[f64; 3]>,
+    #[serde(default)]
+    pub sensor_orientations: Vec<[f64; 4]>,
+    #[serde(default)]
+    pub precontact_baseline: Option<WrenchSample>,
+    #[serde(default)]
+    pub precontact_baseline_position: Option<[f64; 3]>,
+    #[serde(default)]
+    pub precontact_baseline_orientation: Option<[f64; 4]>,
+    #[serde(default)]
+    pub monitor_gravity_reference: Option<WrenchSample>,
+    #[serde(default)]
+    pub monitor_gravity_reference_position: Option<[f64; 3]>,
+    #[serde(default)]
+    pub monitor_gravity_reference_orientation: Option<[f64; 4]>,
     pub max_gap_s: f64,
     pub compensation_digest: String,
+}
+
+/// Subtract the registered sensor bias and a contact-free stationary wrench
+/// reference from a measured sample. The reference is expressed in the pose
+/// where it was captured, so transform its force and moment into the current
+/// sensor frame before subtraction. Returned error bounds include both
+/// measurements and the wrench-frame transform.
+pub fn gravity_compensated_wrench(
+    sample: &WrenchSample,
+    sample_position: [f64; 3],
+    sample_orientation: [f64; 4],
+    bias: [f64; 6],
+    gravity_reference: Option<(&WrenchSample, [f64; 3], [f64; 4])>,
+) -> Result<([f64; 6], [f64; 6]), WrenchAbortReason> {
+    if sample.validate().is_err() || sample.origin != WrenchSampleOrigin::Simulation {
+        return Err(WrenchAbortReason::MonitorFault);
+    }
+    let mut compensated = [0.0; 6];
+    let mut error = sample.error_bounds;
+    for axis in 0..6 {
+        if !sample.wrench[axis].is_finite()
+            || !sample.error_bounds[axis].is_finite()
+            || sample.error_bounds[axis] < 0.0
+            || !bias[axis].is_finite()
+        {
+            return Err(WrenchAbortReason::MonitorFault);
+        }
+        compensated[axis] = sample.wrench[axis] - bias[axis];
+    }
+    let Some((reference, reference_position, reference_orientation)) = gravity_reference else {
+        return Ok((compensated, error));
+    };
+    if reference.validate().is_err()
+        || reference.sensor_id != sample.sensor_id
+        || reference.sensor_frame != sample.sensor_frame
+        || reference.transform_epoch != sample.transform_epoch
+        || reference.origin != WrenchSampleOrigin::Simulation
+        || reference.sequence > sample.sequence
+        || reference.capture_s > sample.capture_s
+        || !sample_position
+            .iter()
+            .chain(reference_position.iter())
+            .all(|v| v.is_finite())
+    {
+        return Err(WrenchAbortReason::MonitorFault);
+    }
+    let current_rotation = quaternion_rotation(sample_orientation)?;
+    let reference_rotation = quaternion_rotation(reference_orientation)?;
+    let mut reference_wrench = [0.0; 6];
+    for axis in 0..6 {
+        if !reference.wrench[axis].is_finite()
+            || !reference.error_bounds[axis].is_finite()
+            || reference.error_bounds[axis] < 0.0
+            || !bias[axis].is_finite()
+        {
+            return Err(WrenchAbortReason::MonitorFault);
+        }
+        reference_wrench[axis] = reference.wrench[axis] - bias[axis];
+    }
+    let force_world = matrix_vector(
+        reference_rotation,
+        [
+            reference_wrench[0],
+            reference_wrench[1],
+            reference_wrench[2],
+        ],
+    );
+    let torque_world_at_reference = matrix_vector(
+        reference_rotation,
+        [
+            reference_wrench[3],
+            reference_wrench[4],
+            reference_wrench[5],
+        ],
+    );
+    let arm = [
+        reference_position[0] - sample_position[0],
+        reference_position[1] - sample_position[1],
+        reference_position[2] - sample_position[2],
+    ];
+    let torque_world_at_sample = add3(torque_world_at_reference, cross3(arm, force_world));
+    let force_current = matrix_transpose_vector(current_rotation, force_world);
+    let torque_current = matrix_transpose_vector(current_rotation, torque_world_at_sample);
+    for axis in 0..3 {
+        compensated[axis] -= force_current[axis];
+        compensated[axis + 3] -= torque_current[axis];
+    }
+
+    let reference_force_error_world = matrix_abs_vector(
+        reference_rotation,
+        [
+            reference.error_bounds[0],
+            reference.error_bounds[1],
+            reference.error_bounds[2],
+        ],
+    );
+    let reference_torque_error_world = matrix_abs_vector(
+        reference_rotation,
+        [
+            reference.error_bounds[3],
+            reference.error_bounds[4],
+            reference.error_bounds[5],
+        ],
+    );
+    let arm_cross_force_error = [
+        arm[1].abs() * reference_force_error_world[2]
+            + arm[2].abs() * reference_force_error_world[1],
+        arm[2].abs() * reference_force_error_world[0]
+            + arm[0].abs() * reference_force_error_world[2],
+        arm[0].abs() * reference_force_error_world[1]
+            + arm[1].abs() * reference_force_error_world[0],
+    ];
+    let force_error_current =
+        matrix_transpose_abs_vector(current_rotation, reference_force_error_world);
+    let torque_error_current = matrix_transpose_abs_vector(
+        current_rotation,
+        add3(reference_torque_error_world, arm_cross_force_error),
+    );
+    for axis in 0..3 {
+        error[axis] += force_error_current[axis];
+        error[axis + 3] += torque_error_current[axis];
+        if !compensated[axis].is_finite()
+            || !compensated[axis + 3].is_finite()
+            || !error[axis].is_finite()
+            || !error[axis + 3].is_finite()
+        {
+            return Err(WrenchAbortReason::MonitorFault);
+        }
+    }
+    Ok((compensated, error))
+}
+
+fn quaternion_rotation(quaternion: [f64; 4]) -> Result<[[f64; 3]; 3], WrenchAbortReason> {
+    let [w, x, y, z] = quaternion;
+    let norm_squared = w * w + x * x + y * y + z * z;
+    if quaternion.iter().any(|value| !value.is_finite()) || (norm_squared - 1.0).abs() > 1e-5 {
+        return Err(WrenchAbortReason::MonitorFault);
+    }
+    Ok([
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - z * w),
+            2.0 * (x * z + y * w),
+        ],
+        [
+            2.0 * (x * y + z * w),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - x * w),
+        ],
+        [
+            2.0 * (x * z - y * w),
+            2.0 * (y * z + x * w),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ])
+}
+
+fn matrix_vector(matrix: [[f64; 3]; 3], vector: [f64; 3]) -> [f64; 3] {
+    std::array::from_fn(|row| {
+        (0..3)
+            .map(|column| matrix[row][column] * vector[column])
+            .sum()
+    })
+}
+
+fn matrix_transpose_vector(matrix: [[f64; 3]; 3], vector: [f64; 3]) -> [f64; 3] {
+    std::array::from_fn(|column| (0..3).map(|row| matrix[row][column] * vector[row]).sum())
+}
+
+fn matrix_abs_vector(matrix: [[f64; 3]; 3], vector: [f64; 3]) -> [f64; 3] {
+    std::array::from_fn(|row| {
+        (0..3)
+            .map(|column| matrix[row][column].abs() * vector[column])
+            .sum()
+    })
+}
+
+fn matrix_transpose_abs_vector(matrix: [[f64; 3]; 3], vector: [f64; 3]) -> [f64; 3] {
+    std::array::from_fn(|column| {
+        (0..3)
+            .map(|row| matrix[row][column].abs() * vector[row])
+            .sum()
+    })
+}
+
+fn add3(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
+    std::array::from_fn(|axis| left[axis] + right[axis])
+}
+
+fn cross3(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
+    [
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    ]
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WrenchAbortReason {
+    Limit {
+        axis: usize,
+        measured_upper_bound: f64,
+        cap: f64,
+    },
+    MissingSample,
+    StaleSample,
+    GapExceeded,
+    DigestMismatch,
+    MonitorFault,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WrenchAbortEvent {
+    pub reason: WrenchAbortReason,
+    pub triggered_at_s: f64,
+    pub stopped_at_s: f64,
+    pub stop_write_count: u32,
+    pub contract_id: String,
+    pub stop_verified: bool,
+    #[serde(default)]
+    pub stop_actuator_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MonitoredStepResult {
+    pub state: Value,
+    pub wrench_window: SimulationWrenchWindow,
+    pub abort: Option<WrenchAbortEvent>,
+}
+
+/// Conservatively bound every wrench axis using measurement error, sample age,
+/// the registered rise rate, sensor latency, and abort latency. Any telemetry
+/// defect fails closed with a typed reason so the caller can invoke only the
+/// pre-authorized stop contract.
+pub fn conservative_wrench_upper_bound(
+    sample: Option<&WrenchSample>,
+    previous_capture_s: Option<f64>,
+    now_s: f64,
+    policy: &WrenchLimitPolicy,
+) -> Result<[f64; 6], WrenchAbortReason> {
+    if policy.validate().is_err() {
+        return Err(WrenchAbortReason::DigestMismatch);
+    }
+    let Some(sample) = sample else {
+        return Err(WrenchAbortReason::MissingSample);
+    };
+    if sample.validate().is_err()
+        || sample.sensor_id != policy.scope.sensor_id
+        || sample.sensor_frame != policy.scope.sensor_frame
+        || sample.origin != WrenchSampleOrigin::Simulation
+    {
+        return Err(WrenchAbortReason::DigestMismatch);
+    }
+    if !now_s.is_finite() || now_s < sample.receive_s || now_s < sample.capture_s {
+        return Err(WrenchAbortReason::MissingSample);
+    }
+    let age_s = now_s - sample.capture_s;
+    if age_s > policy.max_sample_age_s {
+        return Err(WrenchAbortReason::StaleSample);
+    }
+    if previous_capture_s.is_some_and(|previous| {
+        !previous.is_finite()
+            || sample.capture_s <= previous
+            || sample.capture_s - previous > policy.max_inter_sample_gap_s
+    }) {
+        return Err(WrenchAbortReason::GapExceeded);
+    }
+    let mut upper_bounds = [0.0; 6];
+    for (axis, upper_slot) in upper_bounds.iter_mut().enumerate() {
+        let upper_bound = sample.wrench[axis].abs()
+            + sample.error_bounds[axis]
+            + policy.max_rise_rate[axis]
+                * (age_s + policy.max_sensing_latency_s + policy.max_abort_latency_s);
+        if !upper_bound.is_finite() {
+            return Err(WrenchAbortReason::MonitorFault);
+        }
+        *upper_slot = upper_bound;
+        if upper_bound >= policy.scope.caps[axis] {
+            return Err(WrenchAbortReason::Limit {
+                axis,
+                measured_upper_bound: upper_bound,
+                cap: policy.scope.caps[axis],
+            });
+        }
+    }
+    Ok(upper_bounds)
 }
 
 impl SimulationWrenchWindow {
@@ -196,36 +534,16 @@ impl SimulationWrenchWindow {
             .as_array()
             .ok_or(WrenchSensorError::Worker("samples_missing"))?;
         let mut samples = Vec::with_capacity(records.len());
+        let mut sensor_positions = Vec::with_capacity(records.len());
+        let mut sensor_orientations = Vec::with_capacity(records.len());
         let mut max_gap_s: f64 = 0.0;
         let mut previous_capture: Option<f64> = None;
         let mut previous_sequence: Option<u64> = None;
         for record in records {
-            let sequence = record["sequence"]
-                .as_u64()
-                .ok_or(WrenchSensorError::Worker("sequence"))?;
-            let capture_s = record["capture_s"]
-                .as_f64()
-                .ok_or(WrenchSensorError::Worker("capture_s"))?;
-            let receive_s = record["receive_s"]
-                .as_f64()
-                .ok_or(WrenchSensorError::Worker("receive_s"))?;
-            let wrench = parse_six(&record["wrench"]).ok_or(WrenchSensorError::Worker("wrench"))?;
-            let error_bounds = parse_six(&record["error_bounds"])
-                .ok_or(WrenchSensorError::Worker("error_bounds"))?;
-            if error_bounds
-                .iter()
-                .zip(profile.error_bounds)
-                .any(|(actual, expected)| actual.to_bits() != expected.to_bits())
-            {
-                return Err(WrenchSensorError::Sample("error_bounds_mismatch"));
-            }
-            if !capture_s.is_finite()
-                || capture_s < 0.0
-                || !receive_s.is_finite()
-                || (receive_s - capture_s - profile.latency_s).abs() > 1e-9
-            {
-                return Err(WrenchSensorError::Sample("timestamps"));
-            }
+            let (sample, sensor_position, sensor_quaternion) =
+                parse_worker_sample(record, profile, transform_epoch)?;
+            let sequence = sample.sequence;
+            let capture_s = sample.capture_s;
             if previous_sequence.is_some_and(|previous| sequence != previous + 1) {
                 return Err(WrenchSensorError::Sample("sequence_order"));
             }
@@ -236,32 +554,141 @@ impl SimulationWrenchWindow {
                 }
                 max_gap_s = max_gap_s.max(gap);
             }
-            let mut sample = WrenchSample {
-                sensor_id: profile.sensor_id.clone(),
-                sensor_frame: profile.sensor_frame.clone(),
-                transform_epoch: transform_epoch.into(),
-                units: profile.units.clone(),
-                wrench,
-                error_bounds,
-                capture_s,
-                receive_s,
-                sequence,
-                clock_domain: "mujoco_simulation_clock".into(),
-                origin: WrenchSampleOrigin::Simulation,
-                digest: String::new(),
-            };
-            sample.digest = wrench_sample_digest(&sample);
-            sample.validate().map_err(WrenchSensorError::Sample)?;
             samples.push(sample);
+            sensor_positions.push(sensor_position);
+            sensor_orientations.push(sensor_quaternion);
             previous_capture = Some(capture_s);
             previous_sequence = Some(sequence);
         }
+        let (precontact_baseline, precontact_baseline_position, precontact_baseline_orientation) =
+            if response["precontact_baseline"].is_null() {
+                (None, None, None)
+            } else {
+                let (baseline, position, orientation) = parse_worker_sample(
+                    &response["precontact_baseline"],
+                    profile,
+                    transform_epoch,
+                )?;
+                if samples.first().is_some_and(|sample| {
+                    baseline.sequence > sample.sequence || baseline.capture_s > sample.capture_s
+                }) {
+                    return Err(WrenchSensorError::Sample("precontact_baseline_future"));
+                }
+                if let Some(index) = samples
+                    .iter()
+                    .position(|sample| sample.sequence == baseline.sequence)
+                {
+                    if samples[index] != baseline
+                        || sensor_positions[index] != position
+                        || sensor_orientations[index] != orientation
+                    {
+                        return Err(WrenchSensorError::Sample("baseline_sample_mismatch"));
+                    }
+                }
+                (Some(baseline), Some(position), Some(orientation))
+            };
+        let (
+            monitor_gravity_reference,
+            monitor_gravity_reference_position,
+            monitor_gravity_reference_orientation,
+        ) = if response["monitor_gravity_reference"].is_null() {
+            (None, None, None)
+        } else {
+            let (reference, position, orientation) = parse_worker_sample(
+                &response["monitor_gravity_reference"],
+                profile,
+                transform_epoch,
+            )?;
+            if samples.first().is_some_and(|sample| {
+                reference.sequence > sample.sequence || reference.capture_s > sample.capture_s
+            }) {
+                return Err(WrenchSensorError::Sample(
+                    "monitor_gravity_reference_future",
+                ));
+            }
+            if let Some(index) = samples
+                .iter()
+                .position(|sample| sample.sequence == reference.sequence)
+            {
+                if samples[index] != reference
+                    || sensor_positions[index] != position
+                    || sensor_orientations[index] != orientation
+                {
+                    return Err(WrenchSensorError::Sample(
+                        "monitor_gravity_reference_mismatch",
+                    ));
+                }
+            }
+            (Some(reference), Some(position), Some(orientation))
+        };
         Ok(Self {
             samples,
+            sensor_positions,
+            sensor_orientations,
+            precontact_baseline,
+            precontact_baseline_position,
+            precontact_baseline_orientation,
+            monitor_gravity_reference,
+            monitor_gravity_reference_position,
+            monitor_gravity_reference_orientation,
             max_gap_s,
             compensation_digest: profile.limit_policy.compensation_digest.clone(),
         })
     }
+}
+
+fn parse_worker_sample(
+    record: &Value,
+    profile: &SimulationWrenchSensorProfile,
+    transform_epoch: &str,
+) -> Result<(WrenchSample, [f64; 3], [f64; 4]), WrenchSensorError> {
+    let sequence = record["sequence"]
+        .as_u64()
+        .ok_or(WrenchSensorError::Worker("sequence"))?;
+    let capture_s = record["capture_s"]
+        .as_f64()
+        .ok_or(WrenchSensorError::Worker("capture_s"))?;
+    let receive_s = record["receive_s"]
+        .as_f64()
+        .ok_or(WrenchSensorError::Worker("receive_s"))?;
+    let wrench = parse_six(&record["wrench"]).ok_or(WrenchSensorError::Worker("wrench"))?;
+    let sensor_position = parse_three(&record["sensor_position"])
+        .ok_or(WrenchSensorError::Worker("sensor_position"))?;
+    let sensor_quaternion = parse_four(&record["sensor_quaternion"])
+        .ok_or(WrenchSensorError::Worker("sensor_quaternion"))?;
+    let error_bounds =
+        parse_six(&record["error_bounds"]).ok_or(WrenchSensorError::Worker("error_bounds"))?;
+    if error_bounds
+        .iter()
+        .zip(profile.error_bounds)
+        .any(|(actual, expected)| actual.to_bits() != expected.to_bits())
+    {
+        return Err(WrenchSensorError::Sample("error_bounds_mismatch"));
+    }
+    if !capture_s.is_finite()
+        || capture_s < 0.0
+        || !receive_s.is_finite()
+        || (receive_s - capture_s - profile.latency_s).abs() > 1e-9
+    {
+        return Err(WrenchSensorError::Sample("timestamps"));
+    }
+    let mut sample = WrenchSample {
+        sensor_id: profile.sensor_id.clone(),
+        sensor_frame: profile.sensor_frame.clone(),
+        transform_epoch: transform_epoch.into(),
+        units: profile.units.clone(),
+        wrench,
+        error_bounds,
+        capture_s,
+        receive_s,
+        sequence,
+        clock_domain: "mujoco_simulation_clock".into(),
+        origin: WrenchSampleOrigin::Simulation,
+        digest: String::new(),
+    };
+    sample.digest = wrench_sample_digest(&sample);
+    sample.validate().map_err(WrenchSensorError::Sample)?;
+    Ok((sample, sensor_position, sensor_quaternion))
 }
 
 fn parse_six(value: &Value) -> Option<[f64; 6]> {
@@ -275,6 +702,38 @@ fn parse_six(value: &Value) -> Option<[f64; 6]> {
         if !out[index].is_finite() {
             return None;
         }
+    }
+    Some(out)
+}
+
+fn parse_three(value: &Value) -> Option<[f64; 3]> {
+    let values = value.as_array()?;
+    if values.len() != 3 {
+        return None;
+    }
+    let out = [
+        values[0].as_f64()?,
+        values[1].as_f64()?,
+        values[2].as_f64()?,
+    ];
+    out.iter().all(|value| value.is_finite()).then_some(out)
+}
+
+fn parse_four(value: &Value) -> Option<[f64; 4]> {
+    let values = value.as_array()?;
+    if values.len() != 4 {
+        return None;
+    }
+    let out = [
+        values[0].as_f64()?,
+        values[1].as_f64()?,
+        values[2].as_f64()?,
+        values[3].as_f64()?,
+    ];
+    if out.iter().any(|value| !value.is_finite())
+        || (out.iter().map(|value| value * value).sum::<f64>() - 1.0).abs() > 1e-5
+    {
+        return None;
     }
     Some(out)
 }

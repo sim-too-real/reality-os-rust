@@ -97,6 +97,12 @@ class Instance:
         self.load_seed = 0
         self.wrench_sequence_by_profile: dict[str, int] = {}
         self.wrench_step_by_profile: dict[str, int] = {}
+        self.wrench_latest_by_profile: dict[str, dict[str, Any]] = {}
+        self.wrench_pending_by_profile: dict[str, list[dict[str, Any]]] = {}
+        self.wrench_last_received_capture_by_profile: dict[str, float] = {}
+        self.wrench_monitor_started_by_profile: dict[str, float] = {}
+        self.wrench_gravity_reference_by_profile: dict[str, dict[str, Any]] = {}
+        self.wrench_abort_latched = False
 
     def inspect(self) -> dict[str, Any]:
         m, d = self.model, self.data
@@ -742,7 +748,7 @@ def _wrench_profile_steps(profile: dict[str, Any], profile_digest: str, timestep
     sensor_frame = str(profile.get("sensor_frame") or "")
     if (
         not sensor_id
-        or profile.get("model_id") != "mujoco-contact-wrench-v1"
+        or profile.get("model_id") != "mujoco-force-torque-sensor-gravity-baseline-v1"
         or not sensor_frame
         or profile.get("units") != "N,N*m"
         or profile.get("calibration_hash") != policy.get("sensor_calibration_hash")
@@ -799,61 +805,82 @@ def _wrench_profile_steps(profile: dict[str, Any], profile_digest: str, timestep
     return int(round(sample_steps_float))
 
 
-def _tool_sensor_frame(profile: dict[str, Any]):
-    m, d = INST.model, INST.data
-    assert m is not None and d is not None
-    name = str(profile["sensor_frame"])
-    site_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SITE, name)
-    if site_id >= 0:
-        return int(m.site_bodyid[site_id]), ("site", site_id)
-    body_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, name)
-    if body_id > 0:
-        return int(body_id), ("body", body_id)
-    raise ValueError(f"wrench_sensor_frame_unknown:{name}")
+def _add_wrench_sensors(spec: Any, frame_name: str) -> None:
+    name = str(frame_name)
+    sites = list(getattr(spec, "sites", []) or [])
+    site = next((candidate for candidate in sites if candidate.name == name), None)
+    if site is None:
+        body = next((candidate for candidate in (getattr(spec, "bodies", []) or []) if candidate.name == name), None)
+        if body is None or body.name == "world":
+            raise ValueError(f"wrench_sensor_frame_unknown:{name}")
+        site_name = "realityos_wrench_sensor_frame"
+        if any(candidate.name == site_name for candidate in sites):
+            raise ValueError("wrench_sensor_site_name_collision")
+        body.add_site(name=site_name, pos=[0.0, 0.0, 0.0], quat=[1.0, 0.0, 0.0, 0.0], size=[0.001])
+    else:
+        site_name = name
+
+    sensor_names = {"realityos_wrench_force_sensor", "realityos_wrench_torque_sensor"}
+    if any(sensor.name in sensor_names for sensor in (getattr(spec, "sensors", []) or [])):
+        raise ValueError("wrench_sensor_name_collision")
+    spec.add_sensor(
+        name="realityos_wrench_force_sensor",
+        type=mujoco.mjtSensor.mjSENS_FORCE,
+        objtype=mujoco.mjtObj.mjOBJ_SITE,
+        objname=site_name,
+    )
+    spec.add_sensor(
+        name="realityos_wrench_torque_sensor",
+        type=mujoco.mjtSensor.mjSENS_TORQUE,
+        objtype=mujoco.mjtObj.mjOBJ_SITE,
+        objname=site_name,
+    )
 
 
-def _tool_subtree_contains(root_body: int, candidate_body: int) -> bool:
+def _wrench_sensor_ids(profile: dict[str, Any]) -> tuple[int, int]:
     m = INST.model
     assert m is not None
-    current = int(candidate_body)
-    while current > 0:
-        if current == root_body:
-            return True
-        current = int(m.body_parentid[current])
-    return current == root_body
+    frame_name = str(profile["sensor_frame"])
+    site_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SITE, frame_name)
+    if site_id < 0:
+        site_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SITE, "realityos_wrench_sensor_frame")
+    if site_id < 0:
+        raise ValueError(f"wrench_sensor_frame_unknown:{frame_name}")
+    force_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SENSOR, "realityos_wrench_force_sensor")
+    torque_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SENSOR, "realityos_wrench_torque_sensor")
+    if force_id < 0 or torque_id < 0:
+        raise ValueError("wrench_sensor_model_missing")
+    for sensor_id, sensor_type in (
+        (force_id, mujoco.mjtSensor.mjSENS_FORCE),
+        (torque_id, mujoco.mjtSensor.mjSENS_TORQUE),
+    ):
+        if (
+            int(m.sensor_type[sensor_id]) != int(sensor_type)
+            or int(m.sensor_objtype[sensor_id]) != int(mujoco.mjtObj.mjOBJ_SITE)
+            or int(m.sensor_objid[sensor_id]) != site_id
+            or int(m.sensor_dim[sensor_id]) != 3
+        ):
+            raise ValueError("wrench_sensor_model_mismatch")
+    return force_id, torque_id
 
 
-def _tool_contact_wrench(profile: dict[str, Any], root_body: int, frame_ref: tuple[str, int]):
+def _tool_sensor_wrench(sensor_ids: tuple[int, int]):
     import numpy as np
 
     m, d = INST.model, INST.data
     assert m is not None and d is not None
-    frame_kind, frame_id = frame_ref
-    sensor_origin = d.site_xpos[frame_id] if frame_kind == "site" else d.xpos[frame_id]
-    total_force = np.zeros(3, dtype=float)
-    total_torque = np.zeros(3, dtype=float)
-    local_wrench = np.zeros(6, dtype=np.float64)
-    for contact_id in range(int(d.ncon)):
-        contact = d.contact[contact_id]
-        geom1 = int(contact.geom1)
-        geom2 = int(contact.geom2)
-        body1 = int(m.geom_bodyid[geom1])
-        body2 = int(m.geom_bodyid[geom2])
-        tool1 = _tool_subtree_contains(root_body, body1)
-        tool2 = _tool_subtree_contains(root_body, body2)
-        if tool1 == tool2:
-            continue
-        mujoco.mj_contactForce(m, d, contact_id, local_wrench)
-        # mjContact.frame stores its world axes in rows. The solver's contact
-        # force points geom1 -> geom2, so it acts positively on geom2.
-        contact_frame = np.asarray(contact.frame, dtype=float).reshape((3, 3))
-        sign = 1.0 if tool2 else -1.0
-        force_world = sign * contact_frame.T.dot(local_wrench[:3])
-        torque_world = sign * contact_frame.T.dot(local_wrench[3:])
-        torque_world += np.cross(np.asarray(contact.pos, dtype=float) - sensor_origin, force_world)
-        total_force += force_world
-        total_torque += torque_world
-    return np.concatenate((total_force, total_torque))
+    force_id, torque_id = sensor_ids
+    force_start = int(m.sensor_adr[force_id])
+    torque_start = int(m.sensor_adr[torque_id])
+    # MuJoCo reports the interaction wrench from the instrumented child body
+    # toward its parent. The typed sample convention is the wrench acting on
+    # the tool, so convert the complete six-axis wrench by action/reaction.
+    return np.concatenate(
+        (
+            -np.asarray(d.sensordata[force_start : force_start + 3], dtype=float),
+            -np.asarray(d.sensordata[torque_start : torque_start + 3], dtype=float),
+        )
+    )
 
 
 def _seeded_wrench_noise(seed: int, profile_digest: str, sequence: int, axis: int, bound: float) -> float:
@@ -864,9 +891,14 @@ def _seeded_wrench_noise(seed: int, profile_digest: str, sequence: int, axis: in
 
 
 def _sample_tool_wrench(
-    profile: dict[str, Any], profile_digest: str, sequence: int, root_body: int, frame_ref: tuple[str, int]
+    profile: dict[str, Any], profile_digest: str, sequence: int, sensor_ids: tuple[int, int]
 ) -> dict[str, Any]:
-    true_wrench = _tool_contact_wrench(profile, root_body, frame_ref)
+    m, d = INST.model, INST.data
+    assert m is not None and d is not None
+    # MuJoCo force/torque sensors already report the complete transmitted
+    # wrench in the declared site frame, including contacts and distal-body
+    # gravity/inertial loads.
+    true_wrench = _tool_sensor_wrench(sensor_ids)
     measured = []
     for axis in range(6):
         bound = float(profile["seeded_noise_bound"][axis])
@@ -882,13 +914,289 @@ def _sample_tool_wrench(
             raise ValueError("wrench_sample_error_bound_exceeded")
         measured.append(float(quantized))
     capture_s = float(INST.data.time)
+    site_id = int(m.sensor_objid[sensor_ids[0]])
+    sensor_position = [float(value) for value in d.site_xpos[site_id]]
+    sensor_quaternion = np.empty(4, dtype=float)
+    mujoco.mju_mat2Quat(sensor_quaternion, d.site_xmat[site_id])
     return {
         "sequence": sequence,
         "capture_s": capture_s,
         "receive_s": capture_s + float(profile["latency_s"]),
         "wrench": measured,
         "error_bounds": [float(value) for value in profile["error_bounds"]],
+        "sensor_position": sensor_position,
+        "sensor_quaternion": [float(value) for value in sensor_quaternion],
     }
+
+
+def _sensor_subtree_has_contact(sensor_ids: tuple[int, int]) -> bool:
+    """Return whether any external contact touches the instrumented body subtree."""
+    m, d = INST.model, INST.data
+    assert m is not None and d is not None
+    site_id = int(m.sensor_objid[sensor_ids[0]])
+    root_body = int(m.site_bodyid[site_id])
+
+    def in_sensor_subtree(body_id: int) -> bool:
+        while body_id > 0:
+            if body_id == root_body:
+                return True
+            body_id = int(m.body_parentid[body_id])
+        return root_body == 0
+
+    for contact_index in range(int(d.ncon)):
+        contact = d.contact[contact_index]
+        body1 = int(m.geom_bodyid[int(contact.geom1)])
+        body2 = int(m.geom_bodyid[int(contact.geom2)])
+        if in_sensor_subtree(body1) or in_sensor_subtree(body2):
+            return True
+    return False
+
+
+def _sensor_is_quiescent() -> bool:
+    """Only use a stationary start state as a gravity/load baseline."""
+    d = INST.data
+    assert d is not None
+    return _finite(d.qvel) and max((abs(float(value)) for value in d.qvel), default=0.0) <= 1e-3
+
+
+def _compensate_wrench_with_reference(
+    sample: dict[str, Any],
+    profile: dict[str, Any],
+    reference: dict[str, Any] | None,
+) -> tuple[list[float], list[float]]:
+    """Remove bias and transform the stationary no-contact load into this sensor pose."""
+    compensated = [
+        float(sample["wrench"][axis]) - float(profile["bias"][axis])
+        for axis in range(6)
+    ]
+    error = [float(value) for value in sample["error_bounds"]]
+    if reference is None:
+        return compensated, error
+
+    reference_wrench = [
+        float(reference["wrench"][axis]) - float(profile["bias"][axis])
+        for axis in range(6)
+    ]
+    reference_rotation = np.empty(9, dtype=float)
+    current_rotation = np.empty(9, dtype=float)
+    mujoco.mju_quat2Mat(reference_rotation, np.asarray(reference["sensor_quaternion"], dtype=float))
+    mujoco.mju_quat2Mat(current_rotation, np.asarray(sample["sensor_quaternion"], dtype=float))
+    reference_rotation = reference_rotation.reshape((3, 3))
+    current_rotation = current_rotation.reshape((3, 3))
+    force_world = reference_rotation @ np.asarray(reference_wrench[:3], dtype=float)
+    torque_world = reference_rotation @ np.asarray(reference_wrench[3:], dtype=float)
+    arm = np.asarray(reference["sensor_position"], dtype=float) - np.asarray(
+        sample["sensor_position"], dtype=float
+    )
+    torque_world = torque_world + np.cross(arm, force_world)
+    force_current = current_rotation.T @ force_world
+    torque_current = current_rotation.T @ torque_world
+    for axis in range(3):
+        compensated[axis] -= float(force_current[axis])
+        compensated[axis + 3] -= float(torque_current[axis])
+
+    reference_bounds = np.asarray(reference["error_bounds"], dtype=float)
+    force_error_world = np.abs(reference_rotation) @ reference_bounds[:3]
+    torque_error_world = np.abs(reference_rotation) @ reference_bounds[3:]
+    arm_error = np.abs(arm)
+    torque_error_world += np.asarray(
+        [
+            arm_error[1] * force_error_world[2] + arm_error[2] * force_error_world[1],
+            arm_error[2] * force_error_world[0] + arm_error[0] * force_error_world[2],
+            arm_error[0] * force_error_world[1] + arm_error[1] * force_error_world[0],
+        ],
+        dtype=float,
+    )
+    force_error_current = np.abs(current_rotation.T) @ force_error_world
+    torque_error_current = np.abs(current_rotation.T) @ torque_error_world
+    for axis in range(3):
+        error[axis] += float(force_error_current[axis])
+        error[axis + 3] += float(torque_error_current[axis])
+    if not _finite(compensated) or not _finite(error):
+        raise ValueError("wrench_gravity_compensation_nonfinite")
+    return compensated, error
+
+
+def _validate_wrench_abort_contract(policy: dict[str, Any]) -> list[str]:
+    contract = policy.get("abort_contract")
+    if not isinstance(contract, dict):
+        raise ValueError("wrench_abort_contract_missing")
+    if contract.get("hold_mode") != "hold_current_joint_position":
+        raise ValueError("wrench_abort_hold_mode")
+    actuator_ids = contract.get("allowed_stop_actuator_ids")
+    if (
+        not isinstance(actuator_ids, list)
+        or not actuator_ids
+        or any(not isinstance(name, str) or not name.strip() for name in actuator_ids)
+        or len(set(actuator_ids)) != len(actuator_ids)
+    ):
+        raise ValueError("wrench_stop_actuators")
+    if (
+        not math.isfinite(float(contract.get("max_time_to_stop_s", 0.0)))
+        or float(contract["max_time_to_stop_s"]) <= 0.0
+        or int(contract.get("max_stop_writes", 0)) < 1
+        or float(contract["max_time_to_stop_s"]) > float(policy["max_abort_latency_s"])
+    ):
+        raise ValueError("wrench_abort_contract_limits")
+    return list(actuator_ids)
+
+
+def _validate_monitored_grant(msg: dict[str, Any], policy: dict[str, Any]) -> None:
+    scope = policy["scope"]
+    granted = msg.get("grant_wrench_scope")
+    envelope = msg.get("grant_action_envelope")
+    if (
+        not str(msg.get("grant_id") or "")
+        or not str(msg.get("grant_scope_digest") or "")
+        or not str(msg.get("observation_epoch") or "")
+        or not isinstance(granted, dict)
+        or not isinstance(envelope, dict)
+        or envelope.get("kind") != "linear_stroke"
+        or granted.get("sensor_id") != scope.get("sensor_id")
+        or granted.get("sensor_frame") != scope.get("sensor_frame")
+        or granted.get("policy_digest") != scope.get("policy_digest")
+        or granted.get("abort_contract_id") != scope.get("abort_contract_id")
+        or not _finite_six(granted.get("caps"), positive=True)
+        or any(
+            struct.pack("<d", float(left)) != struct.pack("<d", float(right))
+            for left, right in zip(granted["caps"], scope["caps"])
+        )
+        or envelope.get("wrench_limit") != granted
+    ):
+        raise ValueError("wrench_grant_scope_mismatch")
+    requested = float(envelope.get("requested_m", 0.0))
+    maximum = float(envelope.get("maximum_m", 0.0))
+    if not math.isfinite(requested) or not math.isfinite(maximum) or requested <= 0.0 or maximum < requested:
+        raise ValueError("wrench_grant_stroke_bounds")
+
+
+def _hold_current_position(policy: dict[str, Any]) -> tuple[bool, list[str]]:
+    """Apply one bounded safe write to the registered scalar position joints."""
+    m, d = INST.model, INST.data
+    assert m is not None and d is not None
+    actuator_names = _validate_wrench_abort_contract(policy)
+    before = [float(value) for value in d.ctrl]
+    updates: dict[int, float] = {}
+    for name in actuator_names:
+        actuator_id = int(mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_ACTUATOR, name))
+        if actuator_id < 0:
+            raise ValueError(f"wrench_stop_actuator_unknown:{name}")
+        if int(m.actuator_trntype[actuator_id]) not in (0, 1) or int(m.actuator_biastype[actuator_id]) != 1:
+            raise ValueError(f"wrench_stop_actuator_not_position_joint:{name}")
+        joint_id = int(m.actuator_trnid[actuator_id][0])
+        if joint_id < 0 or joint_id >= m.njnt or int(m.jnt_type[joint_id]) not in (2, 3):
+            raise ValueError(f"wrench_stop_joint_not_scalar:{name}")
+        if not bool(m.actuator_ctrllimited[actuator_id]):
+            raise ValueError(f"wrench_stop_control_unbounded:{name}")
+        qpos_address = int(m.jnt_qposadr[joint_id])
+        target = float(d.qpos[qpos_address])
+        low, high = (float(value) for value in m.actuator_ctrlrange[actuator_id])
+        if not math.isfinite(target) or target < low - 1e-10 or target > high + 1e-10:
+            raise ValueError(f"wrench_stop_target_out_of_range:{name}")
+        if actuator_id in updates:
+            raise ValueError(f"wrench_stop_duplicate_actuator:{name}")
+        updates[actuator_id] = target
+    next_ctrl = list(before)
+    for actuator_id, target in updates.items():
+        next_ctrl[actuator_id] = target
+    safe_before = INST.safe_write_count
+    ordinary_before = INST.ctrl_write_count
+    _set_ctrl(next_ctrl, write=False, safe=True)
+    changed_outside_scope = any(
+        index not in updates and float(d.ctrl[index]) != before[index]
+        for index in range(len(before))
+    )
+    verified = (
+        not changed_outside_scope
+        and INST.safe_write_count == safe_before + 1
+        and INST.ctrl_write_count == ordinary_before
+        and all(abs(float(d.ctrl[index]) - target) <= 1e-10 for index, target in updates.items())
+        and len(updates) == len(actuator_names)
+    )
+    return verified, actuator_names
+
+
+def _trip_wrench_monitor(
+    reason: dict[str, Any], policy: dict[str, Any], triggered_at_s: float
+) -> dict[str, Any]:
+    contract = policy["abort_contract"]
+    write_before = INST.safe_write_count
+    stopped_at_s = float(INST.data.time)
+    stop_verified = False
+    stop_actuator_ids: list[str] = []
+    try:
+        stop_verified, stop_actuator_ids = _hold_current_position(policy)
+    except Exception:
+        stop_verified = False
+    stopped_at_s = float(INST.data.time)
+    write_count = INST.safe_write_count - write_before
+    stop_verified = bool(
+        stop_verified
+        and write_count <= int(contract["max_stop_writes"])
+        and stopped_at_s - triggered_at_s <= float(contract["max_time_to_stop_s"]) + 1e-12
+    )
+    INST.wrench_abort_latched = True
+    return {
+        "reason": reason,
+        "triggered_at_s": triggered_at_s,
+        "stopped_at_s": stopped_at_s,
+        "stop_write_count": write_count,
+        "contract_id": str(contract.get("contract_id") or ""),
+        "stop_verified": stop_verified,
+        "stop_actuator_ids": stop_actuator_ids,
+    }
+
+
+def _monitor_reason(
+    sample: dict[str, Any] | None,
+    previous_capture_s: float | None,
+    now_s: float,
+    monitor_started_s: float,
+    policy: dict[str, Any],
+    profile: dict[str, Any],
+    gravity_reference: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if sample is None:
+        if now_s - monitor_started_s > float(policy["max_sample_age_s"]):
+            return {"kind": "missing_sample"}
+        return None
+    capture_s = float(sample["capture_s"])
+    receive_s = float(sample["receive_s"])
+    age_s = now_s - capture_s
+    if receive_s > now_s or capture_s > now_s:
+        return None
+    if not math.isfinite(age_s) or age_s > float(policy["max_sample_age_s"]):
+        return {"kind": "stale_sample"}
+    if previous_capture_s is not None:
+        gap_s = capture_s - previous_capture_s
+        if gap_s <= 0.0 or gap_s > float(policy["max_inter_sample_gap_s"]):
+            return {"kind": "gap_exceeded"}
+    try:
+        if not _finite_six(sample.get("wrench")) or not _finite_six(sample.get("error_bounds")):
+            return {"kind": "monitor_fault"}
+        scope = policy["scope"]
+        compensated_wrench, compensated_error = _compensate_wrench_with_reference(
+            sample, profile, gravity_reference
+        )
+        for axis in range(6):
+            upper = (
+                abs(compensated_wrench[axis])
+                + compensated_error[axis]
+                + float(policy["max_rise_rate"][axis])
+                * (age_s + float(policy["max_sensing_latency_s"]) + float(policy["max_abort_latency_s"]))
+            )
+            if not math.isfinite(upper):
+                return {"kind": "monitor_fault"}
+            if upper >= float(scope["caps"][axis]):
+                return {
+                    "kind": "limit",
+                    "axis": axis,
+                    "measured_upper_bound": upper,
+                    "cap": float(scope["caps"][axis]),
+                }
+    except Exception:
+        return {"kind": "monitor_fault"}
+    return None
 
 
 def _load(msg: dict[str, Any]) -> dict[str, Any]:
@@ -903,6 +1211,12 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
     INST.mesh_asset_by_id = {}
     INST.wrench_sequence_by_profile = {}
     INST.wrench_step_by_profile = {}
+    INST.wrench_latest_by_profile = {}
+    INST.wrench_pending_by_profile = {}
+    INST.wrench_last_received_capture_by_profile = {}
+    INST.wrench_monitor_started_by_profile = {}
+    INST.wrench_gravity_reference_by_profile = {}
+    INST.wrench_abort_latched = False
     fmt = str(msg.get("format", "mjcf")).lower()
     INST.source_format = fmt
     path = msg.get("path")
@@ -935,7 +1249,8 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
     INST.asset_names = sorted({k for k in assets if "/" in k or "." in k})
     seed = int(msg.get("seed", 0))
     INST.load_seed = seed
-    if not extras and path in _BASE_MODEL:
+    wrench_sensor_frame = msg.get("wrench_sensor_frame")
+    if not extras and wrench_sensor_frame is None and path in _BASE_MODEL:
         INST.model = _BASE_MODEL[path]
         INST.mesh_asset_by_id = dict(_BASE_MESH_ASSETS.get(path, {}))
         INST.data = mujoco.MjData(INST.model)
@@ -956,6 +1271,8 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
     try:
         spec = _load_spec(path, assets)
         _add_scenario_objects(spec, extras)
+        if wrench_sensor_frame is not None:
+            _add_wrench_sensors(spec, str(wrench_sensor_frame))
         meshdir = str(getattr(spec.compiler, "meshdir", "") or "")
         for mesh in getattr(spec, "meshes", []) or []:
             mesh_id = int(getattr(mesh, "id", -1))
@@ -988,7 +1305,7 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
     inspect = INST.inspect()
     inspect["load_seed"] = seed
     inspect["model_cache"] = "miss"
-    if not extras:
+    if not extras and wrench_sensor_frame is None:
         _BASE_MODEL[path] = INST.model
         _BASE_INSPECT[path] = dict(inspect)
         _BASE_MESH_ASSETS[path] = dict(INST.mesh_asset_by_id)
@@ -1086,6 +1403,11 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
         return _load(msg)
     if INST.model is None or INST.data is None:
         return {"ok": False, "error": "not_loaded"}
+    if INST.wrench_abort_latched and (
+        cmd in {"set_ctrl", "set_safe_ctrl", "step_with_wrench_profile", "step_monitored"}
+        or (cmd == "step" and int(msg.get("n", 1)) > 0)
+    ):
+        return {"ok": False, "error": "WRENCH_ABORT_LATCHED", "metal": False}
     if cmd == "inspect":
         return {"ok": True, "inspect": INST.inspect()}
     if cmd == "local_linear":
@@ -1133,6 +1455,175 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
             "ctrl_write_count": INST.ctrl_write_count,
             "ctrl": [float(x) for x in INST.data.ctrl],
         }
+    if cmd == "step_monitored":
+        profile = msg.get("profile")
+        policy = msg.get("policy")
+        profile_digest = str(msg.get("profile_digest") or "").lower()
+        validated = False
+        samples: list[dict[str, Any]] = []
+        precontact_baseline_record = None
+        gravity_reference = None
+        try:
+            if not isinstance(profile, dict) or not isinstance(policy, dict):
+                raise ValueError("wrench_monitor_profile_missing")
+            if profile.get("limit_policy") != policy:
+                raise ValueError("wrench_monitor_policy_mismatch")
+            step_interval = _wrench_profile_steps(profile, profile_digest, float(INST.model.opt.timestep))
+            _validate_wrench_abort_contract(policy)
+            _validate_monitored_grant(msg, policy)
+            # Resolve the sensor and every stop target before advancing physics.
+            sensor_ids = _wrench_sensor_ids(profile)
+            _hold_target_names = _validate_wrench_abort_contract(policy)
+            for actuator_name in _hold_target_names:
+                actuator_id = int(mujoco.mj_name2id(INST.model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name))
+                joint_id = int(INST.model.actuator_trnid[actuator_id][0])
+                if (
+                    int(INST.model.actuator_trntype[actuator_id]) not in (0, 1)
+                    or int(INST.model.actuator_biastype[actuator_id]) != 1
+                    or joint_id < 0
+                    or joint_id >= INST.model.njnt
+                    or int(INST.model.jnt_type[joint_id]) not in (2, 3)
+                    or not bool(INST.model.actuator_ctrllimited[actuator_id])
+                ):
+                    raise ValueError(f"wrench_stop_actuator_invalid:{actuator_name}")
+            n = int(msg.get("n", 0))
+            if n <= 0 or n > 100_000:
+                raise ValueError("wrench_step_count")
+            validated = True
+            profile_digest = profile_digest.lower()
+            sequence = int(INST.wrench_sequence_by_profile.get(profile_digest, 0))
+            step_count = int(INST.wrench_step_by_profile.get(profile_digest, 0))
+            latest = INST.wrench_latest_by_profile.get(profile_digest)
+            pending = list(INST.wrench_pending_by_profile.get(profile_digest, []))
+            gravity_reference = INST.wrench_gravity_reference_by_profile.get(profile_digest)
+            previous_capture_s = INST.wrench_last_received_capture_by_profile.get(profile_digest)
+            monitor_started_s = float(INST.wrench_monitor_started_by_profile.setdefault(profile_digest, INST.data.time))
+            drop_wrench_samples = bool(msg.get("drop_wrench_samples", False))
+            request_precontact_baseline = bool(msg.get("request_precontact_baseline", False))
+            if (
+                not drop_wrench_samples
+                and not request_precontact_baseline
+                and latest is None
+                and not pending
+                and sequence == 0
+                and step_count == 0
+            ):
+                mujoco.mj_forward(INST.model, INST.data)
+                initial = _sample_tool_wrench(profile, profile_digest, sequence, sensor_ids)
+                samples.append(initial)
+                pending.append(initial)
+                if not _sensor_subtree_has_contact(sensor_ids) and _sensor_is_quiescent():
+                    gravity_reference = dict(initial)
+                sequence += 1
+            if not drop_wrench_samples and request_precontact_baseline:
+                mujoco.mj_forward(INST.model, INST.data)
+                if not _sensor_subtree_has_contact(sensor_ids) and _sensor_is_quiescent():
+                    baseline_candidates = list(pending)
+                    if latest is not None:
+                        baseline_candidates.append(latest)
+                    baseline_record = next(
+                        (
+                            candidate
+                            for candidate in reversed(baseline_candidates)
+                            if abs(float(candidate["capture_s"]) - float(INST.data.time)) <= 1e-12
+                        ),
+                        None,
+                    )
+                    if baseline_record is None:
+                        baseline_record = _sample_tool_wrench(
+                            profile, profile_digest, sequence, sensor_ids
+                        )
+                        samples.append(baseline_record)
+                        pending.append(baseline_record)
+                        sequence += 1
+                    precontact_baseline_record = dict(baseline_record)
+                    if gravity_reference is None:
+                        gravity_reference = dict(baseline_record)
+            abort = None
+            for _ in range(n):
+                mujoco.mj_step(INST.model, INST.data)
+                if not _finite(INST.data.qpos) or not _finite(INST.data.qvel):
+                    abort = _trip_wrench_monitor({"kind": "monitor_fault"}, policy, float(INST.data.time))
+                    break
+                step_count += 1
+                now_s = float(INST.data.time)
+                if not drop_wrench_samples and step_count % step_interval == 0:
+                    sampled = _sample_tool_wrench(profile, profile_digest, sequence, sensor_ids)
+                    samples.append(sampled)
+                    pending.append(sampled)
+                    sequence += 1
+                newly_available = []
+                still_pending = []
+                for candidate in pending:
+                    if float(candidate["receive_s"]) <= now_s + 1e-12:
+                        newly_available.append(candidate)
+                    else:
+                        still_pending.append(candidate)
+                pending = still_pending
+                for candidate in newly_available:
+                    candidate_capture = float(candidate["capture_s"])
+                    if previous_capture_s is not None:
+                        candidate_gap = candidate_capture - previous_capture_s
+                        if candidate_gap <= 0.0 or candidate_gap > float(policy["max_inter_sample_gap_s"]):
+                            abort = _trip_wrench_monitor({"kind": "gap_exceeded"}, policy, now_s)
+                            break
+                    previous_capture_s = candidate_capture
+                    latest = candidate
+                if abort is not None:
+                    break
+                reason = _monitor_reason(
+                    latest,
+                    None,
+                    now_s,
+                    monitor_started_s,
+                    policy,
+                    profile,
+                    gravity_reference,
+                )
+                if reason is not None:
+                    abort = _trip_wrench_monitor(reason, policy, now_s)
+                    break
+            INST.wrench_sequence_by_profile[profile_digest] = sequence
+            INST.wrench_step_by_profile[profile_digest] = step_count
+            INST.wrench_latest_by_profile[profile_digest] = latest
+            INST.wrench_pending_by_profile[profile_digest] = pending
+            INST.wrench_last_received_capture_by_profile[profile_digest] = previous_capture_s
+            if gravity_reference is not None:
+                INST.wrench_gravity_reference_by_profile[profile_digest] = gravity_reference
+            state = INST.state()
+            return {
+                "ok": True,
+                "state": state,
+                "samples": samples,
+                "sensor_id": str(profile["sensor_id"]),
+                "profile_digest": profile_digest,
+                "precontact_baseline": precontact_baseline_record,
+                "monitor_gravity_reference": gravity_reference,
+                "evidence_status": EVIDENCE_STATUS,
+                "abort": abort,
+                "metal": False,
+            }
+        except Exception as exc:
+            if not validated:
+                return {"ok": False, "error": f"wrench_monitor:{exc}", "metal": False}
+            try:
+                fault = _trip_wrench_monitor({"kind": "monitor_fault"}, policy, float(INST.data.time))
+                return {
+                    "ok": True,
+                    "state": INST.state(),
+                    "samples": samples,
+                    "sensor_id": str(profile["sensor_id"]),
+                    "profile_digest": profile_digest,
+                    "precontact_baseline": precontact_baseline_record,
+                    "monitor_gravity_reference": gravity_reference,
+                    "evidence_status": EVIDENCE_STATUS,
+                    "abort": fault,
+                    "monitor_error": str(exc),
+                    "metal": False,
+                }
+            except Exception as stop_error:
+                INST.wrench_abort_latched = True
+                return {"ok": False, "error": f"wrench_monitor_fault:{exc};stop:{stop_error}", "metal": False}
     if cmd == "step_with_wrench_profile":
         try:
             profile = msg.get("profile")
@@ -1140,7 +1631,7 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
             sample_interval_steps = _wrench_profile_steps(
                 profile, profile_digest, float(INST.model.opt.timestep)
             )
-            root_body, frame_ref = _tool_sensor_frame(profile)
+            sensor_ids = _wrench_sensor_ids(profile)
             profile_digest = profile_digest.lower()
             n = int(msg.get("n", 1))
             if n < 0 or n > 100_000:
@@ -1155,7 +1646,7 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                 step_count += 1
                 if step_count % sample_interval_steps == 0:
                     samples.append(
-                        _sample_tool_wrench(profile, profile_digest, sequence, root_body, frame_ref)
+                        _sample_tool_wrench(profile, profile_digest, sequence, sensor_ids)
                     )
                     sequence += 1
             INST.wrench_sequence_by_profile[profile_digest] = sequence

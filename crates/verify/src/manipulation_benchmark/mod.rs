@@ -19,13 +19,15 @@ pub use physical_evidence::{
     PhysicalSensorIdentity, PhysicalSensorRequirement, PhysicalSensorTrace, SensorOrigin,
 };
 pub use report::{
-    render_markdown, score_campaign, write_report, BenchmarkExecutionError, BenchmarkReport,
-    BenchmarkSliceReport, BenchmarkTrialRecord, RateEstimate,
+    evaluate_paired_screening_gate, paired_campaign_delta, render_markdown, score_campaign,
+    write_report, BenchmarkExecutionError, BenchmarkReport, BenchmarkSliceReport,
+    BenchmarkTrialRecord, PairedCampaignDelta, PairedEmbodimentDelta, PairedMetricDelta,
+    PairedScreeningGate, RateEstimate, WrenchReportMetrics,
 };
 pub use scenario::{
-    resolve_benchmark_trial, trial_digest, BenchmarkConfig, BenchmarkTask, EmbodimentRegistration,
-    EmbodimentRegistry, EmbodimentRole, ResolvedBenchmarkTrial, TrialExpectation,
-    BENCHMARK_SCHEMA_VERSION,
+    paired_trial_key, resolve_benchmark_trial, trial_digest, upgrade_v5_trial_for_v6,
+    BenchmarkConfig, BenchmarkTask, EmbodimentRegistration, EmbodimentRegistry, EmbodimentRole,
+    ResolvedBenchmarkTrial, TrialExpectation, BENCHMARK_SCHEMA_VERSION,
 };
 pub use wrench_sensor::{SimulationWrenchSensorProfile, SimulationWrenchWindow};
 

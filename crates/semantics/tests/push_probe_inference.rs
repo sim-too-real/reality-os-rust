@@ -47,6 +47,9 @@ fn measurement() -> PushProbeMeasurement {
             sample(1, 1.002, [-3.1, 0.0, 0.0, 0.0, 0.0, 0.0]),
             sample(2, 1.008, [-3.1, 0.0, 0.0, 0.0, 0.0, 0.0]),
         ],
+        precontact_baseline: Some(sample(0, 1.001, [0.0; 6])),
+        sample_gravity_wrenches: Vec::new(),
+        sample_sensor_transforms: Vec::new(),
         sensor_to_support: WrenchTransform {
             rotation_to_support: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
             translation_to_support_m: [0.0; 3],
@@ -95,6 +98,62 @@ fn sticking_probe_adds_only_a_conservative_lower_bound() {
         interval[1], 0.8,
         "sticking evidence provides no upper bound"
     );
+}
+
+#[test]
+fn precontact_gravity_baseline_is_removed_from_each_inference_sample() {
+    let mut measured = measurement();
+    measured.samples[0].wrench[0] = -2.1;
+    measured.samples[1].wrench[0] = -2.1;
+    for sample in &mut measured.samples {
+        sample.digest = wrench_sample_digest(sample);
+    }
+    measured.sample_gravity_wrenches = vec![[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]; 2];
+
+    let FrictionInferenceResult::Updated { interval, .. } = infer_support_friction(&measured)
+    else {
+        panic!(
+            "gravity-compensated sticking probe should infer a lower bound: {:?}",
+            infer_support_friction(&measured)
+        );
+    };
+    assert!(
+        interval[0] > 0.30,
+        "gravity baseline must be removed: {interval:?}"
+    );
+}
+
+#[test]
+fn probe_refuses_friction_updates_without_a_precontact_baseline() {
+    let mut measured = measurement();
+    measured.precontact_baseline = None;
+    assert!(matches!(
+        infer_support_friction(&measured),
+        FrictionInferenceResult::NoInference(FrictionNoInferenceReason::PrecontactBaselineMissing)
+    ));
+}
+
+#[test]
+fn per_sample_sensor_pose_transforms_the_wrench_into_support_axes() {
+    let mut measured = measurement();
+    measured.samples[1].wrench = [0.0, 3.1, 0.0, 0.0, 0.0, 0.0];
+    measured.samples[1].digest = wrench_sample_digest(&measured.samples[1]);
+    measured.sample_gravity_wrenches = vec![[0.0; 6]; 2];
+    measured.sample_sensor_transforms = vec![
+        measured.sensor_to_support.clone(),
+        WrenchTransform {
+            rotation_to_support: [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            translation_to_support_m: [0.0; 3],
+        },
+    ];
+
+    assert!(matches!(
+        infer_support_friction(&measured),
+        FrictionInferenceResult::Updated {
+            mode: FrictionInferenceMode::Sticking,
+            interval,
+        } if interval[0] > 0.30
+    ));
 }
 
 #[test]
@@ -287,6 +346,30 @@ fn stale_or_mismatched_lineage_never_updates_friction() {
 }
 
 #[test]
+fn completed_probe_trace_can_be_inferred_after_its_early_samples_age() {
+    let mut trace = measurement();
+    for sequence in 3..=30 {
+        let capture_s = 1.014 + (sequence - 3) as f64 * 0.007;
+        trace
+            .samples
+            .push(sample(sequence, capture_s, [-3.1, 0.0, 0.0, 0.0, 0.0, 0.0]));
+    }
+    trace.motion.end_s = trace.samples.last().unwrap().capture_s;
+    trace.now_s = trace.samples.last().unwrap().receive_s;
+
+    assert!(
+        matches!(
+            infer_support_friction(&trace),
+            FrictionInferenceResult::Updated {
+                mode: FrictionInferenceMode::Sticking,
+                ..
+            }
+        ),
+        "each sample arrived within the declared latency and the final sample is fresh"
+    );
+}
+
+#[test]
 fn non_planar_support_motion_refuses_friction_inference() {
     let mut tilted = measurement();
     tilted.support_normal_world = [0.0, 0.1, 0.99498743710662];
@@ -311,6 +394,9 @@ fn hardware_and_simulation_origins_are_preserved_and_must_match_samples() {
         sample.origin = WrenchSampleOrigin::Hardware;
         sample.digest = wrench_sample_digest(sample);
     }
+    let baseline = hardware.precontact_baseline.as_mut().unwrap();
+    baseline.origin = WrenchSampleOrigin::Hardware;
+    baseline.digest = wrench_sample_digest(baseline);
     assert!(matches!(
         infer_support_friction(&hardware),
         FrictionInferenceResult::Updated {
@@ -378,6 +464,21 @@ fn measurement_digest_binds_sample_values_origin_and_transform() {
     let mut changed_transform = baseline;
     changed_transform.sensor_to_support.translation_to_support_m[2] = 0.01;
     assert_ne!(baseline_digest, changed_transform.digest());
+
+    let baseline = measurement();
+    let mut changed_gravity = baseline.clone();
+    changed_gravity.sample_gravity_wrenches = vec![[0.1, 0.0, 0.0, 0.0, 0.0, 0.0]; 2];
+    assert_ne!(baseline.digest(), changed_gravity.digest());
+
+    let mut changed_sample_pose = baseline.clone();
+    changed_sample_pose.sample_sensor_transforms = vec![
+        baseline.sensor_to_support.clone(),
+        WrenchTransform {
+            rotation_to_support: [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            translation_to_support_m: [0.0; 3],
+        },
+    ];
+    assert_ne!(baseline.digest(), changed_sample_pose.digest());
 }
 
 #[test]

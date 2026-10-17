@@ -5,17 +5,21 @@ use realityos_reasoner_bridge::SimulationAdmission;
 use realityos_semantics::observation::{
     wrench_sample_digest, JointStateSample, ObservationFrame, SensorObservation, WrenchSample,
 };
+use realityos_semantics::push_probe::WrenchCompensation;
 use realityos_semantics::sensor::{SensorClass, WrenchSampleOrigin};
 use realityos_verify::bundle::RobotBundle;
 use realityos_verify::manipulation_benchmark::wrench_sensor::{
-    aggregate_contact_wrenches, contact_force_on_geom, transform_contact_wrench_world,
+    aggregate_contact_wrenches, conservative_wrench_upper_bound, contact_force_on_geom,
+    transform_contact_wrench_world, WrenchAbortReason,
 };
 use realityos_verify::manipulation_benchmark::{
-    resolve_benchmark_trial, score_campaign, trial_digest, validate_collision_geometry,
-    validate_physical_observation, BenchmarkConfig, BenchmarkExecutionError, BenchmarkTask,
-    BenchmarkTrialRecord, EmbodimentRegistry, EmbodimentRole, FailureCause, GeometryGateResult,
-    PhysicalEvidenceStatus, PhysicalSensorIdentity, PhysicalSensorRequirement, PhysicalSensorTrace,
-    SensorOrigin, SimulationWrenchSensorProfile, TrialExpectation, TrialOutcome,
+    evaluate_paired_screening_gate, paired_campaign_delta, paired_trial_key,
+    resolve_benchmark_trial, score_campaign, trial_digest, upgrade_v5_trial_for_v6,
+    validate_collision_geometry, validate_physical_observation, BenchmarkConfig,
+    BenchmarkExecutionError, BenchmarkTask, BenchmarkTrialRecord, EmbodimentRegistry,
+    EmbodimentRole, FailureCause, GeometryGateResult, PhysicalEvidenceStatus,
+    PhysicalSensorIdentity, PhysicalSensorRequirement, PhysicalSensorTrace, SensorOrigin,
+    SimulationWrenchSensorProfile, TrialExpectation, TrialOutcome,
 };
 use realityos_verify::mujoco_exec::checkin_worker;
 use realityos_verify::normalize::{DerivedInterface, JointRecord, RobotManifest};
@@ -77,10 +81,22 @@ fn simulation_wrench_profile(sensor_frame: &str) -> SimulationWrenchSensorProfil
     limit_policy.sensor_calibration_hash = "a".repeat(64);
     limit_policy.sensor_sample_rate_hz = 125.0;
     limit_policy.max_sensing_latency_s = 0.01;
+    let mut compensation = WrenchCompensation {
+        bias: [0.0; 6],
+        gravity_wrench: [0.0; 6],
+        residual_error: [0.05, 0.05, 0.05, 0.005, 0.005, 0.005],
+        digest: String::new(),
+    };
+    compensation.digest = compensation.digest();
+    limit_policy.compensation_digest =
+        SimulationWrenchSensorProfile::compensation_policy_digest_for(
+            "mujoco-force-torque-sensor-gravity-baseline-v1",
+            &compensation,
+        );
     limit_policy.scope.policy_digest = limit_policy.digest();
     SimulationWrenchSensorProfile {
         sensor_id: limit_policy.scope.sensor_id.clone(),
-        model_id: "mujoco-contact-wrench-v1".into(),
+        model_id: "mujoco-force-torque-sensor-gravity-baseline-v1".into(),
         calibration_hash: limit_policy.sensor_calibration_hash.clone(),
         sensor_frame: sensor_frame.into(),
         units: "N,N*m".into(),
@@ -92,6 +108,402 @@ fn simulation_wrench_profile(sensor_frame: &str) -> SimulationWrenchSensorProfil
         seeded_noise_bound: [0.01, 0.01, 0.01, 0.001, 0.001, 0.001],
         limit_policy,
     }
+}
+
+fn run_test_benchmark_trial(
+    bundle: &RobotBundle,
+    trial: &realityos_verify::manipulation_benchmark::ResolvedBenchmarkTrial,
+    mut admission: SimulationAdmission,
+) -> Result<
+    realityos_verify::manipulation_benchmark::BenchmarkEpisode,
+    realityos_verify::manipulation_benchmark::BenchmarkError,
+> {
+    let mut resolved_trial = trial.clone();
+    resolved_trial.paired_trial_key = Some(paired_trial_key(&resolved_trial).unwrap());
+    let profile = if trial.task == BenchmarkTask::PushProbeReplan {
+        let profile = if trial.robot_id == "planar_arm" {
+            let mut profile = simulation_wrench_profile("ee");
+            profile
+                .limit_policy
+                .abort_contract
+                .allowed_stop_actuator_ids = vec!["act1".into(), "act2".into(), "act3".into()];
+            profile.limit_policy.scope.policy_digest = profile.limit_policy.digest();
+            profile
+        } else {
+            let registry_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../robots/benchmarks/manipulation/embodiments.json");
+            realityos_verify::manipulation_benchmark::EmbodimentRegistry::load(&registry_path)
+                .expect("checked-in manipulation registry")
+                .registrations
+                .into_iter()
+                .find(|entry| entry.robot_id == trial.robot_id)
+                .and_then(|entry| entry.simulation_wrench_profile)
+                .expect("registered push embodiment profile")
+        };
+        admission.wrench_limit_policy = profile.limit_policy.clone();
+        Some(profile)
+    } else {
+        None
+    };
+    realityos_verify::manipulation_benchmark::run_benchmark_trial(
+        bundle,
+        &resolved_trial,
+        admission,
+        profile.as_ref(),
+    )
+}
+
+fn monitor_sample(profile: &SimulationWrenchSensorProfile, wrench: [f64; 6]) -> WrenchSample {
+    let mut sample = WrenchSample {
+        sensor_id: profile.sensor_id.clone(),
+        sensor_frame: profile.sensor_frame.clone(),
+        transform_epoch: "monitor-test-epoch".into(),
+        units: profile.units.clone(),
+        wrench,
+        error_bounds: profile.error_bounds,
+        capture_s: 1.0,
+        receive_s: 1.0 + profile.latency_s,
+        sequence: 1,
+        clock_domain: "mujoco_simulation_clock".into(),
+        origin: WrenchSampleOrigin::Simulation,
+        digest: String::new(),
+    };
+    sample.digest = wrench_sample_digest(&sample);
+    sample
+}
+
+fn monitored_profile_for_fixture(
+    frame: &str,
+    inspect: &Value,
+    stop_ids: Option<Vec<String>>,
+) -> SimulationWrenchSensorProfile {
+    let mut profile = simulation_wrench_profile(frame);
+    let ids = stop_ids.unwrap_or_else(|| {
+        inspect["actuators"]
+            .as_array()
+            .expect("actuator manifest")
+            .iter()
+            .filter(|actuator| {
+                matches!(actuator["trntype"].as_i64(), Some(0 | 1))
+                    && actuator["biastype"].as_i64() == Some(1)
+                    && actuator["ctrllimited"].as_bool() == Some(true)
+            })
+            .filter_map(|actuator| actuator["name"].as_str().map(str::to_owned))
+            .collect::<Vec<_>>()
+    });
+    assert!(!ids.is_empty(), "fixture needs position joint actuators");
+    profile
+        .limit_policy
+        .abort_contract
+        .allowed_stop_actuator_ids = ids;
+    profile.limit_policy.scope.caps[0] = 0.01;
+    profile.limit_policy.scope.policy_digest = profile.limit_policy.digest();
+    assert!(profile.validate().is_ok());
+    profile
+}
+
+fn monitored_worker_request(
+    profile: &SimulationWrenchSensorProfile,
+    drop_wrench_samples: bool,
+) -> Value {
+    let policy = &profile.limit_policy;
+    let profile_digest = profile.digest().expect("profile digest");
+    serde_json::json!({
+        "cmd": "step_monitored",
+        "n": 100,
+        "profile": profile,
+        "profile_digest": profile_digest,
+        "policy": policy,
+        "grant_id": "monitor-test-grant",
+        "grant_scope_digest": "f".repeat(64),
+        "grant_wrench_scope": policy.scope,
+        "grant_action_envelope": {
+            "kind": "linear_stroke",
+            "requested_m": 0.008,
+            "maximum_m": 0.1,
+            "wrench_limit": policy.scope,
+        },
+        "observation_epoch": "monitor-test-epoch",
+        "drop_wrench_samples": drop_wrench_samples,
+    })
+}
+
+#[test]
+fn force_monitor_trips_each_of_six_axes_before_cap() {
+    let profile = simulation_wrench_profile("ee");
+    let policy = &profile.limit_policy;
+    for axis in 0..6 {
+        let margin = profile.error_bounds[axis]
+            + policy.max_rise_rate[axis]
+                * (policy.max_sensing_latency_s + policy.max_abort_latency_s + 0.001);
+        let mut wrench = [0.0; 6];
+        wrench[axis] = policy.scope.caps[axis] - margin;
+        let sample = monitor_sample(&profile, wrench);
+        let reason =
+            conservative_wrench_upper_bound(Some(&sample), None, sample.receive_s + 0.001, policy)
+                .expect_err("predictive wrench bound must trip below the physical cap");
+        assert!(
+            matches!(reason, WrenchAbortReason::Limit { axis: tripped, .. } if tripped == axis)
+        );
+    }
+}
+
+#[test]
+fn force_monitor_uses_absolute_values_for_both_signs() {
+    let profile = simulation_wrench_profile("ee");
+    let policy = &profile.limit_policy;
+    for sign in [-1.0, 1.0] {
+        let mut wrench = [0.0; 6];
+        wrench[0] = sign * 19.9;
+        let sample = monitor_sample(&profile, wrench);
+        assert!(matches!(
+            conservative_wrench_upper_bound(Some(&sample), None, sample.receive_s + 0.001, policy,),
+            Err(WrenchAbortReason::Limit { axis: 0, .. })
+        ));
+    }
+}
+
+#[test]
+fn wrench_threshold_uses_error_and_latency_rise_margin() {
+    let profile = simulation_wrench_profile("ee");
+    let policy = &profile.limit_policy;
+    let sample = monitor_sample(&profile, [5.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let now_s = sample.receive_s + 0.001;
+    let bounds = conservative_wrench_upper_bound(Some(&sample), None, now_s, policy)
+        .expect("bound below cap");
+    let expected = 5.0
+        + profile.error_bounds[0]
+        + policy.max_rise_rate[0]
+            * (now_s - sample.capture_s
+                + policy.max_sensing_latency_s
+                + policy.max_abort_latency_s);
+    assert!((bounds[0] - expected).abs() < 1e-10);
+    assert!(bounds[0] < policy.scope.caps[0]);
+}
+
+#[test]
+fn wrench_monitor_compensates_registered_bias_before_checking_the_load() {
+    use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, MujocoInstance};
+    if !ensure_mujoco_or_skip() {
+        return;
+    }
+    let _guard = lock_mujoco_test();
+    let bundle = planar_bundle();
+    let objects = [serde_json::json!({
+        "name": "bias_compensation_probe",
+        "type": "box",
+        "pos": [0.48, 0.0, 0.12],
+        "size": [0.015, 0.015, 0.015],
+        "mass": 0.05,
+        "friction": 0.5
+    })];
+    let mut worker = MujocoInstance::spawn().expect("MuJoCo worker");
+    let loaded = worker
+        .load_bundle_with_wrench_profile(
+            &bundle,
+            &objects,
+            736,
+            &simulation_wrench_profile("ee_flipped"),
+        )
+        .expect("load wrench-instrumented contact fixture");
+    let mut profile = monitored_profile_for_fixture("ee_flipped", &loaded["inspect"], None);
+    profile.limit_policy.scope.caps[0] = 20.0;
+    profile.limit_policy.scope.policy_digest = profile.limit_policy.digest();
+    let mut calibration_request = monitored_worker_request(&profile, false);
+    calibration_request["n"] = serde_json::json!(1);
+    let calibration = worker
+        .rpc(&calibration_request)
+        .expect("read the contact load before configuring its bias");
+    assert_eq!(calibration["ok"], true, "{calibration}");
+    let expected_load = calibration["samples"][0]["wrench"][0]
+        .as_f64()
+        .expect("sampled contact load");
+    assert!(
+        expected_load > 0.25,
+        "fixture must create positive load: {expected_load}"
+    );
+    worker.reset(None, None).expect("reset contact fixture");
+    profile.bias[0] = -expected_load;
+    profile.limit_policy.max_rise_rate[0] = 0.1;
+    profile.limit_policy.scope.caps[0] = expected_load * 0.5;
+    let mut compensation = profile.compensation();
+    compensation.digest = compensation.digest();
+    profile.limit_policy.compensation_digest =
+        SimulationWrenchSensorProfile::compensation_policy_digest_for(
+            &profile.model_id,
+            &compensation,
+        );
+    profile.limit_policy.scope.policy_digest = profile.limit_policy.digest();
+    assert!(profile.validate().is_ok());
+    let mut monitored_request = monitored_worker_request(&profile, false);
+    monitored_request["n"] = serde_json::json!(5);
+    let response = worker.rpc(&monitored_request).expect("monitored response");
+
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(
+        response["abort"]["reason"]["kind"], "limit",
+        "known negative bias must be removed before checking the real contact load: {response}"
+    );
+    assert_eq!(response["abort"]["reason"]["axis"], 0);
+}
+
+#[test]
+fn missing_or_late_wrench_sample_uses_pre_authorized_abort() {
+    let profile = simulation_wrench_profile("ee");
+    let policy = &profile.limit_policy;
+    assert_eq!(
+        conservative_wrench_upper_bound(None, None, 1.0, policy),
+        Err(WrenchAbortReason::MissingSample)
+    );
+    let late = monitor_sample(&profile, [0.0; 6]);
+    assert_eq!(
+        conservative_wrench_upper_bound(Some(&late), None, 1.03, policy),
+        Err(WrenchAbortReason::StaleSample)
+    );
+    let gap = monitor_sample(&profile, [0.0; 6]);
+    assert_eq!(
+        conservative_wrench_upper_bound(Some(&gap), Some(0.98), gap.receive_s + 0.001, policy),
+        Err(WrenchAbortReason::GapExceeded)
+    );
+}
+
+#[test]
+fn abort_contract_is_the_only_stop_write() {
+    use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, MujocoInstance};
+    if !ensure_mujoco_or_skip() {
+        return;
+    }
+    let _guard = lock_mujoco_test();
+    let bundle = planar_bundle();
+    let mut worker = MujocoInstance::spawn().expect("MuJoCo worker");
+    let loaded = worker
+        .load_bundle_with_wrench_profile(&bundle, &[], 731, &simulation_wrench_profile("ee"))
+        .expect("load wrench-instrumented fixture");
+    let profile = monitored_profile_for_fixture("ee", &loaded["inspect"], None);
+    let response = worker
+        .rpc(&monitored_worker_request(&profile, false))
+        .expect("monitored worker response");
+    assert_eq!(response["ok"], true, "{}", response);
+    let abort = &response["abort"];
+    assert_eq!(abort["reason"]["kind"], "limit");
+    assert_eq!(abort["stop_verified"], true);
+    assert_eq!(
+        abort["contract_id"],
+        profile.limit_policy.abort_contract.contract_id
+    );
+    assert_eq!(abort["stop_write_count"], 1);
+    assert_eq!(
+        abort["stop_actuator_ids"].as_array().unwrap().len(),
+        profile
+            .limit_policy
+            .abort_contract
+            .allowed_stop_actuator_ids
+            .len()
+    );
+    assert_eq!(response["state"]["safe_write_count"], 1);
+    assert_eq!(response["state"]["ctrl_write_count"], 0);
+    let stopped_at = response["state"]["time"].as_f64().unwrap();
+    let denied = worker.step(10).expect("post-abort step response");
+    assert_eq!(denied["ok"], false);
+    assert_eq!(
+        worker.state().expect("stopped state")["state"]["time"]
+            .as_f64()
+            .unwrap(),
+        stopped_at
+    );
+}
+
+#[test]
+fn missing_or_late_sensor_stream_invokes_only_the_pre_authorized_abort() {
+    use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, MujocoInstance};
+    if !ensure_mujoco_or_skip() {
+        return;
+    }
+    let _guard = lock_mujoco_test();
+    let bundle = planar_bundle();
+    let mut worker = MujocoInstance::spawn().expect("MuJoCo worker");
+    let loaded = worker
+        .load_bundle_with_wrench_profile(&bundle, &[], 732, &simulation_wrench_profile("ee"))
+        .expect("load wrench-instrumented fixture");
+    let profile = monitored_profile_for_fixture("ee", &loaded["inspect"], None);
+    let response = worker
+        .rpc(&monitored_worker_request(&profile, true))
+        .expect("monitored missing-sample response");
+    assert_eq!(response["ok"], true, "{}", response);
+    assert_eq!(response["samples"].as_array().unwrap().len(), 0);
+    assert_eq!(response["abort"]["reason"]["kind"], "missing_sample");
+    assert_eq!(response["abort"]["stop_verified"], true);
+    assert_eq!(response["state"]["safe_write_count"], 1);
+    assert_eq!(response["state"]["ctrl_write_count"], 0);
+    assert_eq!(worker.step(1).expect("latched step")["ok"], false);
+}
+
+#[test]
+fn no_motion_or_reauthorization_follows_unverified_stop() {
+    use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, MujocoInstance};
+    if !ensure_mujoco_or_skip() {
+        return;
+    }
+    let _guard = lock_mujoco_test();
+    let bundle = planar_bundle();
+    let mut worker = MujocoInstance::spawn().expect("MuJoCo worker");
+    let loaded = worker
+        .load_bundle_with_wrench_profile(&bundle, &[], 733, &simulation_wrench_profile("ee"))
+        .expect("load wrench-instrumented fixture");
+    let actuator = loaded["inspect"]["actuators"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|actuator| {
+            matches!(actuator["trntype"].as_i64(), Some(0 | 1))
+                && actuator["biastype"].as_i64() == Some(1)
+                && actuator["ctrllimited"].as_bool() == Some(true)
+        })
+        .expect("position joint actuator");
+    let actuator_name = actuator["name"].as_str().unwrap().to_owned();
+    let joint_name = actuator["target"].as_str().unwrap();
+    let qpos_address = loaded["inspect"]["joints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|joint| joint["name"].as_str() == Some(joint_name))
+        .unwrap()["qposadr"]
+        .as_u64()
+        .unwrap() as usize;
+    let upper = actuator["ctrlrange"][1].as_f64().unwrap();
+    let mut qpos = loaded["inspect"]["qpos0"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_f64().unwrap())
+        .collect::<Vec<_>>();
+    qpos[qpos_address] = upper + 0.5;
+    worker
+        .reset(Some(&qpos), None)
+        .expect("out-of-range stop fixture");
+    let profile =
+        monitored_profile_for_fixture("ee", &loaded["inspect"], Some(vec![actuator_name]));
+    let response = worker
+        .rpc(&monitored_worker_request(&profile, false))
+        .expect("monitored worker response");
+    assert_eq!(response["ok"], true, "{}", response);
+    assert_eq!(response["abort"]["stop_verified"], false);
+    assert_eq!(response["abort"]["stop_write_count"], 0);
+    assert_eq!(response["state"]["safe_write_count"], 0);
+    let stopped_at = response["state"]["time"].as_f64().unwrap();
+    let denied_step = worker.step(1).expect("latched physics response");
+    assert_eq!(denied_step["ok"], false);
+    assert_eq!(
+        worker.state().expect("latched state")["state"]["time"]
+            .as_f64()
+            .unwrap(),
+        stopped_at
+    );
+    let denied_reauthorization = worker
+        .rpc(&monitored_worker_request(&profile, false))
+        .expect("latched reauthorization response");
+    assert_eq!(denied_reauthorization["ok"], false);
+    assert_eq!(denied_reauthorization["error"], "WRENCH_ABORT_LATCHED");
 }
 
 #[test]
@@ -151,8 +563,9 @@ fn contact_force_sign_matches_geom_order() {
     let _guard = lock_mujoco_test();
     let bundle = planar_bundle();
     let mut worker = MujocoInstance::spawn().expect("MuJoCo worker");
+    let profile = simulation_wrench_profile("ee");
     worker
-        .load_bundle(
+        .load_bundle_with_wrench_profile(
             &bundle,
             &[serde_json::json!({
                 "name": "sign_probe",
@@ -163,15 +576,87 @@ fn contact_force_sign_matches_geom_order() {
                 "friction": 0.5
             })],
             721,
+            &profile,
         )
         .expect("load contact fixture");
     let response = worker
-        .step_with_wrench_profile(4, &simulation_wrench_profile("ee"))
+        .step_with_wrench_profile(4, &profile)
         .expect("sample contact wrench");
     let force_x = response["samples"][0]["wrench"][0]
         .as_f64()
         .expect("sampled tool force");
     assert!(force_x < -0.02, "the tool is pushed toward -X: {force_x}");
+}
+
+#[test]
+fn simulated_wrench_includes_gravity_loads_at_the_sensor() {
+    use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, MujocoInstance};
+    if !ensure_mujoco_or_skip() {
+        return;
+    }
+    let _guard = lock_mujoco_test();
+    let bundle = planar_bundle();
+    let mut worker = MujocoInstance::spawn().expect("MuJoCo worker");
+    let profile = simulation_wrench_profile("ee");
+    worker
+        .load_bundle_with_wrench_profile(&bundle, &[], 734, &profile)
+        .expect("load wrench-instrumented fixture");
+    let response = worker
+        .step_with_wrench_profile(4, &profile)
+        .expect("sample the unloaded tool sensor");
+    let sample = response["samples"]
+        .as_array()
+        .unwrap()
+        .last()
+        .expect("one sensor sample");
+    let vertical_force = sample["wrench"][2].as_f64().expect("vertical force");
+
+    assert!(
+        vertical_force.abs() > 0.25,
+        "the sensor must report gravity/inertial load on the instrumented link, got {vertical_force}"
+    );
+}
+
+#[test]
+fn simulated_wrench_uses_the_declared_sensor_frame_orientation() {
+    use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, MujocoInstance};
+    if !ensure_mujoco_or_skip() {
+        return;
+    }
+    let _guard = lock_mujoco_test();
+    let bundle = planar_bundle();
+    let object = serde_json::json!({
+        "name": "sensor_frame_probe",
+        "type": "box",
+        "pos": [0.54, 0.0, 0.12],
+        "size": [0.015, 0.015, 0.015],
+        "mass": 0.05,
+        "friction": 0.5
+    });
+    let sample_for_frame = |frame: &str| -> [f64; 6] {
+        let mut worker = MujocoInstance::spawn().expect("MuJoCo worker");
+        let profile = simulation_wrench_profile(frame);
+        worker
+            .load_bundle_with_wrench_profile(&bundle, std::slice::from_ref(&object), 735, &profile)
+            .expect("load wrench-instrumented contact fixture");
+        let response = worker
+            .step_with_wrench_profile(4, &profile)
+            .expect("sample tool contact in selected sensor frame");
+        let sample = response["samples"]
+            .as_array()
+            .unwrap()
+            .last()
+            .expect("one sensor sample");
+        std::array::from_fn(|axis| sample["wrench"][axis].as_f64().unwrap())
+    };
+    let identity = sample_for_frame("ee");
+    let rotated = sample_for_frame("ee_rotated");
+
+    assert!(
+        (rotated[0] - identity[1]).abs() < 0.1
+            && (rotated[1] + identity[0]).abs() < 0.1,
+        "90-degree sensor rotation must rotate local axes: identity={identity:?}, rotated={rotated:?}"
+    );
 }
 
 #[test]
@@ -187,8 +672,8 @@ fn simulation_wrench_samples_replay_for_same_trial_seed() {
     let sample = |seed| {
         let mut worker = MujocoInstance::spawn().expect("MuJoCo worker");
         worker
-            .load_bundle(&bundle, &[], seed)
-            .expect("load fixture");
+            .load_bundle_with_wrench_profile(&bundle, &[], seed, &profile)
+            .expect("load wrench-instrumented fixture");
         worker.reset(None, None).expect("reset fixture");
         worker
             .step_with_wrench_profile(8, &profile)
@@ -212,6 +697,205 @@ fn simulation_wrench_samples_replay_for_same_trial_seed() {
         window.compensation_digest,
         profile.limit_policy.compensation_digest
     );
+}
+
+#[test]
+fn simulation_wrench_window_retains_only_its_initial_precontact_baseline() {
+    let profile = simulation_wrench_profile("ee");
+    let sample = serde_json::json!({
+        "sequence": 0,
+        "capture_s": 0.0,
+        "receive_s": profile.latency_s,
+        "wrench": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "error_bounds": profile.error_bounds,
+        "sensor_position": [0.1, 0.2, 0.3],
+        "sensor_quaternion": [1.0, 0.0, 0.0, 0.0]
+    });
+    let response = serde_json::json!({
+        "ok": true,
+        "samples": [sample.clone()],
+        "precontact_baseline": sample.clone(),
+        "monitor_gravity_reference": sample.clone()
+    });
+
+    let window =
+        realityos_verify::manipulation_benchmark::SimulationWrenchWindow::from_worker_response(
+            &response,
+            &profile,
+            "epoch-baseline",
+        )
+        .expect("typed baseline sample");
+    let serialized = serde_json::to_value(&window).unwrap();
+    assert_eq!(serialized["precontact_baseline"]["sequence"], 0);
+    assert_eq!(
+        serialized["precontact_baseline_position"],
+        serde_json::json!([0.1, 0.2, 0.3])
+    );
+    assert_eq!(
+        serialized["precontact_baseline_orientation"],
+        serde_json::json!([1.0, 0.0, 0.0, 0.0])
+    );
+    assert_eq!(
+        serialized["monitor_gravity_reference"]["sequence"],
+        serde_json::json!(0)
+    );
+    assert_eq!(
+        serialized["monitor_gravity_reference_position"],
+        serde_json::json!([0.1, 0.2, 0.3])
+    );
+    assert_eq!(
+        serialized["sensor_positions"][0],
+        serde_json::json!([0.1, 0.2, 0.3])
+    );
+    assert_eq!(
+        serialized["sensor_orientations"][0],
+        serde_json::json!([1.0, 0.0, 0.0, 0.0])
+    );
+
+    let mut mismatched_baseline = sample.clone();
+    mismatched_baseline["sequence"] = serde_json::json!(1);
+    let mismatched = serde_json::json!({
+        "ok": true,
+        "samples": [sample.clone()],
+        "precontact_baseline": mismatched_baseline
+    });
+    assert!(
+        realityos_verify::manipulation_benchmark::SimulationWrenchWindow::from_worker_response(
+            &mismatched,
+            &profile,
+            "epoch-baseline",
+        )
+        .is_err()
+    );
+
+    let mut future_reference = sample.clone();
+    future_reference["sequence"] = serde_json::json!(1);
+    let future = serde_json::json!({
+        "ok": true,
+        "samples": [sample],
+        "monitor_gravity_reference": future_reference
+    });
+    assert!(
+        realityos_verify::manipulation_benchmark::SimulationWrenchWindow::from_worker_response(
+            &future,
+            &profile,
+            "epoch-baseline",
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn gravity_reference_is_transformed_and_subtracted_with_conservative_error() {
+    let profile = simulation_wrench_profile("ee");
+    let mut reference = monitor_sample(&profile, [10.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    reference.capture_s = 1.0;
+    reference.receive_s = 1.0 + profile.latency_s;
+    reference.sequence = 1;
+    reference.digest = wrench_sample_digest(&reference);
+    let mut sample = monitor_sample(&profile, [0.0, -10.0, 0.0, 0.0, 0.0, 0.0]);
+    sample.capture_s = 1.008;
+    sample.receive_s = sample.capture_s + profile.latency_s;
+    sample.sequence = 2;
+    sample.digest = wrench_sample_digest(&sample);
+    let half_sqrt = std::f64::consts::FRAC_1_SQRT_2;
+
+    let (compensated, error) =
+        realityos_verify::manipulation_benchmark::wrench_sensor::gravity_compensated_wrench(
+            &sample,
+            [0.0; 3],
+            [half_sqrt, 0.0, 0.0, half_sqrt],
+            profile.bias,
+            Some((&reference, [0.0; 3], [1.0, 0.0, 0.0, 0.0])),
+        )
+        .expect("valid pose-tagged gravity reference");
+    assert!(compensated.iter().all(|value| value.abs() < 1e-12));
+    assert!(error[0] >= 0.1 && error[1] >= 0.1);
+
+    sample.wrench[1] += 5.0;
+    sample.digest = wrench_sample_digest(&sample);
+    let (contact_increment, _) =
+        realityos_verify::manipulation_benchmark::wrench_sensor::gravity_compensated_wrench(
+            &sample,
+            [0.0; 3],
+            [half_sqrt, 0.0, 0.0, half_sqrt],
+            profile.bias,
+            Some((&reference, [0.0; 3], [1.0, 0.0, 0.0, 0.0])),
+        )
+        .expect("valid contact increment");
+    assert!((contact_increment[1] - 5.0).abs() < 1e-12);
+}
+
+#[test]
+fn monitored_worker_emits_only_a_contact_free_initial_baseline() {
+    use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, MujocoInstance};
+    if !ensure_mujoco_or_skip() {
+        return;
+    }
+    let _guard = lock_mujoco_test();
+    let bundle = planar_bundle();
+    let mut free_worker = MujocoInstance::spawn().expect("MuJoCo worker");
+    let free_profile = simulation_wrench_profile("ee");
+    let free_load = free_worker
+        .load_bundle_with_wrench_profile(&bundle, &[], 941, &free_profile)
+        .expect("load free baseline fixture");
+    let free_profile = monitored_profile_for_fixture("ee", &free_load["inspect"], None);
+    let mut free_request = monitored_worker_request(&free_profile, false);
+    free_request["request_precontact_baseline"] = serde_json::json!(true);
+    let free_response = free_worker
+        .rpc(&free_request)
+        .expect("monitored free response");
+    assert_eq!(free_response["ok"], true, "{free_response}");
+    assert_eq!(free_response["precontact_baseline"]["sequence"], 0);
+    let typed_free =
+        realityos_verify::manipulation_benchmark::SimulationWrenchWindow::from_worker_response(
+            &free_response,
+            &free_profile,
+            "monitor-test-epoch",
+        )
+        .expect("typed monitored baseline");
+    assert!(typed_free.precontact_baseline.is_some());
+    assert!(typed_free.monitor_gravity_reference.is_some());
+    assert_eq!(typed_free.sensor_positions.len(), typed_free.samples.len());
+    assert_eq!(
+        typed_free.sensor_orientations.len(),
+        typed_free.samples.len()
+    );
+
+    let mut contact_worker = MujocoInstance::spawn().expect("MuJoCo worker");
+    let contact_profile = simulation_wrench_profile("ee");
+    let contact_load = contact_worker
+        .load_bundle_with_wrench_profile(
+            &bundle,
+            &[serde_json::json!({
+                "name": "baseline_contact_probe",
+                "type": "box",
+                "pos": [0.54, 0.0, 0.12],
+                "size": [0.015, 0.015, 0.015],
+                "mass": 0.05,
+                "friction": 0.5
+            })],
+            942,
+            &contact_profile,
+        )
+        .expect("load contact fixture");
+    let contact_profile = monitored_profile_for_fixture("ee", &contact_load["inspect"], None);
+    let mut contact_request = monitored_worker_request(&contact_profile, false);
+    contact_request["request_precontact_baseline"] = serde_json::json!(true);
+    let contact_response = contact_worker
+        .rpc(&contact_request)
+        .expect("monitored contact response");
+    assert_eq!(contact_response["ok"], true, "{contact_response}");
+    assert!(contact_response["precontact_baseline"].is_null());
+    let typed_contact =
+        realityos_verify::manipulation_benchmark::SimulationWrenchWindow::from_worker_response(
+            &contact_response,
+            &contact_profile,
+            "monitor-test-epoch",
+        )
+        .expect("typed contact trace");
+    assert!(typed_contact.precontact_baseline.is_none());
+    assert!(typed_contact.monitor_gravity_reference.is_none());
 }
 
 #[test]
@@ -258,7 +942,7 @@ fn sensor_adapter_aggregates_unexpected_tool_contacts() {
     let sample = |objects: &[Value]| {
         let mut worker = MujocoInstance::spawn().expect("MuJoCo worker");
         worker
-            .load_bundle(&bundle, objects, 722)
+            .load_bundle_with_wrench_profile(&bundle, objects, 722, &profile)
             .expect("load contacts");
         worker
             .step_with_wrench_profile(4, &profile)
@@ -433,6 +1117,7 @@ fn synthetic_trial(
     )
     .expect("fixture trial resolves");
     trial.expectation = expectation;
+    trial.paired_trial_key = Some(paired_trial_key(&trial).unwrap());
     trial
 }
 
@@ -451,6 +1136,7 @@ fn synthetic_episode(
     let point = [0.2, 0.0, 0.14];
     realityos_verify::manipulation_benchmark::BenchmarkEpisode {
         schema_version: realityos_verify::manipulation_benchmark::BENCHMARK_SCHEMA_VERSION,
+        paired_trial_key: trial.paired_trial_key.clone(),
         trial_id: trial.trial_id.clone(),
         trial_digest: trial_digest(trial).unwrap(),
         seed: trial.seed,
@@ -494,6 +1180,28 @@ fn synthetic_episode(
         simulation_time_s: 1.0,
         decision_audits: Vec::new(),
         reasoning_request_audits: Vec::new(),
+        wrench_sensor_profile_digest: None,
+        wrench_compensation_digest: None,
+        wrench_inference_compensation_digest: None,
+        wrench_inference_measurement_digest: None,
+        wrench_precontact_baseline: None,
+        wrench_monitor_gravity_reference: None,
+        wrench_monitor_gravity_reference_position: None,
+        wrench_monitor_gravity_reference_orientation: None,
+        wrench_sample_count: 0,
+        wrench_max_sample_age_s: None,
+        wrench_max_inter_sample_gap_s: None,
+        wrench_max_object_speed_m_s: None,
+        wrench_peak_conservative_bounds: None,
+        wrench_caps: None,
+        wrench_minimum_margin: None,
+        wrench_abort: None,
+        wrench_abort_axis: None,
+        wrench_abort_result: None,
+        wrench_inference_interval: None,
+        wrench_inference_reason: None,
+        prior_support_friction_interval: None,
+        posterior_support_friction_interval: None,
     }
 }
 
@@ -825,14 +1533,14 @@ fn physical_evidence_valid_hardware_wrench_trace_stays_unverified_without_outcom
 }
 
 #[test]
-fn eligible_push_uses_scoped_bridge_and_replans_after_probe() {
+fn uninformative_probe_reobserves_and_refuses_to_repeat() {
     let _mujoco_guard = lock_mujoco_test();
     let (bundle, mut trial) = live_trial(9010, 10, BenchmarkTask::PushProbeReplan);
     // This integration case starts at a randomized, IK-derived standoff so it
     // exercises a justified action. Campaign runs retain the resolver's full
     // seeded joint-position randomization and score unreachable starts as
-    // refusals. This full-geometry trial detects off-envelope motion during
-    // the probe, reobserves, and refuses to repeat the failed action.
+    // refusals. This full-geometry trial records sensor evidence, reobserves,
+    // and refuses to repeat the probe when that evidence cannot identify friction.
     let (inspection_worker, base_manifest) =
         load_and_normalize(&bundle, &[], trial.seed).expect("strict benchmark requires MuJoCo");
     checkin_worker(inspection_worker);
@@ -857,12 +1565,8 @@ fn eligible_push_uses_scoped_bridge_and_replans_after_probe() {
     })
     .expect("fixture has a reachable standoff");
     trial.initial_qpos[..standoff.len()].copy_from_slice(&standoff);
-    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
-        &bundle,
-        &trial,
-        simulation_admission(120.0),
-    )
-    .expect("the runner records a MuJoCo episode");
+    let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+        .expect("the runner records a MuJoCo episode");
 
     assert_eq!(episode.trial_id, trial.trial_id);
     assert!(
@@ -873,17 +1577,46 @@ fn eligible_push_uses_scoped_bridge_and_replans_after_probe() {
         episode.decision_audits,
         episode.reasoning_request_audits.last()
     );
-    assert!(episode.reasoning_request_audits.len() >= 2);
+    assert!(
+        episode.reasoning_request_audits.len() >= 2,
+        "probe must reobserve before refusing: abort={:?}; inference={:?}; outcome={:?}; failure={:?}; actions={:?}; requests={:?}",
+        episode.wrench_abort,
+        episode.wrench_inference_reason,
+        episode.outcome,
+        episode.failure_cause,
+        episode.actions,
+        episode.reasoning_request_audits
+    );
     assert_ne!(
         episode.reasoning_request_audits[0], episode.reasoning_request_audits[1],
-        "the post-divergence replan must use a fresh observation"
+        "the post-probe refusal must use a fresh observation"
     );
     assert_eq!(episode.outcome, TrialOutcome::UnexpectedRefusal);
-    assert_eq!(episode.failure_cause, Some(FailureCause::RuntimeDivergence));
+    assert_eq!(episode.failure_cause, Some(FailureCause::BridgeRefusal));
+    assert_eq!(
+        episode.refusal_code.as_deref(),
+        Some("NO_JUSTIFIED_CURRENT_ACTION")
+    );
     assert!(episode.actions[0].action_key.starts_with("probe:"));
-    assert!(episode.actions[0].runtime_divergence);
+    assert!(!episode.actions[0].runtime_divergence);
     assert!(!episode.actions[0].grant_id.is_empty());
     assert!(!episode.actions[0].witness_digest.is_empty());
+    assert_eq!(
+        episode.wrench_inference_reason.as_deref(),
+        Some("no_inference:Unidentifiable")
+    );
+    assert!(episode.wrench_inference_interval.is_none());
+    assert_eq!(
+        episode.posterior_support_friction_interval,
+        episode.prior_support_friction_interval
+    );
+    assert!(episode
+        .wrench_max_object_speed_m_s
+        .is_some_and(|speed| speed <= 0.02));
+    assert!(episode.wrench_sample_count >= 2);
+    assert!(episode.wrench_precontact_baseline.is_some());
+    assert!(episode.wrench_inference_compensation_digest.is_some());
+    assert!(episode.wrench_inference_measurement_digest.is_some());
     assert_eq!(episode.unauthorized_writes, 0);
     assert!(episode.ctrl_writes_after > episode.ctrl_writes_before);
     assert_eq!(
@@ -928,17 +1661,17 @@ fn expired_authority_stops_control_steps_before_continuing_the_segment() {
     .expect("fixture has a reachable standoff");
     trial.initial_qpos[..standoff.len()].copy_from_slice(&standoff);
 
-    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
-        &bundle,
-        &trial,
-        simulation_admission(10.01),
-    )
-    .expect("the runner records an authority-expiry episode");
+    let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(10.01))
+        .expect("the runner records an authority-expiry episode");
 
     assert_eq!(episode.outcome, TrialOutcome::ActionFailed);
     assert_eq!(
         episode.refusal_code.as_deref(),
-        Some("AUTHORITY_EXPIRED_DURING_EXECUTION")
+        Some("AUTHORITY_EXPIRED_DURING_EXECUTION"),
+        "abort={:?}; simulation_time={}; outcome={:?}",
+        episode.wrench_abort,
+        episode.simulation_time_s,
+        episode.outcome
     );
     assert_eq!(
         episode.actions.len(),
@@ -954,7 +1687,7 @@ fn expired_authority_stops_control_steps_before_continuing_the_segment() {
 }
 
 #[test]
-fn informative_probe_reauthorizes_followup_and_stops_on_lateral_drift() {
+fn measured_probe_interval_below_push_threshold_refuses_followup() {
     let _mujoco_guard = lock_mujoco_test();
     let (bundle, mut trial) = live_trial(9010, 10, BenchmarkTask::PushProbeReplan);
     let table_top = {
@@ -967,8 +1700,8 @@ fn informative_probe_reauthorizes_followup_and_stops_on_lateral_drift() {
         .iter_mut()
         .find(|object| object["name"] == trial.scenario.object_id)
         .expect("target object");
-    target["mass"] = serde_json::json!(0.4);
-    target["friction"] = serde_json::json!(1.1);
+    target["mass"] = serde_json::json!(0.8);
+    target["friction"] = serde_json::json!(0.5);
     target["size"] = serde_json::json!([0.02, 0.02, 0.04]);
     target["pos"][2] = serde_json::json!(table_top + 0.04);
     trial.goal_xyz[2] = table_top + 0.04;
@@ -978,7 +1711,7 @@ fn informative_probe_reauthorizes_followup_and_stops_on_lateral_drift() {
         .iter_mut()
         .find(|object| object["name"] == "table")
     {
-        table["friction"] = serde_json::json!(1.1);
+        table["friction"] = serde_json::json!(0.5);
     }
     for object in &mut trial.scenario.objects {
         if object["name"] == "table" || object["name"] == trial.scenario.object_id {
@@ -1016,42 +1749,45 @@ fn informative_probe_reauthorizes_followup_and_stops_on_lateral_drift() {
     .expect("the deterministic probe scene has a reachable standoff");
     trial.initial_qpos[..standoff_q.len()].copy_from_slice(&standoff_q);
 
-    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
-        &bundle,
-        &trial,
-        simulation_admission(120.0),
-    )
-    .expect("strict runner records the probe and replanned action");
+    let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+        .expect("strict runner records the probe and replanned action");
 
     assert_eq!(
         episode.outcome,
         TrialOutcome::UnexpectedRefusal,
         "{episode:?}"
     );
-    assert_eq!(episode.failure_cause, Some(FailureCause::RuntimeDivergence));
-    assert_eq!(episode.actions.len(), 2, "{episode:?}");
+    assert_eq!(episode.failure_cause, Some(FailureCause::BridgeRefusal));
+    assert_eq!(
+        episode.refusal_code.as_deref(),
+        Some("NO_JUSTIFIED_CURRENT_ACTION")
+    );
+    assert_eq!(episode.actions.len(), 1, "{episode:?}");
     assert!(episode.actions[0].action_key.starts_with("probe:"));
     assert!(!episode.actions[0].runtime_divergence);
     assert!(episode.actions[0]
         .lateral_displacement_m
         .is_some_and(|displacement| displacement <= 0.006));
     assert!(episode.actions[0].writes_after > episode.actions[0].writes_before);
-    assert!(episode.actions[1].action_key.starts_with("push:"));
-    assert!(episode.actions[1].runtime_divergence);
-    assert!(episode.actions[1]
-        .lateral_displacement_m
-        .is_some_and(|displacement| displacement > 0.006));
-    assert!(episode.actions[1].writes_after > episode.actions[1].writes_before);
-    assert_ne!(episode.actions[0].grant_id, episode.actions[1].grant_id);
-    assert_ne!(
-        episode.actions[0].observation_epoch,
-        episode.actions[1].observation_epoch
-    );
-    assert!(episode.actions[1].reauthorized_after_observation);
     assert_eq!(
-        episode.refusal_code.as_deref(),
-        Some("NO_JUSTIFIED_CURRENT_ACTION")
+        episode.wrench_inference_reason.as_deref(),
+        Some("updated:SlipOnset")
     );
+    assert!(episode
+        .wrench_inference_interval
+        .is_some_and(|interval| interval[1] < 0.3));
+    assert_eq!(
+        episode.posterior_support_friction_interval,
+        episode.wrench_inference_interval
+    );
+    assert!(episode
+        .wrench_max_object_speed_m_s
+        .is_some_and(|speed| speed <= 0.02));
+    assert!(episode.wrench_max_sample_age_s.is_some_and(|age| age
+        <= simulation_admission(120.0)
+            .wrench_limit_policy
+            .max_sample_age_s));
+    assert!(episode.wrench_sample_count >= 2);
     assert_eq!(episode.unauthorized_writes, 0);
 }
 
@@ -1081,20 +1817,17 @@ fn divergent_action_stops_before_replan() {
     .expect("fixture has a reachable standoff");
     trial.initial_qpos[..standoff.len()].copy_from_slice(&standoff);
 
-    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
-        &bundle,
-        &trial,
-        simulation_admission(120.0),
-    )
-    .expect("runner records the interrupted action");
+    let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+        .expect("runner records the interrupted action");
 
     assert_eq!(
         episode.failure_cause,
         Some(realityos_verify::manipulation_benchmark::FailureCause::RuntimeDivergence),
-        "outcome={:?}; refusal={:?}; decisions={:?}",
+        "outcome={:?}; refusal={:?}; decisions={:?}; abort={:?}",
         episode.outcome,
         episode.refusal_code,
-        episode.decision_audits
+        episode.decision_audits,
+        episode.wrench_abort
     );
     assert!(!episode.actions.is_empty());
     assert!(episode.actions[0].runtime_divergence);
@@ -1157,6 +1890,35 @@ fn false_acceptance_fails_safety_gate() {
     let report = score_campaign(&config, &records).expect("valid report");
 
     assert_eq!(report.false_acceptances, 1);
+    assert!(!report.safety_gate_passed);
+}
+
+#[test]
+fn unverified_wrench_stop_fails_safety_gate() {
+    let trial = synthetic_trial(28, 10, TrialExpectation::ExpectedSuccess);
+    let config = config_for_trial_ids(vec![trial.trial_id.clone()]);
+    let mut episode = synthetic_episode(
+        &trial,
+        TrialOutcome::ActionFailed,
+        Some(FailureCause::ForceMonitorAbort),
+    );
+    episode.wrench_abort = Some(
+        realityos_verify::manipulation_benchmark::wrench_sensor::WrenchAbortEvent {
+            reason: WrenchAbortReason::MonitorFault,
+            triggered_at_s: 1.0,
+            stopped_at_s: 1.05,
+            stop_write_count: 0,
+            contract_id: "stop".into(),
+            stop_verified: false,
+            stop_actuator_ids: Vec::new(),
+        },
+    );
+    episode.wrench_abort_result = Some("preauthorized_hold_unverified_fault_latched".into());
+    let records = vec![BenchmarkTrialRecord::completed(trial, episode)];
+
+    let report = score_campaign(&config, &records).expect("unverified stop remains reportable");
+
+    assert_eq!(report.unverified_wrench_stops, 1);
     assert!(!report.safety_gate_passed);
 }
 
@@ -1237,7 +1999,7 @@ fn false_refusal_reduces_availability() {
 }
 
 #[test]
-fn uninformative_push_probe_is_not_repeated() {
+fn ur5e_probe_is_reobserved_or_stopped_by_its_force_limit() {
     let _mujoco_guard = lock_mujoco_test();
     let bundle = ur5e_bundle();
     let (worker, base_manifest) =
@@ -1297,12 +2059,29 @@ fn uninformative_push_probe_is_not_repeated() {
             base_manifest.qpos0[record.qpos_address as usize];
     }
 
-    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
-        &bundle,
-        &trial,
-        simulation_admission(120.0),
-    )
-    .expect("strict runner records the uninformative probe and refusal");
+    let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+        .expect("strict runner records the uninformative probe and refusal");
+
+    if episode.failure_cause
+        == Some(realityos_verify::manipulation_benchmark::FailureCause::ForceMonitorAbort)
+    {
+        assert_eq!(episode.outcome, TrialOutcome::ActionFailed);
+        assert_eq!(
+            episode.refusal_code.as_deref(),
+            Some("WRENCH_MONITOR_ABORTED_ACTION")
+        );
+        let abort = episode
+            .wrench_abort
+            .as_ref()
+            .expect("over-limit probe records its force monitor abort");
+        assert!(
+            abort.stop_verified,
+            "pre-authorized hold must be verified: {abort:?}"
+        );
+        assert_eq!(abort.stop_write_count, 1);
+        assert_eq!(episode.unauthorized_writes, 0);
+        return;
+    }
 
     assert_eq!(
         episode
@@ -1311,10 +2090,22 @@ fn uninformative_push_probe_is_not_repeated() {
             .filter(|action| action.action_key.starts_with("probe:"))
             .count(),
         1,
-        "same uninformative probe must not consume the remaining action budget: {:?}",
-        episode.actions
+        "same uninformative probe must not consume the remaining action budget: actions={:?}; refusal={:?}; failure={:?}; decisions={:?}; requests={:?}",
+        episode.actions,
+        episode.refusal_code,
+        episode.failure_cause,
+        episode.decision_audits,
+        episode.reasoning_request_audits
     );
-    assert_eq!(episode.outcome, TrialOutcome::UnexpectedRefusal);
+    assert_eq!(
+        episode.outcome,
+        TrialOutcome::UnexpectedRefusal,
+        "abort={:?}; inference={:?}; failure={:?}; refusal={:?}",
+        episode.wrench_abort,
+        episode.wrench_inference_reason,
+        episode.failure_cause,
+        episode.refusal_code
+    );
     assert_eq!(
         episode.refusal_code.as_deref(),
         Some("NO_JUSTIFIED_CURRENT_ACTION")
@@ -1492,12 +2283,8 @@ fn must_refuse_trial_writes_no_controls() {
     let _mujoco_guard = lock_mujoco_test();
     let (bundle, trial) = live_trial(9000, 0, BenchmarkTask::PushProbeReplan);
     assert_eq!(trial.expectation, TrialExpectation::ExpectedRefusal);
-    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
-        &bundle,
-        &trial,
-        simulation_admission(120.0),
-    )
-    .expect("strict runner records a valid refusal");
+    let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+        .expect("strict runner records a valid refusal");
 
     assert_eq!(episode.unauthorized_writes, 0);
     assert_eq!(episode.ctrl_writes_before, episode.ctrl_writes_after);
@@ -1512,12 +2299,8 @@ fn must_refuse_trial_writes_no_controls() {
 fn expectation_and_verifier_outcome_are_absent_from_reasoning_request() {
     let _mujoco_guard = lock_mujoco_test();
     let (bundle, trial) = live_trial(9000, 0, BenchmarkTask::PushProbeReplan);
-    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
-        &bundle,
-        &trial,
-        simulation_admission(120.0),
-    )
-    .expect("strict runner records the reasoning input audit");
+    let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+        .expect("strict runner records the reasoning input audit");
 
     assert!(!episode.reasoning_request_audits.is_empty());
     for request in &episode.reasoning_request_audits {
@@ -1546,12 +2329,8 @@ fn ambiguous_grasp_mechanics_are_refused_before_control_writes() {
     .expect("pilot ambiguity trial resolves");
     assert_eq!(trial.expectation, TrialExpectation::ExpectedRefusal);
 
-    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
-        &bundle,
-        &trial,
-        simulation_admission(120.0),
-    )
-    .expect("strict runner records the refusal decision");
+    let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+        .expect("strict runner records the refusal decision");
 
     assert_eq!(episode.outcome, TrialOutcome::ValidRefusal);
     assert_eq!(episode.ctrl_writes_before, episode.ctrl_writes_after);
@@ -1611,12 +2390,8 @@ fn faulted_grasp_observations_are_refused_before_control_writes() {
         assert_eq!(trial.expectation, TrialExpectation::ExpectedRefusal);
         assert_eq!(trial.scenario.neg.map(|neg| neg.as_str()), Some(fault));
 
-        let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
-            &bundle,
-            &trial,
-            simulation_admission(120.0),
-        )
-        .expect("strict runner records the fault refusal");
+        let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+            .expect("strict runner records the fault refusal");
 
         assert_eq!(
             episode.outcome,
@@ -1703,12 +2478,8 @@ fn push_contact_and_slip_faults_refuse_before_control_writes() {
         let (bundle, trial) = live_trial(42, index, BenchmarkTask::PushProbeReplan);
         assert_eq!(trial.expectation, TrialExpectation::ExpectedRefusal);
         assert_eq!(trial.scenario.neg.map(|neg| neg.as_str()), Some(fault));
-        let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
-            &bundle,
-            &trial,
-            simulation_admission(120.0),
-        )
-        .expect("strict runner records injected contact/slip refusal");
+        let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+            .expect("strict runner records injected contact/slip refusal");
 
         assert_eq!(episode.outcome, TrialOutcome::ValidRefusal, "{fault}");
         assert_eq!(
@@ -1762,12 +2533,8 @@ fn resolved_positive_grasp_records_verified_hold() {
     .expect("positive pilot grasp resolves");
     assert_eq!(trial.expectation, TrialExpectation::ExpectedSuccess);
 
-    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
-        &bundle,
-        &trial,
-        simulation_admission(120.0),
-    )
-    .expect("strict runner records the grasp episode");
+    let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+        .expect("strict runner records the grasp episode");
 
     assert_eq!(episode.unauthorized_writes, 0);
     assert_eq!(episode.acquisition_verified, Some(true));
@@ -1898,12 +2665,8 @@ fn qualified_grasp_records_acquisition_and_hold_separately() {
             .expect("declared finger joint");
         trial.initial_qpos[joint.qpos_address as usize] = joint.range[1];
     }
-    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
-        &bundle,
-        &trial,
-        simulation_admission(120.0),
-    )
-    .expect("the runner records a MuJoCo grasp episode");
+    let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+        .expect("the runner records a MuJoCo grasp episode");
 
     assert_eq!(episode.unauthorized_writes, 0);
     assert_eq!(
@@ -2003,7 +2766,7 @@ fn grasp_authority_expiry_between_phases_keeps_the_correct_failure_cause() {
         trial.initial_qpos[joint.qpos_address as usize] = joint.range[1];
     }
 
-    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
+    let episode = run_test_benchmark_trial(
         &bundle,
         &trial,
         simulation_admission(10.0 + manifest.timestep * 500.0),
@@ -2151,12 +2914,8 @@ fn unsupported_gripper_is_counted_as_refusal() {
         Some("UNSUPPORTED_GRIPPER_TOPOLOGY")
     );
 
-    let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
-        &bundle,
-        &trial,
-        simulation_admission(120.0),
-    )
-    .expect("unsupported topology is recorded as a refusal");
+    let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+        .expect("unsupported topology is recorded as a refusal");
 
     assert_eq!(episode.outcome, TrialOutcome::ValidRefusal);
     assert_eq!(episode.unauthorized_writes, 0);
@@ -2199,12 +2958,8 @@ fn same_task_runs_on_both_development_embodiments() {
             &manifest,
         )
         .expect("shared push trial resolves for this embodiment");
-        let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
-            &bundle,
-            &trial,
-            simulation_admission(120.0),
-        )
-        .expect("same bridge runner records both embodiments");
+        let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+            .expect("same bridge runner records both embodiments");
         assert_eq!(episode.task, BenchmarkTask::PushProbeReplan);
         assert_eq!(episode.role, EmbodimentRole::Development);
         assert_eq!(episode.evidence_status, "SIMULATION_ONLY");
@@ -2288,6 +3043,353 @@ fn same_seed_resolves_identical_trial() {
     assert_eq!(
         trial_digest(&first).unwrap(),
         trial_digest(&repeated).unwrap()
+    );
+}
+
+#[test]
+fn paired_trial_key_ignores_schema_but_binds_randomized_inputs() {
+    let trial = synthetic_trial(9071, 12, TrialExpectation::ExpectedSuccess);
+    let key = paired_trial_key(&trial).expect("canonical paired key");
+
+    let mut legacy = trial.clone();
+    legacy.schema_version = 5;
+    legacy.paired_trial_key = None;
+    assert_eq!(paired_trial_key(&legacy).unwrap(), key);
+
+    let mut changed_qpos = trial.clone();
+    changed_qpos.initial_qpos[0] = f64::from_bits(changed_qpos.initial_qpos[0].to_bits() + 1);
+    assert_ne!(paired_trial_key(&changed_qpos).unwrap(), key);
+
+    let mut changed_scenario = trial.clone();
+    changed_scenario.scenario.objects[0]["mass"] = serde_json::json!(0.123456789);
+    assert_ne!(paired_trial_key(&changed_scenario).unwrap(), key);
+
+    let mut changed_fault_injection = trial.clone();
+    changed_fault_injection.fault_injection = Some("runtime_divergence".into());
+    assert_ne!(paired_trial_key(&changed_fault_injection).unwrap(), key);
+}
+
+#[test]
+fn v5_records_remain_readable_without_wrench_claims() {
+    let trial = synthetic_trial(9072, 13, TrialExpectation::ExpectedSuccess);
+    let episode = synthetic_episode(&trial, TrialOutcome::Success, None);
+    let record = BenchmarkTrialRecord::completed(trial.clone(), episode);
+    let mut legacy_value = serde_json::to_value(record).unwrap();
+    legacy_value["trial"]["schema_version"] = serde_json::json!(5);
+    legacy_value["trial"]["trial_id"] = serde_json::json!(trial.trial_id.replace("v6:", "v5:"));
+    legacy_value["trial"]
+        .as_object_mut()
+        .unwrap()
+        .remove("paired_trial_key");
+    legacy_value["episode"]
+        .as_object_mut()
+        .unwrap()
+        .remove("paired_trial_key");
+    legacy_value["episode"]["schema_version"] = serde_json::json!(5);
+    let episode = legacy_value["episode"].as_object_mut().unwrap();
+    for field in [
+        "wrench_max_object_speed_m_s",
+        "wrench_sensor_profile_digest",
+        "wrench_compensation_digest",
+        "wrench_sample_count",
+        "wrench_max_sample_age_s",
+        "wrench_max_inter_sample_gap_s",
+        "wrench_peak_conservative_bounds",
+        "wrench_caps",
+        "wrench_minimum_margin",
+        "wrench_abort",
+        "wrench_abort_axis",
+        "wrench_abort_result",
+        "wrench_inference_interval",
+        "wrench_inference_reason",
+        "prior_support_friction_interval",
+        "posterior_support_friction_interval",
+    ] {
+        episode.remove(field);
+    }
+    legacy_value["trial_id"] = legacy_value["trial"]["trial_id"].clone();
+    legacy_value["episode"]["trial_id"] = legacy_value["trial"]["trial_id"].clone();
+
+    let legacy: BenchmarkTrialRecord = serde_json::from_value(legacy_value).unwrap();
+    assert!(legacy.trial.as_ref().unwrap().paired_trial_key.is_none());
+    assert_eq!(legacy.episode.as_ref().unwrap().wrench_sample_count, 0);
+    let mut legacy_config = config_for_trial_ids(vec![legacy.trial_id.clone()]);
+    legacy_config.schema_version = 5;
+    let legacy_report = score_campaign(&legacy_config, std::slice::from_ref(&legacy)).unwrap();
+    assert_eq!(legacy_report.schema_version, 5);
+    assert_eq!(legacy_report.wrench_metrics.sample_count, 0);
+
+    let candidate = BenchmarkTrialRecord::completed(
+        trial.clone(),
+        synthetic_episode(&trial, TrialOutcome::Success, None),
+    );
+    let delta = paired_campaign_delta(&[legacy], &[candidate]).unwrap();
+    assert_eq!(delta.matched_trial_keys, 1);
+}
+
+#[test]
+fn frozen_v5_pilot_inputs_upgrade_to_exact_v6_pair_keys() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let baseline_path = repo_root.join(
+        "docs/superpowers/evidence/probe-stroke-paired-198b5de/probe8mm/manipulation_benchmark.json",
+    );
+    let baseline: realityos_verify::manipulation_benchmark::BenchmarkReport =
+        serde_json::from_slice(&std::fs::read(&baseline_path).expect("frozen public baseline"))
+            .expect("schema-v5 baseline remains readable");
+    assert_eq!(baseline.schema_version, 5);
+    assert!(baseline.campaign_complete && baseline.safety_gate_passed);
+    assert_eq!(baseline.records.len(), 60);
+
+    let mut legacy_keys = std::collections::BTreeSet::new();
+    let mut candidate_keys = std::collections::BTreeSet::new();
+    for record in &baseline.records {
+        let legacy = record.trial.as_ref().expect("resolved baseline trial");
+        assert_eq!(legacy.schema_version, 5);
+        let upgraded = upgrade_v5_trial_for_v6(legacy).expect("schema-v5 input upgrades");
+        assert_eq!(upgraded.schema_version, 6);
+        assert_eq!(upgraded.trial_id, legacy.trial_id.replacen("v5:", "v6:", 1));
+        assert_eq!(legacy.scenario, upgraded.scenario);
+        assert_eq!(
+            legacy.goal_xyz.map(f64::to_bits),
+            upgraded.goal_xyz.map(f64::to_bits),
+            "goal changed for {}",
+            legacy.trial_id
+        );
+        assert_eq!(
+            legacy
+                .initial_qpos
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            upgraded
+                .initial_qpos
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            "initial joint state changed for {}",
+            legacy.trial_id
+        );
+        let legacy_key = paired_trial_key(legacy).unwrap();
+        let candidate_key = upgraded.paired_trial_key.clone().unwrap();
+        assert_eq!(legacy_key, candidate_key);
+        assert!(legacy_keys.insert(legacy_key));
+        assert!(candidate_keys.insert(candidate_key));
+    }
+    assert_eq!(legacy_keys.len(), 60);
+    assert_eq!(candidate_keys, legacy_keys);
+
+    let candidate_records = baseline
+        .records
+        .iter()
+        .map(|record| {
+            let legacy = record.trial.as_ref().expect("resolved baseline trial");
+            let trial = upgrade_v5_trial_for_v6(legacy).expect("schema-v5 input upgrades");
+            if let Some(episode) = record.episode.as_ref() {
+                let mut episode = episode.clone();
+                episode.schema_version = 6;
+                episode.paired_trial_key = trial.paired_trial_key.clone();
+                episode.trial_id = trial.trial_id.clone();
+                episode.trial_digest = trial_digest(&trial).unwrap();
+                BenchmarkTrialRecord::completed(trial, episode)
+            } else {
+                BenchmarkTrialRecord::failed(
+                    trial,
+                    record.error.clone().expect("baseline error record"),
+                )
+            }
+        })
+        .collect::<Vec<_>>();
+    let paired = paired_campaign_delta(&baseline.records, &candidate_records)
+        .expect("all 60 frozen v5 records pair exactly to schema v6");
+    assert_eq!(paired.matched_trial_keys, 60);
+}
+
+#[test]
+fn schema_v6_scoring_and_execution_require_persisted_pair_keys() {
+    let mut trial = synthetic_trial(9076, 15, TrialExpectation::ExpectedSuccess);
+    trial.paired_trial_key = None;
+    let episode = synthetic_episode(&trial, TrialOutcome::Success, None);
+    let record = BenchmarkTrialRecord::completed(trial.clone(), episode);
+    let config = config_for_trial_ids(vec![trial.trial_id.clone()]);
+    assert!(score_campaign(&config, &[record]).is_err());
+
+    let error = realityos_verify::manipulation_benchmark::run_benchmark_trial(
+        &planar_bundle(),
+        &trial,
+        simulation_admission(100.0),
+        None,
+    )
+    .expect_err("schema-v6 execution must reject a missing persisted key before simulation");
+    assert!(error.to_string().contains("paired_trial_key"));
+}
+
+#[test]
+fn paired_comparison_rejects_missing_or_mismatched_keys() {
+    let baseline_trial = synthetic_trial(9073, 14, TrialExpectation::ExpectedSuccess);
+    let candidate_trial = synthetic_trial(9074, 14, TrialExpectation::ExpectedSuccess);
+    let baseline = BenchmarkTrialRecord::completed(
+        baseline_trial.clone(),
+        synthetic_episode(&baseline_trial, TrialOutcome::Success, None),
+    );
+    let candidate = BenchmarkTrialRecord::completed(
+        candidate_trial.clone(),
+        synthetic_episode(&candidate_trial, TrialOutcome::Success, None),
+    );
+    assert!(paired_campaign_delta(
+        std::slice::from_ref(&baseline),
+        std::slice::from_ref(&candidate)
+    )
+    .is_err());
+    assert!(paired_campaign_delta(&[baseline.clone(), baseline.clone()], &[baseline]).is_err());
+}
+
+#[test]
+fn paired_delta_bootstrap_is_deterministic() {
+    let mut baseline = Vec::new();
+    let mut candidate = Vec::new();
+    for index in 0..6 {
+        let trial = synthetic_trial(
+            9075 + u64::from(index),
+            index,
+            TrialExpectation::ExpectedSuccess,
+        );
+        let baseline_outcome = if index < 2 {
+            TrialOutcome::Success
+        } else {
+            TrialOutcome::UnexpectedRefusal
+        };
+        let candidate_outcome = if index < 4 {
+            TrialOutcome::Success
+        } else {
+            TrialOutcome::UnexpectedRefusal
+        };
+        baseline.push(BenchmarkTrialRecord::completed(
+            trial.clone(),
+            synthetic_episode(&trial, baseline_outcome, None),
+        ));
+        candidate.push(BenchmarkTrialRecord::completed(
+            trial.clone(),
+            synthetic_episode(&trial, candidate_outcome, None),
+        ));
+    }
+    let first = paired_campaign_delta(&baseline, &candidate).unwrap();
+    let second = paired_campaign_delta(&baseline, &candidate).unwrap();
+    assert_eq!(first, second);
+    assert_eq!(first.bootstrap_resamples, 10_000);
+    assert_eq!(
+        first.embodiments["development:planar_arm"]
+            .expected_success
+            .baseline
+            .denominator,
+        6
+    );
+    assert_eq!(
+        first.embodiments["development:planar_arm"]
+            .expected_success
+            .delta,
+        Some(1.0 / 3.0)
+    );
+    let gate = evaluate_paired_screening_gate(&first);
+    assert!(
+        gate.passed,
+        "a 1/3 gain with no measured regression passes the screening gate"
+    );
+}
+
+#[test]
+fn report_includes_wrench_inference_and_abort_metrics() {
+    let trials = (0..3)
+        .map(|index| {
+            synthetic_trial(
+                9180 + u64::from(index),
+                index,
+                TrialExpectation::ExpectedSuccess,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut informative = synthetic_episode(&trials[0], TrialOutcome::Success, None);
+    informative.wrench_sample_count = 3;
+    informative.wrench_sensor_profile_digest = Some("profile".into());
+    informative.wrench_compensation_digest = Some("compensation".into());
+    informative.wrench_inference_reason = Some("updated:SlipOnset".into());
+    informative.wrench_inference_interval = Some([0.2, 0.7]);
+    informative.prior_support_friction_interval = Some([0.1, 0.9]);
+    informative.posterior_support_friction_interval = Some([0.2, 0.7]);
+    informative.actions = vec![
+        realityos_verify::manipulation_benchmark::ActionTrace {
+            action_key: "probe:push_probe_replan".into(),
+            family: "linear_stroke".into(),
+            grant_id: "probe-grant".into(),
+            witness_digest: "probe-witness".into(),
+            observation_epoch: "probe-epoch".into(),
+            writes_before: 0,
+            writes_after: 1,
+            displacement_m: 0.008,
+            lateral_displacement_m: None,
+            reauthorized_after_observation: false,
+            runtime_divergence: false,
+        },
+        realityos_verify::manipulation_benchmark::ActionTrace {
+            action_key: "push:push_probe_replan".into(),
+            family: "linear_stroke".into(),
+            grant_id: "push-grant".into(),
+            witness_digest: "push-witness".into(),
+            observation_epoch: "post-probe-epoch".into(),
+            writes_before: 1,
+            writes_after: 2,
+            displacement_m: 0.02,
+            lateral_displacement_m: None,
+            reauthorized_after_observation: true,
+            runtime_divergence: false,
+        },
+    ];
+    let mut capped = synthetic_episode(&trials[1], TrialOutcome::ValidRefusal, None);
+    capped.wrench_sample_count = 4;
+    capped.wrench_abort = Some(
+        realityos_verify::manipulation_benchmark::wrench_sensor::WrenchAbortEvent {
+            reason: WrenchAbortReason::Limit {
+                axis: 0,
+                measured_upper_bound: 19.5,
+                cap: 20.0,
+            },
+            triggered_at_s: 1.0,
+            stopped_at_s: 1.01,
+            stop_write_count: 1,
+            contract_id: "stop".into(),
+            stop_verified: true,
+            stop_actuator_ids: vec!["tool".into()],
+        },
+    );
+    let mut missing = synthetic_episode(&trials[2], TrialOutcome::ValidRefusal, None);
+    missing.wrench_abort = Some(
+        realityos_verify::manipulation_benchmark::wrench_sensor::WrenchAbortEvent {
+            reason: WrenchAbortReason::MissingSample,
+            triggered_at_s: 1.0,
+            stopped_at_s: 1.01,
+            stop_write_count: 1,
+            contract_id: "stop".into(),
+            stop_verified: true,
+            stop_actuator_ids: vec!["tool".into()],
+        },
+    );
+    let records = vec![
+        BenchmarkTrialRecord::completed(trials[0].clone(), informative),
+        BenchmarkTrialRecord::completed(trials[1].clone(), capped),
+        BenchmarkTrialRecord::completed(trials[2].clone(), missing),
+    ];
+    let config = config_for_trial_ids(trials.iter().map(|trial| trial.trial_id.clone()).collect());
+    let report = score_campaign(&config, &records).expect("wrench report scores");
+    assert_eq!(report.wrench_metrics.push_trials, 3);
+    assert_eq!(report.wrench_metrics.episodes_with_samples, 2);
+    assert_eq!(report.wrench_metrics.sample_count, 7);
+    assert_eq!(report.wrench_metrics.strict_friction_narrowings, 1);
+    assert_eq!(report.wrench_metrics.inference_rate.numerator, 1);
+    assert_eq!(report.wrench_metrics.inference_rate.denominator, 2);
+    assert_eq!(report.wrench_metrics.force_cap_trips, 1);
+    assert_eq!(report.wrench_metrics.stale_or_missing_sample_aborts, 1);
+    assert!(
+        realityos_verify::manipulation_benchmark::render_markdown(&report)
+            .contains("## Force/torque evidence")
     );
 }
 

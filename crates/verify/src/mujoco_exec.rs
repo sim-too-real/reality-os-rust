@@ -2,7 +2,11 @@
 
 use crate::bundle::RobotBundle;
 use crate::format::ModelFormat;
-use crate::manipulation_benchmark::wrench_sensor::SimulationWrenchSensorProfile;
+use crate::manipulation_benchmark::wrench_sensor::{
+    MonitoredStepResult, SimulationWrenchSensorProfile, SimulationWrenchWindow, WrenchAbortEvent,
+};
+use realityos_kernel::physical_action::{PhysicalActionEnvelope, WrenchLimitPolicy};
+use realityos_session::{grant_covers, ScopedSimulationGrant};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -127,6 +131,7 @@ pub struct MujocoInstance {
     pub last_rpc: String,
     pub last_exit: Option<i32>,
     pub compile_count: u32,
+    wrench_abort_latched: bool,
 }
 
 impl Drop for MujocoInstance {
@@ -188,6 +193,7 @@ impl MujocoInstance {
             last_rpc: "spawn".into(),
             last_exit: None,
             compile_count: 0,
+            wrench_abort_latched: false,
         };
         let hello = inst.rpc(&json!({"cmd":"hello"}))?;
         if hello["ok"] != true {
@@ -287,6 +293,29 @@ impl MujocoInstance {
         objects: &[Value],
         seed: u64,
     ) -> Result<Value, ExecError> {
+        self.load_bundle_with_sensor_frame(bundle, objects, seed, None)
+    }
+
+    pub fn load_bundle_with_wrench_profile(
+        &mut self,
+        bundle: &RobotBundle,
+        objects: &[Value],
+        seed: u64,
+        profile: &SimulationWrenchSensorProfile,
+    ) -> Result<Value, ExecError> {
+        profile
+            .validate()
+            .map_err(|error| ExecError::Msg(error.to_string()))?;
+        self.load_bundle_with_sensor_frame(bundle, objects, seed, Some(&profile.sensor_frame))
+    }
+
+    fn load_bundle_with_sensor_frame(
+        &mut self,
+        bundle: &RobotBundle,
+        objects: &[Value],
+        seed: u64,
+        wrench_sensor_frame: Option<&str>,
+    ) -> Result<Value, ExecError> {
         match bundle.format.format {
             ModelFormat::Sdf => {
                 return Err(ExecError::Msg("UNSUPPORTED_REQUIRES_CONVERSION".into()));
@@ -320,6 +349,7 @@ impl MujocoInstance {
             "asset_roots": asset_roots,
             "objects": objects,
             "seed": seed,
+            "wrench_sensor_frame": wrench_sensor_frame,
         }))?;
         if resp["ok"] != true {
             return Err(ExecError::Msg(
@@ -365,14 +395,23 @@ impl MujocoInstance {
     }
 
     pub fn set_ctrl(&mut self, ctrl: &[f64]) -> Result<Value, ExecError> {
+        if self.wrench_abort_latched {
+            return Err(ExecError::Msg("WRENCH_ABORT_LATCHED".into()));
+        }
         self.rpc(&json!({"cmd":"set_ctrl","ctrl": ctrl}))
     }
 
     pub fn set_safe_ctrl(&mut self, ctrl: &[f64]) -> Result<Value, ExecError> {
+        if self.wrench_abort_latched {
+            return Err(ExecError::Msg("WRENCH_ABORT_LATCHED".into()));
+        }
         self.rpc(&json!({"cmd":"set_safe_ctrl","ctrl": ctrl}))
     }
 
     pub fn step(&mut self, n: u32) -> Result<Value, ExecError> {
+        if self.wrench_abort_latched && n > 0 {
+            return Err(ExecError::Msg("WRENCH_ABORT_LATCHED".into()));
+        }
         self.rpc(&json!({"cmd":"step","n": n}))
     }
 
@@ -407,6 +446,158 @@ impl MujocoInstance {
             ));
         }
         Ok(response)
+    }
+
+    /// Advance a simulation trial only while the exact granted linear action is
+    /// monitored by its bound wrench policy. A trip latches this worker against
+    /// any further control write or physics step for the remainder of the trial.
+    pub fn step_monitored(
+        &mut self,
+        n: u32,
+        profile: &SimulationWrenchSensorProfile,
+        policy: &WrenchLimitPolicy,
+        grant: &ScopedSimulationGrant,
+        request_precontact_baseline: bool,
+    ) -> Result<MonitoredStepResult, ExecError> {
+        if self.wrench_abort_latched {
+            return Err(ExecError::Msg("WRENCH_ABORT_LATCHED".into()));
+        }
+        if n == 0 || n > 100_000 {
+            return Err(ExecError::Msg("wrench_step_count".into()));
+        }
+        let timestep_s = self.inspect["timestep"]
+            .as_f64()
+            .ok_or_else(|| ExecError::Msg("model_timestep_missing".into()))?;
+        profile
+            .validate_for_timestep(timestep_s)
+            .map_err(|error| ExecError::Msg(error.to_string()))?;
+        policy
+            .validate()
+            .map_err(|error| ExecError::Msg(error.to_string()))?;
+        if policy != &profile.limit_policy || policy.digest() != profile.limit_policy.digest() {
+            return Err(ExecError::Msg("wrench_policy_profile_mismatch".into()));
+        }
+        let (requested_m, maximum_m, wrench_scope) = match &grant.scope.action_envelope {
+            PhysicalActionEnvelope::LinearStroke {
+                requested_m,
+                maximum_m,
+                wrench_limit,
+            } => (*requested_m, *maximum_m, wrench_limit.as_ref()),
+            _ => (0.0, 0.0, None),
+        };
+        let Some(wrench_scope) = wrench_scope else {
+            return Err(ExecError::Msg("wrench_grant_scope_missing".into()));
+        };
+        let expected_scope = PhysicalActionEnvelope::LinearStroke {
+            requested_m,
+            maximum_m,
+            wrench_limit: Some(policy.scope.clone()),
+        };
+        let actual_scope = PhysicalActionEnvelope::LinearStroke {
+            requested_m,
+            maximum_m,
+            wrench_limit: Some(wrench_scope.clone()),
+        };
+        if !actual_scope.exactly_matches(&expected_scope) {
+            return Err(ExecError::Msg("wrench_grant_policy_mismatch".into()));
+        }
+        let state_response = self.state()?;
+        let state = state_response["state"].clone();
+        let now_s = 10.0
+            + state["time"]
+                .as_f64()
+                .ok_or_else(|| ExecError::Msg("simulation_time_missing".into()))?;
+        grant_covers(grant, &grant.scope, now_s)
+            .map_err(|error| ExecError::Msg(format!("wrench_grant_expired:{error}")))?;
+        validate_stop_actuators(&self.inspect, policy)?;
+        let profile_digest = profile
+            .digest()
+            .map_err(|error| ExecError::Msg(error.to_string()))?;
+        let grant_action_envelope = json!({
+            "kind": "linear_stroke",
+            "requested_m": requested_m,
+            "maximum_m": maximum_m,
+            "wrench_limit": wrench_scope,
+        });
+        let response = self.rpc(&json!({
+            "cmd": "step_monitored",
+            "n": n,
+            "profile": profile,
+            "profile_digest": profile_digest,
+            "policy": policy,
+            "grant_id": grant.command_id,
+            "grant_scope_digest": grant.scope_digest,
+            "grant_wrench_scope": policy.scope,
+            "grant_action_envelope": grant_action_envelope,
+            "observation_epoch": grant.scope.observation_epoch,
+            "request_precontact_baseline": request_precontact_baseline,
+        }))?;
+        if response["ok"] != true {
+            self.wrench_abort_latched = true;
+            return Err(ExecError::Msg(
+                response["error"]
+                    .as_str()
+                    .unwrap_or("step_monitored")
+                    .into(),
+            ));
+        }
+        let window = SimulationWrenchWindow::from_worker_response(
+            &response,
+            profile,
+            &grant.scope.observation_epoch,
+        )
+        .map_err(|error| {
+            self.wrench_abort_latched = true;
+            ExecError::Msg(error.to_string())
+        })?;
+        let abort = if response["abort"].is_null() {
+            None
+        } else {
+            let mut event: WrenchAbortEvent = serde_json::from_value(response["abort"].clone())
+                .map_err(|error| {
+                    self.wrench_abort_latched = true;
+                    ExecError::Msg(format!("invalid_wrench_abort_event:{error}"))
+                })?;
+            let allowed = &policy.abort_contract.allowed_stop_actuator_ids;
+            let mut reported = event.stop_actuator_ids.clone();
+            let mut expected = allowed.clone();
+            reported.sort();
+            expected.sort();
+            if event.contract_id != policy.abort_contract.contract_id
+                || event.stop_write_count > policy.abort_contract.max_stop_writes
+                || !event
+                    .stop_actuator_ids
+                    .iter()
+                    .all(|actuator| allowed.contains(actuator))
+            {
+                self.wrench_abort_latched = true;
+                event.stop_verified = false;
+            }
+            if event.stop_verified
+                && (event.stop_write_count != 1
+                    || reported != expected
+                    || !event.triggered_at_s.is_finite()
+                    || !event.stopped_at_s.is_finite()
+                    || event.stopped_at_s < event.triggered_at_s
+                    || event.stopped_at_s - event.triggered_at_s
+                        > policy.abort_contract.max_time_to_stop_s + 1e-12)
+            {
+                self.wrench_abort_latched = true;
+                event.stop_verified = false;
+            }
+            self.wrench_abort_latched = true;
+            Some(event)
+        };
+        let state = response["state"].clone();
+        if state.is_null() {
+            self.wrench_abort_latched = true;
+            return Err(ExecError::Msg("monitored_state_missing".into()));
+        }
+        Ok(MonitoredStepResult {
+            state,
+            wrench_window: window,
+            abort,
+        })
     }
 
     pub fn configure_body(
@@ -526,6 +717,44 @@ pub fn json_f64_vec(v: &Value) -> Vec<f64> {
     v.as_array()
         .map(|a| a.iter().filter_map(|x| x.as_f64()).collect())
         .unwrap_or_default()
+}
+
+fn validate_stop_actuators(inspect: &Value, policy: &WrenchLimitPolicy) -> Result<(), ExecError> {
+    let actuators = inspect["actuators"]
+        .as_array()
+        .ok_or_else(|| ExecError::Msg("wrench_stop_actuator_manifest_missing".into()))?;
+    let joints = inspect["joints"]
+        .as_array()
+        .ok_or_else(|| ExecError::Msg("wrench_stop_joint_manifest_missing".into()))?;
+    for actuator_name in &policy.abort_contract.allowed_stop_actuator_ids {
+        let matches = actuators
+            .iter()
+            .filter(|actuator| actuator["name"].as_str() == Some(actuator_name))
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return Err(ExecError::Msg(format!(
+                "wrench_stop_actuator_not_unique:{actuator_name}"
+            )));
+        }
+        let actuator = matches[0];
+        let target = actuator["target"].as_str().unwrap_or_default();
+        let scalar_joint = joints.iter().any(|joint| {
+            joint["name"].as_str() == Some(target)
+                && joint["qpos_dim"].as_u64() == Some(1)
+                && joint["qposadr"].as_i64().is_some()
+        });
+        if actuator["transmission_kind"].as_str() != Some("joint")
+            || !matches!(actuator["trntype"].as_i64(), Some(0 | 1))
+            || actuator["biastype"].as_i64() != Some(1)
+            || actuator["ctrllimited"].as_bool() != Some(true)
+            || !scalar_joint
+        {
+            return Err(ExecError::Msg(format!(
+                "wrench_stop_actuator_not_position_joint:{actuator_name}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub fn wait_brief() {

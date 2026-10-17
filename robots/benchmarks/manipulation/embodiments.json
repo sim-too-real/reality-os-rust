@@ -5,41 +5,92 @@
       "robot_id": "menagerie_ur5e",
       "bundle_path": "robots/external/ur5e",
       "role": "development",
-      "tasks": ["push_probe_replan"],
+      "tasks": [
+        "push_probe_replan"
+      ],
       "simulation_wrench_profile": {
         "sensor_id": "sim-ft-menagerie-ur5e-v1",
-        "model_id": "mujoco-contact-wrench-v1",
+        "model_id": "mujoco-force-torque-sensor-gravity-baseline-v1",
         "calibration_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "sensor_frame": "attachment_site",
         "units": "N,N*m",
         "sample_rate_hz": 125.0,
         "latency_s": 0.01,
-        "resolution": [0.001, 0.001, 0.001, 0.0001, 0.0001, 0.0001],
-        "bias": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        "error_bounds": [0.05, 0.05, 0.05, 0.005, 0.005, 0.005],
-        "seeded_noise_bound": [0.01, 0.01, 0.01, 0.001, 0.001, 0.001],
+        "resolution": [
+          0.001,
+          0.001,
+          0.001,
+          0.0001,
+          0.0001,
+          0.0001
+        ],
+        "bias": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "error_bounds": [
+          0.05,
+          0.05,
+          0.05,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "seeded_noise_bound": [
+          0.01,
+          0.01,
+          0.01,
+          0.001,
+          0.001,
+          0.001
+        ],
         "limit_policy": {
           "scope": {
             "sensor_id": "sim-ft-menagerie-ur5e-v1",
             "sensor_frame": "attachment_site",
-            "caps": [20.0, 20.0, 30.0, 2.0, 2.0, 2.0],
-            "policy_digest": "1a1be8cdd9b23fb284f72588e62ba64e1c083405f59465258778fd8300a13d03",
+            "caps": [
+              20.0,
+              20.0,
+              30.0,
+              2.0,
+              2.0,
+              2.0
+            ],
+            "policy_digest": "e59da5ce6ab06ad32851f5e6dc7b53dd0eb0b0a779396d7630f43c53af21ca7a",
             "abort_contract_id": "sim-wrench-stop-v1"
           },
           "sensor_calibration_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "sensor_sample_rate_hz": 125.0,
-          "max_rise_rate": [250.0, 250.0, 250.0, 25.0, 25.0, 25.0],
+          "max_rise_rate": [
+            250.0,
+            250.0,
+            250.0,
+            25.0,
+            25.0,
+            25.0
+          ],
           "max_sensing_latency_s": 0.01,
           "max_abort_latency_s": 0.03,
           "max_sample_age_s": 0.02,
           "max_inter_sample_gap_s": 0.01,
           "max_cross_sensor_skew_s": 0.005,
           "monitor_id": "mujoco-wrench-monitor-ur5e-v1",
-          "compensation_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "compensation_digest": "bffe9543071c2290b7dd87dc301cfb9d04022385435a9728a5790d2c1ca0012e",
           "abort_contract": {
             "contract_id": "sim-wrench-stop-v1",
             "hold_mode": "hold_current_joint_position",
-            "allowed_stop_actuator_ids": ["shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3"],
+            "allowed_stop_actuator_ids": [
+              "shoulder_pan",
+              "shoulder_lift",
+              "elbow",
+              "wrist_1",
+              "wrist_2",
+              "wrist_3"
+            ],
             "max_time_to_stop_s": 0.03,
             "max_stop_writes": 1
           }
@@ -50,41 +101,93 @@
       "robot_id": "menagerie_iiwa14",
       "bundle_path": "robots/external/iiwa14",
       "role": "development",
-      "tasks": ["push_probe_replan"],
+      "tasks": [
+        "push_probe_replan"
+      ],
       "simulation_wrench_profile": {
         "sensor_id": "sim-ft-menagerie-iiwa14-v1",
-        "model_id": "mujoco-contact-wrench-v1",
+        "model_id": "mujoco-force-torque-sensor-gravity-baseline-v1",
         "calibration_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "sensor_frame": "attachment_site",
         "units": "N,N*m",
         "sample_rate_hz": 125.0,
         "latency_s": 0.01,
-        "resolution": [0.001, 0.001, 0.001, 0.0001, 0.0001, 0.0001],
-        "bias": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        "error_bounds": [0.05, 0.05, 0.05, 0.005, 0.005, 0.005],
-        "seeded_noise_bound": [0.01, 0.01, 0.01, 0.001, 0.001, 0.001],
+        "resolution": [
+          0.001,
+          0.001,
+          0.001,
+          0.0001,
+          0.0001,
+          0.0001
+        ],
+        "bias": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "error_bounds": [
+          0.05,
+          0.05,
+          0.05,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "seeded_noise_bound": [
+          0.01,
+          0.01,
+          0.01,
+          0.001,
+          0.001,
+          0.001
+        ],
         "limit_policy": {
           "scope": {
             "sensor_id": "sim-ft-menagerie-iiwa14-v1",
             "sensor_frame": "attachment_site",
-            "caps": [20.0, 20.0, 30.0, 2.0, 2.0, 2.0],
-            "policy_digest": "97d9fd320509ad15ffcb51325c69b7a77a29d6d85e7c2b0a9344cbe91a7a6b82",
+            "caps": [
+              20.0,
+              20.0,
+              30.0,
+              2.0,
+              2.0,
+              2.0
+            ],
+            "policy_digest": "d1f8b2b7ebf435d2b4bcb8f6f902a813b6ae38b5bd5b4e88bed1c92689bff310",
             "abort_contract_id": "sim-wrench-stop-v1"
           },
           "sensor_calibration_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "sensor_sample_rate_hz": 125.0,
-          "max_rise_rate": [250.0, 250.0, 250.0, 25.0, 25.0, 25.0],
+          "max_rise_rate": [
+            250.0,
+            250.0,
+            250.0,
+            25.0,
+            25.0,
+            25.0
+          ],
           "max_sensing_latency_s": 0.01,
           "max_abort_latency_s": 0.03,
           "max_sample_age_s": 0.02,
           "max_inter_sample_gap_s": 0.01,
           "max_cross_sensor_skew_s": 0.005,
           "monitor_id": "mujoco-wrench-monitor-iiwa14-v1",
-          "compensation_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "compensation_digest": "bffe9543071c2290b7dd87dc301cfb9d04022385435a9728a5790d2c1ca0012e",
           "abort_contract": {
             "contract_id": "sim-wrench-stop-v1",
             "hold_mode": "hold_current_joint_position",
-            "allowed_stop_actuator_ids": ["actuator1", "actuator2", "actuator3", "actuator4", "actuator5", "actuator6", "actuator7"],
+            "allowed_stop_actuator_ids": [
+              "actuator1",
+              "actuator2",
+              "actuator3",
+              "actuator4",
+              "actuator5",
+              "actuator6",
+              "actuator7"
+            ],
             "max_time_to_stop_s": 0.03,
             "max_stop_writes": 1
           }
@@ -95,41 +198,92 @@
       "robot_id": "menagerie_wx250s",
       "bundle_path": "robots/external/wx250s",
       "role": "holdout",
-      "tasks": ["push_probe_replan"],
+      "tasks": [
+        "push_probe_replan"
+      ],
       "simulation_wrench_profile": {
         "sensor_id": "sim-ft-menagerie-wx250s-v1",
-        "model_id": "mujoco-contact-wrench-v1",
+        "model_id": "mujoco-force-torque-sensor-gravity-baseline-v1",
         "calibration_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "sensor_frame": "wx250s/gripper_link",
         "units": "N,N*m",
         "sample_rate_hz": 125.0,
         "latency_s": 0.01,
-        "resolution": [0.001, 0.001, 0.001, 0.0001, 0.0001, 0.0001],
-        "bias": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        "error_bounds": [0.05, 0.05, 0.05, 0.005, 0.005, 0.005],
-        "seeded_noise_bound": [0.01, 0.01, 0.01, 0.001, 0.001, 0.001],
+        "resolution": [
+          0.001,
+          0.001,
+          0.001,
+          0.0001,
+          0.0001,
+          0.0001
+        ],
+        "bias": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "error_bounds": [
+          0.05,
+          0.05,
+          0.05,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "seeded_noise_bound": [
+          0.01,
+          0.01,
+          0.01,
+          0.001,
+          0.001,
+          0.001
+        ],
         "limit_policy": {
           "scope": {
             "sensor_id": "sim-ft-menagerie-wx250s-v1",
             "sensor_frame": "wx250s/gripper_link",
-            "caps": [20.0, 20.0, 30.0, 2.0, 2.0, 2.0],
-            "policy_digest": "09fbfb79213fc97a92681bdebc34d8db9f7c1b9a130b3d96354042ab5fe80b9f",
+            "caps": [
+              20.0,
+              20.0,
+              30.0,
+              2.0,
+              2.0,
+              2.0
+            ],
+            "policy_digest": "3600aa6f74937fd2c0630c1638fa95d03375ec98ac94bf680f42752ada1b0fcf",
             "abort_contract_id": "sim-wrench-stop-v1"
           },
           "sensor_calibration_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           "sensor_sample_rate_hz": 125.0,
-          "max_rise_rate": [250.0, 250.0, 250.0, 25.0, 25.0, 25.0],
+          "max_rise_rate": [
+            250.0,
+            250.0,
+            250.0,
+            25.0,
+            25.0,
+            25.0
+          ],
           "max_sensing_latency_s": 0.01,
           "max_abort_latency_s": 0.03,
           "max_sample_age_s": 0.02,
           "max_inter_sample_gap_s": 0.01,
           "max_cross_sensor_skew_s": 0.005,
           "monitor_id": "mujoco-wrench-monitor-wx250s-v1",
-          "compensation_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "compensation_digest": "bffe9543071c2290b7dd87dc301cfb9d04022385435a9728a5790d2c1ca0012e",
           "abort_contract": {
             "contract_id": "sim-wrench-stop-v1",
             "hold_mode": "hold_current_joint_position",
-            "allowed_stop_actuator_ids": ["waist", "shoulder", "elbow", "forearm_roll", "wrist_angle", "wrist_rotate", "gripper"],
+            "allowed_stop_actuator_ids": [
+              "waist",
+              "shoulder",
+              "elbow",
+              "forearm_roll",
+              "wrist_angle",
+              "wrist_rotate"
+            ],
             "max_time_to_stop_s": 0.03,
             "max_stop_writes": 1
           }
@@ -140,7 +294,9 @@
       "robot_id": "arm_gripper_lift",
       "bundle_path": "robots/bundles/arm_gripper_lift",
       "role": "grasp_fixture",
-      "tasks": ["pinch_grasp_lift"]
+      "tasks": [
+        "pinch_grasp_lift"
+      ]
     }
   ]
 }
