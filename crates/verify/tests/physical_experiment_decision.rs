@@ -1,7 +1,7 @@
 //! Decision matrix for the shipped physical-decision and authority paths.
 
 use realityos_core::{PolicyProposal, RealityOs};
-use realityos_kernel::physical_action::PhysicalActionEnvelope;
+use realityos_kernel::physical_action::{PhysicalActionEnvelope, WrenchLimitScope};
 use realityos_semantics::discrepancy::{
     apply_probe_observation, DiscrepancyKind, Identifiability, ObservationTag, Stimulus,
 };
@@ -40,6 +40,13 @@ fn scope(action: &str, witness: &str, epoch: &str) -> PhysicalActionScope {
         action_envelope: PhysicalActionEnvelope::LinearStroke {
             requested_m: 0.012,
             maximum_m: 0.02,
+            wrench_limit: Some(WrenchLimitScope {
+                sensor_id: "sensor:test-tool".into(),
+                sensor_frame: "tool0".into(),
+                caps: [20.0, 20.0, 30.0, 2.0, 2.0, 2.0],
+                policy_digest: "a".repeat(64),
+                abort_contract_id: "abort-and-reobserve".into(),
+            }),
         },
         issued_at_s: 10.0,
         expires_at_s: 40.0,

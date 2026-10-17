@@ -5,7 +5,9 @@
 //! pose. It does not see the simulator friction coefficient.
 
 use realityos_core::RealityOs;
-use realityos_kernel::physical_action::PhysicalActionEnvelope;
+use realityos_kernel::physical_action::{
+    AbortHoldMode, PhysicalActionEnvelope, WrenchAbortContract, WrenchLimitPolicy, WrenchLimitScope,
+};
 use realityos_reasoner_bridge::{authorize_current_action, BridgeRefusal, SimulationAdmission};
 use realityos_semantics::contact::SupportKind;
 use realityos_semantics::contact_collision::NamedBox;
@@ -33,6 +35,41 @@ use std::path::PathBuf;
 
 const TRUE_FRICTION: f64 = 0.85;
 const MU_REQUIRED: f64 = 0.3;
+
+fn simulation_admission(expires_at_s: f64) -> SimulationAdmission {
+    let mut wrench_limit_policy = WrenchLimitPolicy {
+        scope: WrenchLimitScope {
+            sensor_id: "ft-tool".into(),
+            sensor_frame: "tool0".into(),
+            caps: [20.0, 20.0, 30.0, 2.0, 2.0, 2.0],
+            policy_digest: String::new(),
+            abort_contract_id: "abort-and-reobserve".into(),
+        },
+        sensor_calibration_hash: "test-sensor-calibration-v1".into(),
+        sensor_sample_rate_hz: 125.0,
+        max_rise_rate: [10.0; 6],
+        max_sensing_latency_s: 0.01,
+        max_abort_latency_s: 0.03,
+        max_sample_age_s: 0.02,
+        max_inter_sample_gap_s: 0.01,
+        max_cross_sensor_skew_s: 0.005,
+        monitor_id: "test-wrench-monitor-v1".into(),
+        compensation_digest: "c".repeat(64),
+        abort_contract: WrenchAbortContract {
+            contract_id: "abort-and-reobserve".into(),
+            hold_mode: AbortHoldMode::HoldCurrentJointPosition,
+            allowed_stop_actuator_ids: vec!["tool".into()],
+            max_time_to_stop_s: 0.03,
+            max_stop_writes: 1,
+        },
+    };
+    wrench_limit_policy.scope.policy_digest = wrench_limit_policy.digest();
+    SimulationAdmission {
+        execution_bound_m: 0.1,
+        expires_at_s,
+        wrench_limit_policy,
+    }
+}
 
 #[test]
 fn menagerie_ur5e_declared_body_transforms_match_mujoco_geometry() {
@@ -171,6 +208,7 @@ fn ur5e_finds_a_collision_checked_push_from_a_side_precontact_pose() {
         gripper_force_n: None,
         gripper_resource: None,
         linear_execution_bound_m: None,
+        linear_wrench_limit: None,
         gravity_m_s2: [0.0, 0.0, -9.81],
     };
 
@@ -355,10 +393,7 @@ fn production_reasoner_grasp_refuses_without_qualified_resource() {
             &mut os,
             &mut reasoner,
             &request,
-            &SimulationAdmission {
-                execution_bound_m: 0.1,
-                expires_at_s: 40.0,
-            },
+            &simulation_admission(40.0),
             &[],
         ),
         Err(BridgeRefusal::NoJustifiedAction)
@@ -380,10 +415,7 @@ fn production_reasoner_authorized_grasp_is_verified_in_mujoco() {
         &mut os,
         &mut reasoner,
         &request,
-        &SimulationAdmission {
-            execution_bound_m: 0.1,
-            expires_at_s: 40.0,
-        },
+        &simulation_admission(40.0),
         &[],
     )
     .unwrap_or_else(|error| {
@@ -534,10 +566,7 @@ fn production_reasoner_grasp_expiry_stops_before_unverified_lift() {
         &mut os,
         &mut reasoner,
         &request,
-        &SimulationAdmission {
-            execution_bound_m: 0.1,
-            expires_at_s: 10.95,
-        },
+        &simulation_admission(10.95),
         &[],
     )
     .expect("grant is valid at action start");
@@ -582,10 +611,7 @@ fn production_reasoner_grasp_runtime_divergence_aborts_before_control_write() {
         &mut os,
         &mut reasoner,
         &request,
-        &SimulationAdmission {
-            execution_bound_m: 0.1,
-            expires_at_s: 40.0,
-        },
+        &simulation_admission(40.0),
         &[],
     )
     .expect("grasp starts with a current exact proof");
@@ -987,6 +1013,7 @@ impl World {
             gripper_force_n: Some(2.0),
             gripper_resource: None,
             linear_execution_bound_m: None,
+            linear_wrench_limit: None,
             gravity_m_s2: [0.0, 0.0, -9.81],
         }
     }
@@ -1278,18 +1305,9 @@ fn authorize_planar_current(
     reasoner: &mut PhysicalReasoner,
     request: &ReasoningRequest,
 ) -> realityos_semantics::physical_reasoner::AuthorizedAction {
-    authorize_current_action(
-        os,
-        reasoner,
-        request,
-        &SimulationAdmission {
-            execution_bound_m: 0.1,
-            expires_at_s: 40.0,
-        },
-        &[],
-    )
-    .expect("reasoner bridge authorizes only a current planar action")
-    .action
+    authorize_current_action(os, reasoner, request, &simulation_admission(40.0), &[])
+        .expect("reasoner bridge authorizes only a current planar action")
+        .action
 }
 
 fn candidate_lines(

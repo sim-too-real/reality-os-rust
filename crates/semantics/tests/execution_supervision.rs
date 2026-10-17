@@ -1,4 +1,4 @@
-use realityos_kernel::physical_action::PhysicalActionEnvelope;
+use realityos_kernel::physical_action::{PhysicalActionEnvelope, WrenchLimitScope};
 use std::collections::BTreeMap;
 
 use realityos_semantics::execution_envelope::{
@@ -9,6 +9,16 @@ use realityos_semantics::execution_envelope::{
 use realityos_semantics::physical_belief::PhysicalParameterBelief;
 use realityos_semantics::physical_consequence::FrozenPrediction;
 use realityos_semantics::recoverability::RecoverabilityClass;
+
+fn test_wrench_scope() -> WrenchLimitScope {
+    WrenchLimitScope {
+        sensor_id: "sensor:test-tool".into(),
+        sensor_frame: "tool0".into(),
+        caps: [20.0, 20.0, 30.0, 2.0, 2.0, 2.0],
+        policy_digest: "a".repeat(64),
+        abort_contract_id: "abort-and-reobserve".into(),
+    }
+}
 
 fn frozen() -> FrozenAction {
     let action = FrozenAction {
@@ -22,6 +32,7 @@ fn frozen() -> FrozenAction {
         action_envelope: PhysicalActionEnvelope::LinearStroke {
             requested_m: 0.02,
             maximum_m: 0.02,
+            wrench_limit: Some(test_wrench_scope()),
         },
         prediction: FrozenPrediction {
             action_id: "action:1".into(),

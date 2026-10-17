@@ -119,7 +119,7 @@ mod tests {
     use crate::runner::load_and_normalize;
     use crate::semantics_map::embodiment_from_manifest;
     use realityos_core::{PolicyProposal, RealityOs};
-    use realityos_kernel::physical_action::PhysicalActionEnvelope;
+    use realityos_kernel::physical_action::{PhysicalActionEnvelope, WrenchLimitScope};
     use realityos_physics::{PressureDistribution, SupportFrictionModel};
     use realityos_semantics::command_domain::named_joint_limit_margin;
     use realityos_semantics::contact::declared_manipulation_contact_bodies;
@@ -192,6 +192,16 @@ mod tests {
     };
     use serde_json::json;
     use std::path::PathBuf;
+
+    fn test_wrench_scope() -> WrenchLimitScope {
+        WrenchLimitScope {
+            sensor_id: "sensor:test-tool".into(),
+            sensor_frame: "tool0".into(),
+            caps: [20.0, 20.0, 30.0, 2.0, 2.0, 2.0],
+            policy_digest: "a".repeat(64),
+            abort_contract_id: "execution-envelope:abort-and-reobserve".into(),
+        }
+    }
 
     fn scratch_dir() -> PathBuf {
         std::env::var_os("REALITYOS_GOAL_SCRATCH")
@@ -1721,6 +1731,7 @@ mod tests {
             action_envelope: Some(PhysicalActionEnvelope::LinearStroke {
                 requested_m: stroke_m,
                 maximum_m: maximum_stroke_m.max(stroke_m),
+                wrench_limit: Some(test_wrench_scope()),
             }),
             scoped_grant: None,
             executable_witness_id: witness_contents
@@ -1775,6 +1786,7 @@ mod tests {
             action_envelope: PhysicalActionEnvelope::LinearStroke {
                 requested_m: stroke_m,
                 maximum_m: bound_m.max(stroke_m),
+                wrench_limit: Some(test_wrench_scope()),
             },
             issued_at_s: now_s,
             expires_at_s: now_s + 30.0,
@@ -2372,6 +2384,7 @@ mod tests {
                 .unwrap_or(PhysicalActionEnvelope::LinearStroke {
                     requested_m: probe_stroke,
                     maximum_m: probe_stroke,
+                    wrench_limit: Some(test_wrench_scope()),
                 }),
             prediction,
             belief_snapshot,

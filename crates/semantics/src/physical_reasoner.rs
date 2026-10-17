@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use realityos_kernel::physical_action::PhysicalActionEnvelope;
+use realityos_kernel::physical_action::{PhysicalActionEnvelope, WrenchLimitScope};
 use serde::{Deserialize, Serialize};
 
 use crate::adapter::synth_planar_two_link;
@@ -96,6 +96,8 @@ pub struct ReasoningRequest {
     pub gripper_resource: Option<crate::resource::ControlledResource>,
     /// Optional authority cap installed by a scoped linear-action bridge.
     pub linear_execution_bound_m: Option<f64>,
+    /// Exact sensor/frame/cap policy installed by a scoped linear-action bridge.
+    pub linear_wrench_limit: Option<WrenchLimitScope>,
     pub gravity_m_s2: [f64; 3],
 }
 
@@ -681,6 +683,7 @@ pub fn benchmark_scene() -> (EmbodimentModel, ReasoningRequest) {
         gripper_force_n: Some(2.0),
         gripper_resource: None,
         linear_execution_bound_m: None,
+        linear_wrench_limit: None,
         gravity_m_s2: [0.0, 0.0, -9.81],
     };
     (model, request)
@@ -2616,11 +2619,16 @@ fn action_envelope_witness(envelope: &PhysicalActionEnvelope) -> String {
         PhysicalActionEnvelope::LinearStroke {
             requested_m,
             maximum_m,
+            wrench_limit,
         } => {
             format!(
-                "linear:{:016x}:{:016x}",
+                "linear:{:016x}:{:016x}:{}",
                 requested_m.to_bits(),
-                maximum_m.to_bits()
+                maximum_m.to_bits(),
+                wrench_limit
+                    .as_ref()
+                    .map(wrench_limit_scope_witness)
+                    .unwrap_or_else(|| "none".into())
             )
         }
         PhysicalActionEnvelope::PinchGrasp {
@@ -2763,6 +2771,7 @@ fn proof_dependency_digest(
     push_opt_f64(&mut bytes, request.mass_kg);
     push_opt_f64(&mut bytes, request.gripper_force_n);
     push_opt_f64(&mut bytes, request.linear_execution_bound_m);
+    push_wrench_limit_scope(&mut bytes, request.linear_wrench_limit.as_ref());
     let mut safety_faults = request.safety_faults.iter().collect::<Vec<_>>();
     safety_faults.sort_by_key(|observation| observation.kind);
     for observation in safety_faults {
@@ -2854,6 +2863,7 @@ fn linear_action_envelope(
         maximum_m: request
             .linear_execution_bound_m
             .unwrap_or(candidate.stroke_m),
+        wrench_limit: request.linear_wrench_limit.clone(),
     }
 }
 
@@ -2865,6 +2875,37 @@ fn push_opt_f64(bytes: &mut Vec<u8>, value: Option<f64>) {
         }
         None => bytes.push(0),
     }
+}
+
+fn push_wrench_limit_scope(bytes: &mut Vec<u8>, scope: Option<&WrenchLimitScope>) {
+    let Some(scope) = scope else {
+        bytes.push(0);
+        return;
+    };
+    bytes.push(1);
+    push_str(bytes, &scope.sensor_id);
+    push_str(bytes, &scope.sensor_frame);
+    for cap in scope.caps {
+        push_f64(bytes, cap);
+    }
+    push_str(bytes, &scope.policy_digest);
+    push_str(bytes, &scope.abort_contract_id);
+}
+
+fn wrench_limit_scope_witness(scope: &WrenchLimitScope) -> String {
+    let caps = scope
+        .caps
+        .iter()
+        .map(|cap| format!("{:016x}", cap.to_bits()))
+        .collect::<Vec<_>>()
+        .join(":");
+    format!(
+        "{}:{}:{caps}:{}:{}",
+        hex::encode(scope.sensor_id.as_bytes()),
+        hex::encode(scope.sensor_frame.as_bytes()),
+        scope.policy_digest,
+        hex::encode(scope.abort_contract_id.as_bytes())
+    )
 }
 
 fn push_q(bytes: &mut Vec<u8>, values: &[f64]) {
@@ -2937,6 +2978,7 @@ fn fixture_binding(candidate: &CandidateSummary, request: &ReasoningRequest) -> 
             maximum_m: request
                 .linear_execution_bound_m
                 .unwrap_or(request.probe_stroke_m),
+            wrench_limit: request.linear_wrench_limit.clone(),
         },
         expires_at_s: 40.0,
     }

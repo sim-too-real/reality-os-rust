@@ -1,5 +1,7 @@
 use realityos_core::RealityOs;
-use realityos_kernel::physical_action::PhysicalActionEnvelope;
+use realityos_kernel::physical_action::{
+    AbortHoldMode, PhysicalActionEnvelope, WrenchAbortContract, WrenchLimitPolicy, WrenchLimitScope,
+};
 use realityos_reasoner_bridge::{
     authorize_current_action, BridgeRefusal, SimulationAdmission, EVIDENCE_STATUS,
 };
@@ -119,9 +121,37 @@ fn grasp_fixture() -> (
 }
 
 fn admission() -> SimulationAdmission {
+    let mut wrench_limit_policy = WrenchLimitPolicy {
+        scope: WrenchLimitScope {
+            sensor_id: "ft-tool".into(),
+            sensor_frame: "tool0".into(),
+            caps: [20.0, 20.0, 30.0, 2.0, 2.0, 2.0],
+            policy_digest: String::new(),
+            abort_contract_id: "abort-and-reobserve".into(),
+        },
+        sensor_calibration_hash: "sensor-calibration-v1".into(),
+        sensor_sample_rate_hz: 125.0,
+        max_rise_rate: [10.0; 6],
+        max_sensing_latency_s: 0.01,
+        max_abort_latency_s: 0.03,
+        max_sample_age_s: 0.02,
+        max_inter_sample_gap_s: 0.01,
+        max_cross_sensor_skew_s: 0.005,
+        monitor_id: "wrench-monitor-v1".into(),
+        compensation_digest: "c".repeat(64),
+        abort_contract: WrenchAbortContract {
+            contract_id: "abort-and-reobserve".into(),
+            hold_mode: AbortHoldMode::HoldCurrentJointPosition,
+            allowed_stop_actuator_ids: vec!["tool-x".into(), "tool-y".into()],
+            max_time_to_stop_s: 0.03,
+            max_stop_writes: 2,
+        },
+    };
+    wrench_limit_policy.scope.policy_digest = wrench_limit_policy.digest();
     SimulationAdmission {
         execution_bound_m: 0.05,
         expires_at_s: 40.0,
+        wrench_limit_policy,
     }
 }
 
@@ -162,6 +192,7 @@ fn safe_probe_is_scoped_then_reselected_before_authorization() {
         action_envelope: PhysicalActionEnvelope::LinearStroke {
             requested_m: frozen.linear_stroke_bounds().unwrap().0,
             maximum_m: admission().execution_bound_m,
+            wrench_limit: Some(admission().wrench_limit_policy.scope),
         },
         issued_at_s: request.now_s,
         expires_at_s: admission().expires_at_s,
@@ -286,7 +317,8 @@ fn unsupported_topology_stale_evidence_expiry_and_forbidden_grasp_refuse() {
         &request,
         &SimulationAdmission {
             execution_bound_m: 0.1,
-            expires_at_s: 9.0
+            expires_at_s: 9.0,
+            wrench_limit_policy: admission().wrench_limit_policy,
         },
         &[]
     )
@@ -312,11 +344,44 @@ fn stale_sensor_evidence_is_refused_before_grant_issuance() {
 }
 
 #[test]
+fn bridge_refuses_invalid_policy_before_grant() {
+    let (mut os, mut reasoner, request) = fixture();
+    let mut invalid_admission = admission();
+    invalid_admission.wrench_limit_policy.max_rise_rate[0] += 1.0;
+    assert!(matches!(
+        authorize_current_action(&mut os, &mut reasoner, &request, &invalid_admission, &[]),
+        Err(BridgeRefusal::InvalidWrenchPolicy(_))
+    ));
+}
+
+#[test]
+fn grant_revalidation_rejects_changed_force_cap() {
+    let (mut os, mut reasoner, request) = fixture();
+    let admitted = authorize_current_action(&mut os, &mut reasoner, &request, &admission(), &[])
+        .expect("scoped push grant");
+    let mut changed_scope = admitted.grant.scope.clone();
+    if let PhysicalActionEnvelope::LinearStroke {
+        wrench_limit: Some(wrench_limit),
+        ..
+    } = &mut changed_scope.action_envelope
+    {
+        wrench_limit.caps[0] = f64::from_bits(wrench_limit.caps[0].to_bits() + 1);
+    } else {
+        panic!("linear grant must carry its wrench scope");
+    }
+    assert_eq!(
+        grant_covers(&admitted.grant, &changed_scope, request.now_s),
+        Err(realityos_session::ScopeRefusal::BindingMismatch)
+    );
+}
+
+#[test]
 fn undersized_execution_bound_is_refused_by_scoped_authority() {
     let (mut os, mut reasoner, request) = fixture();
     let small = SimulationAdmission {
         execution_bound_m: 0.001,
         expires_at_s: 40.0,
+        wrench_limit_policy: admission().wrench_limit_policy,
     };
     assert_eq!(
         authorize_current_action(&mut os, &mut reasoner, &request, &small, &[]),
@@ -332,6 +397,7 @@ fn expired_admission_is_refused() {
     let expired = SimulationAdmission {
         execution_bound_m: 0.05,
         expires_at_s: request.now_s,
+        wrench_limit_policy: admission().wrench_limit_policy,
     };
     assert!(matches!(
         authorize_current_action(&mut os, &mut reasoner, &request, &expired, &[]),

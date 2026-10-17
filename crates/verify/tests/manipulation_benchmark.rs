@@ -1,3 +1,6 @@
+use realityos_kernel::physical_action::{
+    AbortHoldMode, WrenchAbortContract, WrenchLimitPolicy, WrenchLimitScope,
+};
 use realityos_reasoner_bridge::SimulationAdmission;
 use realityos_semantics::observation::{
     wrench_sample_digest, JointStateSample, ObservationFrame, SensorObservation, WrenchSample,
@@ -27,6 +30,41 @@ fn lock_mujoco_test() -> MutexGuard<'static, ()> {
     MUJOCO_TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn simulation_admission(expires_at_s: f64) -> SimulationAdmission {
+    let mut wrench_limit_policy = WrenchLimitPolicy {
+        scope: WrenchLimitScope {
+            sensor_id: "ft-tool".into(),
+            sensor_frame: "tool0".into(),
+            caps: [20.0, 20.0, 30.0, 2.0, 2.0, 2.0],
+            policy_digest: String::new(),
+            abort_contract_id: "abort-and-reobserve".into(),
+        },
+        sensor_calibration_hash: "test-sensor-calibration-v1".into(),
+        sensor_sample_rate_hz: 125.0,
+        max_rise_rate: [10.0; 6],
+        max_sensing_latency_s: 0.01,
+        max_abort_latency_s: 0.03,
+        max_sample_age_s: 0.02,
+        max_inter_sample_gap_s: 0.01,
+        max_cross_sensor_skew_s: 0.005,
+        monitor_id: "test-wrench-monitor-v1".into(),
+        compensation_digest: "c".repeat(64),
+        abort_contract: WrenchAbortContract {
+            contract_id: "abort-and-reobserve".into(),
+            hold_mode: AbortHoldMode::HoldCurrentJointPosition,
+            allowed_stop_actuator_ids: vec!["tool".into()],
+            max_time_to_stop_s: 0.03,
+            max_stop_writes: 1,
+        },
+    };
+    wrench_limit_policy.scope.policy_digest = wrench_limit_policy.digest();
+    SimulationAdmission {
+        execution_bound_m: 0.1,
+        expires_at_s,
+        wrench_limit_policy,
+    }
 }
 
 fn planar_bundle() -> RobotBundle {
@@ -612,10 +650,7 @@ fn eligible_push_uses_scoped_bridge_and_replans_after_probe() {
     let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
         &bundle,
         &trial,
-        SimulationAdmission {
-            execution_bound_m: 0.1,
-            expires_at_s: 120.0,
-        },
+        simulation_admission(120.0),
     )
     .expect("the runner records a MuJoCo episode");
 
@@ -686,10 +721,7 @@ fn expired_authority_stops_control_steps_before_continuing_the_segment() {
     let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
         &bundle,
         &trial,
-        SimulationAdmission {
-            execution_bound_m: 0.1,
-            expires_at_s: 10.01,
-        },
+        simulation_admission(10.01),
     )
     .expect("the runner records an authority-expiry episode");
 
@@ -777,10 +809,7 @@ fn informative_probe_reauthorizes_followup_and_stops_on_lateral_drift() {
     let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
         &bundle,
         &trial,
-        SimulationAdmission {
-            execution_bound_m: 0.1,
-            expires_at_s: 120.0,
-        },
+        simulation_admission(120.0),
     )
     .expect("strict runner records the probe and replanned action");
 
@@ -845,10 +874,7 @@ fn divergent_action_stops_before_replan() {
     let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
         &bundle,
         &trial,
-        SimulationAdmission {
-            execution_bound_m: 0.1,
-            expires_at_s: 120.0,
-        },
+        simulation_admission(120.0),
     )
     .expect("runner records the interrupted action");
 
@@ -1064,10 +1090,7 @@ fn uninformative_push_probe_is_not_repeated() {
     let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
         &bundle,
         &trial,
-        SimulationAdmission {
-            execution_bound_m: 0.1,
-            expires_at_s: 120.0,
-        },
+        simulation_admission(120.0),
     )
     .expect("strict runner records the uninformative probe and refusal");
 
@@ -1262,10 +1285,7 @@ fn must_refuse_trial_writes_no_controls() {
     let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
         &bundle,
         &trial,
-        SimulationAdmission {
-            execution_bound_m: 0.1,
-            expires_at_s: 120.0,
-        },
+        simulation_admission(120.0),
     )
     .expect("strict runner records a valid refusal");
 
@@ -1285,10 +1305,7 @@ fn expectation_and_verifier_outcome_are_absent_from_reasoning_request() {
     let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
         &bundle,
         &trial,
-        SimulationAdmission {
-            execution_bound_m: 0.1,
-            expires_at_s: 120.0,
-        },
+        simulation_admission(120.0),
     )
     .expect("strict runner records the reasoning input audit");
 
@@ -1322,10 +1339,7 @@ fn ambiguous_grasp_mechanics_are_refused_before_control_writes() {
     let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
         &bundle,
         &trial,
-        SimulationAdmission {
-            execution_bound_m: 0.1,
-            expires_at_s: 120.0,
-        },
+        simulation_admission(120.0),
     )
     .expect("strict runner records the refusal decision");
 
@@ -1390,10 +1404,7 @@ fn faulted_grasp_observations_are_refused_before_control_writes() {
         let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
             &bundle,
             &trial,
-            SimulationAdmission {
-                execution_bound_m: 0.1,
-                expires_at_s: 120.0,
-            },
+            simulation_admission(120.0),
         )
         .expect("strict runner records the fault refusal");
 
@@ -1485,10 +1496,7 @@ fn push_contact_and_slip_faults_refuse_before_control_writes() {
         let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
             &bundle,
             &trial,
-            SimulationAdmission {
-                execution_bound_m: 0.1,
-                expires_at_s: 120.0,
-            },
+            simulation_admission(120.0),
         )
         .expect("strict runner records injected contact/slip refusal");
 
@@ -1547,10 +1555,7 @@ fn resolved_positive_grasp_records_verified_hold() {
     let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
         &bundle,
         &trial,
-        SimulationAdmission {
-            execution_bound_m: 0.1,
-            expires_at_s: 120.0,
-        },
+        simulation_admission(120.0),
     )
     .expect("strict runner records the grasp episode");
 
@@ -1686,10 +1691,7 @@ fn qualified_grasp_records_acquisition_and_hold_separately() {
     let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
         &bundle,
         &trial,
-        SimulationAdmission {
-            execution_bound_m: 0.1,
-            expires_at_s: 120.0,
-        },
+        simulation_admission(120.0),
     )
     .expect("the runner records a MuJoCo grasp episode");
 
@@ -1794,10 +1796,7 @@ fn grasp_authority_expiry_between_phases_keeps_the_correct_failure_cause() {
     let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
         &bundle,
         &trial,
-        SimulationAdmission {
-            execution_bound_m: 0.1,
-            expires_at_s: 10.0 + manifest.timestep * 500.0,
-        },
+        simulation_admission(10.0 + manifest.timestep * 500.0),
     )
     .expect("the runner records an expired grasp episode");
 
@@ -1933,10 +1932,7 @@ fn unsupported_gripper_is_counted_as_refusal() {
     let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
         &bundle,
         &trial,
-        SimulationAdmission {
-            execution_bound_m: 0.1,
-            expires_at_s: 120.0,
-        },
+        simulation_admission(120.0),
     )
     .expect("unsupported topology is recorded as a refusal");
 
@@ -1984,10 +1980,7 @@ fn same_task_runs_on_both_development_embodiments() {
         let episode = realityos_verify::manipulation_benchmark::run_benchmark_trial(
             &bundle,
             &trial,
-            SimulationAdmission {
-                execution_bound_m: 0.1,
-                expires_at_s: 120.0,
-            },
+            simulation_admission(120.0),
         )
         .expect("same bridge runner records both embodiments");
         assert_eq!(episode.task, BenchmarkTask::PushProbeReplan);

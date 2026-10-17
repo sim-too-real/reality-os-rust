@@ -1,7 +1,7 @@
 //! Simulation-only bridge from a proved reasoner selection to a scoped grant.
 
 use realityos_core::{PolicyProposal, RealityOs};
-use realityos_kernel::physical_action::PhysicalActionEnvelope;
+use realityos_kernel::physical_action::{PhysicalActionEnvelope, WrenchLimitPolicy};
 use realityos_semantics::execution_envelope::ExecutionAuthorization;
 use realityos_semantics::physical_decision::ScopedGrantBinding;
 use realityos_semantics::physical_reasoner::{
@@ -14,10 +14,11 @@ use realityos_session::{
 
 pub const EVIDENCE_STATUS: &str = "SIMULATION_ONLY";
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SimulationAdmission {
     pub execution_bound_m: f64,
     pub expires_at_s: f64,
+    pub wrench_limit_policy: WrenchLimitPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +35,7 @@ pub enum BridgeRefusal {
     UnsupportedActionFamily(String),
     SelectionChanged,
     Scope(ScopeRefusal),
+    InvalidWrenchPolicy(&'static str),
     Reasoner(&'static str),
 }
 
@@ -47,6 +49,9 @@ impl std::fmt::Display for BridgeRefusal {
             }
             Self::SelectionChanged => write!(f, "SELECTION_CHANGED_AFTER_SCOPING"),
             Self::Scope(error) => error.fmt(f),
+            Self::InvalidWrenchPolicy(reason) => {
+                write!(f, "INVALID_WRENCH_LIMIT_POLICY:{reason}")
+            }
             Self::Reasoner(error) => write!(f, "REASONER_REFUSED:{error}"),
         }
     }
@@ -69,11 +74,26 @@ pub fn authorize_current_action(
     if !request.evidence_fresh {
         return Err(BridgeRefusal::SensorEvidenceMissing);
     }
+    let linear_objective = matches!(
+        request.objective,
+        realityos_semantics::physical_reasoner::PhysicalObjective::PlanarTranslation { .. }
+    );
+    if linear_objective {
+        admission
+            .wrench_limit_policy
+            .validate()
+            .map_err(|error| BridgeRefusal::InvalidWrenchPolicy(error.0))?;
+    }
 
     // Install the admission cap before proof selection. This exact cloned
     // request is then used for preparation and the post-grant reselection.
     let mut effective_request = request.clone();
     effective_request.linear_execution_bound_m = Some(admission.execution_bound_m);
+    effective_request.linear_wrench_limit = if linear_objective {
+        Some(admission.wrench_limit_policy.scope.clone())
+    } else {
+        None
+    };
     let report = reasoner.consider_excluding(&effective_request, forbidden_action_keys);
     let step = report
         .executable
@@ -101,7 +121,7 @@ pub fn authorize_current_action(
     if !prepared
         .action_envelope
         .exactly_matches(&step.action_envelope)
-        || prepared.action_envelope.validate().is_err()
+        || prepared.action_envelope.validate_for_execution().is_err()
     {
         return Err(BridgeRefusal::SelectionChanged);
     }
@@ -109,6 +129,17 @@ pub fn authorize_current_action(
         ("planar_push", PhysicalActionEnvelope::LinearStroke { .. })
         | ("pinch_grasp", PhysicalActionEnvelope::PinchGrasp { .. }) => {}
         (family, _) => return Err(BridgeRefusal::UnsupportedActionFamily(family.into())),
+    }
+    if let PhysicalActionEnvelope::LinearStroke {
+        wrench_limit: Some(wrench_limit),
+        ..
+    } = &prepared.action_envelope
+    {
+        if wrench_limit.abort_contract_id != prepared.abort_contract_id {
+            return Err(BridgeRefusal::InvalidWrenchPolicy(
+                "abort_contract_scope_mismatch",
+            ));
+        }
     }
     let scope = PhysicalActionScope {
         model_id: prepared.model_id.clone(),

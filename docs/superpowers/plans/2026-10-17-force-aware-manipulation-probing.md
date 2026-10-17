@@ -45,12 +45,12 @@
 - Consumes: existing `SensorClass`, `SensorObservation`, and `ObservationFrame`.
 - Produces: `WrenchSampleOrigin::{Hardware, Simulation, Synthetic}` and `WrenchSample { sensor_id: String, sensor_frame: String, transform_epoch: String, units: String, wrench: [f64; 6], error_bounds: [f64; 6], capture_s: f64, receive_s: f64, sequence: u64, clock_domain: String, origin: WrenchSampleOrigin, digest: String }`; `wrench_sample_digest(sample: &WrenchSample) -> String`; and `ObservationFrame.wrench_samples: Vec<WrenchSample>` with serde default for old frames. Sample origin is included in the digest and must agree with the enclosing trace/measurement origin.
 
-- [ ] **Step 1: Write failing tests** named `wrench_digest_binds_every_sample_field`, `invalid_wrench_or_error_bound_is_rejected`, `wrench_samples_require_monotonic_sequence_and_matching_epoch`, and `observation_frame_round_trips_wrench_samples`. Assert a change to any metadata, origin, value, or error bound changes the digest; reject non-finite values, negative error bounds, empty identities, wrong units, and stale/out-of-order samples.
-- [ ] **Step 2: Run** `cargo test -p realityos-semantics --test wrench_observation`; expect missing `WrenchSample` or the new frame field.
-- [ ] **Step 3: Implement** the struct, validator, and digest. Hash the domain tag `realityos.wrench_sample/1\0`, fixed-order length-prefixed UTF-8 strings including the stable origin name, little-endian finite `f64` bit patterns, and little-endian sequence; exclude only the digest field itself. Use fixed axis order `[Fx,Fy,Fz,Tx,Ty,Tz]`.
-- [ ] **Step 4: Update** existing frame constructors with an empty wrench vector and retain deserialization of frames without the field.
-- [ ] **Step 5: Run** `cargo test -p realityos-semantics --test wrench_observation`; expect all four tests to pass.
-- [ ] **Step 6: Commit** as `feat(semantics): add typed wrench observations`.
+- [x] **Step 1: Write failing tests** named `wrench_digest_binds_every_sample_field`, `invalid_wrench_or_error_bound_is_rejected`, `wrench_samples_require_monotonic_sequence_and_matching_epoch`, and `observation_frame_round_trips_wrench_samples`. Assert a change to any metadata, origin, value, or error bound changes the digest; reject non-finite values, negative error bounds, empty identities, wrong units, and stale/out-of-order samples.
+- [x] **Step 2: Run** `cargo test -p realityos-semantics --test wrench_observation`; expect missing `WrenchSample` or the new frame field.
+- [x] **Step 3: Implement** the struct, validator, and digest. Hash the domain tag `realityos.wrench_sample/1\0`, fixed-order length-prefixed UTF-8 strings including the stable origin name, little-endian finite `f64` bit patterns, and little-endian sequence; exclude only the digest field itself. Use fixed axis order `[Fx,Fy,Fz,Tx,Ty,Tz]`.
+- [x] **Step 4: Update** existing frame constructors with an empty wrench vector and retain deserialization of frames without the field.
+- [x] **Step 5: Run** `cargo test -p realityos-semantics --test wrench_observation`; expect all four tests to pass.
+- [x] **Step 6: Commit** as `feat(semantics): add typed wrench observations`.
 
 ### Task 2: Force/torque provenance validation
 
@@ -63,12 +63,12 @@
 - Consumes: Task 1 `WrenchSample` and current `PhysicalSensorTrace` validation.
 - Produces: `PhysicalSensorRequirement` fields `class: SensorClass`, `min_sample_rate_hz: f64`, `max_inter_sample_gap_s: f64`, `max_age_s: f64`, and `max_cross_sensor_skew_s: f64`; `PhysicalSensorIdentity.class`; and optional `SensorObservation.device_serial`, `model_id`, and `units` fields, required for `ForceTorque` observations and cross-checked against the identity and requirement. Require each declared channel exactly once; support multiple declared force/torque channels with explicit cross-sensor skew checks.
 
-- [ ] **Step 1: Write failing tests** named `force_torque_trace_requires_declared_class_and_identity`, `physical_wrench_trace_rejects_simulation_and_synthetic_origins`, `wrench_trace_rejects_bad_digest_or_replayed_sequence`, `wrench_trace_rejects_rate_gap_age_and_cross_sensor_skew`, and `valid_hardware_wrench_trace_stays_unverified_without_outcome_measurement`. Assert that valid sensor provenance alone never changes status from `UNVERIFIED`.
-- [ ] **Step 2: Run** `cargo test -p realityos-verify --test manipulation_benchmark physical_evidence`; expect the new requirement fields and sample checks to be missing.
-- [ ] **Step 3: Implement** validation requiring every declared channel to be matched exactly once, exact serial/model/calibration/frame/units identity, valid sample digests, increasing sequence and timestamps, age/gap/rate/skew bounds, `WrenchSampleOrigin::Hardware` on every wrench sample, and no simulation clock or non-hardware trace origin. Reject missing, duplicate, and undeclared channels. Hash ordered wrench sample digests into `PhysicalObservationEvidence.trace_digest`.
-- [ ] **Step 4: Preserve** existing joint-encoder validation; non-wrench `SensorObservation` constructors set the optional force/torque identity fields to `None`.
-- [ ] **Step 5: Run** `cargo test -p realityos-verify --test manipulation_benchmark physical_evidence`; expect all provenance tests to pass and simulator-origin traces to remain rejected.
-- [ ] **Step 6: Commit** as `feat(verify): validate force torque evidence provenance`.
+- [x] **Step 1: Write failing tests** named `force_torque_trace_requires_declared_class_and_identity`, `physical_wrench_trace_rejects_simulation_and_synthetic_origins`, `wrench_trace_rejects_bad_digest_or_replayed_sequence`, `wrench_trace_rejects_rate_gap_age_and_cross_sensor_skew`, and `valid_hardware_wrench_trace_stays_unverified_without_outcome_measurement`. Assert that valid sensor provenance alone never changes status from `UNVERIFIED`.
+- [x] **Step 2: Run** `cargo test -p realityos-verify --test manipulation_benchmark physical_evidence`; expect the new requirement fields and sample checks to be missing.
+- [x] **Step 3: Implement** validation requiring every declared channel to be matched exactly once, exact serial/model/calibration/frame/units identity, valid sample digests, increasing sequence and timestamps, age/gap/rate/skew bounds, `WrenchSampleOrigin::Hardware` on every wrench sample, and no simulation clock or non-hardware trace origin. Reject missing, duplicate, and undeclared channels. Hash ordered wrench sample digests into `PhysicalObservationEvidence.trace_digest`.
+- [x] **Step 4: Preserve** existing joint-encoder validation; non-wrench `SensorObservation` constructors set the optional force/torque identity fields to `None`.
+- [x] **Step 5: Run** `cargo test -p realityos-verify --test manipulation_benchmark physical_evidence`; expect all provenance tests to pass and simulator-origin traces to remain rejected.
+- [x] **Step 6: Commit** as `feat(verify): validate force torque evidence provenance`.
 
 ### Task 3: Wrench policy in exact linear-action authority
 
@@ -82,17 +82,17 @@
 
 **Interfaces:**
 - Consumes: existing `LinearStroke`, `ReasoningRequest`, `PhysicalActionScope`, and `SimulationAdmission`.
-- Produces: `WrenchLimitScope { sensor_id: String, sensor_frame: String, caps: [f64; 6], policy_digest: String, abort_contract_id: String }`; `WrenchAbortContract { contract_id: String, hold_mode: AbortHoldMode, allowed_stop_actuator_ids: Vec<String>, max_time_to_stop_s: f64, max_stop_writes: u32 }`, with `AbortHoldMode::HoldCurrentJointPosition` meaning capture the measured joint position at trip as the only hold target; and `WrenchLimitPolicy { scope: WrenchLimitScope, max_rise_rate: [f64; 6], max_sensing_latency_s: f64, max_abort_latency_s: f64, max_sample_age_s: f64, max_inter_sample_gap_s: f64, max_cross_sensor_skew_s: f64, monitor_id: String, compensation_digest: String, abort_contract: WrenchAbortContract }`.
-- `WrenchLimitPolicy::digest(&self) -> String` hashes every policy field, excluding only `scope.policy_digest` to prevent recursive hashing; `validate(&self) -> Result<(), WrenchPolicyError>` rejects empty identities, non-positive/non-finite caps, negative/non-finite rates or timing values, mismatched abort IDs, and a scope digest mismatch.
+- Produces: `WrenchLimitScope { sensor_id: String, sensor_frame: String, caps: [f64; 6], policy_digest: String, abort_contract_id: String }`; `WrenchAbortContract { contract_id: String, hold_mode: AbortHoldMode, allowed_stop_actuator_ids: Vec<String>, max_time_to_stop_s: f64, max_stop_writes: u32 }`, with `AbortHoldMode::HoldCurrentJointPosition` meaning capture the measured joint position at trip as the only hold target; and `WrenchLimitPolicy { scope: WrenchLimitScope, sensor_calibration_hash: String, sensor_sample_rate_hz: f64, max_rise_rate: [f64; 6], max_sensing_latency_s: f64, max_abort_latency_s: f64, max_sample_age_s: f64, max_inter_sample_gap_s: f64, max_cross_sensor_skew_s: f64, monitor_id: String, compensation_digest: String, abort_contract: WrenchAbortContract }`.
+- `WrenchLimitPolicy::digest(&self) -> String` hashes every policy field, including sensor calibration hash and declared sample rate, excluding only `scope.policy_digest` to prevent recursive hashing; `validate(&self) -> Result<(), WrenchPolicyError>` rejects empty identities, non-positive/non-finite caps or sample rate, negative/non-finite rates or timing values, mismatched abort IDs, and a scope digest mismatch.
 - Extend `PhysicalActionEnvelope::LinearStroke` with `wrench_limit: Option<WrenchLimitScope>`; exact matching compares all six cap bit patterns and every identity/digest field. Preserve unscoped planning candidates if existing reasoner flows need them, but add `validate_for_execution()` that rejects a missing or invalid scope; grant issuance and execution must use that validation.
 - Extend `ReasoningRequest` with `linear_wrench_limit: Option<WrenchLimitScope>`; `SimulationAdmission` carries a validated `WrenchLimitPolicy`. The bridge copies its scope into the request before selection and refuses an invalid policy before grant issuance.
 
-- [ ] **Step 1: Write failing tests** named `linear_stroke_scope_binds_all_six_wrench_caps`, `linear_stroke_rejects_missing_or_invalid_wrench_scope`, `policy_digest_binds_sensor_latency_rise_rates_and_abort_contract`, `abort_contract_rejects_unregistered_stop_actuator`, `bridge_refuses_invalid_policy_before_grant`, and `grant_revalidation_rejects_changed_force_cap`. Assert a one-bit change in any cap or digest invalidates exact authority matching.
-- [ ] **Step 2: Run** `cargo test -p realityos-kernel physical_action` and `cargo test -p realityos-reasoner-bridge --test bridge`; expect missing policy types or failing exact-scope checks.
-- [ ] **Step 3: Implement** the policy and scope types in the kernel, add the scope to the linear envelope, then propagate the same scope through reasoner selection, prepared action, and scoped grant. Hash the policy with nested `scope.policy_digest` omitted, then verify that field equals the computed digest. Never construct a default policy.
-- [ ] **Step 4: Update** every linear-action request and envelope fixture with an explicit test policy or an intentional missing-policy refusal case; leave pinch-grasp authority unchanged.
-- [ ] **Step 5: Run** `cargo test -p realityos-kernel physical_action` and `cargo test -p realityos-reasoner-bridge --test bridge`; expect all exact-scope and refusal tests to pass.
-- [ ] **Step 6: Commit** as `feat(authority): scope linear actions to wrench limits`.
+- [x] **Step 1: Write failing tests** named `linear_stroke_scope_binds_all_six_wrench_caps`, `linear_stroke_rejects_missing_or_invalid_wrench_scope`, `policy_digest_binds_sensor_calibration_rate_latency_rise_rates_and_abort_contract`, `abort_contract_rejects_empty_or_duplicate_stop_actuators`, `bridge_refuses_invalid_policy_before_grant`, and `grant_revalidation_rejects_changed_force_cap`. Assert a one-bit change in any cap or digest invalidates exact authority matching.
+- [x] **Step 2: Run** `cargo test -p realityos-kernel physical_action` and `cargo test -p realityos-reasoner-bridge --test bridge`; expect missing policy types or failing exact-scope checks.
+- [x] **Step 3: Implement** the policy and scope types in the kernel, add the scope to the linear envelope, then propagate the same scope through reasoner selection, prepared action, and scoped grant. Hash the policy with nested `scope.policy_digest` omitted, then verify that field equals the computed digest. Never construct a default policy.
+- [x] **Step 4: Update** every linear-action request and envelope fixture with an explicit test policy or an intentional missing-policy refusal case; leave pinch-grasp authority unchanged.
+- [x] **Step 5: Run** `cargo test -p realityos-kernel physical_action` and `cargo test -p realityos-reasoner-bridge --test bridge`; expect all exact-scope and refusal tests to pass.
+- [x] **Step 6: Commit** as `feat(authority): scope linear actions to wrench limits`.
 
 ### Task 4: Conservative probe inference and evidence lineage
 
@@ -127,7 +127,7 @@
 - Test: `crates/verify/tests/manipulation_benchmark.rs`
 
 **Interfaces:**
-- Produces `SimulationWrenchSensorProfile { sensor_id: String, model_id: String, calibration_hash: String, sensor_frame: String, units: String, sample_rate_hz: f64, latency_s: f64, resolution: [f64; 6], bias: [f64; 6], error_bounds: [f64; 6], seeded_noise_bound: [f64; 6], limit_policy: WrenchLimitPolicy }` and `SimulationWrenchWindow { samples: Vec<WrenchSample>, max_gap_s: f64, compensation_digest: String }`. `seeded_noise_bound` bounds reproducible trial-seeded noise; each realized noise value must remain inside this bound and the reported sample error bound.
+- Produces `SimulationWrenchSensorProfile { sensor_id: String, model_id: String, calibration_hash: String, sensor_frame: String, units: String, sample_rate_hz: f64, latency_s: f64, resolution: [f64; 6], bias: [f64; 6], error_bounds: [f64; 6], seeded_noise_bound: [f64; 6], limit_policy: WrenchLimitPolicy }` and `SimulationWrenchWindow { samples: Vec<WrenchSample>, max_gap_s: f64, compensation_digest: String }`. `seeded_noise_bound` bounds reproducible trial-seeded noise; each realized noise value must remain inside this bound and the reported sample error bound. Profile sensor ID, frame, calibration hash, and rate must match the exact policy scope/fields.
 - Extend every push/probe `EmbodimentRegistration` with an explicit simulation profile and policy; every generated sample is stamped `WrenchSampleOrigin::Simulation`. The pinch-grasp fixture may omit the push profile. Bump embodiment registry schema from 4 to 5. No inherited values or profile defaults.
 - Add `MujocoInstance::step_with_wrench_profile(n: u32, profile: &SimulationWrenchSensorProfile) -> Result<Value, ExecError>` over the worker JSON protocol; return one simulated sensor sample at each declared sampling instant.
 
@@ -199,3 +199,4 @@ The worker conversion follows MuJoCo's `mj_contactForce` API, which returns a si
 - Per-step safety stop, abort timing, no stale-authority continuation, and trial audit: Task 6.
 - Schema v6, v5 immutability, exact paired 60-trial comparison, strict campaign accounting, and no premature holdout: Task 7.
 - The physical-transfer gate remains open pending a named cell, real sensor adapter, and independent outcome measurement; no simulation task can close it.
+

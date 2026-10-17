@@ -9,7 +9,7 @@ use realityos_core::{
     is_learned_source, DecideRequest, Intent, PolicyProposal, ProposalClass, RealityOs, WorldView,
 };
 use realityos_governor::{admit_from_parts, RuntimeGovernor, RuntimeIdentity};
-use realityos_kernel::physical_action::PhysicalActionEnvelope;
+use realityos_kernel::physical_action::{PhysicalActionEnvelope, WrenchLimitScope};
 
 use crate::packages::GovernorPackage;
 use realityos_plant::{ActuationCommand, SimPlant};
@@ -82,7 +82,7 @@ pub struct AuthorityEligibility {
 }
 
 pub fn scope_digest(scope: &PhysicalActionScope) -> String {
-    let mut canonical = b"realityos.physical_action_scope/v2\0".to_vec();
+    let mut canonical = b"realityos.physical_action_scope/v3\0".to_vec();
     encode_string(&mut canonical, &scope.model_id);
     encode_string(&mut canonical, &scope.embodiment_id);
     encode_string(&mut canonical, &scope.observation_epoch);
@@ -123,10 +123,18 @@ fn encode_action_envelope(out: &mut Vec<u8>, envelope: &PhysicalActionEnvelope) 
         PhysicalActionEnvelope::LinearStroke {
             requested_m,
             maximum_m,
+            wrench_limit,
         } => {
             out.push(0);
             encode_f64(out, *requested_m);
             encode_f64(out, *maximum_m);
+            match wrench_limit {
+                None => out.push(0),
+                Some(scope) => {
+                    out.push(1);
+                    encode_wrench_limit_scope(out, scope);
+                }
+            }
         }
         PhysicalActionEnvelope::PinchGrasp {
             resource_id,
@@ -150,6 +158,16 @@ fn encode_action_envelope(out: &mut Vec<u8>, envelope: &PhysicalActionEnvelope) 
             encode_f64(out, *maximum_lift_m);
         }
     }
+}
+
+fn encode_wrench_limit_scope(out: &mut Vec<u8>, scope: &WrenchLimitScope) {
+    encode_string(out, &scope.sensor_id);
+    encode_string(out, &scope.sensor_frame);
+    for cap in scope.caps {
+        encode_f64(out, cap);
+    }
+    encode_string(out, &scope.policy_digest);
+    encode_string(out, &scope.abort_contract_id);
 }
 fn nonempty(value: &str) -> bool {
     !value.trim().is_empty()
@@ -185,7 +203,7 @@ fn scope_problem(scope: &PhysicalActionScope) -> Option<&'static str> {
     if !nonempty(&scope.witness_digest) {
         return Some("witness_digest");
     }
-    if let Err(problem) = scope.action_envelope.validate() {
+    if let Err(problem) = scope.action_envelope.validate_for_execution() {
         return Some(match problem {
             "requested_stroke" => "requested_stroke",
             "maximum_stroke" => "execution_bound",
@@ -206,6 +224,15 @@ fn scope_problem(scope: &PhysicalActionScope) -> Option<&'static str> {
     }
     if !nonempty(&scope.abort_contract_id) {
         return Some("abort_contract");
+    }
+    if let PhysicalActionEnvelope::LinearStroke {
+        wrench_limit: Some(wrench_limit),
+        ..
+    } = &scope.action_envelope
+    {
+        if wrench_limit.abort_contract_id != scope.abort_contract_id {
+            return Some("wrench_abort_contract");
+        }
     }
     None
 }
@@ -419,6 +446,17 @@ pub fn grant_covers(
 }
 
 #[cfg(test)]
+fn test_wrench_scope() -> WrenchLimitScope {
+    WrenchLimitScope {
+        sensor_id: "ft-tool".into(),
+        sensor_frame: "tool0".into(),
+        caps: [20.0, 20.0, 30.0, 2.0, 2.0, 2.0],
+        policy_digest: "a".repeat(64),
+        abort_contract_id: "abort-and-reobserve".into(),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -433,6 +471,7 @@ mod tests {
             action_envelope: PhysicalActionEnvelope::LinearStroke {
                 requested_m: 0.012,
                 maximum_m: 0.02,
+                wrench_limit: Some(test_wrench_scope()),
             },
             issued_at_s: 10.0,
             expires_at_s: 40.0,
@@ -530,6 +569,7 @@ mod typed_action_envelope_tests {
             action_envelope: PhysicalActionEnvelope::LinearStroke {
                 requested_m: 0.012,
                 maximum_m: 0.02,
+                wrench_limit: Some(test_wrench_scope()),
             },
             issued_at_s: 10.0,
             expires_at_s: 40.0,
@@ -559,6 +599,7 @@ mod typed_action_envelope_tests {
         sub_nanometer_change.action_envelope = PhysicalActionEnvelope::LinearStroke {
             requested_m: 0.0120000002,
             maximum_m: 0.02,
+            wrench_limit: Some(test_wrench_scope()),
         };
         assert_ne!(scope_digest(&baseline), scope_digest(&sub_nanometer_change));
 

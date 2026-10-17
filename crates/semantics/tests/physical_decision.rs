@@ -1,4 +1,4 @@
-use realityos_kernel::physical_action::PhysicalActionEnvelope;
+use realityos_kernel::physical_action::{PhysicalActionEnvelope, WrenchLimitScope};
 use realityos_semantics::physical_decision::{
     decide_physical_action, CandidateEvidence, CandidateRole, DecisionContext, DecisionKind,
     LexicographicPreference, PredictedPhysicalEffect, ProbeEvidence, ProbeRecoverabilityAssessment,
@@ -7,6 +7,16 @@ use realityos_semantics::physical_decision::{
 use realityos_semantics::planar_goal::GoalProgressClass;
 use realityos_semantics::probe_selection::BeliefRobustness;
 use realityos_semantics::recoverability::RecoverabilityClass;
+
+fn test_wrench_scope() -> WrenchLimitScope {
+    WrenchLimitScope {
+        sensor_id: "sensor:test-tool".into(),
+        sensor_frame: "tool0".into(),
+        caps: [20.0, 20.0, 30.0, 2.0, 2.0, 2.0],
+        policy_digest: "a".repeat(64),
+        abort_contract_id: "abort-and-reobserve".into(),
+    }
+}
 
 fn candidate(id: &str, role: CandidateRole) -> CandidateEvidence {
     CandidateEvidence {
@@ -20,6 +30,7 @@ fn candidate(id: &str, role: CandidateRole) -> CandidateEvidence {
         action_envelope: Some(PhysicalActionEnvelope::LinearStroke {
             requested_m: 0.02,
             maximum_m: 0.02,
+            wrench_limit: Some(test_wrench_scope()),
         }),
         scoped_grant: None,
         executable_witness_id: Some(format!("witness:{id}")),

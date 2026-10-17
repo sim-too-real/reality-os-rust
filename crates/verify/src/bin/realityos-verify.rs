@@ -1,5 +1,8 @@
 //! CLI for the MuJoCo verification harness. SIMULATION_ONLY. Never metal.
 
+use realityos_kernel::physical_action::{
+    AbortHoldMode, WrenchAbortContract, WrenchLimitPolicy, WrenchLimitScope,
+};
 use realityos_verify::bundle::RobotBundle;
 use realityos_verify::corpus::{milestone_robots, robot_dir};
 use realityos_verify::evidence::{aggregate, render_markdown};
@@ -111,10 +114,7 @@ fn manipulation_benchmark(args: &[String]) {
                     std::process::exit(2);
                 }),
                 &trial,
-                realityos_reasoner_bridge::SimulationAdmission {
-                    execution_bound_m: 0.1,
-                    expires_at_s: 120.0,
-                },
+                simulation_admission(120.0),
             ),
         )]
     } else {
@@ -375,14 +375,46 @@ fn run_bundle_campaign(
         let result = realityos_verify::manipulation_benchmark::run_benchmark_trial(
             bundle,
             &trial,
-            realityos_reasoner_bridge::SimulationAdmission {
-                execution_bound_m: 0.1,
-                expires_at_s: 120.0,
-            },
+            simulation_admission(120.0),
         );
         records.push(BenchmarkTrialRecord::from_run_result(trial, result));
     }
     records
+}
+
+fn simulation_admission(expires_at_s: f64) -> realityos_reasoner_bridge::SimulationAdmission {
+    let mut wrench_limit_policy = WrenchLimitPolicy {
+        scope: WrenchLimitScope {
+            sensor_id: "ft-tool".into(),
+            sensor_frame: "tool0".into(),
+            caps: [20.0, 20.0, 30.0, 2.0, 2.0, 2.0],
+            policy_digest: String::new(),
+            abort_contract_id: "abort-and-reobserve".into(),
+        },
+        sensor_calibration_hash: "cli-sensor-calibration-v1".into(),
+        sensor_sample_rate_hz: 125.0,
+        max_rise_rate: [10.0; 6],
+        max_sensing_latency_s: 0.01,
+        max_abort_latency_s: 0.03,
+        max_sample_age_s: 0.02,
+        max_inter_sample_gap_s: 0.01,
+        max_cross_sensor_skew_s: 0.005,
+        monitor_id: "cli-wrench-monitor-v1".into(),
+        compensation_digest: "c".repeat(64),
+        abort_contract: WrenchAbortContract {
+            contract_id: "abort-and-reobserve".into(),
+            hold_mode: AbortHoldMode::HoldCurrentJointPosition,
+            allowed_stop_actuator_ids: vec!["tool".into()],
+            max_time_to_stop_s: 0.03,
+            max_stop_writes: 1,
+        },
+    };
+    wrench_limit_policy.scope.policy_digest = wrench_limit_policy.digest();
+    realityos_reasoner_bridge::SimulationAdmission {
+        execution_bound_m: 0.1,
+        expires_at_s,
+        wrench_limit_policy,
+    }
 }
 
 fn load_trial_bundle(repo_root: &Path, robot_id: &str) -> Result<RobotBundle, String> {

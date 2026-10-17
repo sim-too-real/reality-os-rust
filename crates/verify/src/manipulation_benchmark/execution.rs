@@ -397,10 +397,7 @@ pub fn run_benchmark_trial(
             &mut os,
             &mut reasoner,
             &request,
-            &SimulationAdmission {
-                execution_bound_m: admission.execution_bound_m,
-                expires_at_s: admission.expires_at_s,
-            },
+            &admission,
             &blocked_action_keys,
         ) {
             Ok(authorized) => authorized,
@@ -1704,6 +1701,7 @@ fn build_push_reasoning_request(
         gripper_force_n: None,
         gripper_resource: None,
         linear_execution_bound_m: None,
+        linear_wrench_limit: None,
         gravity_m_s2: [0.0, 0.0, -9.81],
     })
 }
@@ -1862,6 +1860,7 @@ fn build_grasp_reasoning_request(
         gripper_force_n,
         gripper_resource: resource.cloned(),
         linear_execution_bound_m: None,
+        linear_wrench_limit: None,
         gravity_m_s2: [0.0, 0.0, -9.81],
     })
 }
