@@ -7,12 +7,15 @@ use realityos_semantics::observation::{
 };
 use realityos_semantics::sensor::{SensorClass, WrenchSampleOrigin};
 use realityos_verify::bundle::RobotBundle;
+use realityos_verify::manipulation_benchmark::wrench_sensor::{
+    aggregate_contact_wrenches, contact_force_on_geom, transform_contact_wrench_world,
+};
 use realityos_verify::manipulation_benchmark::{
     resolve_benchmark_trial, score_campaign, trial_digest, validate_collision_geometry,
     validate_physical_observation, BenchmarkConfig, BenchmarkExecutionError, BenchmarkTask,
     BenchmarkTrialRecord, EmbodimentRegistry, EmbodimentRole, FailureCause, GeometryGateResult,
     PhysicalEvidenceStatus, PhysicalSensorIdentity, PhysicalSensorRequirement, PhysicalSensorTrace,
-    SensorOrigin, TrialExpectation, TrialOutcome,
+    SensorOrigin, SimulationWrenchSensorProfile, TrialExpectation, TrialOutcome,
 };
 use realityos_verify::mujoco_exec::checkin_worker;
 use realityos_verify::normalize::{DerivedInterface, JointRecord, RobotManifest};
@@ -65,6 +68,213 @@ fn simulation_admission(expires_at_s: f64) -> SimulationAdmission {
         expires_at_s,
         wrench_limit_policy,
     }
+}
+
+fn simulation_wrench_profile(sensor_frame: &str) -> SimulationWrenchSensorProfile {
+    let mut limit_policy = simulation_admission(100.0).wrench_limit_policy;
+    limit_policy.scope.sensor_id = "sim-ft-tool-v1".into();
+    limit_policy.scope.sensor_frame = sensor_frame.into();
+    limit_policy.sensor_calibration_hash = "a".repeat(64);
+    limit_policy.sensor_sample_rate_hz = 125.0;
+    limit_policy.max_sensing_latency_s = 0.01;
+    limit_policy.scope.policy_digest = limit_policy.digest();
+    SimulationWrenchSensorProfile {
+        sensor_id: limit_policy.scope.sensor_id.clone(),
+        model_id: "mujoco-contact-wrench-v1".into(),
+        calibration_hash: limit_policy.sensor_calibration_hash.clone(),
+        sensor_frame: sensor_frame.into(),
+        units: "N,N*m".into(),
+        sample_rate_hz: limit_policy.sensor_sample_rate_hz,
+        latency_s: limit_policy.max_sensing_latency_s,
+        resolution: [0.001; 6],
+        bias: [0.0; 6],
+        error_bounds: [0.05, 0.05, 0.05, 0.005, 0.005, 0.005],
+        seeded_noise_bound: [0.01, 0.01, 0.01, 0.001, 0.001, 0.001],
+        limit_policy,
+    }
+}
+
+#[test]
+fn simulation_wrench_profile_requires_all_six_limits_and_sensor_fields() {
+    let profile = simulation_wrench_profile("ee");
+    assert!(profile.validate().is_ok());
+    assert!(profile.validate_for_timestep(0.002).is_ok());
+    assert!(profile.validate_for_timestep(0.003).is_err());
+
+    let mut bad_caps = profile.clone();
+    bad_caps.limit_policy.scope.caps[5] = 0.0;
+    bad_caps.limit_policy.scope.policy_digest = bad_caps.limit_policy.digest();
+    assert!(bad_caps.validate().is_err());
+
+    let mut mismatched_sensor = profile.clone();
+    mismatched_sensor.sensor_frame = "other_frame".into();
+    assert!(mismatched_sensor.validate().is_err());
+
+    let mut incomplete = serde_json::to_value(profile).unwrap();
+    incomplete["limit_policy"]["scope"]["caps"] = serde_json::json!([20.0, 20.0, 30.0, 2.0, 2.0]);
+    assert!(serde_json::from_value::<SimulationWrenchSensorProfile>(incomplete).is_err());
+
+    let mut missing_sensor = serde_json::to_value(simulation_wrench_profile("ee")).unwrap();
+    missing_sensor.as_object_mut().unwrap().remove("sensor_id");
+    assert!(serde_json::from_value::<SimulationWrenchSensorProfile>(missing_sensor).is_err());
+
+    let profile = simulation_wrench_profile("ee");
+    let digest = profile.digest().unwrap();
+    let mut changed = profile.clone();
+    changed.resolution[5] += 0.0001;
+    assert_ne!(digest, changed.digest().unwrap());
+}
+
+#[test]
+fn contact_wrench_transform_matches_force_and_moment_balance() {
+    let wrench = transform_contact_wrench_world(
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        [2.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        true,
+    );
+    assert_eq!(wrench, [1.0, 2.0, 3.0, 4.0, -1.0, 10.0]);
+}
+
+#[test]
+fn contact_force_sign_matches_geom_order() {
+    let force_on_geom2 = contact_force_on_geom([1.0, -2.0, 3.0, 4.0, -5.0, 6.0], false);
+    let force_on_geom1 = contact_force_on_geom([1.0, -2.0, 3.0, 4.0, -5.0, 6.0], true);
+    assert_eq!(force_on_geom2, [1.0, -2.0, 3.0, 4.0, -5.0, 6.0]);
+    assert_eq!(force_on_geom1, [-1.0, 2.0, -3.0, -4.0, 5.0, -6.0]);
+
+    use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, MujocoInstance};
+    if !ensure_mujoco_or_skip() {
+        return;
+    }
+    let _guard = lock_mujoco_test();
+    let bundle = planar_bundle();
+    let mut worker = MujocoInstance::spawn().expect("MuJoCo worker");
+    worker
+        .load_bundle(
+            &bundle,
+            &[serde_json::json!({
+                "name": "sign_probe",
+                "type": "box",
+                "pos": [0.54, 0.0, 0.12],
+                "size": [0.015, 0.015, 0.015],
+                "mass": 0.05,
+                "friction": 0.5
+            })],
+            721,
+        )
+        .expect("load contact fixture");
+    let response = worker
+        .step_with_wrench_profile(4, &simulation_wrench_profile("ee"))
+        .expect("sample contact wrench");
+    let force_x = response["samples"][0]["wrench"][0]
+        .as_f64()
+        .expect("sampled tool force");
+    assert!(force_x < -0.02, "the tool is pushed toward -X: {force_x}");
+}
+
+#[test]
+fn simulation_wrench_samples_replay_for_same_trial_seed() {
+    use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, MujocoInstance};
+
+    if !ensure_mujoco_or_skip() {
+        return;
+    }
+    let _guard = lock_mujoco_test();
+    let bundle = planar_bundle();
+    let profile = simulation_wrench_profile("ee");
+    let sample = |seed| {
+        let mut worker = MujocoInstance::spawn().expect("MuJoCo worker");
+        worker
+            .load_bundle(&bundle, &[], seed)
+            .expect("load fixture");
+        worker.reset(None, None).expect("reset fixture");
+        worker
+            .step_with_wrench_profile(8, &profile)
+            .expect("sample simulated wrench")
+    };
+    let first = sample(9021);
+    let replay = sample(9021);
+    assert_eq!(first["samples"], replay["samples"]);
+    let window =
+        realityos_verify::manipulation_benchmark::SimulationWrenchWindow::from_worker_response(
+            &first,
+            &profile,
+            "epoch-9021",
+        )
+        .expect("typed simulation wrench window");
+    assert_eq!(window.samples.len(), 2);
+    assert_eq!(window.samples[0].origin, WrenchSampleOrigin::Simulation);
+    assert_eq!(window.samples[0].sequence, 0);
+    assert!((window.max_gap_s - 0.008).abs() < 1e-12);
+    assert_eq!(
+        window.compensation_digest,
+        profile.limit_policy.compensation_digest
+    );
+}
+
+#[test]
+fn sensor_adapter_aggregates_unexpected_tool_contacts() {
+    let aggregate = aggregate_contact_wrenches(&[
+        [1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+        [2.0, 0.0, 0.0, 0.0, 0.0, 2.0],
+    ]);
+    assert_eq!(aggregate, [3.0, 0.0, 0.0, 0.0, 0.0, 3.0]);
+
+    use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, MujocoInstance};
+    if !ensure_mujoco_or_skip() {
+        return;
+    }
+    let _guard = lock_mujoco_test();
+    let bundle = planar_bundle();
+    let profile = simulation_wrench_profile("ee");
+    let one_contact = serde_json::json!([{
+        "name": "unmodeled_fixture_contact_a",
+        "type": "box",
+        "pos": [0.54, 0.0, 0.12],
+        "size": [0.015, 0.015, 0.015],
+        "mass": 0.05,
+        "friction": 0.5
+    }]);
+    let two_unexpected_contacts = serde_json::json!([
+        {
+            "name": "unmodeled_fixture_contact_a",
+            "type": "box",
+            "pos": [0.54, 0.0, 0.12],
+            "size": [0.015, 0.015, 0.015],
+            "mass": 0.05,
+            "friction": 0.5
+        },
+        {
+            "name": "unmodeled_fixture_contact_b",
+            "type": "box",
+            "pos": [0.54, 0.025, 0.12],
+            "size": [0.015, 0.015, 0.015],
+            "mass": 0.05,
+            "friction": 0.5
+        }
+    ]);
+    let sample = |objects: &[Value]| {
+        let mut worker = MujocoInstance::spawn().expect("MuJoCo worker");
+        worker
+            .load_bundle(&bundle, objects, 722)
+            .expect("load contacts");
+        worker
+            .step_with_wrench_profile(4, &profile)
+            .expect("sample unexpected tool contacts")
+    };
+    let single = sample(one_contact.as_array().unwrap());
+    let multiple = sample(two_unexpected_contacts.as_array().unwrap());
+    let single_x = single["samples"][0]["wrench"][0].as_f64().unwrap().abs();
+    let multiple_x = multiple["samples"][0]["wrench"][0].as_f64().unwrap().abs();
+    assert!(single_x > 0.02, "unexpected tool contact must be sensed");
+    assert!(
+        multiple_x > single_x,
+        "all tool contacts must contribute: {single_x} -> {multiple_x}"
+    );
+    let output = multiple.to_string();
+    assert!(!output.contains("geom1") && !output.contains("body1") && !output.contains("contacts"));
 }
 
 fn planar_bundle() -> RobotBundle {
@@ -1869,6 +2079,18 @@ fn holdout_role_is_registered_without_early_scoring() {
     assert_eq!(holdout.len(), 1);
     assert_eq!(holdout[0].role, EmbodimentRole::Holdout);
     assert_eq!(holdout[0].robot_id, "menagerie_wx250s");
+    assert!(public.iter().all(|entry| {
+        entry.tasks.contains(&BenchmarkTask::PushProbeReplan)
+            == entry.simulation_wrench_profile.is_some()
+    }));
+    assert!(holdout[0].simulation_wrench_profile.is_some());
+    assert!(public
+        .iter()
+        .filter_map(|entry| entry.simulation_wrench_profile.as_ref())
+        .all(|profile| profile.validate().is_ok()));
+    let mut incomplete_registry = registry.clone();
+    incomplete_registry.registrations[0].simulation_wrench_profile = None;
+    assert!(incomplete_registry.validate().is_err());
     assert_eq!(registry.digest().unwrap().len(), 64);
 }
 

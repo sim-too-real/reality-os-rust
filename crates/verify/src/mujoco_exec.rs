@@ -2,6 +2,7 @@
 
 use crate::bundle::RobotBundle;
 use crate::format::ModelFormat;
+use crate::manipulation_benchmark::wrench_sensor::SimulationWrenchSensorProfile;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -373,6 +374,39 @@ impl MujocoInstance {
 
     pub fn step(&mut self, n: u32) -> Result<Value, ExecError> {
         self.rpc(&json!({"cmd":"step","n": n}))
+    }
+
+    /// Advance MuJoCo while sampling the registered simulation-only wrench
+    /// sensor at its declared integration-step cadence.
+    pub fn step_with_wrench_profile(
+        &mut self,
+        n: u32,
+        profile: &SimulationWrenchSensorProfile,
+    ) -> Result<Value, ExecError> {
+        let timestep_s = self.inspect["timestep"]
+            .as_f64()
+            .ok_or_else(|| ExecError::Msg("model_timestep_missing".into()))?;
+        profile
+            .validate_for_timestep(timestep_s)
+            .map_err(|error| ExecError::Msg(error.to_string()))?;
+        let profile_digest = profile
+            .digest()
+            .map_err(|error| ExecError::Msg(error.to_string()))?;
+        let response = self.rpc(&json!({
+            "cmd": "step_with_wrench_profile",
+            "n": n,
+            "profile": profile,
+            "profile_digest": profile_digest,
+        }))?;
+        if response["ok"] != true {
+            return Err(ExecError::Msg(
+                response["error"]
+                    .as_str()
+                    .unwrap_or("step_with_wrench_profile")
+                    .into(),
+            ));
+        }
+        Ok(response)
     }
 
     pub fn configure_body(

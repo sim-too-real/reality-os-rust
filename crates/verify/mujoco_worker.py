@@ -8,9 +8,11 @@ It does not certify real-world safety. SIM != METAL.
 from __future__ import annotations
 
 import gc
+import hashlib
 import json
 import math
 import os
+import struct
 import sys
 import time
 import traceback
@@ -92,6 +94,9 @@ class Instance:
         self.compiled_bytes_hash = ""
         self.asset_names: list[str] = []
         self.mesh_asset_by_id: dict[int, str] = {}
+        self.load_seed = 0
+        self.wrench_sequence_by_profile: dict[str, int] = {}
+        self.wrench_step_by_profile: dict[str, int] = {}
 
     def inspect(self) -> dict[str, Any]:
         m, d = self.model, self.data
@@ -658,6 +663,234 @@ def _drop_runtime(keep_if_cached: bool = True) -> None:
         gc.collect()
 
 
+def _finite_six(values: Any, *, positive: bool = False) -> bool:
+    return (
+        isinstance(values, list)
+        and len(values) == 6
+        and _finite(values)
+        and (not positive or all(float(value) > 0.0 for value in values))
+    )
+
+
+def _digest_string(hasher, value: str) -> None:
+    encoded = value.encode("utf-8")
+    hasher.update(struct.pack("<Q", len(encoded)))
+    hasher.update(encoded)
+
+
+def _policy_digest(policy: dict[str, Any]) -> str:
+    scope = policy["scope"]
+    contract = policy["abort_contract"]
+    hasher = hashlib.sha256()
+    hasher.update(b"realityos.wrench_limit_policy/1\0")
+    _digest_string(hasher, str(scope["sensor_id"]))
+    _digest_string(hasher, str(scope["sensor_frame"]))
+    for value in scope["caps"]:
+        hasher.update(struct.pack("<d", float(value)))
+    _digest_string(hasher, str(scope["abort_contract_id"]))
+    _digest_string(hasher, str(policy["sensor_calibration_hash"]))
+    hasher.update(struct.pack("<d", float(policy["sensor_sample_rate_hz"])))
+    for value in policy["max_rise_rate"]:
+        hasher.update(struct.pack("<d", float(value)))
+    for field in (
+        "max_sensing_latency_s",
+        "max_abort_latency_s",
+        "max_sample_age_s",
+        "max_inter_sample_gap_s",
+        "max_cross_sensor_skew_s",
+    ):
+        hasher.update(struct.pack("<d", float(policy[field])))
+    _digest_string(hasher, str(policy["monitor_id"]))
+    _digest_string(hasher, str(policy["compensation_digest"]))
+    _digest_string(hasher, str(contract["contract_id"]))
+    if contract["hold_mode"] != "hold_current_joint_position":
+        raise ValueError("wrench_abort_hold_mode")
+    hasher.update(bytes([0]))
+    actuators = contract["allowed_stop_actuator_ids"]
+    if not isinstance(actuators, list):
+        raise ValueError("wrench_stop_actuators")
+    hasher.update(struct.pack("<Q", len(actuators)))
+    for actuator in actuators:
+        _digest_string(hasher, str(actuator))
+    hasher.update(struct.pack("<d", float(contract["max_time_to_stop_s"])))
+    hasher.update(struct.pack("<I", int(contract["max_stop_writes"])))
+    return hasher.hexdigest()
+
+
+def _simulation_profile_digest(profile: dict[str, Any]) -> str:
+    hasher = hashlib.sha256()
+    hasher.update(b"realityos.simulation_wrench_sensor_profile/1\0")
+    for field in ("sensor_id", "model_id", "calibration_hash", "sensor_frame", "units"):
+        _digest_string(hasher, str(profile[field]))
+    hasher.update(struct.pack("<d", float(profile["sample_rate_hz"])))
+    hasher.update(struct.pack("<d", float(profile["latency_s"])))
+    for field in ("resolution", "bias", "error_bounds", "seeded_noise_bound"):
+        for value in profile[field]:
+            hasher.update(struct.pack("<d", float(value)))
+    _digest_string(hasher, _policy_digest(profile["limit_policy"]))
+    return hasher.hexdigest()
+
+
+def _wrench_profile_steps(profile: dict[str, Any], profile_digest: str, timestep: float) -> int:
+    if not isinstance(profile, dict):
+        raise ValueError("wrench_profile_missing")
+    policy = profile.get("limit_policy")
+    scope = policy.get("scope") if isinstance(policy, dict) else None
+    if not isinstance(scope, dict):
+        raise ValueError("wrench_policy_missing")
+    sensor_id = str(profile.get("sensor_id") or "")
+    sensor_frame = str(profile.get("sensor_frame") or "")
+    if (
+        not sensor_id
+        or profile.get("model_id") != "mujoco-contact-wrench-v1"
+        or not sensor_frame
+        or profile.get("units") != "N,N*m"
+        or profile.get("calibration_hash") != policy.get("sensor_calibration_hash")
+        or profile.get("sample_rate_hz") != policy.get("sensor_sample_rate_hz")
+        or profile.get("latency_s") != policy.get("max_sensing_latency_s")
+        or scope.get("sensor_id") != sensor_id
+        or scope.get("sensor_frame") != sensor_frame
+        or len(str(scope.get("policy_digest") or "")) != 64
+        or len(str(profile_digest or "")) != 64
+    ):
+        raise ValueError("wrench_profile_policy_mismatch")
+    computed_policy_digest = _policy_digest(policy)
+    if str(scope["policy_digest"]).lower() != computed_policy_digest:
+        raise ValueError("wrench_policy_digest_mismatch")
+    if profile_digest.lower() != _simulation_profile_digest(profile):
+        raise ValueError("wrench_profile_digest_mismatch")
+    rate = float(profile["sample_rate_hz"])
+    latency = float(profile["latency_s"])
+    gap = float(policy["max_inter_sample_gap_s"])
+    timestep = float(timestep)
+    if not math.isfinite(rate) or rate <= 0.0 or not math.isfinite(timestep) or timestep <= 0.0:
+        raise ValueError("wrench_rate_or_timestep")
+    if not _finite_six(scope.get("caps"), positive=True):
+        raise ValueError("wrench_caps")
+    if not _finite_six(profile.get("resolution"), positive=True):
+        raise ValueError("wrench_resolution")
+    if not _finite_six(profile.get("bias")):
+        raise ValueError("wrench_bias")
+    if not _finite_six(profile.get("error_bounds")) or any(float(x) < 0.0 for x in profile["error_bounds"]):
+        raise ValueError("wrench_error_bounds")
+    if not _finite_six(profile.get("seeded_noise_bound")) or any(
+        float(noise) < 0.0
+        or float(noise) + float(resolution) * 0.5 > float(error) + 1e-12
+        for noise, resolution, error in zip(
+            profile["seeded_noise_bound"], profile["resolution"], profile["error_bounds"]
+        )
+    ):
+        raise ValueError("wrench_noise_bound")
+    sample_steps_float = 1.0 / rate / timestep
+    gap_steps_float = gap / timestep
+    latency_steps_float = latency / timestep
+    for label, steps in (
+        ("sample_rate", sample_steps_float),
+        ("max_gap", gap_steps_float),
+    ):
+        if steps < 1.0 or abs(steps - round(steps)) > 1e-9 * max(1.0, abs(steps)):
+            raise ValueError(f"wrench_{label}_not_representable")
+    if latency > 0.0 and (
+        latency_steps_float < 1.0
+        or abs(latency_steps_float - round(latency_steps_float))
+        > 1e-9 * max(1.0, abs(latency_steps_float))
+    ):
+        raise ValueError("wrench_latency_not_representable")
+    return int(round(sample_steps_float))
+
+
+def _tool_sensor_frame(profile: dict[str, Any]):
+    m, d = INST.model, INST.data
+    assert m is not None and d is not None
+    name = str(profile["sensor_frame"])
+    site_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SITE, name)
+    if site_id >= 0:
+        return int(m.site_bodyid[site_id]), ("site", site_id)
+    body_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, name)
+    if body_id > 0:
+        return int(body_id), ("body", body_id)
+    raise ValueError(f"wrench_sensor_frame_unknown:{name}")
+
+
+def _tool_subtree_contains(root_body: int, candidate_body: int) -> bool:
+    m = INST.model
+    assert m is not None
+    current = int(candidate_body)
+    while current > 0:
+        if current == root_body:
+            return True
+        current = int(m.body_parentid[current])
+    return current == root_body
+
+
+def _tool_contact_wrench(profile: dict[str, Any], root_body: int, frame_ref: tuple[str, int]):
+    import numpy as np
+
+    m, d = INST.model, INST.data
+    assert m is not None and d is not None
+    frame_kind, frame_id = frame_ref
+    sensor_origin = d.site_xpos[frame_id] if frame_kind == "site" else d.xpos[frame_id]
+    total_force = np.zeros(3, dtype=float)
+    total_torque = np.zeros(3, dtype=float)
+    local_wrench = np.zeros(6, dtype=np.float64)
+    for contact_id in range(int(d.ncon)):
+        contact = d.contact[contact_id]
+        geom1 = int(contact.geom1)
+        geom2 = int(contact.geom2)
+        body1 = int(m.geom_bodyid[geom1])
+        body2 = int(m.geom_bodyid[geom2])
+        tool1 = _tool_subtree_contains(root_body, body1)
+        tool2 = _tool_subtree_contains(root_body, body2)
+        if tool1 == tool2:
+            continue
+        mujoco.mj_contactForce(m, d, contact_id, local_wrench)
+        # mjContact.frame stores its world axes in rows. The solver's contact
+        # force points geom1 -> geom2, so it acts positively on geom2.
+        contact_frame = np.asarray(contact.frame, dtype=float).reshape((3, 3))
+        sign = 1.0 if tool2 else -1.0
+        force_world = sign * contact_frame.T.dot(local_wrench[:3])
+        torque_world = sign * contact_frame.T.dot(local_wrench[3:])
+        torque_world += np.cross(np.asarray(contact.pos, dtype=float) - sensor_origin, force_world)
+        total_force += force_world
+        total_torque += torque_world
+    return np.concatenate((total_force, total_torque))
+
+
+def _seeded_wrench_noise(seed: int, profile_digest: str, sequence: int, axis: int, bound: float) -> float:
+    payload = f"{seed}:{profile_digest}:{sequence}:{axis}".encode("utf-8")
+    integer = int.from_bytes(hashlib.sha256(payload).digest()[:8], "little")
+    unit = integer / ((1 << 64) - 1)
+    return (2.0 * unit - 1.0) * bound
+
+
+def _sample_tool_wrench(
+    profile: dict[str, Any], profile_digest: str, sequence: int, root_body: int, frame_ref: tuple[str, int]
+) -> dict[str, Any]:
+    true_wrench = _tool_contact_wrench(profile, root_body, frame_ref)
+    measured = []
+    for axis in range(6):
+        bound = float(profile["seeded_noise_bound"][axis])
+        noise = _seeded_wrench_noise(INST.load_seed, profile_digest, sequence, axis, bound)
+        if abs(noise) > bound + 1e-15:
+            raise ValueError("wrench_seeded_noise_out_of_bound")
+        value = float(true_wrench[axis]) + float(profile["bias"][axis]) + noise
+        resolution = float(profile["resolution"][axis])
+        quantized = round(value / resolution) * resolution
+        if abs(quantized - (float(true_wrench[axis]) + float(profile["bias"][axis]))) > float(
+            profile["error_bounds"][axis]
+        ) + 1e-12:
+            raise ValueError("wrench_sample_error_bound_exceeded")
+        measured.append(float(quantized))
+    capture_s = float(INST.data.time)
+    return {
+        "sequence": sequence,
+        "capture_s": capture_s,
+        "receive_s": capture_s + float(profile["latency_s"]),
+        "wrench": measured,
+        "error_bounds": [float(value) for value in profile["error_bounds"]],
+    }
+
+
 def _load(msg: dict[str, Any]) -> dict[str, Any]:
     _drop_runtime(True)
     INST.ctrl_write_count = 0
@@ -668,6 +901,8 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
     INST.usd_experimental = False
     INST.asset_names = []
     INST.mesh_asset_by_id = {}
+    INST.wrench_sequence_by_profile = {}
+    INST.wrench_step_by_profile = {}
     fmt = str(msg.get("format", "mjcf")).lower()
     INST.source_format = fmt
     path = msg.get("path")
@@ -699,6 +934,7 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
     assets = _collect_assets(roots)
     INST.asset_names = sorted({k for k in assets if "/" in k or "." in k})
     seed = int(msg.get("seed", 0))
+    INST.load_seed = seed
     if not extras and path in _BASE_MODEL:
         INST.model = _BASE_MODEL[path]
         INST.mesh_asset_by_id = dict(_BASE_MESH_ASSETS.get(path, {}))
@@ -897,6 +1133,43 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
             "ctrl_write_count": INST.ctrl_write_count,
             "ctrl": [float(x) for x in INST.data.ctrl],
         }
+    if cmd == "step_with_wrench_profile":
+        try:
+            profile = msg.get("profile")
+            profile_digest = str(msg.get("profile_digest") or "")
+            sample_interval_steps = _wrench_profile_steps(
+                profile, profile_digest, float(INST.model.opt.timestep)
+            )
+            root_body, frame_ref = _tool_sensor_frame(profile)
+            profile_digest = profile_digest.lower()
+            n = int(msg.get("n", 1))
+            if n < 0 or n > 100_000:
+                raise ValueError("wrench_step_count")
+            sequence = int(INST.wrench_sequence_by_profile.get(profile_digest, 0))
+            step_count = int(INST.wrench_step_by_profile.get(profile_digest, 0))
+            samples = []
+            for _ in range(n):
+                mujoco.mj_step(INST.model, INST.data)
+                if not _finite(INST.data.qpos) or not _finite(INST.data.qvel):
+                    return {"ok": False, "error": "wrench_step_divergent", "metal": False}
+                step_count += 1
+                if step_count % sample_interval_steps == 0:
+                    samples.append(
+                        _sample_tool_wrench(profile, profile_digest, sequence, root_body, frame_ref)
+                    )
+                    sequence += 1
+            INST.wrench_sequence_by_profile[profile_digest] = sequence
+            INST.wrench_step_by_profile[profile_digest] = step_count
+            return {
+                "ok": True,
+                "samples": samples,
+                "sensor_id": str(profile["sensor_id"]),
+                "profile_digest": profile_digest,
+                "evidence_status": EVIDENCE_STATUS,
+                "metal": False,
+            }
+        except Exception as exc:
+            return {"ok": False, "error": f"wrench_sensor:{exc}", "metal": False}
     if cmd == "step":
         n = int(msg.get("n", 1))
         max_force = 0.0

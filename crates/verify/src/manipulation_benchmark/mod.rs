@@ -5,6 +5,7 @@ pub mod geometry;
 pub mod physical_evidence;
 pub mod report;
 pub mod scenario;
+pub mod wrench_sensor;
 
 pub use execution::{
     run_benchmark_trial, ActionTrace, BenchmarkEpisode, FailureCause, TrialOutcome,
@@ -26,6 +27,7 @@ pub use scenario::{
     EmbodimentRegistry, EmbodimentRole, ResolvedBenchmarkTrial, TrialExpectation,
     BENCHMARK_SCHEMA_VERSION,
 };
+pub use wrench_sensor::{SimulationWrenchSensorProfile, SimulationWrenchWindow};
 
 use thiserror::Error;
 

@@ -1,3 +1,4 @@
+use super::wrench_sensor::SimulationWrenchSensorProfile;
 use super::BenchmarkError;
 use crate::bundle::RobotBundle;
 use crate::manipulation_scenarios::{
@@ -17,7 +18,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 pub const BENCHMARK_SCHEMA_VERSION: u32 = 5;
-const EMBODIMENT_REGISTRY_SCHEMA_VERSION: u32 = 4;
+const EMBODIMENT_REGISTRY_SCHEMA_VERSION: u32 = 5;
 const MAX_SAFE_INITIAL_QPOS_ATTEMPTS: usize = 64;
 pub const PILOT_SEEDS: std::ops::Range<u64> = 9000..9020;
 pub const PUBLIC_SEEDS: std::ops::Range<u64> = 0..100;
@@ -104,6 +105,8 @@ pub struct EmbodimentRegistration {
     pub bundle_path: String,
     pub role: EmbodimentRole,
     pub tasks: Vec<BenchmarkTask>,
+    #[serde(default)]
+    pub simulation_wrench_profile: Option<SimulationWrenchSensorProfile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -167,6 +170,28 @@ impl EmbodimentRegistry {
                     entry.role.as_str(),
                     entry.robot_id
                 )));
+            }
+            let has_push_probe = entry.tasks.contains(&BenchmarkTask::PushProbeReplan);
+            match (&entry.simulation_wrench_profile, has_push_probe) {
+                (Some(profile), true) => profile.validate().map_err(|error| {
+                    BenchmarkError::InvalidManifest(format!(
+                        "invalid simulation wrench profile for {}: {error}",
+                        entry.robot_id
+                    ))
+                })?,
+                (None, true) => {
+                    return Err(BenchmarkError::InvalidManifest(format!(
+                    "push/probe embodiment {} is missing its explicit simulation wrench profile",
+                    entry.robot_id
+                )))
+                }
+                (Some(_), false) => {
+                    return Err(BenchmarkError::InvalidManifest(format!(
+                        "non-push embodiment {} must not register a push/probe wrench profile",
+                        entry.robot_id
+                    )))
+                }
+                (None, false) => {}
             }
         }
         let development = self
