@@ -1,0 +1,195 @@
+{
+  "trial_id": "v6:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:9019:34",
+  "trial": {
+    "schema_version": 6,
+    "paired_trial_key": "54086449ca834ce7102b79604e5a645174fde8d812742d9b76ced03e08d9d086",
+    "trial_id": "v6:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:9019:34",
+    "seed": 9019,
+    "index": 34,
+    "task": "pinch_grasp_lift",
+    "role": "grasp_fixture",
+    "robot_id": "arm_gripper_lift",
+    "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+    "source_hash": "b75b518f36853782407512c054d5257c17371704097a3da0e445c98b5165d185",
+    "expectation": "expected_refusal",
+    "scenario": {
+      "seed": 9019,
+      "polarity": "negative",
+      "skill": "GRASP",
+      "objects": [
+        {
+          "friction": 0.9185573755156315,
+          "mass": 0.2003392247363914,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.55,
+            0.2,
+            0.115
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.009786612336690552,
+            0.025
+          ],
+          "type": "cylinder"
+        },
+        {
+          "mass": 10.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.25,
+            0.0,
+            0.08
+          ],
+          "rgba": [
+            0.4,
+            0.4,
+            0.4,
+            1
+          ],
+          "size": [
+            0.15,
+            0.22,
+            0.01
+          ],
+          "type": "box"
+        }
+      ],
+      "planar": true,
+      "object_id": "obj0",
+      "expected_refusal": "GRIPPER_EMPTY_CLOSE",
+      "neg": "empty_close",
+      "stale": false,
+      "move_object_after_obs": false,
+      "replay": false,
+      "restart_replay": false,
+      "crash_controller": false,
+      "immovable": false,
+      "push_dir": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "push_dist": 0.0,
+      "required_opening": 0.2,
+      "world_construction": "fixed_world"
+    },
+    "initial_qpos": [
+      1.315363800209109,
+      -1.9653673141267631,
+      -1.6137021359734591,
+      0.016279972456385978,
+      0.0070612963887191245,
+      0.020031354923271506
+    ],
+    "goal_xyz": [
+      0.55,
+      0.2,
+      0.115
+    ],
+    "fault_injection": "GRIPPER_EMPTY_CLOSE"
+  },
+  "expectation": "expected_refusal",
+  "episode": {
+    "schema_version": 6,
+    "paired_trial_key": "54086449ca834ce7102b79604e5a645174fde8d812742d9b76ced03e08d9d086",
+    "trial_id": "v6:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:9019:34",
+    "trial_digest": "cc8dd510120adc869ae4f1fc119e6dc8662398da6292af78f41bf8debb60841c",
+    "seed": 9019,
+    "task": "pinch_grasp_lift",
+    "role": "grasp_fixture",
+    "robot_id": "arm_gripper_lift",
+    "object_id": "obj0",
+    "goal_xyz": [
+      0.55,
+      0.2,
+      0.115
+    ],
+    "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+    "source_hash": "b75b518f36853782407512c054d5257c17371704097a3da0e445c98b5165d185",
+    "simulator": "MuJoCo",
+    "simulator_version": "3.7.0",
+    "evidence_status": "SIMULATION_ONLY",
+    "expectation": "expected_refusal",
+    "fault_injection": "GRIPPER_EMPTY_CLOSE",
+    "outcome": "valid_refusal",
+    "failure_cause": "bridge_refusal",
+    "refusal_code": "NO_JUSTIFIED_CURRENT_ACTION",
+    "geometry_digest": "2d7263f8d583645d05a8b5c519eee4f86cf146e31954c1952f4ea874b6ca1564",
+    "ctrl_writes_before": 0,
+    "ctrl_writes_after": 0,
+    "unauthorized_writes": 0,
+    "actions": [],
+    "safety_fault_observations": [],
+    "grasp_simulated_friction_oracle_samples": [
+      0.910731677455881,
+      0.9112945306671231,
+      0.9276443601235735,
+      0.9099311088035722,
+      0.9143991641610062
+    ],
+    "grasp_simulated_friction_oracle_interval": [
+      0.8948001682422313,
+      0.9348001682422313
+    ],
+    "object_start_xyz": [
+      0.55,
+      0.2,
+      0.115
+    ],
+    "object_end_xyz": [
+      0.55,
+      0.2,
+      0.115
+    ],
+    "goal_error_start_m": 0.0,
+    "goal_error_end_m": 0.0,
+    "recovery_count": 0,
+    "acquisition_verified": null,
+    "hold_verified": null,
+    "grasp_phase_object_positions": [],
+    "grasp_verifier_evidence": [],
+    "grasp_contact_audits": [],
+    "grasp_opening_01": null,
+    "grasp_ee_lift_m": null,
+    "grasp_object_follow_residual_m": null,
+    "wall_time_s": 2.1997157,
+    "simulation_time_s": 0.0,
+    "decision_audits": [
+      "decision=CurrentlyUnachievable { reason: \"NO_PHYSICAL_CANDIDATES\" };support_friction_interval=Some([0.05, 0.8]);candidates=planar_push:push:+x:IK_RESIDUAL|planar_push:push:-x:IK_RESIDUAL|planar_push:push:+y:IK_RESIDUAL|planar_push:push:-y:IK_RESIDUAL|pinch_grasp:grasp:y:IK_RESIDUAL"
+    ],
+    "reasoning_request_audits": [
+      "ReasoningRequest { scene: TableScene { object_id: \"obj0\", object_center: [0.55, 0.2, 0.115], object_half: [0.009786612336690552, 0.009786612336690552, 0.025], object_quat: [1.0, 0.0, 0.0, 0.0], support_origin: [0.0, 0.0, 0.0], support_normal: [0.0, 0.0, 1.0], support_half_extents: None, obstacles: [], arm_q: [1.315363800209109, -1.9653673141267631, -1.6137021359734591, 0.016279972456385978], joint_names: [\"joint1\", \"joint2\", \"joint3\", \"lift_z\"], ee: \"ee\", tool_radius_m: 0.012, observation_epoch: \"v6:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:9019:34:0:4621819117588971520\", held: false, finger_names: [\"finger_l\", \"finger_r\"], finger_q: [0.0070612963887191245, 0.020031354923271506] }, belief: PhysicalParameterBelief { parameters: [ParameterBelief { parameter: SupportFriction, status: DerivedConstraint, declared: Provenanced { value: Some(0.5), provenance: ModelDeclared, source: \"benchmark_support_prior\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.5, 0.5]), lineage: [BeliefLineage { belief_before: \"SupportFriction status=DeclaredFact declared=Some(0.5) interval=None\", observation: \"benchmark_support_calibration\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.5, 0.5])\" }], evidence: [] }, ParameterBelief { parameter: ToolObjectFriction, status: Unknown, declared: Provenanced { value: None, provenance: Unknown, source: \"unmeasured_grasp_pair\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.8948001682422313, 0.9348001682422313]), lineage: [BeliefLineage { belief_before: \"ToolObjectFriction status=Unknown declared=None interval=None\", observation: \"mujoco_oracle_friction_input_v1:samples=[0.910731677455881, 0.9112945306671231, 0.9276443601235735, 0.9099311088035722, 0.9143991641610062]\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"ToolObjectFriction status=Unknown declared=None interval=Some([0.8948001682422313, 0.9348001682422313])\" }], evidence: [] }] }, objective: AcquireObject { object_id: \"obj0\" }, mu_required: 0.3, goal_stroke_m: 0.025, probe_stroke_m: 0.008, grants: [], now_s: 10.0, evidence_fresh: true, safety_faults: [], mass_kg: Some(0.2003392247363914), gripper_force_n: Some(1.95), gripper_resource: Some(ControlledResource { id: \"gripper\", kind: Gripper, topology: DirectJointGripper, actuator_inputs: [\"grip_l\", \"grip_r\"], affected_joints: [\"finger_l\", \"finger_r\"], finger_bodies: [\"finger_l\", \"finger_r\"], coupling: CouplingModel { tendon: None, equalities: [], declared_only: true }, command_coordinate: \"opening\", opening_range: Provenanced { value: Some([0.0, 0.03]), provenance: SimulatorDerived, source: \"verify.inspect\", as_of_s: 0.0, uncertainty: None }, command_range: Provenanced { value: Some([0.0, 0.03]), provenance: SimulatorDerived, source: \"verify.inspect\", as_of_s: 0.0, uncertainty: None }, closing_direction: TowardMin, force_bound: Provenanced { value: Some([0.0, 1.95]), provenance: ModelDeclared, source: \"verify.inspect\", as_of_s: 0.0, uncertainty: None }, qualification: Qualified, unsupported_detail: None }), linear_execution_bound_m: None, linear_wrench_limit: None, gravity_m_s2: [0.0, 0.0, -9.81] }"
+    ],
+    "wrench_sensor_profile_digest": null,
+    "wrench_compensation_digest": null,
+    "wrench_inference_compensation_digest": null,
+    "wrench_inference_measurement_digest": null,
+    "wrench_precontact_baseline": null,
+    "wrench_monitor_gravity_reference": null,
+    "wrench_monitor_gravity_reference_position": null,
+    "wrench_monitor_gravity_reference_orientation": null,
+    "wrench_sample_count": 0,
+    "wrench_max_sample_age_s": null,
+    "wrench_max_inter_sample_gap_s": null,
+    "wrench_max_object_speed_m_s": null,
+    "wrench_peak_conservative_bounds": null,
+    "wrench_caps": null,
+    "wrench_minimum_margin": null,
+    "wrench_abort": null,
+    "wrench_abort_axis": null,
+    "wrench_abort_result": null,
+    "wrench_inference_interval": null,
+    "wrench_inference_reason": null,
+    "prior_support_friction_interval": null,
+    "posterior_support_friction_interval": null
+  },
+  "error": null
+}

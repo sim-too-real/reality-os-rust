@@ -109,6 +109,14 @@ Then run the strict MuJoCo 20-seed pilot on the same 60 randomized scenarios as 
 
 Physical transfer remains open. It requires a named robot/cell, declared calibrated force/torque sensor, fresh hardware-origin trace, and independent task outcome measurement; simulation evidence cannot satisfy this requirement.
 
+## Public pilot result
+
+Candidate `7d8ee51582f2e6718ad1dbdc40a871b2cc5f424d` completed the strict 20-seed pilot in [the frozen candidate evidence directory](../evidence/force-aware-probe-7d8ee51/). All 60 scheduled trials matched the schema-v5 baseline by exact key; the candidate worktree was clean at execution. Accounting and safety checks passed: 60/60 completed, zero infrastructure/invalid/unaccounted trials, zero false acceptances, unauthorized writes, geometry omissions, stale-authority continuations, or unverified wrench stops.
+
+The availability screen failed. On the 11 expected-success UR5e push keys, task success stayed at 0/11, information-bearing probes at 0/11, and justified follow-ups at 0/11; all paired deltas were 0.0 percentage points. The IIWA-14 slice had zero expected-success keys, so this pilot cannot establish cross-embodiment task success. The entire campaign recorded 3/17 expected-success tasks, 43/43 correct expected refusals, nine false refusals, and two verified force-cap stops. Across nine push episodes with wrench samples, there were zero strict friction narrowings; seven inference attempts returned `PrecontactBaselineMissing`. The worker could not obtain a fresh, stationary, contact-free inference baseline immediately before the probe ramp for those UR5e task poses. The monitor still records its separate contact-free reference and fails closed when force limits are reached.
+
+This candidate does not demonstrate an availability improvement and supports no competitive claim. Before the next candidate, revise the public task set so each embodiment has physically feasible expected-success cases and enough probes can reach a stationary, contact-free inference state; because that changes randomized inputs, establish a new public baseline instead of reusing these paired keys. The holdout was not run or inspected. All evidence remains `SIMULATION_ONLY`; the physical-transfer gate remains open pending a named cell, calibrated hardware sensor, and independent outcome measurement.
+
 ## Fixed implementation choices
 
 - Use per-axis absolute error bounds and conservative interval arithmetic; do not use covariance estimates in this iteration. The safety monitor bounds absolute value on both polarities for all three force and three torque axes.
