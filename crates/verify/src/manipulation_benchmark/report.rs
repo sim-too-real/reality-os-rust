@@ -244,11 +244,11 @@ pub fn score_campaign(
     config: &BenchmarkConfig,
     records: &[BenchmarkTrialRecord],
 ) -> Result<BenchmarkReport, BenchmarkError> {
-    if !matches!(config.schema_version, 5 | BENCHMARK_SCHEMA_VERSION)
+    if !matches!(config.schema_version, 5 | 6 | BENCHMARK_SCHEMA_VERSION)
         || config.scheduled_trial_ids.is_empty()
     {
         return Err(BenchmarkError::InvalidManifest(
-            "campaign scoring supports schema-v5 history or schema-v6 execution and requires a non-empty scheduled_trial_ids manifest".into(),
+            "campaign scoring supports schema-v5/v6 history or schema-v7 execution and requires a non-empty scheduled_trial_ids manifest".into(),
         ));
     }
     if !config.target_ci_half_width.is_finite()
@@ -256,6 +256,18 @@ pub fn score_campaign(
     {
         return Err(BenchmarkError::InvalidManifest(
             "target confidence-interval half-width must be finite and within [0,1]".into(),
+        ));
+    }
+    if config.schema_version == BENCHMARK_SCHEMA_VERSION
+        && config.scenario_suite_sha256.is_some()
+        && (config
+            .scenario_suite_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+            || config.scenario_suite_version.is_none())
+    {
+        return Err(BenchmarkError::InvalidManifest(
+            "scenario suite digest requires a suite identifier and version".into(),
         ));
     }
 
@@ -284,8 +296,8 @@ pub fn score_campaign(
                     "record and resolved trial identity mismatch for {id}"
                 )));
             }
-            if config.schema_version == BENCHMARK_SCHEMA_VERSION {
-                validate_v6_paired_key(trial)?;
+            if matches!(config.schema_version, 6 | BENCHMARK_SCHEMA_VERSION) {
+                validate_paired_key(trial, config.schema_version)?;
             } else if trial.schema_version != config.schema_version {
                 return Err(BenchmarkError::InvalidTrial(format!(
                     "schema-v{} trial cannot be scored by schema-v{} campaign",
@@ -293,14 +305,35 @@ pub fn score_campaign(
                 )));
             }
             if config.schema_version == BENCHMARK_SCHEMA_VERSION
+                && config.scenario_suite_sha256.is_some()
+                && (trial.scenario_suite_id != config.scenario_suite_id
+                    || trial.scenario_suite_version != config.scenario_suite_version
+                    || (trial.task == BenchmarkTask::PushProbeReplan
+                        && match trial.stratum {
+                            Some(super::scenario::PushTrialStratum::ExpectedSuccess) => {
+                                trial.expectation != TrialExpectation::ExpectedSuccess
+                            }
+                            Some(super::scenario::PushTrialStratum::ExpectedRefusal) => {
+                                trial.expectation != TrialExpectation::ExpectedRefusal
+                            }
+                            None => true,
+                        })
+                    || (trial.task != BenchmarkTask::PushProbeReplan && trial.stratum.is_some()))
+            {
+                return Err(BenchmarkError::InvalidTrial(format!(
+                    "schema-v{} trial {id} does not match the configured scenario suite and frozen stratum",
+                    BENCHMARK_SCHEMA_VERSION
+                )));
+            }
+            if matches!(config.schema_version, 6 | BENCHMARK_SCHEMA_VERSION)
                 && record.episode.as_ref().is_some_and(|episode| {
-                    episode.schema_version != BENCHMARK_SCHEMA_VERSION
+                    episode.schema_version != config.schema_version
                         || episode.paired_trial_key != trial.paired_trial_key
                 })
             {
                 return Err(BenchmarkError::InvalidTrial(format!(
                     "schema-v{} episode {id} is missing or has a mismatched paired_trial_key",
-                    BENCHMARK_SCHEMA_VERSION
+                    config.schema_version
                 )));
             }
         }
@@ -566,7 +599,7 @@ pub fn score_campaign(
 
 /// Compare two campaigns only when every scheduled randomized input is paired
 /// exactly once. Legacy schema-v5 trials derive the schema-independent key;
-/// schema-v6 records must carry and validate their persisted key.
+/// schema-v6/v7 records must carry and validate their persisted key.
 pub fn paired_campaign_delta(
     baseline: &[BenchmarkTrialRecord],
     candidate: &[BenchmarkTrialRecord],
@@ -777,8 +810,8 @@ fn index_paired_records<'a>(
         }
         let key = match trial.schema_version {
             5 => paired_trial_key(trial)?,
-            BENCHMARK_SCHEMA_VERSION => {
-                validate_v6_paired_key(trial)?;
+            6 | BENCHMARK_SCHEMA_VERSION => {
+                validate_paired_key(trial, trial.schema_version)?;
                 trial
                     .paired_trial_key
                     .clone()
@@ -799,18 +832,21 @@ fn index_paired_records<'a>(
     Ok(indexed)
 }
 
-fn validate_v6_paired_key(trial: &ResolvedBenchmarkTrial) -> Result<(), BenchmarkError> {
-    if trial.schema_version != BENCHMARK_SCHEMA_VERSION {
+fn validate_paired_key(
+    trial: &ResolvedBenchmarkTrial,
+    expected_schema_version: u32,
+) -> Result<(), BenchmarkError> {
+    if trial.schema_version != expected_schema_version {
         return Err(BenchmarkError::InvalidTrial(format!(
             "schema-v{} trial cannot be used as schema-v{} execution input",
-            trial.schema_version, BENCHMARK_SCHEMA_VERSION
+            trial.schema_version, expected_schema_version
         )));
     }
     let computed = paired_trial_key(trial)?;
     if trial.paired_trial_key.as_deref() != Some(computed.as_str()) {
         return Err(BenchmarkError::InvalidTrial(format!(
             "schema-v{} trial is missing or has a mismatched paired_trial_key",
-            BENCHMARK_SCHEMA_VERSION
+            expected_schema_version
         )));
     }
     Ok(())
@@ -1227,6 +1263,7 @@ fn failure_cause_name(cause: &FailureCause) -> &'static str {
         FailureCause::AcquisitionNotVerified => "acquisition_not_verified",
         FailureCause::HoldNotVerified => "hold_not_verified",
         FailureCause::ForceMonitorAbort => "force_monitor_abort",
+        FailureCause::ForceBaselineUnavailable => "force_baseline_unavailable",
         FailureCause::AuthorityExpired => "authority_expired",
     }
 }

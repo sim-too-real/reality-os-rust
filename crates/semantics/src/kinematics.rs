@@ -503,6 +503,57 @@ fn solve_from_seed(
     Ok((q, norm3(sub3(target, fk.ee.xyz))))
 }
 
+/// Solve translation IK from exactly one caller-provided seed.
+///
+/// This is useful when a caller needs a fast feasibility witness and does not
+/// need all alternate branches ranked. Collision-aware planners should use
+/// `solve_ik_candidates` so they can evaluate distinct branches.
+pub fn solve_ik_from_seed(
+    model: &EmbodimentModel,
+    chain: &[String],
+    ee: &str,
+    target: [f64; 3],
+    seed_q: &[f64],
+    current_q: &[f64],
+) -> Result<(Vec<f64>, IkTrace), SkillRefuse> {
+    crate::work_counters::note_ik_attempt();
+    let joints = resolve_chain_joints(model, chain)?;
+    if seed_q.len() != joints.len() || current_q.len() != joints.len() {
+        return Err(SkillRefuse::MissingJointState);
+    }
+    if !target.iter().all(|value| value.is_finite())
+        || !seed_q.iter().all(|value| value.is_finite())
+        || !current_q.iter().all(|value| value.is_finite())
+    {
+        return Err(SkillRefuse::Unreachable);
+    }
+    let (q, residual) = solve_from_seed(model, chain, &joints, ee, target, seed_q.to_vec())?;
+    if !ik_residual_is_precise(residual)
+        || !q
+            .iter()
+            .enumerate()
+            .all(|(index, value)| in_limits(&joints[index], *value))
+    {
+        return Err(SkillRefuse::Unreachable);
+    }
+    let delta_norm = distance_from_current(&q, current_q);
+    let max_joint_move = q
+        .iter()
+        .zip(current_q)
+        .map(|(target, current)| (target - current).abs())
+        .fold(0.0_f64, f64::max);
+    Ok((
+        q.clone(),
+        IkTrace {
+            initial_q: current_q.to_vec(),
+            target_q: q,
+            joint_delta_norm: delta_norm,
+            max_joint_move,
+            residual,
+        },
+    ))
+}
+
 fn extra_seeds(n: usize) -> Vec<Vec<f64>> {
     const PATTERNS: &[&[f64]] = &[
         &[0.45, 0.70, -0.55, 0.35, 0.25, 0.15],
@@ -866,6 +917,22 @@ mod tests {
         let fk = forward_kinematics(&m, &chain, "ee", &q).unwrap();
         assert!((fk.ee.xyz[0] - 0.2).abs() < 1e-3);
         assert!(fk.ee.xyz[1].abs() < 1e-3);
+    }
+
+    #[test]
+    fn precise_ik_from_seed_returns_a_bounded_single_branch_solution() {
+        let model = synth_planar_two_link();
+        let chain = model.ee_joint_chain("ee").unwrap();
+        let seed = [0.25, -0.2];
+        let target = forward_kinematics(&model, &chain, "ee", &seed)
+            .unwrap()
+            .ee
+            .xyz;
+        let (q, trace) = solve_ik_from_seed(&model, &chain, "ee", target, &seed, &seed).unwrap();
+
+        assert!(ik_residual_is_precise(trace.residual));
+        assert!(distance_from_current(&q, &seed) < 1e-5);
+        assert_eq!(trace.initial_q, seed);
     }
 
     #[test]

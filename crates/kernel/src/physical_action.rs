@@ -68,6 +68,10 @@ pub struct WrenchLimitPolicy {
     pub scope: WrenchLimitScope,
     pub sensor_calibration_hash: String,
     pub sensor_sample_rate_hz: f64,
+    #[serde(default)]
+    pub max_position_tracking_correction_rad: f64,
+    #[serde(default)]
+    pub position_tracking_correction_gain: f64,
     pub max_rise_rate: [f64; 6],
     pub max_sensing_latency_s: f64,
     pub max_abort_latency_s: f64,
@@ -94,7 +98,12 @@ impl WrenchLimitPolicy {
         }
 
         let mut hash = Sha256::new();
-        hash.update(b"realityos.wrench_limit_policy/1\0");
+        let tracking_correction_enabled = self.max_position_tracking_correction_rad > 0.0;
+        hash.update(if tracking_correction_enabled {
+            b"realityos.wrench_limit_policy/2\0"
+        } else {
+            b"realityos.wrench_limit_policy/1\0"
+        });
         write_string(&mut hash, &self.scope.sensor_id);
         write_string(&mut hash, &self.scope.sensor_frame);
         for cap in self.scope.caps {
@@ -103,6 +112,10 @@ impl WrenchLimitPolicy {
         write_string(&mut hash, &self.scope.abort_contract_id);
         write_string(&mut hash, &self.sensor_calibration_hash);
         write_f64(&mut hash, self.sensor_sample_rate_hz);
+        if tracking_correction_enabled {
+            write_f64(&mut hash, self.max_position_tracking_correction_rad);
+            write_f64(&mut hash, self.position_tracking_correction_gain);
+        }
         for rise_rate in self.max_rise_rate {
             write_f64(&mut hash, rise_rate);
         }
@@ -133,6 +146,22 @@ impl WrenchLimitPolicy {
         }
         if !self.sensor_sample_rate_hz.is_finite() || self.sensor_sample_rate_hz <= 0.0 {
             return Err(WrenchPolicyError("sensor_sample_rate_hz"));
+        }
+        if !self.max_position_tracking_correction_rad.is_finite()
+            || self.max_position_tracking_correction_rad < 0.0
+            || self.max_position_tracking_correction_rad > 0.05
+        {
+            return Err(WrenchPolicyError("position_tracking_correction_bound"));
+        }
+        if !self.position_tracking_correction_gain.is_finite()
+            || self.position_tracking_correction_gain < 0.0
+            || self.position_tracking_correction_gain > 3.0
+            || (self.max_position_tracking_correction_rad == 0.0
+                && self.position_tracking_correction_gain != 0.0)
+            || (self.max_position_tracking_correction_rad > 0.0
+                && self.position_tracking_correction_gain == 0.0)
+        {
+            return Err(WrenchPolicyError("position_tracking_correction_gain"));
         }
         if self
             .max_rise_rate
@@ -380,6 +409,8 @@ mod tests {
             },
             sensor_calibration_hash: "sensor-calibration-v1".into(),
             sensor_sample_rate_hz: 125.0,
+            max_position_tracking_correction_rad: 0.0,
+            position_tracking_correction_gain: 0.0,
             max_rise_rate: [10.0; 6],
             max_sensing_latency_s: 0.01,
             max_abort_latency_s: 0.03,
@@ -475,6 +506,17 @@ mod tests {
         let mut changed = baseline.clone();
         changed.sensor_sample_rate_hz += 1.0;
         assert_ne!(digest, changed.digest());
+        let mut changed = baseline.clone();
+        changed.max_position_tracking_correction_rad = 0.03;
+        changed.position_tracking_correction_gain = 2.0;
+        assert_ne!(digest, changed.digest());
+        changed.scope.policy_digest = changed.digest();
+        assert!(changed.validate().is_ok());
+        changed.position_tracking_correction_gain = 2.1;
+        assert_ne!(changed.scope.policy_digest, changed.digest());
+        changed.max_position_tracking_correction_rad = 0.050_001;
+        changed.scope.policy_digest = changed.digest();
+        assert!(changed.validate().is_err());
         let mut changed = baseline.clone();
         changed.scope.sensor_id.push_str("-other");
         assert_ne!(digest, changed.digest());

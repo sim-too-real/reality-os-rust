@@ -25,9 +25,11 @@ pub use report::{
     PairedScreeningGate, RateEstimate, WrenchReportMetrics,
 };
 pub use scenario::{
-    paired_trial_key, resolve_benchmark_trial, trial_digest, upgrade_v5_trial_for_v6,
-    BenchmarkConfig, BenchmarkTask, EmbodimentRegistration, EmbodimentRegistry, EmbodimentRole,
-    ResolvedBenchmarkTrial, TrialExpectation, BENCHMARK_SCHEMA_VERSION,
+    paired_trial_key, resolve_benchmark_trial, resolve_benchmark_trial_with_suite, trial_digest,
+    upgrade_v5_trial_for_v6, BenchmarkConfig, BenchmarkTask, EmbodimentRegistration,
+    EmbodimentRegistry, EmbodimentRole, PositivePushRandomization, PushTrialStratum,
+    ResolvedBenchmarkTrial, ScenarioSeedRange, ScenarioSuiteManifest, TrialExpectation,
+    BENCHMARK_SCHEMA_VERSION,
 };
 pub use wrench_sensor::{SimulationWrenchSensorProfile, SimulationWrenchWindow};
 

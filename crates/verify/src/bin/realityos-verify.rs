@@ -10,10 +10,9 @@ use realityos_verify::families::{family_spec, MILESTONE_FAMILIES};
 use realityos_verify::foundation_report::{run_campaign, write_report};
 use realityos_verify::honesty::{refuse_physical_proof_origin, SIMULATION_ONLY};
 use realityos_verify::manipulation_benchmark::{
-    evaluate_paired_screening_gate, paired_campaign_delta, resolve_benchmark_trial, score_campaign,
-    upgrade_v5_trial_for_v6, write_report as write_benchmark_report, BenchmarkConfig,
-    BenchmarkExecutionError, BenchmarkReport, BenchmarkTask, BenchmarkTrialRecord,
-    EmbodimentRegistry, EmbodimentRole, SimulationWrenchSensorProfile,
+    resolve_benchmark_trial_with_suite, score_campaign, write_report as write_benchmark_report,
+    BenchmarkConfig, BenchmarkExecutionError, BenchmarkReport, BenchmarkTask, BenchmarkTrialRecord,
+    EmbodimentRegistry, EmbodimentRole, ScenarioSuiteManifest, SimulationWrenchSensorProfile,
 };
 use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, require_mujoco_env};
 use realityos_verify::reduce::minimize;
@@ -59,9 +58,7 @@ struct BenchmarkBundleSpec {
     wrench_profile: Option<SimulationWrenchSensorProfile>,
 }
 
-const BASELINE_SOURCE_SHA: &str = "c38a52a4d8ace0e70e6d144b20b91ff4e0a738eb";
-const V5_PROBE_BASELINE: &str =
-    "docs/superpowers/evidence/probe-stroke-paired-198b5de/probe8mm/manipulation_benchmark.json";
+const SCENARIO_SUITE_V2: &str = "robots/benchmarks/manipulation/scenario_suite_v2.json";
 
 fn manipulation_benchmark(args: &[String]) {
     let parsed = match parse_benchmark_args(args) {
@@ -71,6 +68,12 @@ fn manipulation_benchmark(args: &[String]) {
             std::process::exit(2);
         }
     };
+    if parsed.holdout {
+        eprintln!(
+            "suite-v2 does not run the historical WX250S holdout; it is not an untouched holdout"
+        );
+        std::process::exit(2);
+    }
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let (candidate_sha, dirty) = git_revision(&repo_root);
     if parsed.holdout && dirty {
@@ -87,11 +90,21 @@ fn manipulation_benchmark(args: &[String]) {
     }
 
     let mut config = BenchmarkConfig::default();
-    let pilot_baseline = if parsed.pilot {
-        Some(load_paired_v5_baseline(&repo_root).unwrap_or_else(|error| {
-            eprintln!("cannot load paired schema-v5 pilot baseline: {error}");
+    let scenario_suite = if parsed.replay.is_none() {
+        let path = repo_root.join(SCENARIO_SUITE_V2);
+        let suite = ScenarioSuiteManifest::load(&path).unwrap_or_else(|error| {
+            eprintln!("invalid scenario suite {}: {error}", path.display());
             std::process::exit(2);
-        }))
+        });
+        config.pilot_seeds = suite.pilot_seeds.clone();
+        config.public_seeds = suite.public_seeds.clone();
+        config.scenario_suite_id = Some(suite.suite_id.clone());
+        config.scenario_suite_version = Some(suite.suite_version);
+        config.scenario_suite_sha256 = Some(suite.digest().unwrap_or_else(|error| {
+            eprintln!("cannot digest scenario suite: {error}");
+            std::process::exit(2);
+        }));
+        Some(suite)
     } else {
         None
     };
@@ -117,6 +130,7 @@ fn manipulation_benchmark(args: &[String]) {
             eprintln!("replay record has no resolved trial input");
             std::process::exit(2);
         };
+        config.schema_version = trial.schema_version;
         config.scheduled_trial_ids.push(trial.trial_id.clone());
         let bundle = load_trial_bundle(&repo_root, &trial.robot_id).unwrap_or_else(|error| {
             eprintln!("cannot load replay bundle: {error}");
@@ -147,29 +161,20 @@ fn manipulation_benchmark(args: &[String]) {
             eprintln!("one benchmark invocation is limited to 100 frozen trials per seed set");
             std::process::exit(2);
         }
-        let (specs, registry_digest) = benchmark_bundle_specs(&repo_root, parsed.holdout)
-            .unwrap_or_else(|error| {
+        let (specs, registry_digest) =
+            benchmark_bundle_specs(&repo_root, false).unwrap_or_else(|error| {
                 eprintln!("invalid benchmark embodiment registry: {error}");
                 std::process::exit(2);
             });
         config.embodiment_registry_sha256 = Some(registry_digest);
-        if let Some(baseline) = pilot_baseline.as_ref() {
-            if seeds.len() != 20 {
-                eprintln!("paired pilot comparison requires the complete frozen 20-seed set");
-                std::process::exit(2);
-            }
-            run_paired_v5_campaign(&repo_root, &baseline.records, &specs, &mut config)
-                .unwrap_or_else(|error| {
-                    eprintln!("cannot prepare paired schema-v5 pilot inputs: {error}");
-                    std::process::exit(2);
-                })
-        } else {
-            let mut records = Vec::new();
-            for spec in specs {
-                records.extend(run_bundle_campaign(&spec, &seeds, &mut config));
-            }
-            records
+        let suite = scenario_suite
+            .as_ref()
+            .expect("new campaigns load the validated scenario suite");
+        let mut records = Vec::new();
+        for spec in specs {
+            records.extend(run_bundle_campaign(&spec, &seeds, &mut config, suite));
         }
+        records
     };
 
     let mut report = match score_campaign(&config, &records) {
@@ -181,25 +186,14 @@ fn manipulation_benchmark(args: &[String]) {
     };
     report.candidate_source_sha = Some(candidate_sha);
     report.candidate_worktree_dirty = dirty;
-    report.baseline_source_sha = Some(BASELINE_SOURCE_SHA.into());
-    report.baseline_status = "not_compared".into();
-    if let Some(baseline) = pilot_baseline.as_ref() {
-        report.baseline_source_sha = baseline.candidate_source_sha.clone();
-        match paired_campaign_delta(&baseline.records, &report.records) {
-            Ok(delta) => {
-                let gate = evaluate_paired_screening_gate(&delta);
-                report.baseline_status = "paired_schema_v5_exact_keys".into();
-                report.paired_delta = Some(delta);
-                report.paired_screening_gate = Some(gate);
-            }
-            Err(error) => {
-                report.baseline_status = format!("paired_comparison_rejected: {error}");
-                eprintln!("paired pilot comparison rejected: {error}");
-                let _ = write_benchmark_report(&report, &parsed.out_dir);
-                std::process::exit(1);
-            }
-        }
-    }
+    report.baseline_source_sha = None;
+    report.baseline_status = if parsed.replay.is_some() {
+        "historical_replay_not_compared".into()
+    } else if parsed.pilot {
+        "suite_v2_pilot_screening_not_compared".into()
+    } else {
+        "suite_v2_public_baseline".into()
+    };
     if let Err(error) = write_benchmark_report(&report, &parsed.out_dir) {
         eprintln!("benchmark report write failed: {error}");
         std::process::exit(1);
@@ -224,13 +218,8 @@ fn manipulation_benchmark(args: &[String]) {
     if !report.safety_gate_passed {
         std::process::exit(1);
     }
-    if parsed.pilot
-        && !report
-            .paired_screening_gate
-            .as_ref()
-            .is_some_and(|gate| gate.passed)
-    {
-        eprintln!("paired pilot did not pass the availability screening gate");
+    if parsed.pilot && !suite_pilot_has_positive_denominators(&report) {
+        eprintln!("suite-v2 pilot did not schedule positive trials on both development arms");
         std::process::exit(1);
     }
 }
@@ -312,6 +301,24 @@ fn selected_benchmark_seeds(
         .collect()
 }
 
+fn suite_pilot_has_positive_denominators(report: &BenchmarkReport) -> bool {
+    let mut denominators = std::collections::BTreeMap::<String, u64>::new();
+    for trial in report
+        .records
+        .iter()
+        .filter_map(|record| record.trial.as_ref())
+    {
+        if trial.role == EmbodimentRole::Development
+            && trial.task == BenchmarkTask::PushProbeReplan
+            && trial.expectation
+                == realityos_verify::manipulation_benchmark::TrialExpectation::ExpectedSuccess
+        {
+            *denominators.entry(trial.robot_id.clone()).or_default() += 1;
+        }
+    }
+    denominators.len() >= 2 && denominators.values().all(|denominator| *denominator > 0)
+}
+
 fn benchmark_bundle_specs(
     repo_root: &Path,
     holdout: bool,
@@ -345,154 +352,11 @@ fn benchmark_bundle_specs(
     Ok((specs, digest))
 }
 
-fn load_paired_v5_baseline(repo_root: &Path) -> Result<BenchmarkReport, String> {
-    let path = repo_root.join(V5_PROBE_BASELINE);
-    let bytes = fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
-    let baseline: BenchmarkReport = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("parse {}: {error}", path.display()))?;
-    if baseline.schema_version != 5
-        || baseline.config.schema_version != 5
-        || !baseline.campaign_complete
-        || !baseline.safety_gate_passed
-        || baseline.records.len() as u64 != baseline.scheduled_trials
-        || baseline.scheduled_trials != 60
-        || baseline.candidate_worktree_dirty
-        || baseline.candidate_source_sha.is_none()
-    {
-        return Err(
-            "the frozen 60-trial schema-v5 baseline is incomplete, dirty, or not safety-gated"
-                .into(),
-        );
-    }
-    Ok(baseline)
-}
-
-fn run_paired_v5_campaign(
-    _repo_root: &Path,
-    baseline_records: &[BenchmarkTrialRecord],
-    specs: &[BenchmarkBundleSpec],
-    config: &mut BenchmarkConfig,
-) -> Result<Vec<BenchmarkTrialRecord>, String> {
-    let mut grouped = vec![Vec::new(); specs.len()];
-    for record in baseline_records {
-        let trial = record
-            .trial
-            .as_ref()
-            .ok_or_else(|| format!("baseline record {} has no resolved trial", record.trial_id))?;
-        if trial.schema_version != 5 || record.expectation != Some(trial.expectation) {
-            return Err(format!(
-                "baseline record {} is not a valid schema-v5 input",
-                record.trial_id
-            ));
-        }
-        let spec_index = specs
-            .iter()
-            .position(|spec| {
-                spec.robot_id == trial.robot_id
-                    && spec.role == trial.role
-                    && spec.task == trial.task
-            })
-            .ok_or_else(|| {
-                format!(
-                    "baseline embodiment/task {}/{}/{} is not registered for the candidate",
-                    trial.role.as_str(),
-                    trial.robot_id,
-                    trial.task.as_str()
-                )
-            })?;
-        grouped[spec_index].push(record);
-    }
-
-    let mut records = Vec::with_capacity(baseline_records.len());
-    for (spec, legacy_records) in specs.iter().zip(grouped) {
-        if legacy_records.is_empty() {
-            continue;
-        }
-        if legacy_records.len() != 20 {
-            return Err(format!(
-                "frozen pilot requires 20 exact baseline inputs for {}/{}; found {}",
-                spec.role.as_str(),
-                spec.robot_id,
-                legacy_records.len()
-            ));
-        }
-        let bundle = RobotBundle::load(&spec.path)
-            .ok()
-            .filter(|bundle| bundle.manifest.robot_id == spec.robot_id);
-        let inspected = bundle
-            .as_ref()
-            .ok_or_else(|| {
-                "registered bundle failed to load or has a mismatched robot id".to_string()
-            })
-            .and_then(|bundle| {
-                load_and_normalize(
-                    bundle,
-                    &[],
-                    legacy_records[0]
-                        .trial
-                        .as_ref()
-                        .expect("group contains resolved baseline inputs")
-                        .seed,
-                )
-                .map(|(worker, manifest)| {
-                    realityos_verify::mujoco_exec::checkin_worker(worker);
-                    manifest
-                })
-                .map_err(|error| format!("strict_mujoco_preflight:{error}"))
-            });
-
-        for record in legacy_records {
-            let legacy = record.trial.as_ref().expect("validated resolved trial");
-            let trial = upgrade_v5_trial_for_v6(legacy).map_err(|error| error.to_string())?;
-            config.scheduled_trial_ids.push(trial.trial_id.clone());
-            let result = match (&bundle, &inspected) {
-                (Some(bundle), Ok(manifest))
-                    if legacy.model_hash == manifest.model_hash
-                        && legacy.source_hash == manifest.source_hash =>
-                {
-                    realityos_verify::manipulation_benchmark::run_benchmark_trial(
-                        bundle,
-                        &trial,
-                        simulation_admission_for_profile(120.0, spec.wrench_profile.as_ref()),
-                        spec.wrench_profile.as_ref(),
-                    )
-                }
-                (Some(_), Ok(manifest)) => Err(
-                    realityos_verify::manipulation_benchmark::BenchmarkError::InvalidTrial(
-                        format!(
-                            "frozen baseline model/source hash does not match current {} bundle (model {} vs {}, source {} vs {})",
-                            spec.robot_id,
-                            legacy.model_hash,
-                            manifest.model_hash,
-                            legacy.source_hash,
-                            manifest.source_hash
-                        ),
-                    ),
-                ),
-                (_, Err(error)) => Err(
-                    realityos_verify::manipulation_benchmark::BenchmarkError::Simulation(
-                        error.clone(),
-                    ),
-                ),
-                (None, Ok(_)) => unreachable!("a manifest cannot load without a bundle"),
-            };
-            records.push(BenchmarkTrialRecord::from_run_result(trial, result));
-        }
-    }
-    if records.len() != baseline_records.len() {
-        return Err(format!(
-            "paired pilot scheduled {} of {} frozen baseline records",
-            records.len(),
-            baseline_records.len()
-        ));
-    }
-    Ok(records)
-}
-
 fn run_bundle_campaign(
     spec: &BenchmarkBundleSpec,
     seeds: &[u64],
     config: &mut BenchmarkConfig,
+    suite: &ScenarioSuiteManifest,
 ) -> Vec<BenchmarkTrialRecord> {
     let mut records = Vec::new();
     let mut schedule_error = None;
@@ -531,13 +395,14 @@ fn run_bundle_campaign(
     };
 
     for (offset, seed) in seeds.iter().copied().enumerate() {
-        let trial_index = match (spec.task, offset) {
-            (_, 1) => 0,
-            (BenchmarkTask::PinchGraspLift, _) => 15_u32.saturating_add(offset as u32),
-            _ => 10_u32.saturating_add(offset as u32),
+        let trial_index = match spec.task {
+            BenchmarkTask::PushProbeReplan => offset as u32,
+            BenchmarkTask::PinchGraspLift if offset == 1 => 0,
+            BenchmarkTask::PinchGraspLift => 15_u32.saturating_add(offset as u32),
         };
         let fallback_id = format!(
-            "v1:{}:{}:{}:{}:{}",
+            "v{}:{}:{}:{}:{}:{}",
+            realityos_verify::manipulation_benchmark::BENCHMARK_SCHEMA_VERSION,
             spec.role.as_str(),
             spec.robot_id,
             spec.task.as_str(),
@@ -555,13 +420,14 @@ fn run_bundle_campaign(
         }
         let bundle = bundle.as_ref().expect("manifest requires loaded bundle");
         let manifest = manifest.as_ref().expect("manifest was inspected");
-        let trial = match resolve_benchmark_trial(
+        let trial = match resolve_benchmark_trial_with_suite(
             seed,
             trial_index,
             spec.task,
             spec.role,
             bundle,
             manifest,
+            suite,
         ) {
             Ok(trial) => trial,
             Err(error) => {
@@ -597,6 +463,8 @@ fn simulation_admission(expires_at_s: f64) -> realityos_reasoner_bridge::Simulat
         },
         sensor_calibration_hash: "cli-sensor-calibration-v1".into(),
         sensor_sample_rate_hz: 125.0,
+        max_position_tracking_correction_rad: 0.0,
+        position_tracking_correction_gain: 0.0,
         max_rise_rate: [10.0; 6],
         max_sensing_latency_s: 0.01,
         max_abort_latency_s: 0.03,

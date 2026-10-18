@@ -214,11 +214,17 @@ pub struct SimulationWrenchWindow {
     #[serde(default)]
     pub precontact_baseline: Option<WrenchSample>,
     #[serde(default)]
+    pub precontact_baseline_status: Option<String>,
+    #[serde(default)]
     pub precontact_baseline_position: Option<[f64; 3]>,
     #[serde(default)]
     pub precontact_baseline_orientation: Option<[f64; 4]>,
     #[serde(default)]
+    pub triggering_sample: Option<WrenchSample>,
+    #[serde(default)]
     pub monitor_gravity_reference: Option<WrenchSample>,
+    #[serde(default)]
+    pub monitor_gravity_reference_status: Option<String>,
     #[serde(default)]
     pub monitor_gravity_reference_position: Option<[f64; 3]>,
     #[serde(default)]
@@ -227,18 +233,28 @@ pub struct SimulationWrenchWindow {
     pub compensation_digest: String,
 }
 
-/// Subtract the registered sensor bias and a contact-free stationary wrench
-/// reference from a measured sample. The reference is expressed in the pose
-/// where it was captured, so transform its force and moment into the current
-/// sensor frame before subtraction. Returned error bounds include both
-/// measurements and the wrench-frame transform.
+/// Subtract the registered sensor bias and a contact-free stationary load
+/// reference from a measured sample. The reference load is attached to the
+/// instrumented child subtree, so rotate its force and moment into the current
+/// sensor frame without translating its origin with the sensor. The v1 model
+/// retains its historical point-wrench translation for old evidence profiles;
+/// v2 fixes that model for body-fixed loads. Returned error bounds include both
+/// measurements and the selected wrench-frame transform.
 pub fn gravity_compensated_wrench(
     sample: &WrenchSample,
     sample_position: [f64; 3],
     sample_orientation: [f64; 4],
     bias: [f64; 6],
+    model_id: &str,
     gravity_reference: Option<(&WrenchSample, [f64; 3], [f64; 4])>,
 ) -> Result<([f64; 6], [f64; 6]), WrenchAbortReason> {
+    if !matches!(
+        model_id,
+        "mujoco-force-torque-sensor-gravity-baseline-v1"
+            | "mujoco-force-torque-sensor-gravity-baseline-v2"
+    ) {
+        return Err(WrenchAbortReason::MonitorFault);
+    }
     if sample.validate().is_err() || sample.origin != WrenchSampleOrigin::Simulation {
         return Err(WrenchAbortReason::MonitorFault);
     }
@@ -292,7 +308,7 @@ pub fn gravity_compensated_wrench(
             reference_wrench[2],
         ],
     );
-    let torque_world_at_reference = matrix_vector(
+    let mut torque_world_at_sample = matrix_vector(
         reference_rotation,
         [
             reference_wrench[3],
@@ -300,13 +316,39 @@ pub fn gravity_compensated_wrench(
             reference_wrench[5],
         ],
     );
-    let arm = [
-        reference_position[0] - sample_position[0],
-        reference_position[1] - sample_position[1],
-        reference_position[2] - sample_position[2],
-    ];
-    let torque_world_at_sample = add3(torque_world_at_reference, cross3(arm, force_world));
     let force_current = matrix_transpose_vector(current_rotation, force_world);
+    let mut torque_error_world = matrix_abs_vector(
+        reference_rotation,
+        [
+            reference.error_bounds[3],
+            reference.error_bounds[4],
+            reference.error_bounds[5],
+        ],
+    );
+    if model_id == "mujoco-force-torque-sensor-gravity-baseline-v1" {
+        let arm = [
+            reference_position[0] - sample_position[0],
+            reference_position[1] - sample_position[1],
+            reference_position[2] - sample_position[2],
+        ];
+        torque_world_at_sample = add3(torque_world_at_sample, cross3(arm, force_world));
+        let force_error_world = matrix_abs_vector(
+            reference_rotation,
+            [
+                reference.error_bounds[0],
+                reference.error_bounds[1],
+                reference.error_bounds[2],
+            ],
+        );
+        torque_error_world = add3(
+            torque_error_world,
+            [
+                arm[1].abs() * force_error_world[2] + arm[2].abs() * force_error_world[1],
+                arm[2].abs() * force_error_world[0] + arm[0].abs() * force_error_world[2],
+                arm[0].abs() * force_error_world[1] + arm[1].abs() * force_error_world[0],
+            ],
+        );
+    }
     let torque_current = matrix_transpose_vector(current_rotation, torque_world_at_sample);
     for axis in 0..3 {
         compensated[axis] -= force_current[axis];
@@ -321,28 +363,9 @@ pub fn gravity_compensated_wrench(
             reference.error_bounds[2],
         ],
     );
-    let reference_torque_error_world = matrix_abs_vector(
-        reference_rotation,
-        [
-            reference.error_bounds[3],
-            reference.error_bounds[4],
-            reference.error_bounds[5],
-        ],
-    );
-    let arm_cross_force_error = [
-        arm[1].abs() * reference_force_error_world[2]
-            + arm[2].abs() * reference_force_error_world[1],
-        arm[2].abs() * reference_force_error_world[0]
-            + arm[0].abs() * reference_force_error_world[2],
-        arm[0].abs() * reference_force_error_world[1]
-            + arm[1].abs() * reference_force_error_world[0],
-    ];
     let force_error_current =
         matrix_transpose_abs_vector(current_rotation, reference_force_error_world);
-    let torque_error_current = matrix_transpose_abs_vector(
-        current_rotation,
-        add3(reference_torque_error_world, arm_cross_force_error),
-    );
+    let torque_error_current = matrix_transpose_abs_vector(current_rotation, torque_error_world);
     for axis in 0..3 {
         error[axis] += force_error_current[axis];
         error[axis + 3] += torque_error_current[axis];
@@ -440,6 +463,12 @@ pub enum WrenchAbortReason {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WrenchAbortEvent {
     pub reason: WrenchAbortReason,
+    #[serde(default)]
+    pub triggering_sample: Option<WrenchSample>,
+    #[serde(default)]
+    pub triggering_sensor_position: Option<[f64; 3]>,
+    #[serde(default)]
+    pub triggering_sensor_orientation: Option<[f64; 4]>,
     pub triggered_at_s: f64,
     pub stopped_at_s: f64,
     pub stop_write_count: u32,
@@ -447,6 +476,8 @@ pub struct WrenchAbortEvent {
     pub stop_verified: bool,
     #[serde(default)]
     pub stop_actuator_ids: Vec<String>,
+    #[serde(default)]
+    pub stop_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -454,6 +485,7 @@ pub struct MonitoredStepResult {
     pub state: Value,
     pub wrench_window: SimulationWrenchWindow,
     pub abort: Option<WrenchAbortEvent>,
+    pub control_correction_max_rad: f64,
 }
 
 /// Conservatively bound every wrench axis using measurement error, sample age,
@@ -621,14 +653,26 @@ impl SimulationWrenchWindow {
             }
             (Some(reference), Some(position), Some(orientation))
         };
+        let triggering_sample = if response["triggering_sample"].is_null() {
+            None
+        } else {
+            Some(parse_worker_sample(&response["triggering_sample"], profile, transform_epoch)?.0)
+        };
         Ok(Self {
             samples,
             sensor_positions,
             sensor_orientations,
             precontact_baseline,
+            precontact_baseline_status: response["precontact_baseline_status"]
+                .as_str()
+                .map(str::to_owned),
             precontact_baseline_position,
             precontact_baseline_orientation,
+            triggering_sample,
             monitor_gravity_reference,
+            monitor_gravity_reference_status: response["monitor_gravity_reference_status"]
+                .as_str()
+                .map(str::to_owned),
             monitor_gravity_reference_position,
             monitor_gravity_reference_orientation,
             max_gap_s,

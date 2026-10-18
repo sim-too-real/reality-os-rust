@@ -8,11 +8,13 @@ use super::scenario::{
     paired_trial_key, simulated_grasp_friction_oracle_input, trial_digest, BenchmarkTask,
     ResolvedBenchmarkTrial, TrialExpectation, BENCHMARK_SCHEMA_VERSION,
 };
-use super::wrench_sensor::{SimulationWrenchSensorProfile, WrenchAbortEvent, WrenchAbortReason};
+use super::wrench_sensor::{
+    SimulationWrenchSensorProfile, SimulationWrenchWindow, WrenchAbortEvent, WrenchAbortReason,
+};
 use super::BenchmarkError;
 use crate::bundle::RobotBundle;
 use crate::manipulation_scenarios::{ManipulationScenario, NegKind};
-use crate::mujoco_exec::{json_f64_vec, MujocoInstance};
+use crate::mujoco_exec::{json_f64_vec, MonitoredControlRamp, MujocoInstance};
 use crate::normalize::RobotManifest;
 use crate::observation::VerifierTruth;
 use crate::resource_discover::discover_resources;
@@ -50,7 +52,12 @@ const MU_REQUIRED: f64 = 0.3;
 const MAX_ACTIONS: usize = 6;
 const CONTROL_STEPS_PER_SEGMENT: u32 = 500;
 const PUSH_STEPS_PER_WAYPOINT: u32 = 500;
-const PROBE_CONTACT_RAMP_STEPS: u32 = 3_000;
+const MAX_PROBE_CONTROL_RAMP_STEPS: u32 = 6_000;
+const MIN_PROBE_CONTROL_RAMP_STEPS: u32 = 100;
+const PROBE_JOINT_RAMP_RATE_RAD_S: f64 = 0.1;
+const PROBE_TRANSIT_TRACKING_SETTLE_STEPS: u32 = 2_000;
+const PROBE_PRECONTACT_SETTLE_STEPS: u32 = 1_000;
+const PROBE_CONTROL_UPDATE_STEPS: u32 = 100;
 const CONTROL_CONVERGENCE_CHECK_STEPS: u32 = 100;
 const CONTROL_AUTHORITY_CHECK_STEPS: u32 = 10;
 const GRASP_CLOSE_SETTLE_STEPS: u32 = 200;
@@ -81,6 +88,7 @@ pub enum FailureCause {
     AcquisitionNotVerified,
     HoldNotVerified,
     ForceMonitorAbort,
+    ForceBaselineUnavailable,
     AuthorityExpired,
 }
 
@@ -97,6 +105,19 @@ pub struct ActionTrace {
     pub lateral_displacement_m: Option<f64>,
     pub reauthorized_after_observation: bool,
     pub runtime_divergence: bool,
+    #[serde(default)]
+    pub control_tracking_correction_bound_rad: Option<f64>,
+    #[serde(default)]
+    pub control_tracking_correction_gain: Option<f64>,
+    #[serde(default)]
+    pub control_tracking_correction_max_rad: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WrenchGravityReference {
+    pub sample: WrenchSample,
+    pub sensor_position: [f64; 3],
+    pub sensor_orientation: [f64; 4],
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -172,7 +193,15 @@ pub struct BenchmarkEpisode {
     #[serde(default)]
     pub wrench_precontact_baseline: Option<WrenchSample>,
     #[serde(default)]
+    pub wrench_precontact_baseline_status: Option<String>,
+    #[serde(default)]
+    pub wrench_contact_pairs: Vec<String>,
+    #[serde(default)]
     pub wrench_monitor_gravity_reference: Option<WrenchSample>,
+    #[serde(default)]
+    pub wrench_monitor_gravity_reference_status: Option<String>,
+    #[serde(default)]
+    pub wrench_monitor_gravity_reference_history: Vec<WrenchGravityReference>,
     #[serde(default)]
     pub wrench_monitor_gravity_reference_position: Option<[f64; 3]>,
     #[serde(default)]
@@ -396,7 +425,11 @@ pub fn run_benchmark_trial(
         wrench_inference_compensation_digest: None,
         wrench_inference_measurement_digest: None,
         wrench_precontact_baseline: None,
+        wrench_precontact_baseline_status: None,
+        wrench_contact_pairs: Vec::new(),
         wrench_monitor_gravity_reference: None,
+        wrench_monitor_gravity_reference_status: None,
+        wrench_monitor_gravity_reference_history: Vec::new(),
         wrench_monitor_gravity_reference_position: None,
         wrench_monitor_gravity_reference_orientation: None,
         wrench_sample_count: 0,
@@ -679,6 +712,19 @@ pub fn run_benchmark_trial(
             reauthorized_after_observation: !previous_epoch.is_empty()
                 && previous_epoch != frozen.observation_epoch,
             runtime_divergence: exec == WitnessExecution::Diverged,
+            control_tracking_correction_bound_rad: push_witness_audit.as_ref().map(|_| {
+                admission
+                    .wrench_limit_policy
+                    .max_position_tracking_correction_rad
+            }),
+            control_tracking_correction_gain: push_witness_audit.as_ref().map(|_| {
+                admission
+                    .wrench_limit_policy
+                    .position_tracking_correction_gain
+            }),
+            control_tracking_correction_max_rad: push_witness_audit
+                .as_ref()
+                .map(|audit| audit.control_correction_max_rad),
         });
         if exec == WitnessExecution::Diverged {
             episode.failure_cause = Some(FailureCause::RuntimeDivergence);
@@ -701,6 +747,12 @@ pub fn run_benchmark_trial(
         if exec == WitnessExecution::WroteNothing {
             episode.failure_cause = Some(FailureCause::UnsupportedControlMapping);
             episode.refusal_code = Some("NO_AUTHORIZED_CONTROL_MAPPING".into());
+            episode.outcome = TrialOutcome::ActionFailed;
+            break;
+        }
+        if exec == WitnessExecution::BaselineUnavailable {
+            episode.failure_cause = Some(FailureCause::ForceBaselineUnavailable);
+            episode.refusal_code = Some("PRECONTACT_FORCE_BASELINE_UNAVAILABLE".into());
             episode.outcome = TrialOutcome::ActionFailed;
             break;
         }
@@ -911,6 +963,7 @@ enum WitnessExecution {
     WroteNothing,
     Diverged,
     WrenchAborted,
+    BaselineUnavailable,
     AuthorityExpired,
 }
 
@@ -944,13 +997,57 @@ struct PushWitnessAudit {
     sensor_positions: Vec<[f64; 3]>,
     sensor_orientations: Vec<[f64; 4]>,
     precontact_baseline: Option<WrenchSample>,
+    precontact_baseline_status: Option<String>,
     precontact_baseline_position: Option<[f64; 3]>,
     precontact_baseline_orientation: Option<[f64; 4]>,
+    wrench_contact_pairs: Vec<String>,
     monitor_gravity_reference: Option<WrenchSample>,
+    monitor_gravity_reference_status: Option<String>,
     monitor_gravity_reference_position: Option<[f64; 3]>,
     monitor_gravity_reference_orientation: Option<[f64; 4]>,
+    monitor_gravity_references: Vec<WrenchGravityReference>,
+    sample_gravity_reference_indices: Vec<Option<usize>>,
     abort: Option<WrenchAbortEvent>,
     motion: PushMotionAudit,
+    control_correction_max_rad: f64,
+}
+
+fn record_push_wrench_window(audit: &mut PushWitnessAudit, window: SimulationWrenchWindow) {
+    if let Some(status) = window.monitor_gravity_reference_status.as_ref() {
+        audit.monitor_gravity_reference_status = Some(status.clone());
+    }
+    let reference_index = if let (Some(sample), Some(sensor_position), Some(sensor_orientation)) = (
+        window.monitor_gravity_reference.as_ref(),
+        window.monitor_gravity_reference_position,
+        window.monitor_gravity_reference_orientation,
+    ) {
+        let index = audit
+            .monitor_gravity_references
+            .iter()
+            .position(|reference| reference.sample.digest == sample.digest)
+            .unwrap_or_else(|| {
+                audit
+                    .monitor_gravity_references
+                    .push(WrenchGravityReference {
+                        sample: sample.clone(),
+                        sensor_position,
+                        sensor_orientation,
+                    });
+                audit.monitor_gravity_references.len() - 1
+            });
+        audit.monitor_gravity_reference = Some(sample.clone());
+        audit.monitor_gravity_reference_position = Some(sensor_position);
+        audit.monitor_gravity_reference_orientation = Some(sensor_orientation);
+        Some(index)
+    } else {
+        None
+    };
+    audit
+        .sample_gravity_reference_indices
+        .extend(std::iter::repeat(reference_index).take(window.samples.len()));
+    audit.samples.extend(window.samples);
+    audit.sensor_positions.extend(window.sensor_positions);
+    audit.sensor_orientations.extend(window.sensor_orientations);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -977,13 +1074,19 @@ fn execute_push_witness(
         sensor_positions: Vec::new(),
         sensor_orientations: Vec::new(),
         precontact_baseline: None,
+        precontact_baseline_status: None,
         precontact_baseline_position: None,
         precontact_baseline_orientation: None,
+        wrench_contact_pairs: Vec::new(),
         monitor_gravity_reference: None,
+        monitor_gravity_reference_status: None,
         monitor_gravity_reference_position: None,
         monitor_gravity_reference_orientation: None,
+        monitor_gravity_references: Vec::new(),
+        sample_gravity_reference_indices: Vec::new(),
         abort: None,
         motion: PushMotionAudit::default(),
+        control_correction_max_rad: 0.0,
     };
     let frozen = authorized.action.frozen();
     let (requested, maximum) = frozen
@@ -995,7 +1098,7 @@ fn execute_push_witness(
     }
     let contents = &frozen.witness_contents;
     let is_probe = frozen.action_key.starts_with("probe:");
-    let Some((q0, targets)) =
+    let Some((q0, transit_count, targets)) =
         decode_push_witness(contents, request.scene.joint_names.len(), is_probe)
     else {
         return Ok(audit);
@@ -1010,13 +1113,71 @@ fn execute_push_witness(
         return Ok(audit);
     }
 
+    if is_probe && audit.monitor_gravity_reference.is_none() {
+        let mut settle_remaining = PROBE_PRECONTACT_SETTLE_STEPS;
+        while settle_remaining > 0 {
+            let runtime_now_s = 10.0 + simulator_now(worker)?;
+            if !authorization_covers_at(authorized, runtime_now_s) {
+                audit.execution = WitnessExecution::AuthorityExpired;
+                return Ok(audit);
+            }
+            let steps_until_expiry = ((authorized.grant.scope.expires_at_s - runtime_now_s + 1e-9)
+                / manifest.timestep)
+                .floor()
+                .max(0.0) as u32;
+            if steps_until_expiry == 0 {
+                audit.execution = WitnessExecution::AuthorityExpired;
+                return Ok(audit);
+            }
+            let steps = settle_remaining.min(steps_until_expiry);
+            let monitor = worker
+                .step_monitored(steps, profile, policy, &authorized.grant, false, true, None)
+                .map_err(|error| {
+                    BenchmarkError::Simulation(format!("wrench_initial_settle:{error}"))
+                })?;
+            audit.control_correction_max_rad = audit
+                .control_correction_max_rad
+                .max(monitor.control_correction_max_rad);
+            record_wrench_contacts(&mut audit, &monitor.state);
+            record_push_wrench_window(&mut audit, monitor.wrench_window);
+            if let Some(abort) = monitor.abort {
+                audit.execution = WitnessExecution::WrenchAborted;
+                audit.abort = Some(abort);
+                return Ok(audit);
+            }
+            if audit.monitor_gravity_reference_status.as_deref() == Some("contact_present") {
+                audit.execution = WitnessExecution::BaselineUnavailable;
+                return Ok(audit);
+            }
+            if audit.monitor_gravity_reference.is_some() {
+                break;
+            }
+            settle_remaining -= steps;
+        }
+        if audit.monitor_gravity_reference.is_none() {
+            audit.execution = WitnessExecution::BaselineUnavailable;
+            return Ok(audit);
+        }
+        let settled = read_named_joints(worker, manifest, &request.scene.joint_names)?;
+        if !vectors_near(&settled, &q0, 0.04) {
+            audit.execution = WitnessExecution::Diverged;
+            return Ok(audit);
+        }
+    }
+
     let actuator_map = position_actuator_map(manifest, &request.scene.joint_names)?;
     let mut has_written = false;
     let direction = action_direction(&frozen.action_key);
     let mut stroke_completed_by_observation = false;
-    let observed_completion_distance = if is_probe { requested * 0.8 } else { requested };
+    let observed_completion_distance = if is_probe {
+        requested.min(0.0045)
+    } else {
+        requested
+    };
     for (target_index, target) in targets.into_iter().enumerate() {
-        let motion_phase = target_index > 0 && (!is_probe || target_index < last_target_index);
+        let transit_target = target_index < transit_count;
+        let motion_phase =
+            target_index >= transit_count && (!is_probe || target_index < last_target_index);
         if stroke_completed_by_observation && target_index != last_target_index {
             continue;
         }
@@ -1067,17 +1228,24 @@ fn execute_push_witness(
         if !authorized_covers_now(worker, authorized, now_s)? {
             return Ok(audit);
         }
-        let probe_motion_ramp = is_probe && motion_phase;
+        let probe_control_ramp =
+            is_probe && (motion_phase || transit_target || target_index == last_target_index);
         let ramp_target = next.clone();
-        if !probe_motion_ramp {
+        if !probe_control_ramp {
             worker.set_ctrl(&next).map_err(|error| {
                 BenchmarkError::Simulation(format!("authorized_control_write:{error}"))
             })?;
             has_written = true;
         }
         let mut converged = false;
-        let total_steps = if probe_motion_ramp {
-            PROBE_CONTACT_RAMP_STEPS
+        let total_steps = if probe_control_ramp {
+            probe_control_ramp_steps(
+                &ctrl,
+                &ramp_target,
+                &actuator_map,
+                &request.scene.joint_names,
+                manifest.timestep,
+            )
         } else {
             PUSH_STEPS_PER_WAYPOINT
         };
@@ -1088,11 +1256,11 @@ fn execute_push_witness(
             // probe cannot overshoot between observations. Transit remains
             // batched because it must be object-motion-free.
             let check_steps = if target_index == 0 && is_probe {
-                CONTROL_AUTHORITY_CHECK_STEPS.min(4)
+                PROBE_CONTROL_UPDATE_STEPS
             } else if target_index == 0 {
                 CONTROL_AUTHORITY_CHECK_STEPS
-            } else if probe_motion_ramp {
-                CONTROL_AUTHORITY_CHECK_STEPS.min(4)
+            } else if probe_control_ramp {
+                PROBE_CONTROL_UPDATE_STEPS
             } else {
                 1
             };
@@ -1113,29 +1281,36 @@ fn execute_push_witness(
                 return Ok(audit);
             }
             let steps = remaining_steps.min(check_steps).min(steps_until_expiry);
-            if probe_motion_ramp {
-                let progress = f64::from(elapsed_steps + steps) / f64::from(total_steps);
-                let ramped_ctrl = ctrl
-                    .iter()
-                    .zip(&ramp_target)
-                    .map(|(start, end)| start + (end - start) * progress)
-                    .collect::<Vec<_>>();
-                worker.set_ctrl(&ramped_ctrl).map_err(|error| {
-                    BenchmarkError::Simulation(format!("authorized_probe_ramp_write:{error}"))
-                })?;
+            let control_ramp = probe_control_ramp.then(|| {
                 has_written = true;
-            }
+                MonitoredControlRamp {
+                    start_ctrl: &ctrl,
+                    target_ctrl: &ramp_target,
+                    elapsed_steps,
+                    total_steps,
+                }
+            });
             let monitor = worker
                 .step_monitored(
                     steps,
                     profile,
                     policy,
                     &authorized.grant,
-                    is_probe && probe_motion_ramp && elapsed_steps == 0,
+                    is_probe && motion_phase && elapsed_steps == 0,
+                    false,
+                    control_ramp,
                 )
                 .map_err(|error| {
                     BenchmarkError::Simulation(format!("wrench_monitored_step:{error}"))
                 })?;
+            audit.control_correction_max_rad = audit
+                .control_correction_max_rad
+                .max(monitor.control_correction_max_rad);
+            record_wrench_contacts(&mut audit, &monitor.state);
+            if audit.precontact_baseline_status.is_none() {
+                audit.precontact_baseline_status =
+                    monitor.wrench_window.precontact_baseline_status.clone();
+            }
             if audit.precontact_baseline.is_none() {
                 audit.precontact_baseline = monitor.wrench_window.precontact_baseline.clone();
                 audit.precontact_baseline_position =
@@ -1143,21 +1318,7 @@ fn execute_push_witness(
                 audit.precontact_baseline_orientation =
                     monitor.wrench_window.precontact_baseline_orientation;
             }
-            if audit.monitor_gravity_reference.is_none() {
-                audit.monitor_gravity_reference =
-                    monitor.wrench_window.monitor_gravity_reference.clone();
-                audit.monitor_gravity_reference_position =
-                    monitor.wrench_window.monitor_gravity_reference_position;
-                audit.monitor_gravity_reference_orientation =
-                    monitor.wrench_window.monitor_gravity_reference_orientation;
-            }
-            audit
-                .sensor_positions
-                .extend(monitor.wrench_window.sensor_positions);
-            audit
-                .sensor_orientations
-                .extend(monitor.wrench_window.sensor_orientations);
-            audit.samples.extend(monitor.wrench_window.samples);
+            record_push_wrench_window(&mut audit, monitor.wrench_window);
             remaining_steps -= steps;
             elapsed_steps += steps;
             let mut inject_now = false;
@@ -1229,12 +1390,12 @@ fn execute_push_witness(
             // begin the authorized stroke before the final stroke waypoint,
             // so allow only the requested displacement plus a small model
             // tolerance once contact has been intentionally established.
-            let permitted_planar_displacement = if target_index == 0 {
+            let permitted_planar_displacement = if transit_target {
                 0.005
             } else {
                 requested + 0.005
             };
-            let permitted_along_displacement = if target_index == 0 {
+            let permitted_along_displacement = if transit_target {
                 0.005
             } else {
                 requested + 0.003
@@ -1269,7 +1430,7 @@ fn execute_push_witness(
                 return Ok(audit);
             }
             if remaining_steps > 0
-                && (probe_motion_ramp || remaining_steps % CONTROL_CONVERGENCE_CHECK_STEPS != 0)
+                && (probe_control_ramp || remaining_steps % CONTROL_CONVERGENCE_CHECK_STEPS != 0)
             {
                 continue;
             }
@@ -1279,9 +1440,144 @@ fn execute_push_witness(
                 break;
             }
         }
+        if !converged && is_probe && transit_target {
+            // The probe transit ramp is deliberately slew-limited. Give the
+            // arm a short monitored hold at its already-authorized endpoint
+            // to settle tracking lag before treating a small joint error as
+            // divergence. No new control target or authority is introduced.
+            let mut settle_remaining = PROBE_TRANSIT_TRACKING_SETTLE_STEPS;
+            while settle_remaining > 0 {
+                let runtime_now_s = 10.0 + simulator_now(worker)?;
+                if !authorization_covers_at(authorized, runtime_now_s) {
+                    audit.execution = WitnessExecution::AuthorityExpired;
+                    return Ok(audit);
+                }
+                let steps_until_expiry = ((authorized.grant.scope.expires_at_s - runtime_now_s
+                    + 1e-9)
+                    / manifest.timestep)
+                    .floor()
+                    .max(0.0) as u32;
+                if steps_until_expiry == 0 {
+                    audit.execution = WitnessExecution::AuthorityExpired;
+                    return Ok(audit);
+                }
+                let steps = settle_remaining
+                    .min(PROBE_CONTROL_UPDATE_STEPS)
+                    .min(steps_until_expiry);
+                let monitor = worker
+                    .step_monitored(
+                        steps,
+                        profile,
+                        policy,
+                        &authorized.grant,
+                        false,
+                        false,
+                        None,
+                    )
+                    .map_err(|error| {
+                        BenchmarkError::Simulation(format!(
+                            "wrench_transit_tracking_settle:{error}"
+                        ))
+                    })?;
+                audit.control_correction_max_rad = audit
+                    .control_correction_max_rad
+                    .max(monitor.control_correction_max_rad);
+                record_wrench_contacts(&mut audit, &monitor.state);
+                record_push_wrench_window(&mut audit, monitor.wrench_window);
+                settle_remaining -= steps;
+                if let Some(abort) = monitor.abort {
+                    audit.execution = WitnessExecution::WrenchAborted;
+                    audit.abort = Some(abort);
+                    return Ok(audit);
+                }
+                let displacement = sub3(
+                    body_position(&monitor.state, &request.scene.object_id)?,
+                    request.scene.object_center,
+                );
+                let planar_displacement = displacement[0].hypot(displacement[1]);
+                let along =
+                    direction.map(|axis| displacement[0] * axis[0] + displacement[1] * axis[1]);
+                let lateral = direction
+                    .map(|axis| (displacement[0] * axis[1] - displacement[1] * axis[0]).abs());
+                if planar_displacement > 0.005
+                    || displacement[2].abs() > 0.01
+                    || along.is_some_and(|value| value < -0.005 || value > 0.005)
+                    || lateral.is_some_and(|value| value > 0.006)
+                {
+                    audit.execution = WitnessExecution::Diverged;
+                    return Ok(audit);
+                }
+                let observed = read_named_joints_from_state(
+                    manifest,
+                    &request.scene.joint_names,
+                    &monitor.state,
+                )?;
+                if vectors_near(&observed, &target, 0.02) {
+                    converged = true;
+                    break;
+                }
+            }
+        }
         if !converged {
             audit.execution = WitnessExecution::Diverged;
             return Ok(audit);
+        }
+        if is_probe && target_index + 1 == transit_count && audit.precontact_baseline.is_none() {
+            let mut settle_remaining = PROBE_PRECONTACT_SETTLE_STEPS;
+            while settle_remaining > 0 {
+                let runtime_now_s = 10.0 + simulator_now(worker)?;
+                if !authorization_covers_at(authorized, runtime_now_s) {
+                    audit.execution = WitnessExecution::AuthorityExpired;
+                    return Ok(audit);
+                }
+                let steps_until_expiry = ((authorized.grant.scope.expires_at_s - runtime_now_s
+                    + 1e-9)
+                    / manifest.timestep)
+                    .floor()
+                    .max(0.0) as u32;
+                if steps_until_expiry == 0 {
+                    audit.execution = WitnessExecution::AuthorityExpired;
+                    return Ok(audit);
+                }
+                let steps = settle_remaining.min(steps_until_expiry);
+                let monitor = worker
+                    .step_monitored(steps, profile, policy, &authorized.grant, true, true, None)
+                    .map_err(|error| {
+                        BenchmarkError::Simulation(format!("wrench_precontact_settle:{error}"))
+                    })?;
+                audit.control_correction_max_rad = audit
+                    .control_correction_max_rad
+                    .max(monitor.control_correction_max_rad);
+                record_wrench_contacts(&mut audit, &monitor.state);
+                let baseline_status = monitor.wrench_window.precontact_baseline_status.clone();
+                let baseline = monitor.wrench_window.precontact_baseline.clone();
+                let baseline_position = monitor.wrench_window.precontact_baseline_position;
+                let baseline_orientation = monitor.wrench_window.precontact_baseline_orientation;
+                record_push_wrench_window(&mut audit, monitor.wrench_window);
+                if let Some(abort) = monitor.abort {
+                    audit.execution = WitnessExecution::WrenchAborted;
+                    audit.abort = Some(abort);
+                    return Ok(audit);
+                }
+                if let Some(status) = baseline_status.as_ref() {
+                    audit.precontact_baseline_status = Some(status.clone());
+                }
+                if baseline_status.as_deref() == Some("contact_present") {
+                    audit.execution = WitnessExecution::BaselineUnavailable;
+                    return Ok(audit);
+                }
+                if let Some(baseline) = baseline {
+                    audit.precontact_baseline = Some(baseline);
+                    audit.precontact_baseline_position = baseline_position;
+                    audit.precontact_baseline_orientation = baseline_orientation;
+                    break;
+                }
+                settle_remaining -= steps;
+            }
+            if audit.precontact_baseline.is_none() {
+                audit.execution = WitnessExecution::BaselineUnavailable;
+                return Ok(audit);
+            }
         }
     }
     if is_probe {
@@ -1323,6 +1619,12 @@ fn update_wrench_episode_audit(
     episode.wrench_sensor_profile_digest = Some(profile_digest);
     episode.wrench_compensation_digest = Some(profile.limit_policy.compensation_digest.clone());
     episode.wrench_monitor_gravity_reference = audit.monitor_gravity_reference.clone();
+    episode.wrench_monitor_gravity_reference_status =
+        audit.monitor_gravity_reference_status.clone();
+    episode.wrench_monitor_gravity_reference_history = audit.monitor_gravity_references.clone();
+    episode.wrench_precontact_baseline_status = audit.precontact_baseline_status.clone();
+    episode.wrench_precontact_baseline = audit.precontact_baseline.clone();
+    episode.wrench_contact_pairs = audit.wrench_contact_pairs.clone();
     episode.wrench_monitor_gravity_reference_position = audit.monitor_gravity_reference_position;
     episode.wrench_monitor_gravity_reference_orientation =
         audit.monitor_gravity_reference_orientation;
@@ -1353,17 +1655,41 @@ fn update_wrench_episode_audit(
                 .copied()
                 .unwrap_or([1.0, 0.0, 0.0, 0.0]);
             let reference = audit
-                .monitor_gravity_reference
-                .as_ref()
-                .zip(audit.monitor_gravity_reference_position)
-                .zip(audit.monitor_gravity_reference_orientation)
-                .map(|((sample, position), orientation)| (sample, position, orientation));
+                .sample_gravity_reference_indices
+                .get(index)
+                .copied()
+                .flatten()
+                .and_then(|reference_index| audit.monitor_gravity_references.get(reference_index))
+                .map(|reference| {
+                    (
+                        &reference.sample,
+                        reference.sensor_position,
+                        reference.sensor_orientation,
+                    )
+                })
+                .or_else(|| {
+                    audit
+                        .monitor_gravity_references
+                        .is_empty()
+                        .then(|| {
+                            audit
+                                .monitor_gravity_reference
+                                .as_ref()
+                                .zip(audit.monitor_gravity_reference_position)
+                                .zip(audit.monitor_gravity_reference_orientation)
+                                .map(|((sample, position), orientation)| {
+                                    (sample, position, orientation)
+                                })
+                        })
+                        .flatten()
+                });
             let (compensated, compensated_error) =
                 match super::wrench_sensor::gravity_compensated_wrench(
                     sample,
                     sample_position,
                     sample_orientation,
                     profile.bias,
+                    &profile.model_id,
                     reference,
                 ) {
                     Ok(compensated) => compensated,
@@ -1400,6 +1726,22 @@ fn update_wrench_episode_audit(
             "preauthorized_hold_unverified_fault_latched".into()
         });
         episode.wrench_abort = Some(abort.clone());
+    }
+}
+
+fn record_wrench_contacts(audit: &mut PushWitnessAudit, state: &Value) {
+    let Some(contacts) = state["contacts"].as_array() else {
+        return;
+    };
+    for contact in contacts {
+        let body1 = contact["body1"].as_str().unwrap_or("unknown");
+        let body2 = contact["body2"].as_str().unwrap_or("unknown");
+        let geom1 = contact["geom1_name"].as_str().unwrap_or("unknown_geom");
+        let geom2 = contact["geom2_name"].as_str().unwrap_or("unknown_geom");
+        let record = format!("{body1}/{geom1}<->{body2}/{geom2}");
+        if audit.wrench_contact_pairs.len() < 64 && !audit.wrench_contact_pairs.contains(&record) {
+            audit.wrench_contact_pairs.push(record);
+        }
     }
 }
 
@@ -1702,9 +2044,24 @@ fn decode_push_witness(
     contents: &str,
     joint_count: usize,
     is_probe: bool,
-) -> Option<(Vec<f64>, Vec<Vec<f64>>)> {
+) -> Option<(Vec<f64>, usize, Vec<Vec<f64>>)> {
     let q0 = strict_witness_joint_line(contents, "q0_bits=")?;
     let transit = strict_witness_joint_line(contents, "q_transit_bits=")?;
+    let transit_count_payload = contents
+        .lines()
+        .find_map(|line| line.strip_prefix("transit_state_count="));
+    let has_transit_count = transit_count_payload.is_some();
+    let transit_count = match transit_count_payload {
+        Some(value) => value.parse::<usize>().ok()?,
+        None => 1,
+    };
+    let approach_count = match contents
+        .lines()
+        .find_map(|line| line.strip_prefix("approach_state_count="))
+    {
+        Some(value) => value.parse::<usize>().ok()?,
+        None => 0,
+    };
     let contact = strict_witness_joint_line(contents, "q_contact_bits=")?;
     let end = strict_witness_joint_line(contents, "q_end_bits=")?;
     let stroke_count = contents
@@ -1712,9 +2069,24 @@ fn decode_push_witness(
         .find_map(|line| line.strip_prefix("stroke_state_count="))?
         .parse::<usize>()
         .ok()?;
-    if stroke_count == 0 || stroke_count > 64 {
+    if stroke_count == 0
+        || stroke_count > 64
+        || transit_count == 0
+        || transit_count > 64
+        || approach_count > 64
+    {
         return None;
     }
+    let transit_states = if has_transit_count {
+        (0..transit_count)
+            .map(|index| strict_witness_joint_line(contents, &format!("transit_state_{index}=")))
+            .collect::<Option<Vec<_>>>()?
+    } else {
+        vec![transit.clone()]
+    };
+    let approach_states = (0..approach_count)
+        .map(|index| strict_witness_joint_line(contents, &format!("approach_state_{index}=")))
+        .collect::<Option<Vec<_>>>()?;
     let stroke_states = (0..stroke_count)
         .map(|index| strict_witness_joint_line(contents, &format!("stroke_state_{index}=")))
         .collect::<Option<Vec<_>>>()?;
@@ -1725,10 +2097,20 @@ fn decode_push_witness(
     if joint_count == 0
         || !valid(&q0)
         || !valid(&transit)
+        || transit_states.iter().any(|state| !valid(state))
+        || approach_states.iter().any(|state| !valid(state))
         || !valid(&contact)
         || !valid(&end)
         || stroke_states.iter().any(|state| !valid(state))
         || (is_probe && !retract.as_deref().is_some_and(valid))
+    {
+        return None;
+    }
+    if !transit_states
+        .last()?
+        .iter()
+        .zip(&transit)
+        .all(|(state, transit)| state.to_bits() == transit.to_bits())
     {
         return None;
     }
@@ -1740,12 +2122,14 @@ fn decode_push_witness(
     {
         return None;
     }
-    let mut targets = vec![transit, contact];
+    let mut targets = transit_states;
+    targets.extend(approach_states);
+    targets.push(contact);
     targets.extend(stroke_states);
     if is_probe {
         targets.push(retract?);
     }
-    Some((q0, targets))
+    Some((q0, transit_count, targets))
 }
 
 fn strict_witness_joint_line(contents: &str, prefix: &str) -> Option<Vec<f64>> {
@@ -2335,7 +2719,40 @@ fn position_actuator_map(
     Ok(result)
 }
 
-fn declared_ee_observation_key(bundle: &RobotBundle, ee_name: &str) -> Option<String> {
+fn probe_control_ramp_steps(
+    start_ctrl: &[f64],
+    target_ctrl: &[f64],
+    actuator_map: &BTreeMap<String, usize>,
+    joint_names: &[String],
+    timestep_s: f64,
+) -> u32 {
+    if !timestep_s.is_finite() || timestep_s <= 0.0 || start_ctrl.len() != target_ctrl.len() {
+        return MAX_PROBE_CONTROL_RAMP_STEPS;
+    }
+    let mut maximum_delta_rad = 0.0_f64;
+    for joint in joint_names {
+        let Some(index) = actuator_map.get(joint).copied() else {
+            return MAX_PROBE_CONTROL_RAMP_STEPS;
+        };
+        let (Some(start), Some(target)) = (start_ctrl.get(index), target_ctrl.get(index)) else {
+            return MAX_PROBE_CONTROL_RAMP_STEPS;
+        };
+        let delta = (target - start).abs();
+        if !delta.is_finite() {
+            return MAX_PROBE_CONTROL_RAMP_STEPS;
+        }
+        maximum_delta_rad = maximum_delta_rad.max(delta);
+    }
+    let requested_steps = (maximum_delta_rad / PROBE_JOINT_RAMP_RATE_RAD_S / timestep_s).ceil();
+    if !requested_steps.is_finite() {
+        return MAX_PROBE_CONTROL_RAMP_STEPS;
+    }
+    (requested_steps as u32)
+        .max(MIN_PROBE_CONTROL_RAMP_STEPS)
+        .min(MAX_PROBE_CONTROL_RAMP_STEPS)
+}
+
+pub(super) fn declared_ee_observation_key(bundle: &RobotBundle, ee_name: &str) -> Option<String> {
     let declared = bundle
         .manifest
         .end_effectors
@@ -2347,7 +2764,7 @@ fn declared_ee_observation_key(bundle: &RobotBundle, ee_name: &str) -> Option<St
     declared.site.as_ref().or(declared.body.as_ref()).cloned()
 }
 
-fn build_push_reasoning_request(
+pub(super) fn build_push_reasoning_request(
     bundle: &RobotBundle,
     manifest: &RobotManifest,
     model: &realityos_semantics::embodiment::EmbodimentModel,
@@ -2734,7 +3151,7 @@ fn injected_safety_fault_alerts(
     }]
 }
 
-fn uncertain_push_belief() -> PhysicalParameterBelief {
+pub(super) fn uncertain_push_belief() -> PhysicalParameterBelief {
     let mut belief = PhysicalParameterBelief::declared_point(
         PhysicalParameter::SupportFriction,
         0.5,
@@ -2963,29 +3380,49 @@ pub(super) fn declared_ee_radius(
     use realityos_semantics::geometry::{CollisionRole, PrimitiveShape};
     let ee = model.end_effectors.iter().find(|ee| ee.name == ee_name)?;
     let frame = model.frames.iter().find(|frame| frame.name == ee.frame)?;
-    model
+    let frame_pose = frame.pose()?;
+    let body_from_ee = frame_pose.inverse();
+    let mut found_collision_geom = false;
+    let radius = model
         .collision_geoms
         .iter()
-        .filter(|geom| {
-            geom.owner_body == frame.parent_body && geom.collision_role == CollisionRole::Collision
-        })
-        .filter_map(|geom| match &geom.shape {
-            PrimitiveShape::Sphere { radius }
-            | PrimitiveShape::Capsule { radius, .. }
-            | PrimitiveShape::Cylinder { radius, .. } => Some(radius.abs()),
-            PrimitiveShape::Box { half_extents } => Some(
-                half_extents
+        .filter(|geom| geom.owner_body == frame.parent_body)
+        .try_fold(0.0_f64, |maximum, geom| {
+            match geom.collision_role {
+                CollisionRole::Visual => return Some(maximum),
+                CollisionRole::Collision => {}
+                CollisionRole::Unknown => return None,
+            }
+            found_collision_geom = true;
+            let ee_from_geom = body_from_ee.compose(geom.local_pose);
+            let shape_radius = match &geom.shape {
+                PrimitiveShape::Sphere { radius } => radius.abs(),
+                PrimitiveShape::Capsule {
+                    radius,
+                    half_length,
+                } => radius.abs() + half_length.abs(),
+                PrimitiveShape::Cylinder {
+                    radius,
+                    half_length,
+                } => radius.abs().hypot(half_length.abs()),
+                PrimitiveShape::Box { half_extents } => half_extents
                     .iter()
-                    .map(|value| value.abs())
-                    .fold(0.0, f64::max),
-            ),
-            PrimitiveShape::ConvexMesh { vertices } => vertices
-                .iter()
-                .map(|vertex| vertex[0].hypot(vertex[1]).hypot(vertex[2]))
-                .reduce(f64::max),
-            PrimitiveShape::Plane { .. } | PrimitiveShape::Unsupported { .. } => None,
-        })
-        .reduce(f64::max)
+                    .map(|value| value.abs().powi(2))
+                    .sum::<f64>()
+                    .sqrt(),
+                PrimitiveShape::ConvexMesh { vertices } => vertices
+                    .iter()
+                    .map(|vertex| vertex[0].hypot(vertex[1]).hypot(vertex[2]))
+                    .reduce(f64::max)?,
+                PrimitiveShape::Plane { .. } | PrimitiveShape::Unsupported { .. } => return None,
+            };
+            let bound = ee_from_geom.xyz[0]
+                .hypot(ee_from_geom.xyz[1])
+                .hypot(ee_from_geom.xyz[2])
+                + shape_radius;
+            bound.is_finite().then_some(maximum.max(bound))
+        })?;
+    found_collision_geom.then_some(radius)
 }
 
 fn witness_joint_line(contents: &str, prefix: &str) -> Vec<f64> {
@@ -3040,10 +3477,19 @@ fn truth_position(truth: &VerifierTruth, name: &str) -> Option<[f64; 3]> {
 
 #[cfg(test)]
 mod witness_tests {
-    use super::{decode_push_witness, injected_safety_fault_alerts};
+    use super::{
+        declared_ee_radius, decode_push_witness, injected_safety_fault_alerts,
+        probe_control_ramp_steps,
+    };
     use crate::manipulation_scenarios::{push_scenario, NegKind};
+    use realityos_semantics::embodiment::{EmbodimentModel, EndEffector, FrameKind, ModelFrame};
+    use realityos_semantics::geometry::{
+        CollisionRole, PrimitiveShape, RigidGeometry, SemanticRole,
+    };
     use realityos_semantics::physical_reasoner::SafetyFaultKind;
     use realityos_semantics::provenance::Provenance;
+    use realityos_semantics::provenance::Provenanced;
+    use realityos_semantics::transform::Se3;
 
     fn line(name: &str, values: &[f64]) -> String {
         let bits = values
@@ -3054,10 +3500,89 @@ mod witness_tests {
         format!("{name}={bits}\n")
     }
 
+    #[test]
+    fn declared_ee_radius_is_conservative_and_fails_closed() {
+        let mut model = EmbodimentModel::new("test", "bundle", "model", "epoch", "version");
+        model.end_effectors.push(EndEffector {
+            name: "tool".into(),
+            frame: "tool".into(),
+            joint_chain: Vec::new(),
+        });
+        model.frames.push(ModelFrame {
+            name: "tool".into(),
+            kind: FrameKind::Ee,
+            parent_body: "wrist".into(),
+            translation: Provenanced::declared([0.02, 0.0, 0.0], "test", 0.0),
+            rotation: Provenanced::declared([1.0, 0.0, 0.0, 0.0], "test", 0.0),
+        });
+        model.collision_geoms.push(RigidGeometry::declared(
+            "offset_tool_collision",
+            "wrist",
+            Se3::translation([0.0, 0.03, 0.0]).expect("finite test pose"),
+            PrimitiveShape::Sphere { radius: 0.01 },
+            CollisionRole::Collision,
+            SemanticRole::Tool,
+            "test",
+        ));
+
+        let radius = declared_ee_radius(&model, "tool").expect("supported collision geometry");
+        assert!((radius - (0.02_f64.hypot(0.03) + 0.01)).abs() < 1e-12);
+
+        model.collision_geoms.push(RigidGeometry::declared(
+            "unknown_tool_collision",
+            "wrist",
+            Se3::identity(),
+            PrimitiveShape::Unsupported {
+                kind: "unknown_mesh".into(),
+            },
+            CollisionRole::Collision,
+            SemanticRole::Tool,
+            "test",
+        ));
+        assert!(declared_ee_radius(&model, "tool").is_none());
+
+        model.collision_geoms.pop();
+        model.collision_geoms.push(RigidGeometry::declared(
+            "unknown_role_tool_geom",
+            "wrist",
+            Se3::identity(),
+            PrimitiveShape::Sphere { radius: 0.01 },
+            CollisionRole::Unknown,
+            SemanticRole::Tool,
+            "test",
+        ));
+        assert!(declared_ee_radius(&model, "tool").is_none());
+    }
+
+    #[test]
+    fn probe_ramp_duration_scales_with_joint_segment_and_keeps_existing_cap() {
+        let joints = vec!["joint1".to_string(), "joint2".to_string()];
+        let actuator_map =
+            std::collections::BTreeMap::from([(joints[0].clone(), 0), (joints[1].clone(), 1)]);
+
+        assert_eq!(
+            probe_control_ramp_steps(&[0.0, 0.0], &[0.02, 0.20], &actuator_map, &joints, 0.002,),
+            1_000,
+            "a 0.2 rad segment should use the registered 0.1 rad/s ramp"
+        );
+        assert_eq!(
+            probe_control_ramp_steps(&[0.0, 0.0], &[0.02, 2.0], &actuator_map, &joints, 0.002,),
+            6_000,
+            "long segments keep the existing 6,000-step ceiling"
+        );
+        assert_eq!(
+            probe_control_ramp_steps(&[0.0, 0.0], &[0.0, 0.0], &actuator_map, &joints, 0.002,),
+            100,
+            "stationary targets retain a minimum monitored control window"
+        );
+    }
+
     fn witness(include_retract: bool) -> String {
         let mut contents = String::new();
         contents.push_str(&line("q0_bits", &[0.1, 0.2]));
         contents.push_str(&line("q_transit_bits", &[0.2, 0.3]));
+        contents.push_str("transit_state_count=1\n");
+        contents.push_str(&line("transit_state_0", &[0.2, 0.3]));
         contents.push_str(&line("q_contact_bits", &[0.3, 0.4]));
         contents.push_str(&line("q_end_bits", &[0.4, 0.5]));
         contents.push_str("stroke_state_count=2\n");
@@ -3090,9 +3615,53 @@ mod witness_tests {
     fn non_probe_push_witness_does_not_require_retreat() {
         let decoded = decode_push_witness(&witness(false), 2, false)
             .expect("ordinary push witnesses have checked stroke waypoints");
-        assert_eq!(decoded.1.len(), 4);
-        assert_eq!(decoded.1[2], vec![0.35, 0.45]);
-        assert_eq!(decoded.1[3], vec![0.4, 0.5]);
+        assert_eq!(decoded.1, 1);
+        assert_eq!(decoded.2.len(), 4);
+        assert_eq!(decoded.2[2], vec![0.35, 0.45]);
+        assert_eq!(decoded.2[3], vec![0.4, 0.5]);
+    }
+
+    #[test]
+    fn push_witness_requires_transit_path_to_end_at_certified_standoff() {
+        let multi_waypoint = witness(false)
+            .replace("transit_state_count=1", "transit_state_count=2")
+            .replace(
+                &line("transit_state_0", &[0.2, 0.3]),
+                &line("transit_state_0", &[0.15, 0.25]),
+            )
+            + &line("transit_state_1", &[0.2, 0.3]);
+        let decoded = decode_push_witness(&multi_waypoint, 2, false)
+            .expect("every certified transit waypoint is executable in order");
+        assert_eq!(decoded.1, 2);
+        assert_eq!(decoded.2[0], vec![0.15, 0.25]);
+        assert_eq!(decoded.2[1], vec![0.2, 0.3]);
+        assert_eq!(decoded.2[2], vec![0.3, 0.4]);
+
+        let mut malformed = witness(false);
+        malformed.push_str(&line("transit_state_1", &[0.25, 0.35]));
+        malformed = malformed.replace("transit_state_count=1", "transit_state_count=2");
+        assert!(decode_push_witness(&malformed, 2, false).is_none());
+    }
+
+    #[test]
+    fn push_witness_executes_certified_approach_waypoints_before_contact() {
+        let contents = witness(false).replace(
+            &line("q_contact_bits", &[0.3, 0.4]),
+            &format!(
+                "approach_state_count=2\n{}{}{}",
+                line("approach_state_0", &[0.24, 0.34]),
+                line("approach_state_1", &[0.27, 0.37]),
+                line("q_contact_bits", &[0.3, 0.4]),
+            ),
+        );
+        let decoded = decode_push_witness(&contents, 2, false)
+            .expect("all force-monitored approach states are part of the executed witness");
+        assert_eq!(decoded.1, 1, "approach waypoints follow the transit phase");
+        assert_eq!(decoded.2.len(), 6);
+        assert_eq!(decoded.2[0], vec![0.2, 0.3]);
+        assert_eq!(decoded.2[1], vec![0.24, 0.34]);
+        assert_eq!(decoded.2[2], vec![0.27, 0.37]);
+        assert_eq!(decoded.2[3], vec![0.3, 0.4]);
     }
 
     #[test]

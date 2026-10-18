@@ -34,8 +34,11 @@ impl ContactPhase {
         match self {
             Self::ContactStroke | Self::GraspApproach | Self::GraspClose | Self::GraspLift => true,
             Self::ApproachToContact => n_samples > 0 && sample_i + 1 == n_samples,
-            // Start may already sit near the face; retracting is not a strike.
-            Self::CurrentToApproach | Self::FreeSpace => true,
+            // Transit to a manipulation standoff must remain object-free. A
+            // state that starts in contact needs a separately proven retreat
+            // before it can be used as a probe approach.
+            Self::CurrentToApproach => false,
+            Self::FreeSpace => true,
         }
     }
 }
@@ -205,6 +208,19 @@ mod tests {
         assert_eq!(
             p.permit("tool", "object", ContactPhase::ApproachToContact, 7, 8),
             PairPermission::Allowed
+        );
+    }
+
+    #[test]
+    fn current_to_approach_transit_must_stay_clear_of_the_object() {
+        let p = policy();
+        assert_eq!(
+            p.permit("tool", "object", ContactPhase::CurrentToApproach, 0, 8),
+            PairPermission::Forbidden
+        );
+        assert_eq!(
+            p.permit("tool", "object", ContactPhase::CurrentToApproach, 7, 8),
+            PairPermission::Forbidden
         );
     }
 

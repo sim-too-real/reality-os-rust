@@ -47,6 +47,8 @@ fn simulation_admission(expires_at_s: f64) -> SimulationAdmission {
         },
         sensor_calibration_hash: "test-sensor-calibration-v1".into(),
         sensor_sample_rate_hz: 125.0,
+        max_position_tracking_correction_rad: 0.0,
+        position_tracking_correction_gain: 0.0,
         max_rise_rate: [10.0; 6],
         max_sensing_latency_s: 0.01,
         max_abort_latency_s: 0.03,

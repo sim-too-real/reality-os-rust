@@ -8,7 +8,6 @@ joint_aliases: {}
 actuator_aliases: {}
 end_effectors:
   - name: tool0
-    site: attachment_site
     body: link7
 grippers: []
 feet: []

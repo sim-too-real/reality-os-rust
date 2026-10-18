@@ -445,6 +445,8 @@ class Instance:
                 {
                     "geom1": g1,
                     "geom2": g2,
+                    "geom1_name": m.geom(g1).name or f"geom_{g1}",
+                    "geom2_name": m.geom(g2).name or f"geom_{g2}",
                     "dist": float(c.dist),
                     "pos": [float(x) for x in c.pos],
                     "body1": m.body(int(m.geom_bodyid[g1])).name if g1 >= 0 else "",
@@ -687,8 +689,25 @@ def _digest_string(hasher, value: str) -> None:
 def _policy_digest(policy: dict[str, Any]) -> str:
     scope = policy["scope"]
     contract = policy["abort_contract"]
+    tracking_correction = float(policy.get("max_position_tracking_correction_rad", 0.0))
+    tracking_gain = float(policy.get("position_tracking_correction_gain", 0.0))
+    if (
+        not math.isfinite(tracking_correction)
+        or tracking_correction < 0.0
+        or tracking_correction > 0.05
+        or not math.isfinite(tracking_gain)
+        or tracking_gain < 0.0
+        or tracking_gain > 3.0
+        or (tracking_correction == 0.0 and tracking_gain != 0.0)
+        or (tracking_correction > 0.0 and tracking_gain == 0.0)
+    ):
+        raise ValueError("position_tracking_correction_bound")
     hasher = hashlib.sha256()
-    hasher.update(b"realityos.wrench_limit_policy/1\0")
+    hasher.update(
+        b"realityos.wrench_limit_policy/2\0"
+        if tracking_correction > 0.0
+        else b"realityos.wrench_limit_policy/1\0"
+    )
     _digest_string(hasher, str(scope["sensor_id"]))
     _digest_string(hasher, str(scope["sensor_frame"]))
     for value in scope["caps"]:
@@ -696,6 +715,9 @@ def _policy_digest(policy: dict[str, Any]) -> str:
     _digest_string(hasher, str(scope["abort_contract_id"]))
     _digest_string(hasher, str(policy["sensor_calibration_hash"]))
     hasher.update(struct.pack("<d", float(policy["sensor_sample_rate_hz"])))
+    if tracking_correction > 0.0:
+        hasher.update(struct.pack("<d", tracking_correction))
+        hasher.update(struct.pack("<d", tracking_gain))
     for value in policy["max_rise_rate"]:
         hasher.update(struct.pack("<d", float(value)))
     for field in (
@@ -748,7 +770,10 @@ def _wrench_profile_steps(profile: dict[str, Any], profile_digest: str, timestep
     sensor_frame = str(profile.get("sensor_frame") or "")
     if (
         not sensor_id
-        or profile.get("model_id") != "mujoco-force-torque-sensor-gravity-baseline-v1"
+        or profile.get("model_id") not in {
+            "mujoco-force-torque-sensor-gravity-baseline-v1",
+            "mujoco-force-torque-sensor-gravity-baseline-v2",
+        }
         or not sensor_frame
         or profile.get("units") != "N,N*m"
         or profile.get("calibration_hash") != policy.get("sensor_calibration_hash")
@@ -952,11 +977,45 @@ def _sensor_subtree_has_contact(sensor_ids: tuple[int, int]) -> bool:
     return False
 
 
-def _sensor_is_quiescent() -> bool:
-    """Only use a stationary start state as a gravity/load baseline."""
-    d = INST.data
-    assert d is not None
-    return _finite(d.qvel) and max((abs(float(value)) for value in d.qvel), default=0.0) <= 1e-3
+def _sensor_is_quiescent(sensor_ids: tuple[int, int]) -> bool:
+    """Require the instrumented subtree's joints to have settled, not merely zero velocity."""
+    m, d = INST.model, INST.data
+    assert m is not None and d is not None
+    site_id = int(m.sensor_objid[sensor_ids[0]])
+    sensor_body = int(m.site_bodyid[site_id])
+
+    def is_ancestor_or_same(ancestor: int, body_id: int) -> bool:
+        while body_id > 0:
+            if body_id == ancestor:
+                return True
+            body_id = int(m.body_parentid[body_id])
+        return ancestor == 0
+
+    dof_count_by_joint_type = {0: 6, 1: 3, 2: 1, 3: 1}
+    relevant_velocities = []
+    relevant_accelerations = []
+    for joint_id in range(int(m.njnt)):
+        joint_body = int(m.jnt_bodyid[joint_id])
+        if not (
+            is_ancestor_or_same(joint_body, sensor_body)
+            or is_ancestor_or_same(sensor_body, joint_body)
+        ):
+            continue
+        dof_address = int(m.jnt_dofadr[joint_id])
+        dof_count = dof_count_by_joint_type.get(int(m.jnt_type[joint_id]), 0)
+        relevant_velocities.extend(
+            float(d.qvel[dof_address + offset]) for offset in range(dof_count)
+        )
+        relevant_accelerations.extend(
+            float(d.qacc[dof_address + offset]) for offset in range(dof_count)
+        )
+    return (
+        bool(relevant_velocities)
+        and _finite(relevant_velocities)
+        and _finite(relevant_accelerations)
+        and max((abs(value) for value in relevant_velocities), default=0.0) <= 1e-3
+        and max((abs(value) for value in relevant_accelerations), default=0.0) <= 1e-2
+    )
 
 
 def _compensate_wrench_with_reference(
@@ -964,7 +1023,7 @@ def _compensate_wrench_with_reference(
     profile: dict[str, Any],
     reference: dict[str, Any] | None,
 ) -> tuple[list[float], list[float]]:
-    """Remove bias and transform the stationary no-contact load into this sensor pose."""
+    """Remove bias and rotate the rigidly attached no-contact load into this sensor frame."""
     compensated = [
         float(sample["wrench"][axis]) - float(profile["bias"][axis])
         for axis in range(6)
@@ -985,28 +1044,29 @@ def _compensate_wrench_with_reference(
     current_rotation = current_rotation.reshape((3, 3))
     force_world = reference_rotation @ np.asarray(reference_wrench[:3], dtype=float)
     torque_world = reference_rotation @ np.asarray(reference_wrench[3:], dtype=float)
-    arm = np.asarray(reference["sensor_position"], dtype=float) - np.asarray(
-        sample["sensor_position"], dtype=float
-    )
-    torque_world = torque_world + np.cross(arm, force_world)
+    reference_bounds = np.asarray(reference["error_bounds"], dtype=float)
+    force_error_world = np.abs(reference_rotation) @ reference_bounds[:3]
+    torque_error_world = np.abs(reference_rotation) @ reference_bounds[3:]
+    if profile["model_id"] == "mujoco-force-torque-sensor-gravity-baseline-v1":
+        arm = np.asarray(reference["sensor_position"], dtype=float) - np.asarray(
+            sample["sensor_position"], dtype=float
+        )
+        torque_world = torque_world + np.cross(arm, force_world)
+        arm_error = np.abs(arm)
+        torque_error_world += np.asarray(
+            [
+                arm_error[1] * force_error_world[2] + arm_error[2] * force_error_world[1],
+                arm_error[2] * force_error_world[0] + arm_error[0] * force_error_world[2],
+                arm_error[0] * force_error_world[1] + arm_error[1] * force_error_world[0],
+            ],
+            dtype=float,
+        )
     force_current = current_rotation.T @ force_world
     torque_current = current_rotation.T @ torque_world
     for axis in range(3):
         compensated[axis] -= float(force_current[axis])
         compensated[axis + 3] -= float(torque_current[axis])
 
-    reference_bounds = np.asarray(reference["error_bounds"], dtype=float)
-    force_error_world = np.abs(reference_rotation) @ reference_bounds[:3]
-    torque_error_world = np.abs(reference_rotation) @ reference_bounds[3:]
-    arm_error = np.abs(arm)
-    torque_error_world += np.asarray(
-        [
-            arm_error[1] * force_error_world[2] + arm_error[2] * force_error_world[1],
-            arm_error[2] * force_error_world[0] + arm_error[0] * force_error_world[2],
-            arm_error[0] * force_error_world[1] + arm_error[1] * force_error_world[0],
-        ],
-        dtype=float,
-    )
     force_error_current = np.abs(current_rotation.T) @ force_error_world
     torque_error_current = np.abs(current_rotation.T) @ torque_error_world
     for axis in range(3):
@@ -1070,6 +1130,83 @@ def _validate_monitored_grant(msg: dict[str, Any], policy: dict[str, Any]) -> No
         raise ValueError("wrench_grant_stroke_bounds")
 
 
+def _validate_monitored_control_ramp(
+    msg: dict[str, Any], policy: dict[str, Any], n: int
+) -> dict[str, Any] | None:
+    ramp = msg.get("control_ramp")
+    if ramp is None:
+        return None
+    if not isinstance(ramp, dict):
+        raise ValueError("wrench_control_ramp_shape")
+    m, d = INST.model, INST.data
+    assert m is not None and d is not None
+    start = ramp.get("start_ctrl")
+    target = ramp.get("target_ctrl")
+    elapsed = int(ramp.get("elapsed_steps", -1))
+    total = int(ramp.get("total_steps", 0))
+    if (
+        not isinstance(start, list)
+        or not isinstance(target, list)
+        or len(start) != int(m.nu)
+        or len(target) != int(m.nu)
+        or not _finite(start)
+        or not _finite(target)
+        or elapsed < 0
+        or total <= 0
+        or elapsed + n > total
+        or total > 100_000
+    ):
+        raise ValueError("wrench_control_ramp_bounds")
+    allowed = set(_validate_wrench_abort_contract(policy))
+    allowed_ids = set()
+    for actuator_name in allowed:
+        actuator_id = int(mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name))
+        if actuator_id < 0:
+            raise ValueError(f"wrench_control_ramp_actuator_unknown:{actuator_name}")
+        allowed_ids.add(actuator_id)
+    for index, (start_value, target_value) in enumerate(zip(start, target)):
+        if index not in allowed_ids:
+            if abs(float(target_value) - float(start_value)) > 1e-12:
+                raise ValueError(f"wrench_control_ramp_out_of_scope:{index}")
+            continue
+        low, high = (float(value) for value in m.actuator_ctrlrange[index])
+        if (
+            not bool(m.actuator_ctrllimited[index])
+            or float(start_value) < low - 1e-10
+            or float(start_value) > high + 1e-10
+            or float(target_value) < low - 1e-10
+            or float(target_value) > high + 1e-10
+        ):
+            raise ValueError(f"wrench_control_ramp_ctrlrange:{index}")
+        if (
+            int(m.actuator_trntype[index]) not in (0, 1)
+            or int(m.actuator_biastype[index]) != 1
+        ):
+            raise ValueError(f"wrench_control_ramp_actuator_not_position_joint:{index}")
+        joint_id = int(m.actuator_trnid[index][0])
+        if (
+            joint_id < 0
+            or joint_id >= m.njnt
+            or int(m.jnt_type[joint_id]) not in (2, 3)
+        ):
+            raise ValueError(f"wrench_control_ramp_joint_not_scalar:{index}")
+    progress = elapsed / total
+    eased = progress * progress * (3.0 - 2.0 * progress)
+    for index, (start_value, target_value) in enumerate(zip(start, target)):
+        expected = float(start_value) + (float(target_value) - float(start_value)) * eased
+        correction_bound = float(policy.get("max_position_tracking_correction_rad", 0.0))
+        allowed_error = correction_bound + 1e-8 if index in allowed_ids else 1e-8
+        if abs(float(d.ctrl[index]) - expected) > allowed_error:
+            raise ValueError(f"wrench_control_ramp_stale_start:{index}")
+    return {
+        "start_ctrl": start,
+        "target_ctrl": target,
+        "elapsed_steps": elapsed,
+        "total_steps": total,
+        "tracking_actuator_ids": sorted(allowed_ids),
+    }
+
+
 def _hold_current_position(policy: dict[str, Any]) -> tuple[bool, list[str]]:
     """Apply one bounded safe write to the registered scalar position joints."""
     m, d = INST.model, INST.data
@@ -1124,10 +1261,12 @@ def _trip_wrench_monitor(
     stopped_at_s = float(INST.data.time)
     stop_verified = False
     stop_actuator_ids: list[str] = []
+    stop_error: str | None = None
     try:
         stop_verified, stop_actuator_ids = _hold_current_position(policy)
-    except Exception:
+    except Exception as error:
         stop_verified = False
+        stop_error = f"{type(error).__name__}:{error}"
     stopped_at_s = float(INST.data.time)
     write_count = INST.safe_write_count - write_before
     stop_verified = bool(
@@ -1144,6 +1283,7 @@ def _trip_wrench_monitor(
         "contract_id": str(contract.get("contract_id") or ""),
         "stop_verified": stop_verified,
         "stop_actuator_ids": stop_actuator_ids,
+        "stop_error": stop_error,
     }
 
 
@@ -1434,6 +1574,26 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
             if len(v) != INST.model.nv:
                 return {"ok": False, "error": f"qvel_dim:{len(v)}!={INST.model.nv}"}
             INST.data.qvel[:] = v
+        # A randomized benchmark reset places the robot at an observed pose.
+        # Initialize position-servo targets to that same pose so the first
+        # monitored step does not create an artificial startup transient.
+        for actuator_id in range(int(INST.model.nu)):
+            joint_id = int(INST.model.actuator_trnid[actuator_id][0])
+            if (
+                int(INST.model.actuator_trntype[actuator_id]) not in (0, 1)
+                or int(INST.model.actuator_biastype[actuator_id]) != 1
+                or joint_id < 0
+                or joint_id >= INST.model.njnt
+                or int(INST.model.jnt_type[joint_id]) not in (2, 3)
+                or not bool(INST.model.actuator_ctrllimited[actuator_id])
+            ):
+                continue
+            qpos_address = int(INST.model.jnt_qposadr[joint_id])
+            value = float(INST.data.qpos[qpos_address])
+            lower, upper = INST.model.actuator_ctrlrange[actuator_id]
+            if float(lower) <= value <= float(upper):
+                INST.data.ctrl[actuator_id] = value
+        INST.last_ctrl = [float(value) for value in INST.data.ctrl]
         mujoco.mj_forward(INST.model, INST.data)
         return {"ok": True, "state": INST.state()}
     if cmd == "peek_ctrl":
@@ -1461,7 +1621,10 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
         profile_digest = str(msg.get("profile_digest") or "").lower()
         validated = False
         samples: list[dict[str, Any]] = []
+        control_correction_max_rad = 0.0
         precontact_baseline_record = None
+        precontact_baseline_status = None
+        monitor_gravity_reference_status = None
         gravity_reference = None
         try:
             if not isinstance(profile, dict) or not isinstance(policy, dict):
@@ -1489,6 +1652,7 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
             n = int(msg.get("n", 0))
             if n <= 0 or n > 100_000:
                 raise ValueError("wrench_step_count")
+            control_ramp = _validate_monitored_control_ramp(msg, policy, n)
             validated = True
             profile_digest = profile_digest.lower()
             sequence = int(INST.wrench_sequence_by_profile.get(profile_digest, 0))
@@ -1500,9 +1664,13 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
             monitor_started_s = float(INST.wrench_monitor_started_by_profile.setdefault(profile_digest, INST.data.time))
             drop_wrench_samples = bool(msg.get("drop_wrench_samples", False))
             request_precontact_baseline = bool(msg.get("request_precontact_baseline", False))
+            request_monitor_gravity_reference = bool(
+                msg.get("request_monitor_gravity_reference", False)
+            )
             if (
                 not drop_wrench_samples
                 and not request_precontact_baseline
+                and not request_monitor_gravity_reference
                 and latest is None
                 and not pending
                 and sequence == 0
@@ -1512,12 +1680,46 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                 initial = _sample_tool_wrench(profile, profile_digest, sequence, sensor_ids)
                 samples.append(initial)
                 pending.append(initial)
-                if not _sensor_subtree_has_contact(sensor_ids) and _sensor_is_quiescent():
+                if not _sensor_subtree_has_contact(sensor_ids) and _sensor_is_quiescent(sensor_ids):
                     gravity_reference = dict(initial)
                 sequence += 1
+            if not drop_wrench_samples and request_monitor_gravity_reference:
+                if _sensor_subtree_has_contact(sensor_ids):
+                    monitor_gravity_reference_status = "contact_present"
+                elif not _sensor_is_quiescent(sensor_ids):
+                    monitor_gravity_reference_status = "sensor_not_quiescent"
+                else:
+                    # An explicit request refreshes the reference for the
+                    # current settled motion phase. A home-pose reference can
+                    # be stale after the arm moves to its pre-contact pose.
+                    monitor_gravity_reference_status = "captured"
+                    reference_candidates = list(pending)
+                    if latest is not None:
+                        reference_candidates.append(latest)
+                    reference_record = next(
+                        (
+                            candidate
+                            for candidate in reversed(reference_candidates)
+                            if abs(float(candidate["capture_s"]) - float(INST.data.time)) <= 1e-12
+                        ),
+                        None,
+                    )
+                    if reference_record is None:
+                        reference_record = _sample_tool_wrench(
+                            profile, profile_digest, sequence, sensor_ids
+                        )
+                        samples.append(reference_record)
+                        pending.append(reference_record)
+                        sequence += 1
+                    gravity_reference = dict(reference_record)
             if not drop_wrench_samples and request_precontact_baseline:
                 mujoco.mj_forward(INST.model, INST.data)
-                if not _sensor_subtree_has_contact(sensor_ids) and _sensor_is_quiescent():
+                if _sensor_subtree_has_contact(sensor_ids):
+                    precontact_baseline_status = "contact_present"
+                elif not _sensor_is_quiescent(sensor_ids):
+                    precontact_baseline_status = "sensor_not_quiescent"
+                else:
+                    precontact_baseline_status = "captured"
                     baseline_candidates = list(pending)
                     if latest is not None:
                         baseline_candidates.append(latest)
@@ -1540,7 +1742,45 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                     if gravity_reference is None:
                         gravity_reference = dict(baseline_record)
             abort = None
-            for _ in range(n):
+            for step_offset in range(n):
+                if control_ramp is not None:
+                    progress = (
+                        control_ramp["elapsed_steps"] + step_offset + 1
+                    ) / control_ramp["total_steps"]
+                    eased_progress = progress * progress * (3.0 - 2.0 * progress)
+                    ramped_ctrl = [
+                        float(start) + (float(end) - float(start)) * eased_progress
+                        for start, end in zip(
+                            control_ramp["start_ctrl"], control_ramp["target_ctrl"]
+                        )
+                    ]
+                    correction_bound = float(
+                        policy.get("max_position_tracking_correction_rad", 0.0)
+                    )
+                    if correction_bound > 0.0:
+                        for actuator_id in control_ramp["tracking_actuator_ids"]:
+                            joint_id = int(INST.model.actuator_trnid[actuator_id][0])
+                            qpos_address = int(INST.model.jnt_qposadr[joint_id])
+                            desired = ramped_ctrl[actuator_id]
+                            measured = float(INST.data.qpos[qpos_address])
+                            correction = max(
+                                -correction_bound,
+                                min(
+                                    correction_bound,
+                                    float(policy["position_tracking_correction_gain"])
+                                    * (desired - measured),
+                                ),
+                            )
+                            low, high = (
+                                float(value)
+                                for value in INST.model.actuator_ctrlrange[actuator_id]
+                            )
+                            corrected = max(low, min(high, desired + correction))
+                            control_correction_max_rad = max(
+                                control_correction_max_rad, abs(corrected - desired)
+                            )
+                            ramped_ctrl[actuator_id] = corrected
+                    _set_ctrl(ramped_ctrl, write=True)
                 mujoco.mj_step(INST.model, INST.data)
                 if not _finite(INST.data.qpos) or not _finite(INST.data.qvel):
                     abort = _trip_wrench_monitor({"kind": "monitor_fault"}, policy, float(INST.data.time))
@@ -1571,6 +1811,36 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                     latest = candidate
                 if abort is not None:
                     break
+                if (
+                    not drop_wrench_samples
+                    and request_monitor_gravity_reference
+                    and monitor_gravity_reference_status == "sensor_not_quiescent"
+                    and latest is not None
+                    and step_count % step_interval == 0
+                ):
+                    if _sensor_subtree_has_contact(sensor_ids):
+                        monitor_gravity_reference_status = "contact_present"
+                    elif _sensor_is_quiescent(sensor_ids):
+                        # A batched monitored settle may begin while gravity
+                        # dynamics are still moving the arm. Capture only once
+                        # a received sample coincides with a contact-free,
+                        # quiescent sensor subtree.
+                        monitor_gravity_reference_status = "captured"
+                        gravity_reference = dict(latest)
+                if (
+                    not drop_wrench_samples
+                    and request_precontact_baseline
+                    and precontact_baseline_status == "sensor_not_quiescent"
+                    and latest is not None
+                    and step_count % step_interval == 0
+                ):
+                    if _sensor_subtree_has_contact(sensor_ids):
+                        precontact_baseline_status = "contact_present"
+                    elif _sensor_is_quiescent(sensor_ids):
+                        precontact_baseline_status = "captured"
+                        precontact_baseline_record = dict(latest)
+                        if gravity_reference is None:
+                            gravity_reference = dict(latest)
                 reason = _monitor_reason(
                     latest,
                     None,
@@ -1583,6 +1853,13 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                 if reason is not None:
                     abort = _trip_wrench_monitor(reason, policy, now_s)
                     break
+            if (
+                abort is not None
+                and abort["reason"].get("kind") == "limit"
+                and latest is not None
+            ):
+                abort["triggering_sensor_position"] = latest.get("sensor_position")
+                abort["triggering_sensor_orientation"] = latest.get("sensor_quaternion")
             INST.wrench_sequence_by_profile[profile_digest] = sequence
             INST.wrench_step_by_profile[profile_digest] = step_count
             INST.wrench_latest_by_profile[profile_digest] = latest
@@ -1598,7 +1875,15 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                 "sensor_id": str(profile["sensor_id"]),
                 "profile_digest": profile_digest,
                 "precontact_baseline": precontact_baseline_record,
+                "precontact_baseline_status": precontact_baseline_status,
+                "monitor_gravity_reference_status": monitor_gravity_reference_status,
+                "triggering_sample": (
+                    latest
+                    if abort is not None and abort["reason"].get("kind") == "limit"
+                    else None
+                ),
                 "monitor_gravity_reference": gravity_reference,
+                "control_correction_max_rad": control_correction_max_rad,
                 "evidence_status": EVIDENCE_STATUS,
                 "abort": abort,
                 "metal": False,
@@ -1615,7 +1900,15 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                     "sensor_id": str(profile["sensor_id"]),
                     "profile_digest": profile_digest,
                     "precontact_baseline": precontact_baseline_record,
+                    "precontact_baseline_status": precontact_baseline_status,
+                    "monitor_gravity_reference_status": monitor_gravity_reference_status,
+                    "triggering_sample": (
+                        latest
+                        if fault is not None and fault["reason"].get("kind") == "limit"
+                        else None
+                    ),
                     "monitor_gravity_reference": gravity_reference,
+                    "control_correction_max_rad": control_correction_max_rad,
                     "evidence_status": EVIDENCE_STATUS,
                     "abort": fault,
                     "monitor_error": str(exc),

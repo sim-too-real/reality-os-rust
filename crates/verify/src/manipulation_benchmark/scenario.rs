@@ -12,17 +12,192 @@ use realityos_semantics::allowed_contact::ContactPhase;
 use realityos_semantics::contact_collision::{
     policy_from_scene_model, scene_from_collision_world, CollisionWorld, NamedBox,
 };
+use realityos_semantics::physical_reasoner::PhysicalReasoner;
 use realityos_semantics::transition_validity::{validate_transition, GeometryVerdict};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-pub const BENCHMARK_SCHEMA_VERSION: u32 = 6;
+pub const BENCHMARK_SCHEMA_VERSION: u32 = 7;
+const LEGACY_PAIRED_SCHEMA_VERSION: u32 = 6;
 const EMBODIMENT_REGISTRY_SCHEMA_VERSION: u32 = 5;
 const MAX_SAFE_INITIAL_QPOS_ATTEMPTS: usize = 64;
-pub const PILOT_SEEDS: std::ops::Range<u64> = 9000..9020;
-pub const PUBLIC_SEEDS: std::ops::Range<u64> = 0..100;
+const MIN_POSITIVE_JOINT_MARGIN_RAD: f64 = 0.1;
+pub const PILOT_SEEDS: std::ops::Range<u64> = 19000..19020;
+pub const PUBLIC_SEEDS: std::ops::Range<u64> = 20000..20100;
 pub const HOLDOUT_SEEDS: std::ops::Range<u64> = 10000..10100;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PushTrialStratum {
+    ExpectedSuccess,
+    ExpectedRefusal,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PositivePushRandomization {
+    pub object_x_m: [f64; 2],
+    pub object_y_m: [f64; 2],
+    pub half_size_m: [f64; 2],
+    pub half_height_m: [f64; 2],
+    pub mass_kg: [f64; 2],
+    pub friction: [f64; 2],
+    pub push_distance_m: [f64; 2],
+    pub obstacle_count: [u32; 2],
+    pub obstacle_forward_m: [f64; 2],
+    pub obstacle_lateral_m: [f64; 2],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScenarioSeedRange {
+    pub name: String,
+    pub start_inclusive: u64,
+    pub end_exclusive: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScenarioSuiteManifest {
+    pub schema_version: u32,
+    pub suite_id: String,
+    pub suite_version: u32,
+    pub pilot_seeds: Vec<u64>,
+    pub public_seeds: Vec<u64>,
+    pub historical_seed_ranges: Vec<ScenarioSeedRange>,
+    pub stratum_period: u32,
+    pub expected_success_residues: Vec<u32>,
+    pub push_approach_gap_m: f64,
+    pub push_probe_stroke_m: f64,
+    pub minimum_post_contact_stroke_m: f64,
+    pub max_positive_resamples: u32,
+    pub positive_push: PositivePushRandomization,
+    pub refusal_cycle: Vec<String>,
+}
+
+impl ScenarioSuiteManifest {
+    pub fn load(path: &std::path::Path) -> Result<Self, BenchmarkError> {
+        let bytes = std::fs::read(path).map_err(|error| {
+            BenchmarkError::InvalidManifest(format!(
+                "read scenario suite {}: {error}",
+                path.display()
+            ))
+        })?;
+        let suite: Self = serde_json::from_slice(&bytes)?;
+        suite.validate()?;
+        Ok(suite)
+    }
+
+    pub fn validate(&self) -> Result<(), BenchmarkError> {
+        let invalid = |message: &str| BenchmarkError::InvalidManifest(message.into());
+        if self.schema_version != 1 || self.suite_id.trim().is_empty() || self.suite_version != 2 {
+            return Err(invalid("unsupported or empty scenario suite identity"));
+        }
+        if self.pilot_seeds.len() != 20 || self.public_seeds.len() != 100 {
+            return Err(invalid(
+                "scenario suite requires exactly 20 pilot and 100 public seeds",
+            ));
+        }
+        let mut scheduled = std::collections::BTreeSet::new();
+        for seed in self.pilot_seeds.iter().chain(&self.public_seeds) {
+            if !scheduled.insert(*seed) {
+                return Err(invalid(
+                    "pilot and public seed lists overlap or contain duplicates",
+                ));
+            }
+        }
+        for range in &self.historical_seed_ranges {
+            if range.name.trim().is_empty() || range.start_inclusive >= range.end_exclusive {
+                return Err(invalid("historical seed range is empty or invalid"));
+            }
+            if scheduled
+                .iter()
+                .any(|seed| *seed >= range.start_inclusive && *seed < range.end_exclusive)
+            {
+                return Err(invalid(
+                    "new scenario suite seeds overlap a historical seed range",
+                ));
+            }
+        }
+        if self.stratum_period != 5
+            || self.expected_success_residues.len() != 3
+            || self
+                .expected_success_residues
+                .iter()
+                .any(|residue| *residue >= self.stratum_period)
+            || self
+                .expected_success_residues
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != self.expected_success_residues.len()
+        {
+            return Err(invalid(
+                "scenario suite must declare a unique 3-in-5 success schedule",
+            ));
+        }
+        if !self.push_approach_gap_m.is_finite()
+            || !self.push_probe_stroke_m.is_finite()
+            || !self.minimum_post_contact_stroke_m.is_finite()
+            || self.push_approach_gap_m <= 0.0
+            || self.minimum_post_contact_stroke_m <= 0.0
+            || self.push_approach_gap_m + self.minimum_post_contact_stroke_m
+                > self.push_probe_stroke_m + 1e-12
+            || (self.push_approach_gap_m
+                - realityos_semantics::physical_reasoner::PUSH_PROBE_APPROACH_GAP_M)
+                .abs()
+                > 1e-12
+        {
+            return Err(invalid(
+                "push probe gap must match the shared planner constant and retain the declared post-contact stroke",
+            ));
+        }
+        if self.max_positive_resamples == 0 || self.refusal_cycle.is_empty() {
+            return Err(invalid(
+                "scenario suite requires resampling attempts and refusal strata",
+            ));
+        }
+        let positive = &self.positive_push;
+        for range in [
+            positive.object_x_m,
+            positive.object_y_m,
+            positive.half_size_m,
+            positive.half_height_m,
+            positive.mass_kg,
+            positive.friction,
+            positive.push_distance_m,
+            positive.obstacle_forward_m,
+            positive.obstacle_lateral_m,
+        ] {
+            if range.iter().any(|value| !value.is_finite()) || range[0] >= range[1] {
+                return Err(invalid("positive scenario range is non-finite or empty"));
+            }
+        }
+        if positive.half_size_m[0] <= 0.0
+            || positive.half_height_m[0] <= 0.0
+            || positive.mass_kg[0] <= 0.0
+            || positive.friction[0] < 0.0
+            || positive.push_distance_m[0] <= 0.0
+            || positive.obstacle_count[0] > positive.obstacle_count[1]
+            || positive.obstacle_lateral_m[0] <= 0.0
+        {
+            return Err(invalid("positive scenario physical bounds are invalid"));
+        }
+        Ok(())
+    }
+
+    pub fn stratum_for_index(&self, index: u32) -> PushTrialStratum {
+        let residue = index % self.stratum_period;
+        if self.expected_success_residues.contains(&residue) {
+            PushTrialStratum::ExpectedSuccess
+        } else {
+            PushTrialStratum::ExpectedRefusal
+        }
+    }
+
+    pub fn digest(&self) -> Result<String, BenchmarkError> {
+        let bytes = serde_json::to_vec(self)?;
+        Ok(hex::encode(Sha256::digest(bytes)))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct SimulatedFrictionOracleInput {
@@ -83,6 +258,12 @@ pub struct BenchmarkConfig {
     pub scheduled_trial_ids: Vec<String>,
     #[serde(default)]
     pub embodiment_registry_sha256: Option<String>,
+    #[serde(default)]
+    pub scenario_suite_id: Option<String>,
+    #[serde(default)]
+    pub scenario_suite_version: Option<u32>,
+    #[serde(default)]
+    pub scenario_suite_sha256: Option<String>,
 }
 
 impl Default for BenchmarkConfig {
@@ -95,6 +276,9 @@ impl Default for BenchmarkConfig {
             target_ci_half_width: 0.10,
             scheduled_trial_ids: Vec::new(),
             embodiment_registry_sha256: None,
+            scenario_suite_id: None,
+            scenario_suite_version: None,
+            scenario_suite_sha256: None,
         }
     }
 }
@@ -237,6 +421,12 @@ pub struct ResolvedBenchmarkTrial {
     /// Persisted schema-independent key used to pair randomized candidate runs.
     #[serde(default)]
     pub paired_trial_key: Option<String>,
+    #[serde(default)]
+    pub scenario_suite_id: Option<String>,
+    #[serde(default)]
+    pub scenario_suite_version: Option<u32>,
+    #[serde(default)]
+    pub stratum: Option<PushTrialStratum>,
     pub trial_id: String,
     pub seed: u64,
     pub index: u32,
@@ -260,6 +450,91 @@ pub fn resolve_benchmark_trial(
     bundle: &RobotBundle,
     manifest: &RobotManifest,
 ) -> Result<ResolvedBenchmarkTrial, BenchmarkError> {
+    resolve_benchmark_trial_impl(seed, index, task, role, bundle, manifest, None)
+}
+
+pub fn resolve_benchmark_trial_with_suite(
+    seed: u64,
+    index: u32,
+    task: BenchmarkTask,
+    role: EmbodimentRole,
+    bundle: &RobotBundle,
+    manifest: &RobotManifest,
+    suite: &ScenarioSuiteManifest,
+) -> Result<ResolvedBenchmarkTrial, BenchmarkError> {
+    suite.validate()?;
+    if task != BenchmarkTask::PushProbeReplan {
+        let mut trial =
+            resolve_benchmark_trial_impl(seed, index, task, role, bundle, manifest, None)?;
+        trial.scenario_suite_id = Some(suite.suite_id.clone());
+        trial.scenario_suite_version = Some(suite.suite_version);
+        trial.paired_trial_key = Some(paired_trial_key(&trial)?);
+        return Ok(trial);
+    }
+
+    let stratum = suite.stratum_for_index(index);
+    let attempts = if stratum == PushTrialStratum::ExpectedSuccess {
+        suite.max_positive_resamples
+    } else {
+        1
+    };
+    let mut last_infeasibility = None;
+    for attempt in 0..attempts {
+        let attempt_seed = seed
+            .wrapping_add(u64::from(attempt).wrapping_mul(0x9e37_79b9_7f4a_7c15))
+            ^ 0x6670_726f_6265_7632;
+        match resolve_benchmark_trial_impl(
+            attempt_seed,
+            index,
+            task,
+            role,
+            bundle,
+            manifest,
+            Some(suite),
+        ) {
+            Ok(mut trial) => {
+                trial.seed = seed;
+                trial.scenario.seed = seed;
+                trial.scenario_suite_id = Some(suite.suite_id.clone());
+                trial.scenario_suite_version = Some(suite.suite_version);
+                trial.stratum = Some(stratum);
+                trial.trial_id = format!(
+                    "v{}:{}:{}:{}:{}:{}",
+                    BENCHMARK_SCHEMA_VERSION,
+                    trial.role.as_str(),
+                    trial.robot_id,
+                    trial.task.as_str(),
+                    seed,
+                    index
+                );
+                trial.paired_trial_key = Some(paired_trial_key(&trial)?);
+                return Ok(trial);
+            }
+            Err(BenchmarkError::InvalidTrial(message))
+                if stratum == PushTrialStratum::ExpectedSuccess
+                    && message.starts_with("suite_v2_positive_infeasible:") =>
+            {
+                last_infeasibility = Some(message);
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(BenchmarkError::InvalidTrial(format!(
+        "suite_v2_positive_infeasible: no valid positive scenario after {attempts} deterministic samples; last_reason={}",
+        last_infeasibility.as_deref().unwrap_or("no_diagnostic")
+    )))
+}
+
+fn resolve_benchmark_trial_impl(
+    seed: u64,
+    index: u32,
+    task: BenchmarkTask,
+    role: EmbodimentRole,
+    bundle: &RobotBundle,
+    manifest: &RobotManifest,
+    scenario_suite: Option<&ScenarioSuiteManifest>,
+) -> Result<ResolvedBenchmarkTrial, BenchmarkError> {
     if bundle.manifest.robot_id != manifest.robot_id {
         return Err(BenchmarkError::InvalidManifest(format!(
             "bundle robot {} does not match inspected robot {}",
@@ -274,14 +549,27 @@ pub fn resolve_benchmark_trial(
             manifest.qpos0.len()
         )));
     }
-
-    let axes = end_effector_axes(manifest);
+    let axes = end_effector_axes(bundle, manifest);
     let planar = arm_is_planar(axes.iter());
     let scenario_index = index as usize;
-    let mut scenario = match task {
-        BenchmarkTask::PushProbeReplan => push_scenario(seed, planar, scenario_index),
-        BenchmarkTask::PinchGraspLift => grasp_scenario(seed, planar, scenario_index),
+    let (mut scenario, suite_stratum) = match (scenario_suite, task) {
+        (Some(suite), BenchmarkTask::PushProbeReplan) => {
+            let stratum = suite.stratum_for_index(index);
+            (
+                suite_push_scenario(seed, planar, scenario_index, suite, stratum)?,
+                Some(stratum),
+            )
+        }
+        (_, BenchmarkTask::PushProbeReplan) => (push_scenario(seed, planar, scenario_index), None),
+        (_, BenchmarkTask::PinchGraspLift) => (grasp_scenario(seed, planar, scenario_index), None),
     };
+    if suite_stratum == Some(PushTrialStratum::ExpectedSuccess)
+        && !manifest.geometry_inspection_complete
+    {
+        return Err(BenchmarkError::InvalidTrial(
+            "suite_v2_positive_infeasible: complete collision geometry is not available".into(),
+        ));
+    }
 
     if planar && task == BenchmarkTask::PushProbeReplan {
         // The planar-arm embodiment moves its tool in a fixed horizontal
@@ -320,7 +608,14 @@ pub fn resolve_benchmark_trial(
             .get(1)
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(half_x);
-        let half_z = 0.02;
+        let half_z = if suite_stratum == Some(PushTrialStratum::ExpectedSuccess) {
+            size.get(2)
+                .and_then(serde_json::Value::as_f64)
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .unwrap_or(0.02)
+        } else {
+            0.02
+        };
         let position = target["pos"]
             .as_array_mut()
             .ok_or_else(|| BenchmarkError::InvalidTrial("planar target has no position".into()))?;
@@ -378,7 +673,7 @@ pub fn resolve_benchmark_trial(
     let mut rng = StdRng::seed_from_u64(
         seed.wrapping_add((index as u64).wrapping_mul(0x9e37_79b9)) ^ 0x6d61_6e69_7075_6c61,
     );
-    if task == BenchmarkTask::PushProbeReplan {
+    if task == BenchmarkTask::PushProbeReplan && scenario_suite.is_none() {
         add_randomized_obstacles(&mut scenario, &mut rng)?;
     }
     scenario.objects.sort_by(|left, right| {
@@ -413,8 +708,12 @@ pub fn resolve_benchmark_trial(
     }
     let probe_capable_ambiguous_push = task == BenchmarkTask::PushProbeReplan
         && scenario.polarity == crate::manipulation_scenarios::Polarity::Ambiguous;
-    let mut expectation = if (scenario.polarity
-        == crate::manipulation_scenarios::Polarity::Positive
+    let mut expectation = if let Some(stratum) = suite_stratum {
+        match stratum {
+            PushTrialStratum::ExpectedSuccess => TrialExpectation::ExpectedSuccess,
+            PushTrialStratum::ExpectedRefusal => TrialExpectation::ExpectedRefusal,
+        }
+    } else if (scenario.polarity == crate::manipulation_scenarios::Polarity::Positive
         || probe_capable_ambiguous_push)
         && scenario.expected_refusal.is_none()
     {
@@ -422,19 +721,56 @@ pub fn resolve_benchmark_trial(
     } else {
         TrialExpectation::ExpectedRefusal
     };
-    let mut initial_qpos = sample_initial_qpos(manifest, &mut rng)?;
+    let stable_random_start = scenario_suite.is_some()
+        && task == BenchmarkTask::PushProbeReplan
+        && expectation == TrialExpectation::ExpectedSuccess;
+    let mut initial_qpos = if stable_random_start {
+        sample_positive_start_qpos(manifest, &mut rng)?
+    } else {
+        sample_initial_qpos(manifest, &mut rng)?
+    };
     if expectation == TrialExpectation::ExpectedSuccess {
         let mut found_standoff = false;
         let mut safe_initial_qpos = None;
-        let attempts = if manifest.geometry_inspection_complete {
+        // In the v2 positive suite, the randomized standoff is a witness for
+        // the scenario's fixed target pose. It does not depend on which safe
+        // randomized home pose is selected below, so solve it once instead of
+        // repeating the full IK search for every initial-state candidate.
+        if stable_random_start && manifest.geometry_inspection_complete {
+            let mut standoff_witness = initial_qpos.clone();
+            found_standoff = set_randomized_push_standoff(
+                bundle,
+                manifest,
+                &scenario,
+                &mut standoff_witness,
+                &mut rng,
+            )?;
+        }
+        let attempts = if stable_random_start && !found_standoff {
+            0
+        } else if manifest.geometry_inspection_complete {
             MAX_SAFE_INITIAL_QPOS_ATTEMPTS
         } else {
             1
         };
         for _ in 0..attempts {
-            let mut candidate = sample_initial_qpos(manifest, &mut rng)?;
+            let mut candidate = if stable_random_start {
+                sample_positive_start_qpos(manifest, &mut rng)?
+            } else {
+                sample_initial_qpos(manifest, &mut rng)?
+            };
             if manifest.geometry_inspection_complete {
                 let reachable = match task {
+                    BenchmarkTask::PushProbeReplan if stable_random_start => {
+                        // Keep the randomized, collision-checked start pose as
+                        // the trial initial state. The standoff IK is a
+                        // feasibility witness only; using it as qpos would
+                        // start the robot beside/inside the support edge and
+                        // bypass the required transit proof. Its scenario pose
+                        // is fixed across the initial-state search, so reuse
+                        // the already-computed witness.
+                        found_standoff
+                    }
                     BenchmarkTask::PushProbeReplan => set_randomized_push_standoff(
                         bundle,
                         manifest,
@@ -468,9 +804,9 @@ pub fn resolve_benchmark_trial(
             }
             found_standoff = true;
             initial_qpos = candidate.clone();
-            if !manifest.geometry_inspection_complete
-                || initial_configuration_is_clear(bundle, manifest, &scenario, &candidate)?
-            {
+            let collision_free = !manifest.geometry_inspection_complete
+                || initial_configuration_is_clear(bundle, manifest, &scenario, &candidate)?;
+            if collision_free {
                 safe_initial_qpos = Some(candidate);
                 break;
             }
@@ -478,6 +814,16 @@ pub fn resolve_benchmark_trial(
         if let Some(candidate) = safe_initial_qpos {
             initial_qpos = candidate;
         } else {
+            if suite_stratum == Some(PushTrialStratum::ExpectedSuccess) {
+                return Err(BenchmarkError::InvalidTrial(format!(
+                    "suite_v2_positive_infeasible: {}",
+                    if !found_standoff {
+                        "no complete-geometry standoff IK solution"
+                    } else {
+                        "no collision-free initial configuration"
+                    }
+                )));
+            }
             scenario.expected_refusal = Some(
                 if !found_standoff {
                     match task {
@@ -490,6 +836,25 @@ pub fn resolve_benchmark_trial(
                 .into(),
             );
             expectation = TrialExpectation::ExpectedRefusal;
+        }
+    }
+    if suite_stratum == Some(PushTrialStratum::ExpectedSuccess)
+        && task == BenchmarkTask::PushProbeReplan
+        && manifest.geometry_inspection_complete
+    {
+        let probe_status = positive_probe_candidate_status(
+            bundle,
+            manifest,
+            &scenario,
+            goal_xyz,
+            &initial_qpos,
+            seed,
+            index,
+        )?;
+        if probe_status != "PROVED" {
+            return Err(BenchmarkError::InvalidTrial(format!(
+                "suite_v2_positive_infeasible: complete probe-path proof returned {probe_status}"
+            )));
         }
     }
     let task_name = task.as_str();
@@ -512,6 +877,9 @@ pub fn resolve_benchmark_trial(
     let mut resolved = ResolvedBenchmarkTrial {
         schema_version: BENCHMARK_SCHEMA_VERSION,
         paired_trial_key: None,
+        scenario_suite_id: scenario_suite.map(|suite| suite.suite_id.clone()),
+        scenario_suite_version: scenario_suite.map(|suite| suite.suite_version),
+        stratum: suite_stratum,
         trial_id,
         seed,
         index,
@@ -528,6 +896,175 @@ pub fn resolve_benchmark_trial(
     };
     resolved.paired_trial_key = Some(paired_trial_key(&resolved)?);
     Ok(resolved)
+}
+
+fn positive_probe_candidate_status(
+    bundle: &RobotBundle,
+    manifest: &RobotManifest,
+    scenario: &ManipulationScenario,
+    goal_xyz: [f64; 3],
+    initial_qpos: &[f64],
+    seed: u64,
+    index: u32,
+) -> Result<String, BenchmarkError> {
+    let model = embodiment_from_manifest(bundle, manifest);
+    let ee_name = model
+        .end_effectors
+        .first()
+        .map(|ee| ee.name.as_str())
+        .ok_or_else(|| BenchmarkError::InvalidTrial("positive trial has no end-effector".into()))?;
+    let frame_key =
+        super::execution::declared_ee_observation_key(bundle, ee_name).ok_or_else(|| {
+            BenchmarkError::InvalidTrial("positive trial has no observable tool frame".into())
+        })?;
+    let object = object_named(&scenario.objects, &scenario.object_id)?;
+    let center = vec3(&object["pos"])
+        .ok_or_else(|| BenchmarkError::InvalidTrial("positive target pose is invalid".into()))?;
+    let mut state = json!({
+        "qpos": initial_qpos,
+        "xpos": {},
+        "sites": {},
+        "xquat": {}
+    });
+    state["xpos"][&scenario.object_id] = json!(center);
+    state["xpos"][frame_key.as_str()] = json!([0.0, 0.0, 0.0]);
+    state["sites"][frame_key.as_str()] = json!([0.0, 0.0, 0.0]);
+    state["xquat"][&scenario.object_id] = json!(scenario_quaternion(object));
+    let epoch = format!("suite-v2-feasibility:{seed}:{index}");
+    let request = super::execution::build_push_reasoning_request(
+        bundle,
+        manifest,
+        &model,
+        scenario,
+        goal_xyz,
+        &state,
+        &epoch,
+        10.0,
+        true,
+        super::execution::uncertain_push_belief(),
+    )?;
+    let status = PhysicalReasoner::new(model)
+        .preview_candidate(&request, "probe:+x")
+        .status;
+    Ok(status)
+}
+
+fn suite_push_scenario(
+    seed: u64,
+    planar: bool,
+    index: usize,
+    suite: &ScenarioSuiteManifest,
+    stratum: PushTrialStratum,
+) -> Result<ManipulationScenario, BenchmarkError> {
+    let mut rng = StdRng::seed_from_u64(
+        seed.wrapping_add((index as u64).wrapping_mul(0x9e37_79b9)) ^ 0x7375_6974_655f_7632,
+    );
+    match stratum {
+        PushTrialStratum::ExpectedRefusal => {
+            let label = &suite.refusal_cycle[index % suite.refusal_cycle.len()];
+            let legacy_index = match label.as_str() {
+                "unreachable" => 0,
+                "stale_object" => 1,
+                "object_moved" => 2,
+                "unexpected_contact" => 3,
+                "slip" => 4,
+                "replay" => 5,
+                "restart_replay" => 6,
+                "controller_failure" => 7,
+                "force_bound_unavailable" => 8,
+                _ => {
+                    return Err(BenchmarkError::InvalidManifest(format!(
+                        "unknown refusal stratum {label}"
+                    )))
+                }
+            };
+            Ok(push_scenario(seed, planar, legacy_index))
+        }
+        PushTrialStratum::ExpectedSuccess => {
+            let mut scenario = push_scenario(seed, planar, 10);
+            if !planar {
+                let table = scenario
+                    .objects
+                    .iter_mut()
+                    .find(|object| object["name"] == "table")
+                    .ok_or_else(|| {
+                        BenchmarkError::InvalidTrial("spatial suite scenario has no table".into())
+                    })?;
+                // Put the shared positive fixture along the near edge of its
+                // support, facing the arm. This leaves a collision-cleared
+                // approach corridor without changing the target/tool model.
+                table["pos"] = json!([0.90, 0.0, 0.40]);
+                table["size"] = json!([0.40, 0.25, 0.02]);
+            }
+            scenario.seed = seed;
+            scenario.polarity = Polarity::Positive;
+            scenario.expected_refusal = None;
+            scenario.neg = None;
+            scenario.stale = false;
+            scenario.move_object_after_obs = false;
+            scenario.replay = false;
+            scenario.restart_replay = false;
+            scenario.crash_controller = false;
+            scenario.immovable = false;
+            scenario.planar = planar;
+            scenario.push_dir = [1.0, 0.0, 0.0];
+
+            let [x_min, x_max] = suite.positive_push.object_x_m;
+            let [y_min, y_max] = suite.positive_push.object_y_m;
+            let [size_min, size_max] = suite.positive_push.half_size_m;
+            let [height_min, height_max] = suite.positive_push.half_height_m;
+            let [mass_min, mass_max] = suite.positive_push.mass_kg;
+            let [friction_min, friction_max] = suite.positive_push.friction;
+            let [distance_min, distance_max] = suite.positive_push.push_distance_m;
+            let x = rng.gen_range(x_min..=x_max);
+            let y = rng.gen_range(y_min..=y_max);
+            let half_size = rng.gen_range(size_min..=size_max);
+            let half_height = rng.gen_range(height_min..=height_max);
+            let mass = rng.gen_range(mass_min..=mass_max);
+            let friction = rng.gen_range(friction_min..=friction_max);
+            scenario.push_dist = rng.gen_range(distance_min..=distance_max);
+
+            let target = scenario
+                .objects
+                .iter_mut()
+                .find(|object| object["name"] == scenario.object_id)
+                .ok_or_else(|| BenchmarkError::InvalidTrial("missing suite push target".into()))?;
+            target["pos"] = json!([x, y, 0.42 + half_height]);
+            target["size"] = json!([half_size, half_size, half_height]);
+            target["mass"] = json!(mass);
+            target["friction"] = json!(friction);
+            target["movable"] = json!(true);
+            scenario
+                .objects
+                .retain(|object| object["name"] == scenario.object_id || object["name"] == "table");
+
+            let [count_min, count_max] = suite.positive_push.obstacle_count;
+            let obstacle_count = rng.gen_range(count_min..=count_max);
+            let [forward_min, forward_max] = suite.positive_push.obstacle_forward_m;
+            let [lateral_min, lateral_max] = suite.positive_push.obstacle_lateral_m;
+            for obstacle_index in 0..obstacle_count {
+                let side = rng.gen_range(size_min..=size_max);
+                let forward = rng.gen_range(forward_min..=forward_max);
+                let lateral = rng.gen_range(lateral_min..=lateral_max)
+                    * if obstacle_index % 2 == 0 { 1.0 } else { -1.0 };
+                let geom = if rng.gen_bool(0.25) {
+                    "cylinder"
+                } else {
+                    "box"
+                };
+                scenario.objects.push(json!({
+                    "name": format!("benchmark_obstacle_{obstacle_index}"),
+                    "type": geom,
+                    "pos": [x + forward, y + lateral, 0.42 + half_size],
+                    "size": if geom == "cylinder" { json!([side, side]) } else { json!([side, side, side]) },
+                    "mass": 1.0,
+                    "friction": 0.8,
+                    "movable": false
+                }));
+            }
+            Ok(scenario)
+        }
+    }
 }
 
 fn grasp_hold_is_conservatively_provable(
@@ -659,7 +1196,7 @@ pub fn paired_trial_key(trial: &ResolvedBenchmarkTrial) -> Result<String, Benchm
                 .cmp(right.get("name").and_then(Value::as_str).unwrap_or(""))
         });
     }
-    let canonical = json!({
+    let mut canonical = json!({
         "role": trial.role.as_str(),
         "robot_id": trial.robot_id,
         "model_hash": trial.model_hash,
@@ -672,7 +1209,19 @@ pub fn paired_trial_key(trial: &ResolvedBenchmarkTrial) -> Result<String, Benchm
         "goal_xyz_bits": trial.goal_xyz.map(f64::to_bits),
         "initial_qpos_bits": trial.initial_qpos.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
     });
-    let mut bytes = b"realityos.manipulation.paired_trial_key/2\0".to_vec();
+    let suite_bound = trial.scenario_suite_id.is_some()
+        || trial.scenario_suite_version.is_some()
+        || trial.stratum.is_some();
+    if suite_bound {
+        canonical["scenario_suite_id"] = serde_json::to_value(&trial.scenario_suite_id)?;
+        canonical["scenario_suite_version"] = serde_json::to_value(trial.scenario_suite_version)?;
+        canonical["stratum"] = serde_json::to_value(trial.stratum)?;
+    }
+    let mut bytes = if suite_bound {
+        b"realityos.manipulation.paired_trial_key/3\0".to_vec()
+    } else {
+        b"realityos.manipulation.paired_trial_key/2\0".to_vec()
+    };
     push_canonical_json(&canonical, &mut bytes)?;
     Ok(hex::encode(Sha256::digest(bytes)))
 }
@@ -690,10 +1239,10 @@ pub fn upgrade_v5_trial_for_v6(
         )));
     }
     let mut trial = legacy.clone();
-    trial.schema_version = BENCHMARK_SCHEMA_VERSION;
+    trial.schema_version = LEGACY_PAIRED_SCHEMA_VERSION;
     trial.trial_id = format!(
         "v{}:{}:{}:{}:{}:{}",
-        BENCHMARK_SCHEMA_VERSION,
+        LEGACY_PAIRED_SCHEMA_VERSION,
         trial.role.as_str(),
         trial.robot_id,
         trial.task.as_str(),
@@ -745,20 +1294,35 @@ fn push_key_bytes(bytes: &mut Vec<u8>, value: &[u8]) {
     bytes.extend_from_slice(value);
 }
 
-fn end_effector_axes(manifest: &RobotManifest) -> Vec<[f64; 3]> {
-    let Some(chain) = manifest.derived.end_effector_joint_chains.first() else {
-        return manifest
-            .joints
-            .iter()
-            .filter(|joint| matches!(joint.joint_type.as_str(), "hinge" | "slide"))
-            .filter_map(|joint| joint.axis)
-            .collect();
+fn end_effector_axes(bundle: &RobotBundle, manifest: &RobotManifest) -> Vec<[f64; 3]> {
+    // MJCF joint axes are local to their parent bodies. Classifying an arm from
+    // those raw axes mistakes spatial chains whose joints each declare local Z
+    // axes for planar arms. Evaluate the chain at its inspected reference pose
+    // and classify the actual world-space axes instead. Unknown kinematics stay
+    // spatial so the scenario generator never lowers a table on incomplete data.
+    let model = embodiment_from_manifest(bundle, manifest);
+    let Some(ee) = model.end_effectors.first() else {
+        return Vec::new();
     };
-    chain
-        .iter()
-        .filter_map(|name| manifest.joints.iter().find(|joint| &joint.name == name))
-        .filter_map(|joint| joint.axis)
-        .collect()
+    let Some(chain) = model.ee_joint_chain(&ee.name) else {
+        return Vec::new();
+    };
+    let mut q = Vec::with_capacity(chain.len());
+    for name in &chain {
+        let Some(joint) = manifest.joints.iter().find(|joint| joint.name == *name) else {
+            return Vec::new();
+        };
+        let Ok(index) = usize::try_from(joint.qpos_address) else {
+            return Vec::new();
+        };
+        let Some(value) = manifest.qpos0.get(index) else {
+            return Vec::new();
+        };
+        q.push(*value);
+    }
+    realityos_semantics::kinematics::forward_kinematics(&model, &chain, &ee.name, &q)
+        .map(|state| state.axes_world)
+        .unwrap_or_default()
 }
 
 fn sample_initial_qpos(
@@ -799,6 +1363,67 @@ fn sample_initial_qpos(
             lower
         } else {
             rng.gen_range(lower..=upper)
+        };
+    }
+    Ok(qpos)
+}
+
+fn sample_positive_start_qpos(
+    manifest: &RobotManifest,
+    rng: &mut StdRng,
+) -> Result<Vec<f64>, BenchmarkError> {
+    const HOME_RANDOMIZATION_RAD: f64 = 0.08;
+    let expected_nq = usize::try_from(manifest.nq)
+        .map_err(|_| BenchmarkError::InvalidManifest("negative nq".into()))?;
+    if manifest.qpos0.len() != expected_nq || manifest.qpos0.iter().any(|value| !value.is_finite())
+    {
+        return Err(BenchmarkError::InvalidManifest(format!(
+            "qpos0 dimension or value invalid: nq={expected_nq}, qpos0={}",
+            manifest.qpos0.len()
+        )));
+    }
+    let mut qpos = manifest.qpos0.clone();
+    for joint in &manifest.joints {
+        if !joint.limited || joint.qpos_dim != 1 {
+            continue;
+        }
+        let index = usize::try_from(joint.qpos_address).map_err(|_| {
+            BenchmarkError::InvalidManifest(format!("negative qpos address for {}", joint.name))
+        })?;
+        let Some(current) = qpos.get_mut(index) else {
+            return Err(BenchmarkError::InvalidManifest(format!(
+                "qpos address outside qpos0 for {}",
+                joint.name
+            )));
+        };
+        let margin = MIN_POSITIVE_JOINT_MARGIN_RAD;
+        let mut lower = joint.range[0] + margin;
+        let mut upper = joint.range[1] - margin;
+        if let Some(actuator) = manifest
+            .actuators
+            .iter()
+            .find(|actuator| actuator.transmission_target == joint.name)
+        {
+            if actuator.ctrllimited {
+                lower = lower.max(actuator.ctrlrange[0] + margin);
+                upper = upper.min(actuator.ctrlrange[1] - margin);
+            }
+        }
+        if !lower.is_finite() || !upper.is_finite() || lower > upper {
+            return Err(BenchmarkError::InvalidTrial(format!(
+                "suite_v2_positive_infeasible: {} has no controller-safe start range",
+                joint.name
+            )));
+        }
+        let center = current.clamp(lower, upper);
+        let half_width = HOME_RANDOMIZATION_RAD
+            .min(center - lower)
+            .min(upper - center)
+            .max(0.0);
+        *current = if half_width > 1e-9 {
+            rng.gen_range(center - half_width..=center + half_width)
+        } else {
+            center
         };
     }
     Ok(qpos)
@@ -1127,8 +1752,8 @@ fn set_randomized_push_standoff(
         center[1] - direction[1] * (extent + cross_section),
         target_z,
     ];
-    target[0] -= direction[0] * 0.05;
-    target[1] -= direction[1] * 0.05;
+    target[0] -= direction[0] * realityos_semantics::physical_reasoner::PUSH_PROBE_APPROACH_GAP_M;
+    target[1] -= direction[1] * realityos_semantics::physical_reasoner::PUSH_PROBE_APPROACH_GAP_M;
 
     let mut current_q = Vec::with_capacity(chain.len());
     for name in &chain {
@@ -1155,26 +1780,74 @@ fn set_randomized_push_standoff(
         .iter()
         .map(|value| value + rng.gen_range(-0.08_f64..=0.08_f64))
         .collect::<Vec<_>>();
-    let solved = realityos_semantics::kinematics::with_ik_q_seed(Some(&randomized_seed), || {
-        realityos_semantics::kinematics::solve_ik(&model, &chain, ee, target, &current_q)
-    });
-    let Ok((arm_q, trace)) = solved else {
+    let solution_has_safe_margins = |arm_q: &[f64]| {
+        arm_q.len() == chain.len()
+            && chain.iter().zip(arm_q).all(|(name, value)| {
+                let Some(joint) = manifest.joints.iter().find(|joint| joint.name == *name) else {
+                    return false;
+                };
+                if !value.is_finite()
+                    || !joint.limited
+                    || *value <= joint.range[0] + MIN_POSITIVE_JOINT_MARGIN_RAD
+                    || *value >= joint.range[1] - MIN_POSITIVE_JOINT_MARGIN_RAD
+                {
+                    return false;
+                }
+                manifest
+                    .actuators
+                    .iter()
+                    .find(|actuator| actuator.transmission_target == *name)
+                    .is_some_and(|actuator| {
+                        actuator.ctrllimited
+                            && *value > actuator.ctrlrange[0] + MIN_POSITIVE_JOINT_MARGIN_RAD
+                            && *value < actuator.ctrlrange[1] - MIN_POSITIVE_JOINT_MARGIN_RAD
+                    })
+            })
+    };
+    let quick_solution = realityos_semantics::kinematics::solve_ik_from_seed(
+        &model,
+        &chain,
+        ee,
+        target,
+        &randomized_seed,
+        &current_q,
+    )
+    .ok()
+    .filter(|(arm_q, trace)| {
+        realityos_semantics::kinematics::ik_residual_is_precise(trace.residual)
+            && solution_has_safe_margins(arm_q)
+    })
+    .map(|(arm_q, _)| arm_q);
+    let selected = if quick_solution.is_some() {
+        quick_solution
+    } else {
+        let candidates =
+            realityos_semantics::kinematics::with_ik_q_seed(Some(&randomized_seed), || {
+                realityos_semantics::kinematics::solve_ik_candidates(
+                    &model, &chain, ee, target, &current_q, 64,
+                )
+            });
+        let Ok(candidates) = candidates else {
+            return Ok(false);
+        };
+        candidates.into_iter().find_map(|(arm_q, trace)| {
+            if !realityos_semantics::kinematics::ik_residual_is_precise(trace.residual)
+                || arm_q.len() != chain.len()
+            {
+                return None;
+            }
+            solution_has_safe_margins(&arm_q).then_some(arm_q)
+        })
+    };
+    let Some(arm_q) = selected else {
         return Ok(false);
     };
-    if !realityos_semantics::kinematics::ik_residual_is_precise(trace.residual)
-        || arm_q.len() != chain.len()
-    {
-        return Ok(false);
-    }
     for (name, value) in chain.iter().zip(arm_q) {
         let joint = manifest
             .joints
             .iter()
             .find(|joint| joint.name == *name)
             .expect("chain joint validated above");
-        if !value.is_finite() || value < joint.range[0] - 1e-8 || value > joint.range[1] + 1e-8 {
-            return Ok(false);
-        }
         let index =
             usize::try_from(joint.qpos_address).expect("non-negative qpos address validated above");
         qpos[index] = value;

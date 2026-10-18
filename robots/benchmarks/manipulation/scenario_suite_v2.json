@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "suite_id": "feasible_public_probe",
+  "suite_version": 2,
+  "pilot_seeds": [19000, 19001, 19002, 19003, 19004, 19005, 19006, 19007, 19008, 19009, 19010, 19011, 19012, 19013, 19014, 19015, 19016, 19017, 19018, 19019],
+  "public_seeds": [20000, 20001, 20002, 20003, 20004, 20005, 20006, 20007, 20008, 20009, 20010, 20011, 20012, 20013, 20014, 20015, 20016, 20017, 20018, 20019, 20020, 20021, 20022, 20023, 20024, 20025, 20026, 20027, 20028, 20029, 20030, 20031, 20032, 20033, 20034, 20035, 20036, 20037, 20038, 20039, 20040, 20041, 20042, 20043, 20044, 20045, 20046, 20047, 20048, 20049, 20050, 20051, 20052, 20053, 20054, 20055, 20056, 20057, 20058, 20059, 20060, 20061, 20062, 20063, 20064, 20065, 20066, 20067, 20068, 20069, 20070, 20071, 20072, 20073, 20074, 20075, 20076, 20077, 20078, 20079, 20080, 20081, 20082, 20083, 20084, 20085, 20086, 20087, 20088, 20089, 20090, 20091, 20092, 20093, 20094, 20095, 20096, 20097, 20098, 20099],
+  "historical_seed_ranges": [
+    { "name": "schema_v5_v6_public", "start_inclusive": 0, "end_exclusive": 100 },
+    { "name": "schema_v5_v6_pilot", "start_inclusive": 9000, "end_exclusive": 9020 },
+    { "name": "historical_wx250s_regression", "start_inclusive": 10000, "end_exclusive": 10100 }
+  ],
+  "stratum_period": 5,
+  "expected_success_residues": [0, 1, 2],
+  "push_approach_gap_m": 0.004,
+  "push_probe_stroke_m": 0.008,
+  "minimum_post_contact_stroke_m": 0.004,
+  "max_positive_resamples": 64,
+  "positive_push": {
+    "object_x_m": [0.56, 0.63],
+    "object_y_m": [-0.05, 0.05],
+    "half_size_m": [0.020, 0.030],
+    "half_height_m": [0.070, 0.090],
+    "mass_kg": [0.05, 0.18],
+    "friction": [0.20, 0.80],
+    "push_distance_m": [0.04, 0.08],
+    "obstacle_count": [0, 2],
+    "obstacle_forward_m": [0.01, 0.04],
+    "obstacle_lateral_m": [0.14, 0.17]
+  },
+  "refusal_cycle": [
+    "stale_object",
+    "unexpected_contact",
+    "force_bound_unavailable",
+    "unreachable"
+  ]
+}

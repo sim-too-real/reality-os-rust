@@ -46,9 +46,12 @@ use crate::work_counters;
 
 pub const EVIDENCE_STATUS: &str = "SIMULATION_ONLY";
 pub const BENCHMARK_SCHEMA: &str = "realityos.physical_benchmark/1";
+/// Maximum pre-contact gap for the benchmark's bounded 8 mm push probe.
+pub const PUSH_PROBE_APPROACH_GAP_M: f64 = 0.004;
 
 const PUSH_FAMILY: &str = "planar_push";
 const GRASP_FAMILY: &str = "pinch_grasp";
+const MAX_TRANSIT_WAYPOINT_ALTERNATIVES: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PhysicalObjective {
@@ -312,6 +315,17 @@ impl PhysicalReasoner {
 
     pub fn consider(&mut self, request: &ReasoningRequest) -> ReasoningReport {
         self.consider_excluding(request, &[])
+    }
+
+    /// Evaluate one named candidate against the current observation and model.
+    /// This is a proof preview only: it does not select a plan, issue authority,
+    /// or write to an embodiment.
+    pub fn preview_candidate(
+        &mut self,
+        request: &ReasoningRequest,
+        action_key: &str,
+    ) -> CandidateSummary {
+        self.prove_action_key(request, action_key).summary
     }
 
     /// Reconsider the current observation while excluding actions that already
@@ -834,7 +848,6 @@ fn push_raw(
 }
 
 fn push_approach_standoff(request: &ReasoningRequest, candidate: &RawCandidate) -> [f64; 3] {
-    const PUSH_APPROACH_STANDOFF_M: f64 = 0.05;
     if candidate.direction[2].abs() <= 1e-9
         && request.scene.support_normal[0].abs() <= 1e-9
         && request.scene.support_normal[1].abs() <= 1e-9
@@ -848,12 +861,12 @@ fn push_approach_standoff(request: &ReasoningRequest, candidate: &RawCandidate) 
         // object's upper edge before reaching the intended side contact.
         sub3(
             candidate.target_xyz,
-            scale3(candidate.direction, PUSH_APPROACH_STANDOFF_M),
+            scale3(candidate.direction, PUSH_PROBE_APPROACH_GAP_M),
         )
     } else {
         sub3(
             candidate.target_xyz,
-            scale3(candidate.direction, PUSH_APPROACH_STANDOFF_M),
+            scale3(candidate.direction, PUSH_PROBE_APPROACH_GAP_M),
         )
     }
 }
@@ -1273,6 +1286,8 @@ fn grasp_mechanics(request: &ReasoningRequest) -> MechanicsStatus {
 struct SolvedPose {
     q0: Vec<f64>,
     q_transit: Vec<f64>,
+    transit_waypoints: Vec<Vec<f64>>,
+    approach_waypoints: Vec<Vec<f64>>,
     q_contact: Vec<f64>,
     stroke_states: Vec<Vec<f64>>,
     q_end: Vec<f64>,
@@ -1313,29 +1328,44 @@ fn prove_arm_path(
     } else {
         ContactPhase::ApproachToContact
     };
+    let transit_phase = if grasp {
+        ContactPhase::GraspApproach
+    } else {
+        ContactPhase::CurrentToApproach
+    };
     let mut last_refusal = None;
+    let mut transit_solutions = Vec::new();
 
     for q_transit in q_transit_candidates {
-        if let Err(reason) = arm_motion_clear(
-            model,
-            request,
-            &q_transit,
-            &q_transit,
-            ContactPhase::CurrentToApproach,
-        ) {
+        if let Err(reason) = arm_motion_clear(model, request, &q_transit, &q_transit, transit_phase)
+        {
             last_refusal = Some(reason);
             continue;
         }
-        if let Err(reason) = arm_motion_clear(
+        match arm_motion_clear(
             model,
             request,
             &request.scene.arm_q,
             &q_transit,
-            ContactPhase::CurrentToApproach,
+            transit_phase,
         ) {
-            last_refusal = Some(reason);
-            continue;
+            Ok(()) => transit_solutions.push((q_transit.clone(), vec![q_transit])),
+            Err(reason) => {
+                last_refusal = Some(reason);
+            }
         }
+    }
+    if transit_solutions.is_empty() && !grasp {
+        match collision_checked_transit_path(model, request, standoff_xyz, transit_phase) {
+            Ok(solution) => transit_solutions.push(solution),
+            Err(reason) => last_refusal = Some(reason),
+        }
+    }
+    if transit_solutions.is_empty() {
+        return Err(last_refusal.unwrap_or("TRANSIT_PATH_UNAVAILABLE"));
+    }
+
+    for (q_transit, transit_waypoints) in transit_solutions {
         let mut contact_scene = request.scene.clone();
         contact_scene.arm_q = q_transit.clone();
         let q_contact_candidates = match solve_precise_candidates(
@@ -1367,12 +1397,31 @@ fn prove_arm_path(
                 last_refusal = Some(reason);
                 continue;
             }
-            if let Err(reason) =
-                arm_motion_clear(model, request, &q_transit, &q_contact, approach_phase)
-            {
-                last_refusal = Some(reason);
-                continue;
-            }
+            let approach_waypoints = if grasp {
+                if let Err(reason) =
+                    arm_motion_clear(model, request, &q_transit, &q_contact, approach_phase)
+                {
+                    last_refusal = Some(reason);
+                    continue;
+                }
+                Vec::new()
+            } else {
+                match collision_checked_contact_approach(
+                    model,
+                    request,
+                    standoff_xyz,
+                    candidate.target_xyz,
+                    &q_transit,
+                    &q_contact,
+                    approach_phase,
+                ) {
+                    Ok(waypoints) => waypoints,
+                    Err(reason) => {
+                        last_refusal = Some(reason);
+                        continue;
+                    }
+                }
+            };
 
             let mut q_end = q_contact.clone();
             let mut stroke_states = Vec::new();
@@ -1576,6 +1625,8 @@ fn prove_arm_path(
             return Ok(SolvedPose {
                 q0: request.scene.arm_q.clone(),
                 q_transit,
+                transit_waypoints,
+                approach_waypoints,
                 q_contact,
                 stroke_states,
                 q_end,
@@ -1590,27 +1641,290 @@ fn prove_arm_path(
     Err(last_refusal.unwrap_or("IK_FAILED"))
 }
 
+fn collision_checked_contact_approach(
+    model: &EmbodimentModel,
+    request: &ReasoningRequest,
+    standoff_xyz: [f64; 3],
+    contact_xyz: [f64; 3],
+    q_standoff: &[f64],
+    q_contact: &[f64],
+    contact_phase: ContactPhase,
+) -> Result<Vec<Vec<f64>>, &'static str> {
+    const MAX_APPROACH_STEP_M: f64 = 0.001;
+    const MAX_APPROACH_WAYPOINTS: usize = 64;
+    let delta = sub3(contact_xyz, standoff_xyz);
+    let distance = norm3(delta);
+    if !distance.is_finite() || distance <= 1e-9 {
+        return Err("APPROACH_GAP_INVALID");
+    }
+    let segment_count = (distance / MAX_APPROACH_STEP_M).ceil() as usize;
+    if segment_count == 0 || segment_count > MAX_APPROACH_WAYPOINTS {
+        return Err("APPROACH_WAYPOINT_BUDGET_EXCEEDED");
+    }
+
+    let mut prior_q = q_standoff.to_vec();
+    let mut waypoints = Vec::with_capacity(segment_count.saturating_sub(1));
+    for segment_index in 1..segment_count {
+        let fraction = segment_index as f64 / segment_count as f64;
+        let target = add3(standoff_xyz, scale3(delta, fraction));
+        let candidates = solve_precise_candidates_from_seed(
+            model,
+            &request.scene,
+            target,
+            &prior_q,
+            MAX_TRANSIT_WAYPOINT_ALTERNATIVES,
+        )?;
+        let mut clear_candidate = None;
+        let mut last_refusal = "IK_FAILED";
+        for candidate in candidates {
+            match arm_motion_clear(
+                model,
+                request,
+                &prior_q,
+                &candidate,
+                ContactPhase::CurrentToApproach,
+            ) {
+                Ok(()) => {
+                    clear_candidate = Some(candidate);
+                    break;
+                }
+                Err(reason) => last_refusal = reason,
+            }
+        }
+        let Some(next_q) = clear_candidate else {
+            return Err(last_refusal);
+        };
+        waypoints.push(next_q.clone());
+        prior_q = next_q;
+    }
+    arm_motion_clear(model, request, &prior_q, q_contact, contact_phase)?;
+    Ok(waypoints)
+}
+
+fn collision_checked_transit_path(
+    model: &EmbodimentModel,
+    request: &ReasoningRequest,
+    standoff_xyz: [f64; 3],
+    phase: ContactPhase,
+) -> Result<(Vec<f64>, Vec<Vec<f64>>), &'static str> {
+    // Move to a high point above the target, then descend on one continuous IK
+    // branch. When the robot starts outside a finite support, first route to a
+    // collision-checked point just before its footprint. Every segment is
+    // checked against the complete declared geometry before it enters the
+    // authority witness.
+    const CLEARANCE_STAGES_M: [f64; 2] = [0.25, 0.15];
+    let support_normal = crate::transform::normalize3(request.scene.support_normal)
+        .ok_or("SUPPORT_NORMAL_INVALID")?;
+    let chain = model.ee_joint_chain(&request.scene.ee).ok_or("NO_CHAIN")?;
+    let current_fk = forward_kinematics(model, &chain, &request.scene.ee, &request.scene.arm_q)
+        .map_err(|_| "FK_FAILED")?;
+    let mut last_refusal = "TRANSIT_PATH_UNAVAILABLE";
+
+    for clearance_m in CLEARANCE_STAGES_M {
+        let transfer_target = add3(standoff_xyz, scale3(support_normal, clearance_m));
+        let mut path = Vec::new();
+        let mut transfer_seed = request.scene.arm_q.clone();
+        if let Some(side_target) = support_edge_waypoint(
+            current_fk.ee.xyz,
+            transfer_target,
+            &request.scene,
+            support_normal,
+        ) {
+            match solve_collision_free_waypoint(
+                model,
+                request,
+                side_target,
+                &request.scene.arm_q,
+                &request.scene.arm_q,
+                phase,
+            ) {
+                Ok(side_q) => {
+                    if request
+                        .scene
+                        .arm_q
+                        .iter()
+                        .zip(&side_q)
+                        .any(|(from, to)| (to - from).abs() > 1e-9)
+                    {
+                        path.push(side_q.clone());
+                    }
+                    transfer_seed = side_q;
+                }
+                Err(reason) => last_refusal = reason,
+            }
+        }
+        let transfer_q = match solve_collision_free_waypoint(
+            model,
+            request,
+            transfer_target,
+            &transfer_seed,
+            &transfer_seed,
+            phase,
+        ) {
+            Ok(solution) => solution,
+            Err(reason) => {
+                last_refusal = reason;
+                continue;
+            }
+        };
+        if path
+            .last()
+            .unwrap_or(&request.scene.arm_q)
+            .iter()
+            .zip(&transfer_q)
+            .any(|(from, to)| (to - from).abs() > 1e-9)
+        {
+            path.push(transfer_q.clone());
+        }
+
+        let mut prior_q = transfer_q;
+        let mut path_failed = false;
+        for next_clearance_m in CLEARANCE_STAGES_M
+            .iter()
+            .copied()
+            .filter(|height| *height < clearance_m - 1e-9)
+            .chain(std::iter::once(0.0))
+        {
+            let next_xyz = add3(standoff_xyz, scale3(support_normal, next_clearance_m));
+            let next_q = match solve_collision_free_waypoint(
+                model, request, next_xyz, &prior_q, &prior_q, phase,
+            ) {
+                Ok(solution) => solution,
+                Err(reason) => {
+                    last_refusal = reason;
+                    path_failed = true;
+                    break;
+                }
+            };
+            if prior_q
+                .iter()
+                .zip(&next_q)
+                .any(|(from, to)| (to - from).abs() > 1e-9)
+            {
+                path.push(next_q.clone());
+            }
+            prior_q = next_q;
+        }
+        if !path_failed {
+            return Ok((prior_q, path));
+        }
+    }
+    Err(last_refusal)
+}
+
+fn support_edge_waypoint(
+    current_xyz: [f64; 3],
+    transfer_xyz: [f64; 3],
+    scene: &TableScene,
+    support_normal: [f64; 3],
+) -> Option<[f64; 3]> {
+    if support_normal[0].abs() > 1e-9
+        || support_normal[1].abs() > 1e-9
+        || support_normal[2] < 1.0 - 1e-9
+    {
+        return None;
+    }
+    let half = scene.support_half_extents?;
+    let margin = scene.tool_radius_m * 2.5 + 0.02;
+    let center = [scene.support_origin[0], scene.support_origin[1]];
+    let expanded = [half[0] + margin, half[1] + margin];
+    let start = [current_xyz[0], current_xyz[1]];
+    let goal = [transfer_xyz[0], transfer_xyz[1]];
+    let delta = [goal[0] - start[0], goal[1] - start[1]];
+    let inside = |point: [f64; 2]| {
+        (point[0] - center[0]).abs() <= expanded[0] && (point[1] - center[1]).abs() <= expanded[1]
+    };
+    if inside(start) || !inside(goal) {
+        return None;
+    }
+
+    let mut entry = 0.0_f64;
+    let mut exit = 1.0_f64;
+    for axis in 0..2 {
+        if delta[axis].abs() <= 1e-9 {
+            if (start[axis] - center[axis]).abs() > expanded[axis] {
+                return None;
+            }
+            continue;
+        }
+        let lower = (center[axis] - expanded[axis] - start[axis]) / delta[axis];
+        let upper = (center[axis] + expanded[axis] - start[axis]) / delta[axis];
+        entry = entry.max(lower.min(upper));
+        exit = exit.min(lower.max(upper));
+    }
+    if entry < 0.0 || entry > exit || exit < 0.0 || entry > 1.0 {
+        return None;
+    }
+    let path_length = delta[0].hypot(delta[1]);
+    if !path_length.is_finite() || path_length <= 1e-9 {
+        return None;
+    }
+    let before_entry = (entry - 0.02 / path_length).max(0.0);
+    let point = [
+        start[0] + delta[0] * before_entry,
+        start[1] + delta[1] * before_entry,
+        transfer_xyz[2],
+    ];
+    Some(point)
+}
+
+fn solve_collision_free_waypoint(
+    model: &EmbodimentModel,
+    request: &ReasoningRequest,
+    target: [f64; 3],
+    seed_q: &[f64],
+    segment_start_q: &[f64],
+    phase: ContactPhase,
+) -> Result<Vec<f64>, &'static str> {
+    let candidates = solve_precise_candidates_from_seed(
+        model,
+        &request.scene,
+        target,
+        seed_q,
+        MAX_TRANSIT_WAYPOINT_ALTERNATIVES,
+    )?;
+    let mut last_refusal = "IK_FAILED";
+    for candidate in candidates {
+        match arm_motion_clear(model, request, segment_start_q, &candidate, phase) {
+            Ok(()) => return Ok(candidate),
+            Err(reason) => last_refusal = reason,
+        }
+    }
+    Err(last_refusal)
+}
+
 fn solve_precise_candidates(
     model: &EmbodimentModel,
     scene: &TableScene,
     target: [f64; 3],
     limit: usize,
 ) -> Result<Vec<Vec<f64>>, &'static str> {
+    solve_precise_candidates_from_seed(model, scene, target, &scene.arm_q, limit)
+}
+
+fn solve_precise_candidates_from_seed(
+    model: &EmbodimentModel,
+    scene: &TableScene,
+    target: [f64; 3],
+    seed_q: &[f64],
+    limit: usize,
+) -> Result<Vec<Vec<f64>>, &'static str> {
     let chain = model.ee_joint_chain(&scene.ee).ok_or("NO_CHAIN")?;
-    if scene.arm_q.len() != chain.len() {
+    if seed_q.len() != chain.len() {
         return Err("Q_LENGTH");
     }
-    let candidates = with_ik_q_seed(Some(&scene.arm_q), || {
-        solve_ik_candidates(model, &chain, &scene.ee, target, &scene.arm_q, limit)
+    let candidates = with_ik_q_seed(Some(seed_q), || {
+        solve_ik_candidates(model, &chain, &scene.ee, target, seed_q, limit)
     });
     match candidates {
         Ok(candidates) => Ok(candidates.into_iter().map(|(q, _)| q).collect()),
-        Err(_) => {
+        Err(_) if seed_q == scene.arm_q => {
             // Preserve the existing refusal detail when no precise solution is
             // available; best-effort IK may distinguish residual from failure.
             let _ = solve_precise(model, scene, target)?;
             Err("IK_FAILED")
         }
+        Err(_) => Err("IK_FAILED"),
     }
 }
 
@@ -2572,7 +2886,7 @@ fn joint_margin(model: &EmbodimentModel, names: &[String], q: &[f64]) -> f64 {
     }
 }
 
-const PROOF_ALGORITHM: &str = "physical-proof/6";
+const PROOF_ALGORITHM: &str = "physical-proof/8";
 
 fn witness_text(
     family: &str,
@@ -2584,12 +2898,14 @@ fn witness_text(
 ) -> String {
     let dependency = proof_dependency_digest(family, model, request, candidate);
     let mut witness = format!(
-        "algorithm={PROOF_ALGORITHM}\nfamily={family}\nkey={}\npush_bits={}\nstroke_bits={}\nq0_bits={}\nq_transit_bits={}\nq_contact_bits={}\nq_end_bits={}\nstroke_state_count={}\nq_retract_bits={}\nfinger_bits={}\naction_envelope={}\nlift_trajectory_digest={}\ndependency={dependency}\nsegments=transit,approach,contact,stroke,retreat,close,lift\ncontact_observed=false\n",
+        "algorithm={PROOF_ALGORITHM}\nfamily={family}\nkey={}\npush_bits={}\nstroke_bits={}\nq0_bits={}\nq_transit_bits={}\ntransit_state_count={}\napproach_state_count={}\nq_contact_bits={}\nq_end_bits={}\nstroke_state_count={}\nq_retract_bits={}\nfinger_bits={}\naction_envelope={}\nlift_trajectory_digest={}\ndependency={dependency}\nsegments=transit,approach,contact,stroke,retreat,close,lift\ncontact_observed=false\n",
         hex::encode(candidate.action_key.as_bytes()),
         bits3(candidate.direction),
         candidate.stroke_m.to_bits(),
         bits_q(&solved.q0),
         bits_q(&solved.q_transit),
+        solved.transit_waypoints.len(),
+        solved.approach_waypoints.len(),
         bits_q(&solved.q_contact),
         bits_q(&solved.q_end),
         solved.stroke_states.len(),
@@ -2598,6 +2914,12 @@ fn witness_text(
         action_envelope_witness(action_envelope),
         solved.lift_trajectory_digest.as_deref().unwrap_or("none"),
     );
+    for (index, state) in solved.transit_waypoints.iter().enumerate() {
+        witness.push_str(&format!("transit_state_{index}={}\n", bits_q(state)));
+    }
+    for (index, state) in solved.approach_waypoints.iter().enumerate() {
+        witness.push_str(&format!("approach_state_{index}={}\n", bits_q(state)));
+    }
     for (index, state) in solved.stroke_states.iter().enumerate() {
         witness.push_str(&format!("stroke_state_{index}={}\n", bits_q(state)));
     }
@@ -3215,6 +3537,20 @@ mod tests {
     }
 
     #[test]
+    fn candidate_preview_proves_only_the_named_action_without_authority() {
+        let (model, request) = benchmark_scene();
+        let mut reasoner = PhysicalReasoner::new(model);
+
+        let probe = reasoner.preview_candidate(&request, "probe:+x");
+
+        assert_eq!(probe.action_key, "probe:+x");
+        assert_eq!(probe.status, "PROVED");
+        assert!(probe.witness_digest.is_some());
+        assert!(probe.witness_contents.is_some());
+        assert_eq!(reasoner.cache_stats().executable_misses, 1);
+    }
+
+    #[test]
     fn blocked_translation_needs_a_probe_then_an_intermediate_push() {
         let (model, mut request) = benchmark_scene();
         let mut reasoner = PhysicalReasoner::new(model);
@@ -3573,7 +3909,7 @@ mod tests {
     }
 
     #[test]
-    fn push_approach_standoff_clears_object_before_side_contact() {
+    fn push_probe_standoff_fits_authorized_stroke() {
         let (_, mut request) = benchmark_scene();
         request.scene.object_center = [0.3, 0.0, 0.12];
         request.scene.object_half = [0.02, 0.02, 0.02];
@@ -3581,12 +3917,20 @@ mod tests {
         request.scene.tool_radius_m = 0.06;
         let candidate = push_candidates(&request)
             .into_iter()
-            .find(|candidate| candidate.action_key == "push:+x")
-            .expect("positive local-x push");
+            .find(|candidate| candidate.action_key == "probe:+x")
+            .expect("positive local-x probe");
 
         let standoff = push_approach_standoff(&request, &candidate);
+        let gap = (candidate.target_xyz[0] - standoff[0])
+            .hypot(candidate.target_xyz[1] - standoff[1])
+            .hypot(candidate.target_xyz[2] - standoff[2]);
 
-        assert!((standoff[0] - (candidate.target_xyz[0] - 0.05)).abs() < 1e-12);
+        assert!((gap - PUSH_PROBE_APPROACH_GAP_M).abs() < 1e-12);
+        assert_eq!(candidate.stroke_m, request.probe_stroke_m);
+        assert!(
+            candidate.stroke_m - gap >= 0.004 - 1e-12,
+            "the authorized probe stroke must leave at least 4 mm after first contact"
+        );
         assert_eq!(standoff[1], candidate.target_xyz[1]);
         assert_eq!(standoff[2], candidate.target_xyz[2]);
     }

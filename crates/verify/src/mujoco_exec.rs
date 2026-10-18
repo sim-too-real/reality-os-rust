@@ -4,6 +4,7 @@ use crate::bundle::RobotBundle;
 use crate::format::ModelFormat;
 use crate::manipulation_benchmark::wrench_sensor::{
     MonitoredStepResult, SimulationWrenchSensorProfile, SimulationWrenchWindow, WrenchAbortEvent,
+    WrenchAbortReason,
 };
 use realityos_kernel::physical_action::{PhysicalActionEnvelope, WrenchLimitPolicy};
 use realityos_session::{grant_covers, ScopedSimulationGrant};
@@ -20,6 +21,14 @@ use thiserror::Error;
 
 static WORKER_SEQ: AtomicU64 = AtomicU64::new(1);
 static WORKER_POOL: Mutex<Vec<MujocoInstance>> = Mutex::new(Vec::new());
+
+#[derive(Debug, Clone, Copy)]
+pub struct MonitoredControlRamp<'a> {
+    pub start_ctrl: &'a [f64],
+    pub target_ctrl: &'a [f64],
+    pub elapsed_steps: u32,
+    pub total_steps: u32,
+}
 
 /// Recycle an isolated worker process. Each checkout still has its own mjModel/mjData after load.
 pub fn checkout_worker() -> Result<MujocoInstance, ExecError> {
@@ -458,6 +467,8 @@ impl MujocoInstance {
         policy: &WrenchLimitPolicy,
         grant: &ScopedSimulationGrant,
         request_precontact_baseline: bool,
+        request_monitor_gravity_reference: bool,
+        control_ramp: Option<MonitoredControlRamp<'_>>,
     ) -> Result<MonitoredStepResult, ExecError> {
         if self.wrench_abort_latched {
             return Err(ExecError::Msg("WRENCH_ABORT_LATCHED".into()));
@@ -519,6 +530,14 @@ impl MujocoInstance {
             "maximum_m": maximum_m,
             "wrench_limit": wrench_scope,
         });
+        let control_ramp = control_ramp.map(|ramp| {
+            json!({
+                "start_ctrl": ramp.start_ctrl,
+                "target_ctrl": ramp.target_ctrl,
+                "elapsed_steps": ramp.elapsed_steps,
+                "total_steps": ramp.total_steps,
+            })
+        });
         let response = self.rpc(&json!({
             "cmd": "step_monitored",
             "n": n,
@@ -531,6 +550,8 @@ impl MujocoInstance {
             "grant_action_envelope": grant_action_envelope,
             "observation_epoch": grant.scope.observation_epoch,
             "request_precontact_baseline": request_precontact_baseline,
+            "request_monitor_gravity_reference": request_monitor_gravity_reference,
+            "control_ramp": control_ramp,
         }))?;
         if response["ok"] != true {
             self.wrench_abort_latched = true;
@@ -558,6 +579,28 @@ impl MujocoInstance {
                     self.wrench_abort_latched = true;
                     ExecError::Msg(format!("invalid_wrench_abort_event:{error}"))
                 })?;
+            event.triggering_sample = window
+                .triggering_sample
+                .clone()
+                .or_else(|| window.samples.last().cloned());
+            let triggering_pose_valid = !matches!(&event.reason, WrenchAbortReason::Limit { .. })
+                || event
+                    .triggering_sensor_position
+                    .as_ref()
+                    .is_some_and(|position| position.iter().all(|value| value.is_finite()))
+                    && event
+                        .triggering_sensor_orientation
+                        .as_ref()
+                        .is_some_and(|orientation| {
+                            let norm_squared =
+                                orientation.iter().map(|value| value * value).sum::<f64>();
+                            orientation.iter().all(|value| value.is_finite())
+                                && (norm_squared - 1.0).abs() <= 1e-5
+                        });
+            if !triggering_pose_valid {
+                self.wrench_abort_latched = true;
+                event.stop_verified = false;
+            }
             let allowed = &policy.abort_contract.allowed_stop_actuator_ids;
             let mut reported = event.stop_actuator_ids.clone();
             let mut expected = allowed.clone();
@@ -593,10 +636,22 @@ impl MujocoInstance {
             self.wrench_abort_latched = true;
             return Err(ExecError::Msg("monitored_state_missing".into()));
         }
+        let control_correction_max_rad = response["control_correction_max_rad"]
+            .as_f64()
+            .filter(|value| {
+                value.is_finite()
+                    && *value >= 0.0
+                    && *value <= policy.max_position_tracking_correction_rad + 1e-9
+            })
+            .ok_or_else(|| {
+                self.wrench_abort_latched = true;
+                ExecError::Msg("monitored_control_correction_audit_invalid".into())
+            })?;
         Ok(MonitoredStepResult {
             state,
             wrench_window: window,
             abort,
+            control_correction_max_rad,
         })
     }
 
