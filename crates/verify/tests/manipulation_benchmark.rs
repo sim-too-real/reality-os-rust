@@ -788,6 +788,32 @@ fn simulation_wrench_window_retains_only_its_initial_precontact_baseline() {
         )
         .is_err()
     );
+
+    let mut later_sample = sample.clone();
+    later_sample["sequence"] = serde_json::json!(1);
+    later_sample["capture_s"] = serde_json::json!(0.008);
+    later_sample["receive_s"] = serde_json::json!(0.008 + profile.latency_s);
+    let mid_batch = serde_json::json!({
+        "ok": true,
+        "state": { "time": 0.01 },
+        "samples": [sample.clone(), later_sample.clone()],
+        "precontact_baseline": later_sample.clone(),
+        "monitor_gravity_reference": later_sample
+    });
+    let typed_mid_batch =
+        realityos_verify::manipulation_benchmark::SimulationWrenchWindow::from_worker_response(
+            &mid_batch,
+            &profile,
+            "epoch-baseline",
+        )
+        .expect("a reference captured later in the monitored batch is valid evidence");
+    assert_eq!(
+        typed_mid_batch
+            .monitor_gravity_reference
+            .as_ref()
+            .map(|sample| sample.sequence),
+        Some(1)
+    );
 }
 
 #[test]

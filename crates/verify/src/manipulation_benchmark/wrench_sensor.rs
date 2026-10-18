@@ -601,9 +601,7 @@ impl SimulationWrenchWindow {
                     profile,
                     transform_epoch,
                 )?;
-                if samples.first().is_some_and(|sample| {
-                    baseline.sequence > sample.sequence || baseline.capture_s > sample.capture_s
-                }) {
+                if worker_sample_is_future(&baseline, &samples, response) {
                     return Err(WrenchSensorError::Sample("precontact_baseline_future"));
                 }
                 if let Some(index) = samples
@@ -631,9 +629,7 @@ impl SimulationWrenchWindow {
                 profile,
                 transform_epoch,
             )?;
-            if samples.first().is_some_and(|sample| {
-                reference.sequence > sample.sequence || reference.capture_s > sample.capture_s
-            }) {
+            if worker_sample_is_future(&reference, &samples, response) {
                 return Err(WrenchSensorError::Sample(
                     "monitor_gravity_reference_future",
                 ));
@@ -679,6 +675,22 @@ impl SimulationWrenchWindow {
             compensation_digest: profile.limit_policy.compensation_digest.clone(),
         })
     }
+}
+
+fn worker_sample_is_future(
+    candidate: &WrenchSample,
+    samples: &[WrenchSample],
+    response: &Value,
+) -> bool {
+    let after_last_sample = samples.last().is_some_and(|last| {
+        candidate.sequence > last.sequence || candidate.capture_s > last.capture_s + 1e-12
+    });
+    let state = &response["state"];
+    let after_final_state = !state.is_null()
+        && !state["time"]
+            .as_f64()
+            .is_some_and(|time_s| time_s.is_finite() && candidate.capture_s <= time_s + 1e-12);
+    after_last_sample || after_final_state
 }
 
 fn parse_worker_sample(
