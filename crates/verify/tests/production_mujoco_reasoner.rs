@@ -186,6 +186,7 @@ fn ur5e_finds_a_collision_checked_push_from_a_side_precontact_pose() {
             joint_names: chain,
             ee: "tool0".into(),
             tool_radius_m: 0.04,
+            tool_contact_extent_m: 0.04,
             observation_epoch: "ur5e-safe-standoff".into(),
             held: false,
             finger_names: Vec::new(),
@@ -996,6 +997,8 @@ impl World {
                 joint_names: self.arm_names.clone(),
                 ee: "ee".into(),
                 tool_radius_m: declared_ee_cross_section_radius(model, "ee")
+                    .expect("declared end-effector collision geometry"),
+                tool_contact_extent_m: declared_ee_cross_section_radius(model, "ee")
                     .expect("declared end-effector collision geometry"),
                 observation_epoch: "epoch:mujoco-0".into(),
                 held: false,

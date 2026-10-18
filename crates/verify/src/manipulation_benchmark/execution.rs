@@ -2848,6 +2848,8 @@ pub(super) fn build_push_reasoning_request(
     let tool_radius_m = declared_ee_radius(model, &ee.name).ok_or_else(|| {
         BenchmarkError::InvalidTrial("end-effector has no supported collision cross-section".into())
     })?;
+    let tool_contact_extent_m =
+        declared_ee_contact_extent(model, &ee.name).unwrap_or(tool_radius_m);
     let mass_kg = object_spec["mass"]
         .as_f64()
         .filter(|mass| mass.is_finite() && *mass > 0.0);
@@ -2872,6 +2874,7 @@ pub(super) fn build_push_reasoning_request(
             joint_names: joints,
             ee: ee.name.clone(),
             tool_radius_m,
+            tool_contact_extent_m,
             observation_epoch: epoch.into(),
             held: false,
             finger_names: Vec::new(),
@@ -3031,6 +3034,9 @@ fn build_grasp_reasoning_request(
                     "end-effector has no supported collision cross-section".into(),
                 )
             })?,
+            tool_contact_extent_m: declared_ee_contact_extent(model, &ee.name).unwrap_or_else(|| {
+                declared_ee_radius(model, &ee.name).unwrap_or(0.0)
+            }),
             observation_epoch: epoch.into(),
             held: false,
             finger_names,
@@ -3425,6 +3431,98 @@ pub(super) fn declared_ee_radius(
     found_collision_geom.then_some(radius)
 }
 
+/// Distance collision geometry extends past the end-effector frame along the
+/// body-to-frame axis. This is the face a directed probe can reach. The
+/// isotropic radius in `declared_ee_radius` stays the clearance bound.
+pub(super) fn declared_ee_contact_extent(
+    model: &realityos_semantics::embodiment::EmbodimentModel,
+    ee_name: &str,
+) -> Option<f64> {
+    use realityos_semantics::geometry::CollisionRole;
+    let ee = model.end_effectors.iter().find(|ee| ee.name == ee_name)?;
+    let frame = model.frames.iter().find(|frame| frame.name == ee.frame)?;
+    let frame_pose = frame.pose()?;
+    let axis_norm = frame_pose.xyz[0]
+        .hypot(frame_pose.xyz[1])
+        .hypot(frame_pose.xyz[2]);
+    if !axis_norm.is_finite() || axis_norm <= 1.0e-9 {
+        return None;
+    }
+    let axis = [
+        frame_pose.xyz[0] / axis_norm,
+        frame_pose.xyz[1] / axis_norm,
+        frame_pose.xyz[2] / axis_norm,
+    ];
+    let mut found = false;
+    let mut support = f64::NEG_INFINITY;
+    for geom in model
+        .collision_geoms
+        .iter()
+        .filter(|geom| geom.owner_body == frame.parent_body)
+    {
+        match geom.collision_role {
+            CollisionRole::Visual => continue,
+            CollisionRole::Collision => {}
+            CollisionRole::Unknown => return None,
+        }
+        let Some(geom_support) = shape_support(&geom.local_pose, &geom.shape, axis) else {
+            return None;
+        };
+        found = true;
+        support = support.max(geom_support);
+    }
+    found.then(|| {
+        let past_frame = support
+            - (frame_pose.xyz[0] * axis[0]
+                + frame_pose.xyz[1] * axis[1]
+                + frame_pose.xyz[2] * axis[2]);
+        past_frame.max(0.0)
+    })
+}
+
+fn shape_support(
+    pose: &realityos_semantics::transform::Se3,
+    shape: &realityos_semantics::geometry::PrimitiveShape,
+    direction: [f64; 3],
+) -> Option<f64> {
+    use realityos_semantics::geometry::PrimitiveShape;
+    let center = pose.xyz[0] * direction[0] + pose.xyz[1] * direction[1] + pose.xyz[2] * direction[2];
+    let along = |local: [f64; 3]| {
+        let world = pose.rotate(local);
+        world[0] * direction[0] + world[1] * direction[1] + world[2] * direction[2]
+    };
+    match shape {
+        PrimitiveShape::Sphere { radius } => Some(center + radius.abs()),
+        PrimitiveShape::Cylinder { radius, half_length } => {
+            let axial = along([0.0, 0.0, 1.0]).abs();
+            let radial = (1.0 - axial * axial).max(0.0).sqrt();
+            Some(center + half_length.abs() * axial + radius.abs() * radial)
+        }
+        PrimitiveShape::Capsule { radius, half_length } => {
+            let axial = along([0.0, 0.0, 1.0]).abs();
+            Some(center + half_length.abs() * axial + radius.abs())
+        }
+        PrimitiveShape::Box { half_extents } => Some(
+            center
+                + half_extents[0].abs() * along([1.0, 0.0, 0.0]).abs()
+                + half_extents[1].abs() * along([0.0, 1.0, 0.0]).abs()
+                + half_extents[2].abs() * along([0.0, 0.0, 1.0]).abs(),
+        ),
+        PrimitiveShape::ConvexMesh { vertices } => vertices
+            .iter()
+            .map(|vertex| {
+                let placed = [
+                    pose.xyz[0] + pose.rotate(*vertex)[0],
+                    pose.xyz[1] + pose.rotate(*vertex)[1],
+                    pose.xyz[2] + pose.rotate(*vertex)[2],
+                ];
+                placed[0] * direction[0] + placed[1] * direction[1] + placed[2] * direction[2]
+            })
+            .reduce(f64::max),
+        PrimitiveShape::Plane { .. } | PrimitiveShape::Unsupported { .. } => None,
+    }
+}
+
 fn witness_joint_line(contents: &str, prefix: &str) -> Vec<f64> {
     contents
         .lines()
@@ -3478,8 +3576,8 @@ fn truth_position(truth: &VerifierTruth, name: &str) -> Option<[f64; 3]> {
 #[cfg(test)]
 mod witness_tests {
     use super::{
-        declared_ee_radius, decode_push_witness, injected_safety_fault_alerts,
-        probe_control_ramp_steps,
+        declared_ee_contact_extent, declared_ee_radius, decode_push_witness,
+        injected_safety_fault_alerts, probe_control_ramp_steps,
     };
     use crate::manipulation_scenarios::{push_scenario, NegKind};
     use realityos_semantics::embodiment::{EmbodimentModel, EndEffector, FrameKind, ModelFrame};
@@ -3527,6 +3625,41 @@ mod witness_tests {
 
         let radius = declared_ee_radius(&model, "tool").expect("supported collision geometry");
         assert!((radius - (0.02_f64.hypot(0.03) + 0.01)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn contact_extent_stops_at_the_flange_while_the_bounding_radius_includes_the_wrist() {
+        let mut model = EmbodimentModel::new("test", "bundle", "model", "epoch", "version");
+        model.end_effectors.push(EndEffector {
+            name: "tool".into(),
+            frame: "tool".into(),
+            joint_chain: Vec::new(),
+        });
+        model.frames.push(ModelFrame {
+            name: "tool".into(),
+            kind: FrameKind::Ee,
+            parent_body: "wrist".into(),
+            translation: Provenanced::declared([0.0, 0.10, 0.0], "test", 0.0),
+            rotation: Provenanced::declared([1.0, 0.0, 0.0, 0.0], "test", 0.0),
+        });
+        let turn = std::f64::consts::FRAC_1_SQRT_2;
+        model.collision_geoms.push(RigidGeometry::declared(
+            "flange",
+            "wrist",
+            Se3::try_new([0.0, 0.08, 0.0], [turn, turn, 0.0, 0.0]).expect("cylinder pose"),
+            PrimitiveShape::Cylinder {
+                radius: 0.04,
+                half_length: 0.02,
+            },
+            CollisionRole::Collision,
+            SemanticRole::Tool,
+            "test",
+        ));
+
+        let radius = declared_ee_radius(&model, "tool").expect("cylinder bound");
+        let extent = declared_ee_contact_extent(&model, "tool").expect("cylinder face");
+        assert!(radius > 0.06, "{radius}");
+        assert!(extent < 1.0e-9, "{extent}");
 
         model.collision_geoms.push(RigidGeometry::declared(
             "unknown_tool_collision",

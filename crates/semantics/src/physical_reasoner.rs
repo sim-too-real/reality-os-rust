@@ -74,6 +74,10 @@ pub struct TableScene {
     pub joint_names: Vec<String>,
     pub ee: String,
     pub tool_radius_m: f64,
+    /// How far collision geometry extends past the end-effector frame along the
+    /// outward tool axis. The isotropic `tool_radius_m` remains the clearance
+    /// bound. A smaller contact extent is what a directed probe can actually reach.
+    pub tool_contact_extent_m: f64,
     pub observation_epoch: String,
     pub held: bool,
     pub finger_names: Vec<String>,
@@ -678,6 +682,7 @@ pub fn benchmark_scene() -> (EmbodimentModel, ReasoningRequest) {
             joint_names: chain,
             ee: "ee".into(),
             tool_radius_m: 0.004,
+            tool_contact_extent_m: 0.004,
             observation_epoch: "epoch:table".into(),
             held: false,
             finger_names: vec!["finger_l".into(), "finger_r".into()],
@@ -3151,6 +3156,7 @@ fn proof_dependency_digest(
         push_q(&mut bytes, &obstacle.quat_wxyz);
     }
     push_f64(&mut bytes, request.scene.tool_radius_m);
+    push_f64(&mut bytes, request.scene.tool_contact_extent_m);
     push_str(&mut bytes, &request.scene.ee);
     bytes.push(u8::from(request.scene.held));
     push_q(&mut bytes, &candidate.direction);
@@ -3961,6 +3967,7 @@ mod tests {
         request.scene.object_half = [0.02, 0.02, 0.02];
         request.scene.support_origin = [0.3, 0.0, 0.10];
         request.scene.tool_radius_m = 0.06;
+        request.scene.tool_contact_extent_m = 0.06;
 
         let candidate = push_candidates(&request)
             .into_iter()
@@ -3986,6 +3993,7 @@ mod tests {
         request.scene.object_half = [0.02, 0.02, 0.005];
         request.scene.support_origin = [0.3, 0.0, 0.08];
         request.scene.tool_radius_m = 0.06;
+        request.scene.tool_contact_extent_m = 0.06;
         let candidate = push_candidates(&request)
             .into_iter()
             .find(|candidate| candidate.action_key == "push:+x")
@@ -4005,6 +4013,7 @@ mod tests {
         request.scene.object_half = [0.02, 0.02, 0.02];
         request.scene.support_origin = [0.3, 0.0, 0.10];
         request.scene.tool_radius_m = 0.06;
+        request.scene.tool_contact_extent_m = 0.06;
         let candidate = push_candidates(&request)
             .into_iter()
             .find(|candidate| candidate.action_key == "probe:+x")
