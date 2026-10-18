@@ -3630,8 +3630,14 @@ mod tests {
         let work = work_counters::work_snapshot();
 
         assert_eq!(action.summary.status, "MECHANICS_UNKNOWN");
-        assert_eq!(work.ik_attempts, 0, "an unauthorized push needs no IK proof");
-        assert_eq!(work.collision_queries, 0, "no path is searched without mechanics");
+        assert_eq!(
+            work.ik_attempts, 0,
+            "an unauthorized push needs no IK proof"
+        );
+        assert_eq!(
+            work.collision_queries, 0,
+            "no path is searched without mechanics"
+        );
     }
 
     #[test]
