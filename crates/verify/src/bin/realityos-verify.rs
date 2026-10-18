@@ -58,7 +58,7 @@ struct BenchmarkBundleSpec {
     wrench_profile: Option<SimulationWrenchSensorProfile>,
 }
 
-const SCENARIO_SUITE_V2: &str = "robots/benchmarks/manipulation/scenario_suite_v2.json";
+const SCENARIO_SUITE_V3: &str = "robots/benchmarks/manipulation/scenario_suite_v3.json";
 
 fn manipulation_benchmark(args: &[String]) {
     let parsed = match parse_benchmark_args(args) {
@@ -70,7 +70,7 @@ fn manipulation_benchmark(args: &[String]) {
     };
     if parsed.holdout {
         eprintln!(
-            "suite-v2 does not run the historical WX250S holdout; it is not an untouched holdout"
+            "suite-v3 does not run the historical WX250S holdout; it is not an untouched holdout"
         );
         std::process::exit(2);
     }
@@ -91,7 +91,7 @@ fn manipulation_benchmark(args: &[String]) {
 
     let mut config = BenchmarkConfig::default();
     let scenario_suite = if parsed.replay.is_none() {
-        let path = repo_root.join(SCENARIO_SUITE_V2);
+        let path = repo_root.join(SCENARIO_SUITE_V3);
         let suite = ScenarioSuiteManifest::load(&path).unwrap_or_else(|error| {
             eprintln!("invalid scenario suite {}: {error}", path.display());
             std::process::exit(2);
@@ -190,9 +190,9 @@ fn manipulation_benchmark(args: &[String]) {
     report.baseline_status = if parsed.replay.is_some() {
         "historical_replay_not_compared".into()
     } else if parsed.pilot {
-        "suite_v2_pilot_screening_not_compared".into()
+        "suite_v3_pilot_screening_not_compared".into()
     } else {
-        "suite_v2_public_baseline".into()
+        "suite_v3_public_baseline".into()
     };
     if let Err(error) = write_benchmark_report(&report, &parsed.out_dir) {
         eprintln!("benchmark report write failed: {error}");
@@ -219,7 +219,7 @@ fn manipulation_benchmark(args: &[String]) {
         std::process::exit(1);
     }
     if parsed.pilot && !suite_pilot_has_positive_denominators(&report) {
-        eprintln!("suite-v2 pilot did not schedule positive trials on both development arms");
+        eprintln!("suite-v3 pilot did not schedule positive trials on both development arms");
         std::process::exit(1);
     }
 }

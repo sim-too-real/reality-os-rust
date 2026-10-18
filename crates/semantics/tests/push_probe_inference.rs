@@ -329,6 +329,30 @@ fn stale_or_mismatched_lineage_never_updates_friction() {
         FrictionInferenceResult::NoInference(FrictionNoInferenceReason::StaleEvidence)
     ));
 
+    let mut approached = measurement();
+    approached.motion.start_s = 0.4;
+    let approached_result = infer_support_friction(&approached);
+    assert!(
+        !matches!(
+            approached_result,
+            FrictionInferenceResult::NoInference(FrictionNoInferenceReason::StaleEvidence)
+        ),
+        "the action window may begin before transit reaches the precontact baseline: {approached_result:?}"
+    );
+
+    let mut stale_baseline = measurement();
+    if let Some(baseline) = stale_baseline.precontact_baseline.as_mut() {
+        baseline.capture_s = 0.4;
+        baseline.receive_s = 0.4001;
+        baseline.digest = wrench_sample_digest(baseline);
+    }
+    assert!(matches!(
+        infer_support_friction(&stale_baseline),
+        FrictionInferenceResult::NoInference(
+            FrictionNoInferenceReason::PrecontactBaselineGapExceeded
+        )
+    ));
+
     let mut wrong_origin = measurement();
     wrong_origin.samples[0].origin = WrenchSampleOrigin::Synthetic;
     wrong_origin.samples[0].digest = wrench_sample_digest(&wrong_origin.samples[0]);
@@ -384,6 +408,29 @@ fn non_planar_support_motion_refuses_friction_inference() {
         infer_support_friction(&vertical_motion),
         FrictionInferenceResult::NoInference(FrictionNoInferenceReason::NonPlanarMotion)
     ));
+
+    let mut seated_slide = measurement();
+    seated_slide.motion.pose_resolution_m = 0.0001;
+    seated_slide.motion.displacement_m = [0.0031, 0.0, -0.000108];
+    seated_slide.motion.first_motion_s = Some(1.005);
+    let seated = infer_support_friction(&seated_slide);
+    assert!(
+        !matches!(
+            seated,
+            FrictionInferenceResult::NoInference(FrictionNoInferenceReason::NonPlanarMotion)
+        ),
+        "a 0.108 mm support seat on a 3.1 mm slide is still planar: {seated:?}"
+    );
+
+    let mut tilted_slide = measurement();
+    tilted_slide.motion.pose_resolution_m = 0.0001;
+    tilted_slide.motion.displacement_m = [0.0031, 0.0, 0.0005];
+    tilted_slide.motion.first_motion_s = Some(1.005);
+    assert_eq!(
+        infer_support_friction(&tilted_slide),
+        FrictionInferenceResult::NoInference(FrictionNoInferenceReason::NonPlanarMotion),
+        "vertical travel over five percent of the planar probe is not a planar friction witness"
+    );
 }
 
 #[test]

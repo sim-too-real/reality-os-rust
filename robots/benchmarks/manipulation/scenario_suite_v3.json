@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "suite_id": "force_observable_public_probe",
+  "suite_version": 3,
+  "pilot_seeds": [21000, 21001, 21002, 21003, 21004, 21005, 21006, 21007, 21008, 21009, 21010, 21011, 21012, 21013, 21014, 21015, 21016, 21017, 21018, 21019],
+  "public_seeds": [22000, 22001, 22002, 22003, 22004, 22005, 22006, 22007, 22008, 22009, 22010, 22011, 22012, 22013, 22014, 22015, 22016, 22017, 22018, 22019, 22020, 22021, 22022, 22023, 22024, 22025, 22026, 22027, 22028, 22029, 22030, 22031, 22032, 22033, 22034, 22035, 22036, 22037, 22038, 22039, 22040, 22041, 22042, 22043, 22044, 22045, 22046, 22047, 22048, 22049, 22050, 22051, 22052, 22053, 22054, 22055, 22056, 22057, 22058, 22059, 22060, 22061, 22062, 22063, 22064, 22065, 22066, 22067, 22068, 22069, 22070, 22071, 22072, 22073, 22074, 22075, 22076, 22077, 22078, 22079, 22080, 22081, 22082, 22083, 22084, 22085, 22086, 22087, 22088, 22089, 22090, 22091, 22092, 22093, 22094, 22095, 22096, 22097, 22098, 22099],
+  "historical_seed_ranges": [
+    { "name": "schema_v5_v6_public", "start_inclusive": 0, "end_exclusive": 100 },
+    { "name": "schema_v5_v6_pilot", "start_inclusive": 9000, "end_exclusive": 9020 },
+    { "name": "historical_wx250s_regression", "start_inclusive": 10000, "end_exclusive": 10100 },
+    { "name": "scenario_suite_v2_pilot", "start_inclusive": 19000, "end_exclusive": 19020 },
+    { "name": "scenario_suite_v2_public", "start_inclusive": 20000, "end_exclusive": 20100 }
+  ],
+  "stratum_period": 5,
+  "expected_success_residues": [0, 1, 2],
+  "push_approach_gap_m": 0.004,
+  "push_probe_stroke_m": 0.008,
+  "minimum_post_contact_stroke_m": 0.004,
+  "max_positive_resamples": 64,
+  "positive_push": {
+    "object_x_m": [0.58, 0.64],
+    "object_y_m": [-0.05, 0.05],
+    "half_size_m": [0.050, 0.070],
+    "half_height_m": [0.020, 0.040],
+    "mass_kg": [1.0, 1.25],
+    "friction": [0.4, 0.8],
+    "push_distance_m": [0.04, 0.08],
+    "obstacle_count": [0, 2],
+    "obstacle_forward_m": [0.01, 0.04],
+    "obstacle_lateral_m": [0.14, 0.17]
+  },
+  "unidentifiable_push": {
+    "mass_kg": [0.05, 0.18],
+    "friction": [0.2, 0.8]
+  },
+  "refusal_cycle": [
+    "stale_object",
+    "unexpected_contact",
+    "force_bound_unavailable",
+    "unidentifiable_friction",
+    "unreachable"
+  ]
+}

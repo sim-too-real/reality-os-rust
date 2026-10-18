@@ -1,0 +1,800 @@
+{
+  "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:19000:15",
+  "trial": {
+    "schema_version": 7,
+    "paired_trial_key": "a082a9f8009a0d55acdb0b3b8defe66cfed794add96bb8e1876cdb080cd40cd6",
+    "scenario_suite_id": "feasible_public_probe",
+    "scenario_suite_version": 2,
+    "stratum": null,
+    "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:19000:15",
+    "seed": 19000,
+    "index": 15,
+    "task": "pinch_grasp_lift",
+    "role": "grasp_fixture",
+    "robot_id": "arm_gripper_lift",
+    "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+    "source_hash": "b75b518f36853782407512c054d5257c17371704097a3da0e445c98b5165d185",
+    "expectation": "expected_success",
+    "scenario": {
+      "seed": 19000,
+      "polarity": "positive",
+      "skill": "GRASP",
+      "objects": [
+        {
+          "friction": 1.0171880827539646,
+          "mass": 0.2246072847768932,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.29267422856891306,
+            -0.003197628452747736,
+            0.11499999999999999
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.01,
+            0.008600168451648724,
+            0.025
+          ],
+          "type": "box"
+        },
+        {
+          "mass": 10.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.25,
+            0.0,
+            0.08
+          ],
+          "rgba": [
+            0.4,
+            0.4,
+            0.4,
+            1
+          ],
+          "size": [
+            0.15,
+            0.22,
+            0.01
+          ],
+          "type": "box"
+        }
+      ],
+      "planar": true,
+      "object_id": "obj0",
+      "expected_refusal": null,
+      "neg": null,
+      "stale": false,
+      "move_object_after_obs": false,
+      "replay": false,
+      "restart_replay": false,
+      "crash_controller": false,
+      "immovable": false,
+      "push_dir": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "push_dist": 0.0,
+      "required_opening": 0.85,
+      "world_construction": "fixed_world"
+    },
+    "initial_qpos": [
+      -0.7973953261691724,
+      1.335187958399566,
+      0.7709386093201529,
+      0.04499999999817893,
+      0.03,
+      0.03
+    ],
+    "goal_xyz": [
+      0.29267422856891306,
+      -0.003197628452747736,
+      0.11499999999999999
+    ],
+    "fault_injection": null
+  },
+  "expectation": "expected_success",
+  "episode": {
+    "schema_version": 7,
+    "paired_trial_key": "a082a9f8009a0d55acdb0b3b8defe66cfed794add96bb8e1876cdb080cd40cd6",
+    "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:19000:15",
+    "trial_digest": "3a4f9a0d758f3164ef0496029badb2c121178784e9e4cc1d181fad3948fd9240",
+    "seed": 19000,
+    "task": "pinch_grasp_lift",
+    "role": "grasp_fixture",
+    "robot_id": "arm_gripper_lift",
+    "object_id": "obj0",
+    "goal_xyz": [
+      0.29267422856891306,
+      -0.003197628452747736,
+      0.11499999999999999
+    ],
+    "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+    "source_hash": "b75b518f36853782407512c054d5257c17371704097a3da0e445c98b5165d185",
+    "simulator": "MuJoCo",
+    "simulator_version": "3.7.0",
+    "evidence_status": "SIMULATION_ONLY",
+    "expectation": "expected_success",
+    "fault_injection": null,
+    "outcome": "action_failed",
+    "failure_cause": "hold_not_verified",
+    "refusal_code": "GRASP_VERIFIER:Some(\"SLIP\")",
+    "geometry_digest": "5e3c3a1f3d330980668dd63db0d9fa684d1f26b187b48245116604a2999c3cf5",
+    "ctrl_writes_before": 0,
+    "ctrl_writes_after": 7,
+    "unauthorized_writes": 0,
+    "actions": [
+      {
+        "action_key": "grasp:y",
+        "family": "pinch_grasp",
+        "grant_id": "sim-scope:053643d5ebfc03ae556c5ea6cc1c52f6e7e5b159f335b78003f1f9767ebf55be",
+        "witness_digest": "8b57dee06fd9b672bb460e268208bf54d5c0d40a8bcbf741df643b5e6f37ef62",
+        "observation_epoch": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:19000:15:0:4621819117588971520",
+        "writes_before": 0,
+        "writes_after": 7,
+        "displacement_m": 0.012986714166505889,
+        "lateral_displacement_m": null,
+        "reauthorized_after_observation": false,
+        "runtime_divergence": false,
+        "control_tracking_correction_bound_rad": null,
+        "control_tracking_correction_gain": null,
+        "control_tracking_correction_max_rad": null
+      }
+    ],
+    "safety_fault_observations": [],
+    "grasp_simulated_friction_oracle_samples": [
+      1.0081301571636283,
+      1.0157821183817315,
+      1.0207157573413808,
+      1.0133919507000042,
+      1.0188856549950587
+    ],
+    "grasp_simulated_friction_oracle_interval": [
+      0.9953811277163609,
+      1.035381127716361
+    ],
+    "object_start_xyz": [
+      0.29267422856891306,
+      -0.003197628452747736,
+      0.115
+    ],
+    "object_end_xyz": [
+      0.29266574761642794,
+      -0.003266885968564772,
+      0.12798652672243324
+    ],
+    "goal_error_start_m": 0.0,
+    "goal_error_end_m": 0.00006977485257742863,
+    "recovery_count": 0,
+    "acquisition_verified": true,
+    "hold_verified": false,
+    "grasp_phase_object_positions": [
+      [
+        0.29267422856891306,
+        -0.003197628452747736,
+        0.11488674574586584
+      ],
+      [
+        0.29267422856891306,
+        -0.003197628452747736,
+        0.11488674574586584
+      ],
+      [
+        0.292606143311835,
+        -0.0031771923919498434,
+        0.11488701887823163
+      ],
+      [
+        0.2926775918594979,
+        -0.0032798651528354633,
+        0.11504354581794386
+      ],
+      [
+        0.29266543950894075,
+        -0.003256740383150341,
+        0.1191827869022007
+      ],
+      [
+        0.2926516294129997,
+        -0.003228540931388661,
+        0.12359419632303732
+      ],
+      [
+        0.29266574761642794,
+        -0.003266885968564772,
+        0.12798652672243324
+      ]
+    ],
+    "grasp_verifier_evidence": [
+      "left_finger_object_contact",
+      "right_finger_object_contact",
+      "grasp_acquired",
+      "no_forbidden_contact",
+      "typed_grasp_authority_matches_resource",
+      "per_finger_force_within_authorized_ceiling",
+      "object_separated_from_table_support",
+      "bounded_vertical_lift_not_verified",
+      "object_follow_residual_exceeds_five_mm",
+      "gripper_closed_during_hold_check"
+    ],
+    "grasp_contact_audits": [
+      {
+        "phase": "lift_waypoint_1",
+        "finger_body": "finger_l",
+        "normal_force_n": 1.8396494248990751,
+        "tangential_force_n": 1.085813971742247,
+        "object_vertical_force_n": 1.0858188241950173,
+        "contact_dimensions": [
+          3,
+          3,
+          3,
+          3
+        ],
+        "contact_friction": [
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ]
+        ],
+        "force_available": true
+      },
+      {
+        "phase": "lift_waypoint_1",
+        "finger_body": "finger_r",
+        "normal_force_n": 1.8433317949907062,
+        "tangential_force_n": 1.0873601527115428,
+        "object_vertical_force_n": 1.0873485652730066,
+        "contact_dimensions": [
+          3,
+          3,
+          3,
+          3
+        ],
+        "contact_friction": [
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ]
+        ],
+        "force_available": true
+      },
+      {
+        "phase": "lift_waypoint_2",
+        "finger_body": "finger_l",
+        "normal_force_n": 1.8305677505933933,
+        "tangential_force_n": 1.0296270695971832,
+        "object_vertical_force_n": 1.0296289245534391,
+        "contact_dimensions": [
+          3,
+          3,
+          3,
+          3
+        ],
+        "contact_friction": [
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ]
+        ],
+        "force_available": true
+      },
+      {
+        "phase": "lift_waypoint_2",
+        "finger_body": "finger_r",
+        "normal_force_n": 1.8325028496978308,
+        "tangential_force_n": 1.0303165265496674,
+        "object_vertical_force_n": 1.0303144096891983,
+        "contact_dimensions": [
+          3,
+          3,
+          3,
+          3
+        ],
+        "contact_friction": [
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ]
+        ],
+        "force_available": true
+      },
+      {
+        "phase": "lift_waypoint_3",
+        "finger_body": "finger_l",
+        "normal_force_n": 1.8317111447654908,
+        "tangential_force_n": 1.030770532813124,
+        "object_vertical_force_n": 1.0307644396697013,
+        "contact_dimensions": [
+          3,
+          3,
+          3,
+          3
+        ],
+        "contact_friction": [
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ]
+        ],
+        "force_available": true
+      },
+      {
+        "phase": "lift_waypoint_3",
+        "finger_body": "finger_r",
+        "normal_force_n": 1.8299877131326183,
+        "tangential_force_n": 1.0300305409965476,
+        "object_vertical_force_n": 1.0300358934634737,
+        "contact_dimensions": [
+          3,
+          3,
+          3,
+          3
+        ],
+        "contact_friction": [
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ]
+        ],
+        "force_available": true
+      },
+      {
+        "phase": "lift_waypoint_4",
+        "finger_body": "finger_l",
+        "normal_force_n": 1.83041113505349,
+        "tangential_force_n": 1.0303111565330796,
+        "object_vertical_force_n": 1.0303143907377605,
+        "contact_dimensions": [
+          3,
+          3,
+          3,
+          3
+        ],
+        "contact_friction": [
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ]
+        ],
+        "force_available": true
+      },
+      {
+        "phase": "lift_waypoint_4",
+        "finger_body": "finger_r",
+        "normal_force_n": 1.8313858668630196,
+        "tangential_force_n": 1.0307235481612362,
+        "object_vertical_force_n": 1.0307192620320185,
+        "contact_dimensions": [
+          3,
+          3,
+          3,
+          3
+        ],
+        "contact_friction": [
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ]
+        ],
+        "force_available": true
+      },
+      {
+        "phase": "post_close",
+        "finger_body": "finger_l",
+        "normal_force_n": 1.8342317831225974,
+        "tangential_force_n": 0.006976170381757385,
+        "object_vertical_force_n": 0.0024046994814095656,
+        "contact_dimensions": [
+          3,
+          3,
+          3,
+          3
+        ],
+        "contact_friction": [
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ]
+        ],
+        "force_available": true
+      },
+      {
+        "phase": "post_close",
+        "finger_body": "finger_r",
+        "normal_force_n": 1.8106126819672683,
+        "tangential_force_n": 0.005296268352946617,
+        "object_vertical_force_n": 0.002601583743473478,
+        "contact_dimensions": [
+          3,
+          3,
+          3,
+          3
+        ],
+        "contact_friction": [
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ]
+        ],
+        "force_available": true
+      },
+      {
+        "phase": "post_lift",
+        "finger_body": "finger_l",
+        "normal_force_n": 1.83041113505349,
+        "tangential_force_n": 1.0303111565330796,
+        "object_vertical_force_n": 1.0303143907377605,
+        "contact_dimensions": [
+          3,
+          3,
+          3,
+          3
+        ],
+        "contact_friction": [
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ]
+        ],
+        "force_available": true
+      },
+      {
+        "phase": "post_lift",
+        "finger_body": "finger_r",
+        "normal_force_n": 1.8313858668630196,
+        "tangential_force_n": 1.0307235481612362,
+        "object_vertical_force_n": 1.0307192620320185,
+        "contact_dimensions": [
+          3,
+          3,
+          3,
+          3
+        ],
+        "contact_friction": [
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ],
+          [
+            1.0171880827539646,
+            1.0171880827539646,
+            1.0171880827539646,
+            0.01,
+            0.01
+          ]
+        ],
+        "force_available": true
+      }
+    ],
+    "grasp_opening_01": 0.12200885982851796,
+    "grasp_ee_lift_m": [
+      0.000033838912933348286,
+      -0.00008307802180757039,
+      0.018426299490553036
+    ],
+    "grasp_object_follow_residual_m": 0.005326858066873205,
+    "wall_time_s": 1.9036657,
+    "simulation_time_s": 3.799999999999803,
+    "decision_audits": [
+      "decision=ContactTransition { action: SelectedPhysicalAction { goal_id: \"acquire:obj0\", candidate_id: \"grasp:y\", candidate_contents: \"algorithm=physical-proof/8\\nfamily=pinch_grasp\\nkey=67726173703a79\\npush_bits=0,13830554455654793216,0\\nstroke_bits=0\\nq0_bits=13828729554987657144,4608691971164564771,4605119217212595954,4586646004498945502\\nq_transit_bits=13828729537626901274,4608691958444850123,4605119203966706882,4579800535830404123\\ntransit_state_count=1\\napproach_state_count=0\\nq_contact_bits=13828729537618602391,4608691958438818121,4605119203960414702,13795786662845092992\\nq_end_bits=13828729537618602391,4608691958438818121,4605119203960414702,13795786662845092992\\nstroke_state_count=0\\nq_retract_bits=none\\nfinger_bits=0,0\\naction_envelope=pinch:67726970706572:66696e6765725f6c:3f9eb851eb851eb8:0000000000000000,66696e6765725f72:3f9eb851eb851eb8:0000000000000000:3fff333333333333:64343431333365633939363435313835613530656564313536346136366162353261373238363536313332383365626438353561303133353062366430646631:3f9999999999999a\\nlift_trajectory_digest=d44133ec99645185a50eed1564a66ab52a72865613283ebd855a01350b6d0df1\\ndependency=719d2f0fb5abea084e23ae2b4e28ea9d6e95d54245b63c15167898b3b7396253\\nsegments=transit,approach,contact,stroke,retreat,close,lift\\ncontact_observed=false\\ntransit_state_0=13828729537626901274,4608691958444850123,4605119203966706882,4579800535830404123\\nlift_state_0=6a6f696e7431=13828729537618602391,6a6f696e7432=4608691958438818121,6a6f696e7433=4605119203960414702,6c6966745f7a=13795786662845092992;fingers=66696e6765725f6c=0,66696e6765725f72=0\\nlift_state_1=6a6f696e7431=13828729537618598447,6a6f696e7432=4608691958438815255,6a6f696e7433=4605119203960411712,6c6966745f7a=4580845367119315159;fingers=66696e6765725f6c=0,66696e6765725f72=0\\n\", action_key: \"grasp:y\", contact_id: \"pinch_grasp:grasp:y\", witness_id: \"witness:grasp:y\", witness_digest: \"222edcc3cf1c4bb8c4cda12ad46d5354b3d91cf73de4d8b9fe3313a708c6dfcf\", witness_contents: \"algorithm=physical-proof/8\\nfamily=pinch_grasp\\nkey=67726173703a79\\npush_bits=0,13830554455654793216,0\\nstroke_bits=0\\nq0_bits=13828729554987657144,4608691971164564771,4605119217212595954,4586646004498945502\\nq_transit_bits=13828729537626901274,4608691958444850123,4605119203966706882,4579800535830404123\\ntransit_state_count=1\\napproach_state_count=0\\nq_contact_bits=13828729537618602391,4608691958438818121,4605119203960414702,13795786662845092992\\nq_end_bits=13828729537618602391,4608691958438818121,4605119203960414702,13795786662845092992\\nstroke_state_count=0\\nq_retract_bits=none\\nfinger_bits=0,0\\naction_envelope=pinch:67726970706572:66696e6765725f6c:3f9eb851eb851eb8:0000000000000000,66696e6765725f72:3f9eb851eb851eb8:0000000000000000:3fff333333333333:64343431333365633939363435313835613530656564313536346136366162353261373238363536313332383365626438353561303133353062366430646631:3f9999999999999a\\nlift_trajectory_digest=d44133ec99645185a50eed1564a66ab52a72865613283ebd855a01350b6d0df1\\ndependency=719d2f0fb5abea084e23ae2b4e28ea9d6e95d54245b63c15167898b3b7396253\\nsegments=transit,approach,contact,stroke,retreat,close,lift\\ncontact_observed=false\\ntransit_state_0=13828729537626901274,4608691958444850123,4605119203966706882,4579800535830404123\\nlift_state_0=6a6f696e7431=13828729537618602391,6a6f696e7432=4608691958438818121,6a6f696e7433=4605119203960414702,6c6966745f7a=13795786662845092992;fingers=66696e6765725f6c=0,66696e6765725f72=0\\nlift_state_1=6a6f696e7431=13828729537618598447,6a6f696e7432=4608691958438815255,6a6f696e7433=4605119203960411712,6c6966745f7a=4580845367119315159;fingers=66696e6765725f6c=0,66696e6765725f72=0\\n\", role: GoalAction, predicted_effect: PredictedPhysicalEffect { object_translation_world_m: Some([0.0, 0.0]), yaw_change_rad: Some(0.0), contact_persists: Some(true), goal_error_derivative: Some(-1.0), goal_progress: Some(StrictProgress) }, robustness: RobustStrictProgress, recoverability: ProgressAndRecoverable, probe: ProbeEvidence { decision_relevant_distinctions: 0, observable_distinctions: 0, future_interaction: Unknown }, rationale: \"ROBUST_STRICT_PROGRESS_AND_RECOVERABLE\" }, phases: [Reobserve, RecheckCollisionAndWitness, ApproachNewContact] };support_friction_interval=Some([0.05, 0.8]);candidates=planar_push:push:+x:IK_FAILED|planar_push:push:-x:IK_FAILED|planar_push:push:+y:IK_FAILED|planar_push:push:-y:IK_FAILED|pinch_grasp:grasp:y:PROVED"
+    ],
+    "reasoning_request_audits": [
+      "ReasoningRequest { scene: TableScene { object_id: \"obj0\", object_center: [0.29267422856891306, -0.003197628452747736, 0.115], object_half: [0.01, 0.008600168451648724, 0.025], object_quat: [1.0, 0.0, 0.0, 0.0], support_origin: [0.0, 0.0, 0.0], support_normal: [0.0, 0.0, 1.0], support_half_extents: None, obstacles: [], arm_q: [-0.7973953261691724, 1.335187958399566, 0.7709386093201529, 0.04499999999817893], joint_names: [\"joint1\", \"joint2\", \"joint3\", \"lift_z\"], ee: \"ee\", tool_radius_m: 0.078, observation_epoch: \"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:19000:15:0:4621819117588971520\", held: false, finger_names: [\"finger_l\", \"finger_r\"], finger_q: [0.03, 0.03] }, belief: PhysicalParameterBelief { parameters: [ParameterBelief { parameter: SupportFriction, status: DerivedConstraint, declared: Provenanced { value: Some(0.5), provenance: ModelDeclared, source: \"benchmark_support_prior\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.5, 0.5]), lineage: [BeliefLineage { belief_before: \"SupportFriction status=DeclaredFact declared=Some(0.5) interval=None\", observation: \"benchmark_support_calibration\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.5, 0.5])\" }], evidence: [] }, ParameterBelief { parameter: ToolObjectFriction, status: Unknown, declared: Provenanced { value: None, provenance: Unknown, source: \"unmeasured_grasp_pair\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.9953811277163609, 1.035381127716361]), lineage: [BeliefLineage { belief_before: \"ToolObjectFriction status=Unknown declared=None interval=None\", observation: \"mujoco_oracle_friction_input_v1:samples=[1.0081301571636283, 1.0157821183817315, 1.0207157573413808, 1.0133919507000042, 1.0188856549950587]\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"ToolObjectFriction status=Unknown declared=None interval=Some([0.9953811277163609, 1.035381127716361])\" }], evidence: [] }] }, objective: AcquireObject { object_id: \"obj0\" }, mu_required: 0.3, goal_stroke_m: 0.025, probe_stroke_m: 0.008, grants: [], now_s: 10.0, evidence_fresh: true, safety_faults: [], mass_kg: Some(0.2246072847768932), gripper_force_n: Some(1.95), gripper_resource: Some(ControlledResource { id: \"gripper\", kind: Gripper, topology: DirectJointGripper, actuator_inputs: [\"grip_l\", \"grip_r\"], affected_joints: [\"finger_l\", \"finger_r\"], finger_bodies: [\"finger_l\", \"finger_r\"], coupling: CouplingModel { tendon: None, equalities: [], declared_only: true }, command_coordinate: \"opening\", opening_range: Provenanced { value: Some([0.0, 0.03]), provenance: SimulatorDerived, source: \"verify.inspect\", as_of_s: 0.0, uncertainty: None }, command_range: Provenanced { value: Some([0.0, 0.03]), provenance: SimulatorDerived, source: \"verify.inspect\", as_of_s: 0.0, uncertainty: None }, closing_direction: TowardMin, force_bound: Provenanced { value: Some([0.0, 1.95]), provenance: ModelDeclared, source: \"verify.inspect\", as_of_s: 0.0, uncertainty: None }, qualification: Qualified, unsupported_detail: None }), linear_execution_bound_m: None, linear_wrench_limit: None, gravity_m_s2: [0.0, 0.0, -9.81] }"
+    ],
+    "wrench_sensor_profile_digest": null,
+    "wrench_compensation_digest": null,
+    "wrench_inference_compensation_digest": null,
+    "wrench_inference_measurement_digest": null,
+    "wrench_precontact_baseline": null,
+    "wrench_precontact_baseline_status": null,
+    "wrench_contact_pairs": [],
+    "wrench_monitor_gravity_reference": null,
+    "wrench_monitor_gravity_reference_status": null,
+    "wrench_monitor_gravity_reference_history": [],
+    "wrench_monitor_gravity_reference_position": null,
+    "wrench_monitor_gravity_reference_orientation": null,
+    "wrench_sample_count": 0,
+    "wrench_max_sample_age_s": null,
+    "wrench_max_inter_sample_gap_s": null,
+    "wrench_max_object_speed_m_s": null,
+    "wrench_peak_conservative_bounds": null,
+    "wrench_caps": null,
+    "wrench_minimum_margin": null,
+    "wrench_abort": null,
+    "wrench_abort_axis": null,
+    "wrench_abort_result": null,
+    "wrench_inference_interval": null,
+    "wrench_inference_reason": null,
+    "prior_support_friction_interval": null,
+    "posterior_support_friction_interval": null
+  },
+  "error": null
+}

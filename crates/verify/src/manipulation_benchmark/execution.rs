@@ -54,7 +54,11 @@ const CONTROL_STEPS_PER_SEGMENT: u32 = 500;
 const PUSH_STEPS_PER_WAYPOINT: u32 = 500;
 const MAX_PROBE_CONTROL_RAMP_STEPS: u32 = 6_000;
 const MIN_PROBE_CONTROL_RAMP_STEPS: u32 = 100;
-const PROBE_JOINT_RAMP_RATE_RAD_S: f64 = 0.1;
+/// Probe transit stays slow enough to bound acceleration-driven sensor loads.
+const PROBE_JOINT_RAMP_RATE_RAD_S: f64 = 0.04;
+/// Use a slower nominal joint ramp during contact; object speed is still
+/// measured against the estimator's quasi-static bound. Transit stays faster.
+const PROBE_CONTACT_JOINT_RAMP_RATE_RAD_S: f64 = 0.01;
 const PROBE_TRANSIT_TRACKING_SETTLE_STEPS: u32 = 2_000;
 const PROBE_PRECONTACT_SETTLE_STEPS: u32 = 1_000;
 const PROBE_CONTROL_UPDATE_STEPS: u32 = 100;
@@ -1239,12 +1243,18 @@ fn execute_push_witness(
         }
         let mut converged = false;
         let total_steps = if probe_control_ramp {
+            let ramp_rate = if motion_phase {
+                PROBE_CONTACT_JOINT_RAMP_RATE_RAD_S
+            } else {
+                PROBE_JOINT_RAMP_RATE_RAD_S
+            };
             probe_control_ramp_steps(
                 &ctrl,
                 &ramp_target,
                 &actuator_map,
                 &request.scene.joint_names,
                 manifest.timestep,
+                ramp_rate,
             )
         } else {
             PUSH_STEPS_PER_WAYPOINT
@@ -1365,6 +1375,13 @@ fn execute_push_witness(
                     && start_delta[0].hypot(start_delta[1]) > 0.0001
                 {
                     audit.motion.first_motion_s = Some(time_s);
+                    if std::env::var_os("REALITYOS_TRACE_FRICTION_INFERENCE").is_some() {
+                        eprintln!(
+                            "probe-motion-onset time={time_s:.6} displacement={start_delta:?} object_quaternion={:?} contacts={:?}",
+                            state["xquat"][&request.scene.object_id],
+                            state["contacts"]
+                        );
+                    }
                 }
                 let elapsed_s = f64::from(steps) * manifest.timestep;
                 if elapsed_s > 0.0 {
@@ -1541,7 +1558,15 @@ fn execute_push_witness(
                 }
                 let steps = settle_remaining.min(steps_until_expiry);
                 let monitor = worker
-                    .step_monitored(steps, profile, policy, &authorized.grant, true, true, None)
+                    .step_monitored(
+                        steps,
+                        profile,
+                        policy,
+                        &authorized.grant,
+                        false,
+                        false,
+                        None,
+                    )
                     .map_err(|error| {
                         BenchmarkError::Simulation(format!("wrench_precontact_settle:{error}"))
                     })?;
@@ -1549,34 +1574,76 @@ fn execute_push_witness(
                     .control_correction_max_rad
                     .max(monitor.control_correction_max_rad);
                 record_wrench_contacts(&mut audit, &monitor.state);
-                let baseline_status = monitor.wrench_window.precontact_baseline_status.clone();
-                let baseline = monitor.wrench_window.precontact_baseline.clone();
-                let baseline_position = monitor.wrench_window.precontact_baseline_position;
-                let baseline_orientation = monitor.wrench_window.precontact_baseline_orientation;
                 record_push_wrench_window(&mut audit, monitor.wrench_window);
                 if let Some(abort) = monitor.abort {
                     audit.execution = WitnessExecution::WrenchAborted;
                     audit.abort = Some(abort);
                     return Ok(audit);
                 }
-                if let Some(status) = baseline_status.as_ref() {
-                    audit.precontact_baseline_status = Some(status.clone());
-                }
-                if baseline_status.as_deref() == Some("contact_present") {
-                    audit.execution = WitnessExecution::BaselineUnavailable;
-                    return Ok(audit);
-                }
-                if let Some(baseline) = baseline {
-                    audit.precontact_baseline = Some(baseline);
-                    audit.precontact_baseline_position = baseline_position;
-                    audit.precontact_baseline_orientation = baseline_orientation;
-                    break;
-                }
                 settle_remaining -= steps;
             }
             if audit.precontact_baseline.is_none() {
-                audit.execution = WitnessExecution::BaselineUnavailable;
-                return Ok(audit);
+                // Capture at the settled pre-contact pose. Taking the baseline
+                // at the start of the long hold above makes it stale before the
+                // first in-motion sample, despite a freshly settled robot.
+                let runtime_now_s = 10.0 + simulator_now(worker)?;
+                if !authorization_covers_at(authorized, runtime_now_s) {
+                    audit.execution = WitnessExecution::AuthorityExpired;
+                    return Ok(audit);
+                }
+                let steps_until_expiry = ((authorized.grant.scope.expires_at_s - runtime_now_s
+                    + 1e-9)
+                    / manifest.timestep)
+                    .floor()
+                    .max(0.0) as u32;
+                let sample_steps =
+                    profile
+                        .sample_interval_steps(manifest.timestep)
+                        .map_err(|error| {
+                            BenchmarkError::Simulation(format!(
+                                "wrench_precontact_sample_interval:{error}"
+                            ))
+                        })?;
+                if steps_until_expiry < sample_steps {
+                    audit.execution = WitnessExecution::AuthorityExpired;
+                    return Ok(audit);
+                }
+                let monitor = worker
+                    .step_monitored(
+                        sample_steps,
+                        profile,
+                        policy,
+                        &authorized.grant,
+                        true,
+                        true,
+                        None,
+                    )
+                    .map_err(|error| {
+                        BenchmarkError::Simulation(format!("wrench_precontact_capture:{error}"))
+                    })?;
+                audit.control_correction_max_rad = audit
+                    .control_correction_max_rad
+                    .max(monitor.control_correction_max_rad);
+                record_wrench_contacts(&mut audit, &monitor.state);
+                audit.precontact_baseline_status =
+                    monitor.wrench_window.precontact_baseline_status.clone();
+                audit.precontact_baseline = monitor.wrench_window.precontact_baseline.clone();
+                audit.precontact_baseline_position =
+                    monitor.wrench_window.precontact_baseline_position;
+                audit.precontact_baseline_orientation =
+                    monitor.wrench_window.precontact_baseline_orientation;
+                record_push_wrench_window(&mut audit, monitor.wrench_window);
+                if let Some(abort) = monitor.abort {
+                    audit.execution = WitnessExecution::WrenchAborted;
+                    audit.abort = Some(abort);
+                    return Ok(audit);
+                }
+                if audit.precontact_baseline_status.as_deref() == Some("contact_present")
+                    || audit.precontact_baseline.is_none()
+                {
+                    audit.execution = WitnessExecution::BaselineUnavailable;
+                    return Ok(audit);
+                }
             }
         }
     }
@@ -1745,6 +1812,15 @@ fn record_wrench_contacts(audit: &mut PushWitnessAudit, state: &Value) {
     }
 }
 
+fn sample_is_after_precontact_baseline(
+    sample: &WrenchSample,
+    baseline: Option<&WrenchSample>,
+) -> bool {
+    baseline.map_or(true, |baseline| {
+        sample.sequence > baseline.sequence && sample.capture_s > baseline.capture_s
+    })
+}
+
 fn push_probe_measurement(
     manifest: &RobotManifest,
     request: &ReasoningRequest,
@@ -1811,10 +1887,7 @@ fn push_probe_measurement(
         .filter(|((sample, _), _)| {
             sample.capture_s >= start_s
                 && sample.capture_s <= end_s
-                && audit
-                    .precontact_baseline
-                    .as_ref()
-                    .map_or(true, |baseline| sample.sequence != baseline.sequence)
+                && sample_is_after_precontact_baseline(sample, audit.precontact_baseline.as_ref())
         })
         .map(|((sample, position), quaternion)| {
             let transform =
@@ -2725,8 +2798,14 @@ fn probe_control_ramp_steps(
     actuator_map: &BTreeMap<String, usize>,
     joint_names: &[String],
     timestep_s: f64,
+    rate_rad_s: f64,
 ) -> u32 {
-    if !timestep_s.is_finite() || timestep_s <= 0.0 || start_ctrl.len() != target_ctrl.len() {
+    if !timestep_s.is_finite()
+        || timestep_s <= 0.0
+        || !rate_rad_s.is_finite()
+        || rate_rad_s <= 0.0
+        || start_ctrl.len() != target_ctrl.len()
+    {
         return MAX_PROBE_CONTROL_RAMP_STEPS;
     }
     let mut maximum_delta_rad = 0.0_f64;
@@ -2743,13 +2822,11 @@ fn probe_control_ramp_steps(
         }
         maximum_delta_rad = maximum_delta_rad.max(delta);
     }
-    let requested_steps = (maximum_delta_rad / PROBE_JOINT_RAMP_RATE_RAD_S / timestep_s).ceil();
+    let requested_steps = (maximum_delta_rad / rate_rad_s / timestep_s).ceil();
     if !requested_steps.is_finite() {
         return MAX_PROBE_CONTROL_RAMP_STEPS;
     }
-    (requested_steps as u32)
-        .max(MIN_PROBE_CONTROL_RAMP_STEPS)
-        .min(MAX_PROBE_CONTROL_RAMP_STEPS)
+    (requested_steps as u32).clamp(MIN_PROBE_CONTROL_RAMP_STEPS, MAX_PROBE_CONTROL_RAMP_STEPS)
 }
 
 pub(super) fn declared_ee_observation_key(bundle: &RobotBundle, ee_name: &str) -> Option<String> {
@@ -3034,9 +3111,8 @@ fn build_grasp_reasoning_request(
                     "end-effector has no supported collision cross-section".into(),
                 )
             })?,
-            tool_contact_extent_m: declared_ee_contact_extent(model, &ee.name).unwrap_or_else(|| {
-                declared_ee_radius(model, &ee.name).unwrap_or(0.0)
-            }),
+            tool_contact_extent_m: declared_ee_contact_extent(model, &ee.name)
+                .unwrap_or_else(|| declared_ee_radius(model, &ee.name).unwrap_or(0.0)),
             observation_epoch: epoch.into(),
             held: false,
             finger_names,
@@ -3465,9 +3541,7 @@ pub(super) fn declared_ee_contact_extent(
             CollisionRole::Collision => {}
             CollisionRole::Unknown => return None,
         }
-        let Some(geom_support) = shape_support(&geom.local_pose, &geom.shape, axis) else {
-            return None;
-        };
+        let geom_support = shape_support(&geom.local_pose, &geom.shape, axis)?;
         found = true;
         support = support.max(geom_support);
     }
@@ -3486,19 +3560,26 @@ fn shape_support(
     direction: [f64; 3],
 ) -> Option<f64> {
     use realityos_semantics::geometry::PrimitiveShape;
-    let center = pose.xyz[0] * direction[0] + pose.xyz[1] * direction[1] + pose.xyz[2] * direction[2];
+    let center =
+        pose.xyz[0] * direction[0] + pose.xyz[1] * direction[1] + pose.xyz[2] * direction[2];
     let along = |local: [f64; 3]| {
         let world = pose.rotate(local);
         world[0] * direction[0] + world[1] * direction[1] + world[2] * direction[2]
     };
     match shape {
         PrimitiveShape::Sphere { radius } => Some(center + radius.abs()),
-        PrimitiveShape::Cylinder { radius, half_length } => {
+        PrimitiveShape::Cylinder {
+            radius,
+            half_length,
+        } => {
             let axial = along([0.0, 0.0, 1.0]).abs();
             let radial = (1.0 - axial * axial).max(0.0).sqrt();
             Some(center + half_length.abs() * axial + radius.abs() * radial)
         }
-        PrimitiveShape::Capsule { radius, half_length } => {
+        PrimitiveShape::Capsule {
+            radius,
+            half_length,
+        } => {
             let axial = along([0.0, 0.0, 1.0]).abs();
             Some(center + half_length.abs() * axial + radius.abs())
         }
@@ -3578,6 +3659,7 @@ mod witness_tests {
     use super::{
         declared_ee_contact_extent, declared_ee_radius, decode_push_witness,
         injected_safety_fault_alerts, probe_control_ramp_steps,
+        sample_is_after_precontact_baseline,
     };
     use crate::manipulation_scenarios::{push_scenario, NegKind};
     use realityos_semantics::embodiment::{EmbodimentModel, EndEffector, FrameKind, ModelFrame};
@@ -3588,6 +3670,24 @@ mod witness_tests {
     use realityos_semantics::provenance::Provenance;
     use realityos_semantics::provenance::Provenanced;
     use realityos_semantics::transform::Se3;
+    use realityos_semantics::{observation::WrenchSample, sensor::WrenchSampleOrigin};
+
+    fn wrench_sample(sequence: u64, capture_s: f64) -> WrenchSample {
+        WrenchSample {
+            sensor_id: "sim-ft-test".into(),
+            sensor_frame: "tool0".into(),
+            transform_epoch: "epoch:test".into(),
+            units: "N,N*m".into(),
+            wrench: [0.0; 6],
+            error_bounds: [0.0; 6],
+            capture_s,
+            receive_s: capture_s,
+            sequence,
+            clock_domain: "sim:test".into(),
+            origin: WrenchSampleOrigin::Simulation,
+            digest: String::new(),
+        }
+    }
 
     fn line(name: &str, values: &[f64]) -> String {
         let bits = values
@@ -3694,20 +3794,90 @@ mod witness_tests {
             std::collections::BTreeMap::from([(joints[0].clone(), 0), (joints[1].clone(), 1)]);
 
         assert_eq!(
-            probe_control_ramp_steps(&[0.0, 0.0], &[0.02, 0.20], &actuator_map, &joints, 0.002,),
-            1_000,
-            "a 0.2 rad segment should use the registered 0.1 rad/s ramp"
+            probe_control_ramp_steps(
+                &[0.0, 0.0],
+                &[0.02, 0.20],
+                &actuator_map,
+                &joints,
+                0.002,
+                super::PROBE_JOINT_RAMP_RATE_RAD_S,
+            ),
+            2_500,
+            "a 0.2 rad transit segment should use the 0.04 rad/s nominal ramp"
         );
         assert_eq!(
-            probe_control_ramp_steps(&[0.0, 0.0], &[0.02, 2.0], &actuator_map, &joints, 0.002,),
+            probe_control_ramp_steps(
+                &[0.0, 0.0],
+                &[0.02, 0.08],
+                &actuator_map,
+                &joints,
+                0.002,
+                super::PROBE_CONTACT_JOINT_RAMP_RATE_RAD_S,
+            ),
+            4_000,
+            "contact motion uses the slower 0.01 rad/s nominal joint ramp"
+        );
+        assert_eq!(
+            probe_control_ramp_steps(
+                &[0.0, 0.0],
+                &[0.02, 0.20],
+                &actuator_map,
+                &joints,
+                0.002,
+                super::PROBE_CONTACT_JOINT_RAMP_RATE_RAD_S,
+            ),
+            6_000,
+            "long contact segments keep the existing 6,000-step ceiling"
+        );
+        assert_eq!(
+            probe_control_ramp_steps(
+                &[0.0, 0.0],
+                &[0.02, 2.0],
+                &actuator_map,
+                &joints,
+                0.002,
+                super::PROBE_JOINT_RAMP_RATE_RAD_S,
+            ),
             6_000,
             "long segments keep the existing 6,000-step ceiling"
         );
         assert_eq!(
-            probe_control_ramp_steps(&[0.0, 0.0], &[0.0, 0.0], &actuator_map, &joints, 0.002,),
+            probe_control_ramp_steps(
+                &[0.0, 0.0],
+                &[0.0, 0.0],
+                &actuator_map,
+                &joints,
+                0.002,
+                super::PROBE_JOINT_RAMP_RATE_RAD_S,
+            ),
             100,
             "stationary targets retain a minimum monitored control window"
         );
+    }
+
+    #[test]
+    fn probe_inference_window_excludes_samples_at_or_before_its_baseline() {
+        let baseline = wrench_sample(100, 1.0);
+        assert!(!sample_is_after_precontact_baseline(
+            &wrench_sample(99, 0.992),
+            Some(&baseline)
+        ));
+        assert!(!sample_is_after_precontact_baseline(
+            &wrench_sample(100, 1.0),
+            Some(&baseline)
+        ));
+        assert!(!sample_is_after_precontact_baseline(
+            &wrench_sample(101, 0.999),
+            Some(&baseline)
+        ));
+        assert!(sample_is_after_precontact_baseline(
+            &wrench_sample(101, 1.008),
+            Some(&baseline)
+        ));
+        assert!(sample_is_after_precontact_baseline(
+            &wrench_sample(99, 0.992),
+            None
+        ));
     }
 
     fn witness(include_retract: bool) -> String {

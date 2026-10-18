@@ -13,6 +13,7 @@ pub type WrenchEvidenceOrigin = WrenchSampleOrigin;
 const STANDARD_GRAVITY_M_S2: f64 = 9.80665;
 const SUPPORT_NORMAL_TOLERANCE: f64 = 1e-6;
 const ROTATION_TOLERANCE: f64 = 1e-6;
+const MAX_VERTICAL_TO_HORIZONTAL_PROBE_RATIO: f64 = 0.05;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WrenchTransform {
@@ -204,6 +205,7 @@ pub enum FrictionNoInferenceReason {
     UnknownMass,
     InvalidPrior,
     StaleEvidence,
+    PrecontactBaselineGapExceeded,
     AmbiguousContact,
     NoIntendedContact,
     ActuatorSaturated,
@@ -405,7 +407,16 @@ pub fn infer_support_friction(measurement: &PushProbeMeasurement) -> FrictionInf
         return fail(FrictionNoInferenceReason::DynamicMotion);
     }
 
-    if measurement.motion.displacement_m[2].abs() > measurement.motion.pose_resolution_m {
+    // Allow sub-resolution seating noise and a small, bounded relative offset.
+    // Larger vertical motion can change support loading enough to invalidate
+    // the planar friction model.
+    let vertical = measurement.motion.displacement_m[2].abs();
+    let horizontal =
+        measurement.motion.displacement_m[0].hypot(measurement.motion.displacement_m[1]);
+    let resolution = measurement.motion.pose_resolution_m;
+    if vertical > resolution
+        && vertical > MAX_VERTICAL_TO_HORIZONTAL_PROBE_RATIO * horizontal.max(resolution)
+    {
         return fail(FrictionNoInferenceReason::NonPlanarMotion);
     }
     let displacement =
@@ -554,6 +565,22 @@ pub fn infer_support_friction(measurement: &PushProbeMeasurement) -> FrictionInf
             if pre_force[0] <= 0.0 || post_force[1] <= 0.0 {
                 return fail(FrictionNoInferenceReason::Unidentifiable);
             }
+            if std::env::var_os("REALITYOS_TRACE_FRICTION_INFERENCE").is_some() {
+                eprintln!(
+                    "probe-friction-slip onset={onset:.6} before_t={:.6} after_t={:.6} mass={:?} before_raw={:?} after_raw={:?} before_wrench={:?} after_wrench={:?} pre_force={:?} pre_normal={:?} post_force={:?} post_normal={:?}",
+                    before.capture_s,
+                    after.capture_s,
+                    measurement.mass_kg,
+                    before.wrench,
+                    after.wrench,
+                    before_wrench,
+                    after_wrench,
+                    pre_force,
+                    pre_normal,
+                    post_force,
+                    post_normal,
+                );
+            }
             [pre_force[0] / pre_normal[1], post_force[1] / post_normal[0]]
         }
     };
@@ -649,9 +676,11 @@ fn validate_samples(measurement: &PushProbeMeasurement) -> Result<(), FrictionNo
             || baseline.clock_domain != first.clock_domain
             || baseline.sequence >= first.sequence
             || baseline.capture_s >= first.capture_s
-            || first.capture_s - baseline.capture_s > measurement.max_inter_sample_gap_s
         {
             return Err(FrictionNoInferenceReason::StaleEvidence);
+        }
+        if first.capture_s - baseline.capture_s > measurement.max_inter_sample_gap_s {
+            return Err(FrictionNoInferenceReason::PrecontactBaselineGapExceeded);
         }
     }
     let mut prior: Option<&WrenchSample> = None;

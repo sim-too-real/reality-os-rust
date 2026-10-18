@@ -14,8 +14,8 @@
         "calibration_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "sensor_frame": "attachment_site",
         "units": "N,N*m",
-        "sample_rate_hz": 125.0,
-        "latency_s": 0.01,
+        "sample_rate_hz": 250.0,
+        "latency_s": 0.004,
         "resolution": [
           0.001,
           0.001,
@@ -60,11 +60,11 @@
               2.0,
               2.0
             ],
-            "policy_digest": "4c47472ae87ce1cf4c5c26f0914999f33f10e518ae2e853d5b08f02cdae7b2ab",
+            "policy_digest": "087d42a0033cef6464ccd096b2602e52eaccdee01348eb7a81ae876a240f1eba",
             "abort_contract_id": "sim-wrench-stop-v1"
           },
           "sensor_calibration_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "sensor_sample_rate_hz": 125.0,
+          "sensor_sample_rate_hz": 250.0,
           "max_position_tracking_correction_rad": 0.01,
           "position_tracking_correction_gain": 1.0,
           "max_rise_rate": [
@@ -75,7 +75,7 @@
             25.0,
             25.0
           ],
-          "max_sensing_latency_s": 0.01,
+          "max_sensing_latency_s": 0.004,
           "max_abort_latency_s": 0.005,
           "max_sample_age_s": 0.02,
           "max_inter_sample_gap_s": 0.01,
@@ -112,8 +112,8 @@
         "calibration_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "sensor_frame": "attachment_site",
         "units": "N,N*m",
-        "sample_rate_hz": 125.0,
-        "latency_s": 0.01,
+        "sample_rate_hz": 250.0,
+        "latency_s": 0.004,
         "resolution": [
           0.001,
           0.001,
@@ -158,11 +158,11 @@
               2.0,
               2.0
             ],
-            "policy_digest": "afc586ffda7d367b9ba1ef76e80028d2eb0c10d5fe6417e5ec75df9887d5e822",
+            "policy_digest": "bf2abce9a6302934074fc7d7bed295775fc45772b66ba4f946facc2d2b28d749",
             "abort_contract_id": "sim-wrench-stop-v1"
           },
           "sensor_calibration_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "sensor_sample_rate_hz": 125.0,
+          "sensor_sample_rate_hz": 250.0,
           "max_position_tracking_correction_rad": 0.01,
           "position_tracking_correction_gain": 1.0,
           "max_rise_rate": [
@@ -173,7 +173,7 @@
             25.0,
             25.0
           ],
-          "max_sensing_latency_s": 0.01,
+          "max_sensing_latency_s": 0.004,
           "max_abort_latency_s": 0.005,
           "max_sample_age_s": 0.02,
           "max_inter_sample_gap_s": 0.01,

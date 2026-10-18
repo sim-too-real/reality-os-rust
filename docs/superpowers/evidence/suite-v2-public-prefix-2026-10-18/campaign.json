@@ -1,0 +1,57 @@
+{
+  "schema": "realityos.suite-v2-public-prefix-campaign/1",
+  "evidence_status": "SIMULATION_ONLY",
+  "metal": false,
+  "suite_id": "feasible_public_probe",
+  "suite_version": 2,
+  "seeds": [20000, 20001],
+  "command": "REALITYOS_REQUIRE_MUJOCO=1 MUJOCO_GL=disable cargo run -p realityos-verify --bin realityos-verify -- manipulation-benchmark --seeds 2 --out verify-out/suite-v2-seeds2",
+  "scheduled_trials": 6,
+  "completed_trials": 6,
+  "infrastructure_trials": 0,
+  "invalid_trials": 0,
+  "unaccounted_trials": 0,
+  "safety_gate_passed": true,
+  "task_success": { "numerator": 1, "denominator": 5 },
+  "correct_refusal": { "numerator": 1, "denominator": 1 },
+  "false_refusals": 3,
+  "false_acceptances": 0,
+  "unauthorized_writes": 0,
+  "recovery": { "numerator": 0, "denominator": 4 },
+  "failure_causes": { "bridge_refusal": 4, "force_monitor_abort": 1 },
+  "development_pushes": "0/4",
+  "grasp_fixture": "seed 20000 pinch grasp succeeded and the hold verified; seed 20001 was a correct refusal",
+  "iiwa_seed_20000": {
+    "outcome": "unexpected_refusal",
+    "failure_cause": "bridge_refusal",
+    "refusal_code": "NO_JUSTIFIED_CURRENT_ACTION",
+    "object_displacement_m": 0.0015735428410309064,
+    "wrench_inference_reason": "no_inference:DynamicMotion",
+    "prior_support_friction": [0.05, 0.8],
+    "posterior_support_friction": [0.05, 0.8],
+    "quasi_static_speed_limit_m_s": 0.02
+  },
+  "ur5e_seed_20000_bounding_sphere": {
+    "outcome": "unexpected_refusal",
+    "tool_site_to_face_m": 0.083,
+    "probe_stroke_m": 0.008,
+    "note": "The executed site remained about 83 mm from the object face. The authorized 8 mm probe cannot close that gap."
+  },
+  "face_extent_rerun": {
+    "command": "manipulation-benchmark --seeds 1 --out verify-out/suite-v2-contact-extent",
+    "safety_gate_passed": false,
+    "invalid_trials": 1,
+    "task_success": { "numerator": 1, "denominator": 2 },
+    "ur5e_error": "suite_v2_positive_infeasible: complete probe-path proof returned SELF_COLLISION",
+    "classification": "NEGATIVE_RESULT",
+    "note": "Placing the tool site on the object face made every sampled UR5e probe path self-collide. The approach target was returned to the bounding-sphere standoff. The flange contact extent remains recorded and is not used as the standoff."
+  },
+  "classifications": {
+    "grasp_success": "CAPABILITY_PROVEN",
+    "development_push": "NEGATIVE_RESULT",
+    "face_placement": "NEGATIVE_RESULT",
+    "full_public_baseline": "NOT_EXECUTED",
+    "equivalent_baseline_comparison": "NOT_EXECUTED",
+    "hardware": "NOT_EXECUTED"
+  }
+}

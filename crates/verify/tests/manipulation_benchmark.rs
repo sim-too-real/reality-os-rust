@@ -687,6 +687,11 @@ fn simulation_wrench_samples_replay_for_same_trial_seed() {
     let first = sample(9021);
     let replay = sample(9021);
     assert_eq!(first["samples"], replay["samples"]);
+    assert!(first["samples"].as_array().unwrap().iter().all(|sample| {
+        sample["model_gravity_wrench"]
+            .as_array()
+            .is_some_and(|wrench| wrench.len() == 6)
+    }), "every simulated wrench sample must carry a same-state model load for compensation");
     let window =
         realityos_verify::manipulation_benchmark::SimulationWrenchWindow::from_worker_response(
             &first,
@@ -695,6 +700,7 @@ fn simulation_wrench_samples_replay_for_same_trial_seed() {
         )
         .expect("typed simulation wrench window");
     assert_eq!(window.samples.len(), 2);
+    assert_eq!(window.sample_gravity_wrenches.len(), window.samples.len());
     assert_eq!(window.samples[0].origin, WrenchSampleOrigin::Simulation);
     assert_eq!(window.samples[0].sequence, 0);
     assert!((window.max_gap_s - 0.008).abs() < 1e-12);
@@ -1257,6 +1263,12 @@ fn scenario_suite_v2() -> ScenarioSuiteManifest {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../robots/benchmarks/manipulation/scenario_suite_v2.json");
     ScenarioSuiteManifest::load(&path).expect("checked-in v2 scenario suite")
+}
+
+fn scenario_suite_v3() -> ScenarioSuiteManifest {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../robots/benchmarks/manipulation/scenario_suite_v3.json");
+    ScenarioSuiteManifest::load(&path).expect("checked-in v3 scenario suite")
 }
 
 fn collision_fixture() -> (
@@ -3163,6 +3175,14 @@ fn holdout_role_is_registered_without_early_scoring() {
         .iter()
         .filter_map(|entry| entry.simulation_wrench_profile.as_ref())
         .all(|profile| profile.validate().is_ok()));
+    assert!(public
+        .iter()
+        .filter_map(|entry| entry.simulation_wrench_profile.as_ref())
+        .all(|profile| {
+            profile.sample_rate_hz == 250.0
+                && profile.latency_s == 0.004
+                && profile.limit_policy.max_sensing_latency_s == 0.004
+        }));
     let mut incomplete_registry = registry.clone();
     incomplete_registry.registrations[0].simulation_wrench_profile = None;
     assert!(incomplete_registry.validate().is_err());
@@ -3418,6 +3438,73 @@ fn scenario_suite_v2_probe_gap_leaves_four_mm_after_contact() {
         suite.push_probe_stroke_m - suite.push_approach_gap_m
             >= suite.minimum_post_contact_stroke_m
     );
+}
+
+#[test]
+fn scenario_suite_v3_positive_stratum_is_force_observable() {
+    let suite = scenario_suite_v3();
+    let v2 = scenario_suite_v2();
+
+    assert_eq!(suite.suite_version, 3);
+    assert_ne!(suite.suite_id, v2.suite_id);
+    assert_eq!(suite.positive_push.mass_kg, [1.0, 1.25]);
+    assert_eq!(suite.positive_push.friction, [0.4, 0.8]);
+    assert_eq!(suite.positive_push.half_size_m, [0.05, 0.07]);
+    assert_eq!(suite.positive_push.half_height_m, [0.02, 0.04]);
+    let unidentifiable = suite
+        .unidentifiable_push
+        .as_ref()
+        .expect("v3 declares a low-load refusal stratum");
+    assert_eq!(unidentifiable.mass_kg, [0.05, 0.18]);
+    assert_eq!(unidentifiable.friction, [0.2, 0.8]);
+    assert!(suite
+        .refusal_cycle
+        .iter()
+        .any(|label| label == "unidentifiable_friction"));
+    assert_ne!(suite.pilot_seeds, v2.pilot_seeds);
+    assert_ne!(suite.public_seeds, v2.public_seeds);
+}
+
+#[test]
+fn v3_simulation_support_contact_uses_randomized_sliding_friction() {
+    use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, MujocoInstance};
+    if !ensure_mujoco_or_skip() {
+        return;
+    }
+    let _guard = lock_mujoco_test();
+    let bundle = iiwa14_bundle();
+    let objects = vec![
+        serde_json::json!({
+            "name":"obj0","type":"box","pos":[0.6115262561608635,0.017454385150215315,0.5011534150470114],
+            "size":[0.02812522593375574,0.02812522593375574,0.08115341504701144],"mass":1.2182473334463388,
+            "friction":0.7221006358270854,"movable":true
+        }),
+        serde_json::json!({
+            "name":"table","type":"box","pos":[0.9,0.0,0.4],"size":[0.4,0.25,0.02],"mass":20.0,"movable":false,
+            "friction":0.7221006358270854
+        }),
+    ];
+    let mut worker = MujocoInstance::spawn().expect("MuJoCo worker");
+    worker
+        .load_bundle(&bundle, &objects, 21_000)
+        .expect("load support friction fixture");
+    let contacts = worker.state().expect("initial contact state")["state"]["contacts"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let support_contacts = contacts
+        .iter()
+        .filter(|contact| {
+            (contact["body1"] == "obj0" && contact["body2"] == "table")
+                || (contact["body2"] == "obj0" && contact["body1"] == "table")
+        })
+        .collect::<Vec<_>>();
+    assert!(!support_contacts.is_empty());
+    assert!(support_contacts.iter().all(|contact| {
+        (0..2).all(|axis| {
+            (contact["friction"][axis].as_f64().unwrap() - 0.7221006358270854).abs() < 1e-12
+        })
+    }));
 }
 
 #[test]
@@ -4685,7 +4772,7 @@ fn iiwa_expected_success_probe_tracks_retract_under_wrench_monitor() {
         eprintln!("phase: loading IIWA model and suite");
     }
     let bundle = iiwa14_bundle();
-    let suite = scenario_suite_v2();
+    let suite = scenario_suite_v3();
     let (worker, manifest) = load_and_normalize(&bundle, &[], suite.pilot_seeds[0])
         .expect("strict benchmark requires MuJoCo and complete model inspection");
     if debug_phases {
@@ -4727,7 +4814,7 @@ fn iiwa_expected_success_probe_tracks_retract_under_wrench_monitor() {
     assert_eq!(
         episode.outcome,
         TrialOutcome::Success,
-        "the expected-success probe must complete its authorized approach, contact, and retract: scenario={:?}; cause={:?}; refusal={:?}; actions={:?}; inference={:?}; inference_interval={:?}; posterior={:?}; decision_audits={:?}; monitor_reference_status={:?}; monitor_reference_history={:?}; baseline={:?}; abort={:?}",
+        "the expected-success probe must complete its authorized approach, contact, and retract: scenario={:?}; cause={:?}; refusal={:?}; actions={:?}; inference={:?}; inference_interval={:?}; posterior={:?}; decision_audits={:?}; monitor_reference_status={:?}; monitor_reference_history={:?}; baseline={:?}; contacts={:?}; abort={:?}",
         trial.scenario,
         episode.failure_cause,
         episode.refusal_code,
@@ -4739,8 +4826,18 @@ fn iiwa_expected_success_probe_tracks_retract_under_wrench_monitor() {
         episode.wrench_monitor_gravity_reference_status,
         episode.wrench_monitor_gravity_reference_history,
         episode.wrench_precontact_baseline,
+        episode.wrench_contact_pairs,
         episode.wrench_abort
     );
+    assert!(
+        episode
+            .wrench_inference_reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("updated:")),
+        "a successful force-aware probe must produce a validated friction update: {:?}",
+        episode.wrench_inference_reason
+    );
+    assert!(episode.wrench_inference_interval.is_some());
     assert_eq!(episode.actions[0].action_key, "probe:+x");
     assert_eq!(
         episode.wrench_monitor_gravity_reference_status.as_deref(),

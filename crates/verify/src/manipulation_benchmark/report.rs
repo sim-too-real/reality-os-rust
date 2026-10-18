@@ -263,7 +263,7 @@ pub fn score_campaign(
         && (config
             .scenario_suite_id
             .as_deref()
-            .is_none_or(str::is_empty)
+            .map_or(true, str::is_empty)
             || config.scenario_suite_version.is_none())
     {
         return Err(BenchmarkError::InvalidManifest(
