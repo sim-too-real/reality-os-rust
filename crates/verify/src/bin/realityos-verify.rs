@@ -420,6 +420,17 @@ fn run_bundle_campaign(
         }
         let bundle = bundle.as_ref().expect("manifest requires loaded bundle");
         let manifest = manifest.as_ref().expect("manifest was inspected");
+        let progress = env::var_os("REALITYOS_BENCHMARK_PROGRESS").is_some();
+        let resolve_started = std::time::Instant::now();
+        if progress {
+            eprintln!(
+                "benchmark trial start robot={} task={} seed={} index={} phase=resolve",
+                spec.robot_id,
+                spec.task.as_str(),
+                seed,
+                trial_index
+            );
+        }
         let trial = match resolve_benchmark_trial_with_suite(
             seed,
             trial_index,
@@ -431,6 +442,17 @@ fn run_bundle_campaign(
         ) {
             Ok(trial) => trial,
             Err(error) => {
+                if progress {
+                    eprintln!(
+                        "benchmark trial invalid robot={} task={} seed={} index={} phase=resolve elapsed_s={:.3} error={}",
+                        spec.robot_id,
+                        spec.task.as_str(),
+                        seed,
+                        trial_index,
+                        resolve_started.elapsed().as_secs_f64(),
+                        error
+                    );
+                }
                 config.scheduled_trial_ids.push(fallback_id.clone());
                 records.push(BenchmarkTrialRecord::failed_before_resolution(
                     fallback_id,
@@ -440,13 +462,39 @@ fn run_bundle_campaign(
                 continue;
             }
         };
+        if progress {
+            eprintln!(
+                "benchmark trial resolved robot={} task={} seed={} index={} expectation={:?} elapsed_s={:.3} phase=execute",
+                spec.robot_id,
+                spec.task.as_str(),
+                seed,
+                trial_index,
+                trial.expectation,
+                resolve_started.elapsed().as_secs_f64()
+            );
+        }
         config.scheduled_trial_ids.push(trial.trial_id.clone());
+        let execution_started = std::time::Instant::now();
         let result = realityos_verify::manipulation_benchmark::run_benchmark_trial(
             bundle,
             &trial,
             simulation_admission_for_profile(120.0, spec.wrench_profile.as_ref()),
             spec.wrench_profile.as_ref(),
         );
+        if progress {
+            eprintln!(
+                "benchmark trial end robot={} task={} seed={} index={} execution_s={:.3} result={}",
+                spec.robot_id,
+                spec.task.as_str(),
+                seed,
+                trial_index,
+                execution_started.elapsed().as_secs_f64(),
+                result
+                    .as_ref()
+                    .map(|_| "completed".to_owned())
+                    .unwrap_or_else(|error| error.to_string())
+            );
+        }
         records.push(BenchmarkTrialRecord::from_run_result(trial, result));
     }
     records

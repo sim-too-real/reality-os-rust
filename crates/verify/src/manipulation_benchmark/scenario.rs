@@ -483,7 +483,20 @@ pub fn resolve_benchmark_trial_with_suite(
         let attempt_seed = seed
             .wrapping_add(u64::from(attempt).wrapping_mul(0x9e37_79b9_7f4a_7c15))
             ^ 0x6670_726f_6265_7632;
-        match resolve_benchmark_trial_impl(
+        let trace = std::env::var_os("REALITYOS_BENCHMARK_TRACE").is_some();
+        let attempt_started = std::time::Instant::now();
+        if trace {
+            eprintln!(
+                "suite-v2 resolve start robot={} task={} seed={} index={} attempt={}/{}",
+                bundle.manifest.robot_id,
+                task.as_str(),
+                seed,
+                index,
+                attempt + 1,
+                attempts
+            );
+        }
+        let result = resolve_benchmark_trial_impl(
             attempt_seed,
             index,
             task,
@@ -491,7 +504,24 @@ pub fn resolve_benchmark_trial_with_suite(
             bundle,
             manifest,
             Some(suite),
-        ) {
+        );
+        if trace {
+            eprintln!(
+                "suite-v2 resolve end robot={} task={} seed={} index={} attempt={}/{} elapsed_s={:.3} result={}",
+                bundle.manifest.robot_id,
+                task.as_str(),
+                seed,
+                index,
+                attempt + 1,
+                attempts,
+                attempt_started.elapsed().as_secs_f64(),
+                match &result {
+                    Ok(_) => "resolved".to_owned(),
+                    Err(error) => error.to_string(),
+                }
+            );
+        }
+        match result {
             Ok(mut trial) => {
                 trial.seed = seed;
                 trial.scenario.seed = seed;
@@ -943,9 +973,26 @@ fn positive_probe_candidate_status(
         true,
         super::execution::uncertain_push_belief(),
     )?;
+    let before = realityos_semantics::work_counters::work_snapshot();
+    let started = std::time::Instant::now();
     let status = PhysicalReasoner::new(model)
         .preview_candidate(&request, "probe:+x")
         .status;
+    if std::env::var_os("REALITYOS_BENCHMARK_TRACE").is_some() {
+        let after = realityos_semantics::work_counters::work_snapshot();
+        eprintln!(
+            "suite-v2 probe-proof robot={} seed={} index={} status={} elapsed_s={:.3} ik={} fk={} jacobian={} collision={}",
+            bundle.manifest.robot_id,
+            seed,
+            index,
+            status,
+            started.elapsed().as_secs_f64(),
+            after.ik_attempts.saturating_sub(before.ik_attempts),
+            after.fk_evaluations.saturating_sub(before.fk_evaluations),
+            after.jacobian_evaluations.saturating_sub(before.jacobian_evaluations),
+            after.collision_queries.saturating_sub(before.collision_queries),
+        );
+    }
     Ok(status)
 }
 
