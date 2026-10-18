@@ -953,6 +953,9 @@ fn prove_push(
         friction_interval(&request.belief, PhysicalParameter::SupportFriction),
         request.mu_required,
     );
+    if !candidate.probe && mechanics != MechanicsStatus::Feasible {
+        return rejected(PUSH_FAMILY, candidate, "MECHANICS_UNKNOWN", mechanics);
+    }
     let solved = match prove_arm_path(model, request, candidate, false) {
         Ok(solved) => solved,
         Err(reason) => return rejected(PUSH_FAMILY, candidate, reason, mechanics),
@@ -973,9 +976,6 @@ fn prove_push(
     ) && immediate;
     if candidate.probe {
         return finish_probe(model, request, candidate, &solved, mechanics, before);
-    }
-    if mechanics != MechanicsStatus::Feasible {
-        return rejected(PUSH_FAMILY, candidate, "MECHANICS_UNKNOWN", mechanics);
     }
     if !progress_for_objective
         && !matches!(
@@ -3615,6 +3615,23 @@ mod tests {
             work.jacobian_evaluations < 1_000,
             "a collision-clear seeded route should avoid exhaustive IK branch ranking: {work:?}"
         );
+    }
+
+    #[test]
+    fn unknown_push_mechanics_refuses_before_motion_planning() {
+        let (model, request) = benchmark_scene();
+        let candidate = push_candidates(&request)
+            .into_iter()
+            .find(|candidate| candidate.action_key == "push:+x")
+            .expect("positive push candidate");
+        work_counters::reset_work_counters();
+
+        let action = prove_push(&model, &request, &candidate);
+        let work = work_counters::work_snapshot();
+
+        assert_eq!(action.summary.status, "MECHANICS_UNKNOWN");
+        assert_eq!(work.ik_attempts, 0, "an unauthorized push needs no IK proof");
+        assert_eq!(work.collision_queries, 0, "no path is searched without mechanics");
     }
 
     #[test]
