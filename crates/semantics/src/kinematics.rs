@@ -733,22 +733,37 @@ pub fn solve_ik_candidates(
     current_q: &[f64],
     max_candidates: usize,
 ) -> Result<Vec<(Vec<f64>, IkTrace)>, SkillRefuse> {
+    solve_ik_candidates_with_seed_budget(
+        model,
+        chain,
+        ee,
+        target,
+        current_q,
+        max_candidates,
+        usize::MAX,
+    )
+}
+
+/// Return precise IK candidates from at most `max_seed_attempts` seeds.
+/// Candidates are ranked by travel distance within the explored seed prefix.
+/// This bounded search is intended for motion planners that collision-check
+/// every candidate and fall back to `solve_ik_candidates` when the prefix has
+/// no safe route.
+pub fn solve_ik_candidates_with_seed_budget(
+    model: &EmbodimentModel,
+    chain: &[String],
+    ee: &str,
+    target: [f64; 3],
+    current_q: &[f64],
+    max_candidates: usize,
+    max_seed_attempts: usize,
+) -> Result<Vec<(Vec<f64>, IkTrace)>, SkillRefuse> {
     crate::work_counters::note_ik_attempt();
     let joints = resolve_chain_joints(model, chain)?;
     if current_q.len() != joints.len() {
         return Err(SkillRefuse::MissingJointState);
     }
-    let mut seeds = Vec::new();
-    IK_Q_SEED.with(|cell| {
-        if let Some(seed) = cell.borrow().as_ref() {
-            if seed.len() == joints.len() && seed.iter().all(|value| value.is_finite()) {
-                seeds.push(seed.clone());
-            }
-        }
-    });
-    seeds.push(current_q.to_vec());
-    seeds.extend(extra_seeds(joints.len()));
-    seeds.extend(limit_space_seeds(&joints, 16));
+    let seeds = ik_candidate_seeds(&joints, current_q, max_seed_attempts);
 
     let mut candidates: Vec<(Vec<f64>, IkTrace)> = Vec::new();
     let mut structural = None;
@@ -804,6 +819,111 @@ pub fn solve_ik_candidates(
         Err(structural.unwrap_or(SkillRefuse::Unreachable))
     } else {
         Ok(candidates)
+    }
+}
+
+/// Visit precise IK candidates in deterministic seed order and stop as soon
+/// as `accept` proves one usable. Collision-aware planners can validate each
+/// branch immediately instead of evaluating every seed before collision
+/// checking any branch.
+pub fn solve_ik_first_candidate_matching<F>(
+    model: &EmbodimentModel,
+    chain: &[String],
+    ee: &str,
+    target: [f64; 3],
+    current_q: &[f64],
+    max_seed_attempts: usize,
+    mut accept: F,
+) -> Result<Option<(Vec<f64>, IkTrace)>, SkillRefuse>
+where
+    F: FnMut(&[f64], &IkTrace) -> bool,
+{
+    crate::work_counters::note_ik_attempt();
+    let joints = resolve_chain_joints(model, chain)?;
+    if current_q.len() != joints.len() {
+        return Err(SkillRefuse::MissingJointState);
+    }
+    let seeds = ik_candidate_seeds(&joints, current_q, max_seed_attempts);
+    let mut visited_candidates: Vec<Vec<f64>> = Vec::new();
+    let mut structural = None;
+    for seed in seeds {
+        let (q, residual) = match solve_from_seed(model, chain, &joints, ee, target, seed) {
+            Ok(solution) => solution,
+            Err(
+                error @ (SkillRefuse::ModelFeatureUnsupported | SkillRefuse::KinematicsUnsupported),
+            ) => {
+                structural = Some(error);
+                continue;
+            }
+            Err(_) => continue,
+        };
+        if residual > IK_ACCEPT
+            || !q
+                .iter()
+                .enumerate()
+                .all(|(index, value)| in_limits(&joints[index], *value))
+            || visited_candidates
+                .iter()
+                .any(|existing| distance_from_current(existing, &q) < 1e-5)
+        {
+            continue;
+        }
+        visited_candidates.push(q.clone());
+        let delta_norm = distance_from_current(&q, current_q);
+        let max_joint_move = q
+            .iter()
+            .zip(current_q)
+            .map(|(target, current)| (target - current).abs())
+            .fold(0.0_f64, f64::max);
+        let trace = IkTrace {
+            initial_q: current_q.to_vec(),
+            target_q: q.clone(),
+            joint_delta_norm: delta_norm,
+            max_joint_move,
+            residual,
+        };
+        if accept(&q, &trace) {
+            return Ok(Some((q, trace)));
+        }
+    }
+    if visited_candidates.is_empty() {
+        Err(structural.unwrap_or(SkillRefuse::Unreachable))
+    } else {
+        Ok(None)
+    }
+}
+
+fn ik_candidate_seeds(
+    joints: &[Joint],
+    current_q: &[f64],
+    max_seed_attempts: usize,
+) -> Vec<Vec<f64>> {
+    let mut seeds = Vec::new();
+    IK_Q_SEED.with(|cell| {
+        if let Some(seed) = cell.borrow().as_ref() {
+            if seed.len() == joints.len() && seed.iter().all(|value| value.is_finite()) {
+                seeds.push(seed.clone());
+            }
+        }
+    });
+    seeds.push(current_q.to_vec());
+    seeds.extend(extra_seeds(joints.len()));
+    seeds.extend(limit_space_seeds(joints, 16));
+    if max_seed_attempts == usize::MAX {
+        // Preserve the legacy exhaustive seed order exactly.
+        seeds
+    } else {
+        let mut unique_seeds = Vec::with_capacity(seeds.len());
+        for seed in seeds {
+            if !unique_seeds
+                .iter()
+                .any(|existing: &Vec<f64>| distance_from_current(existing, &seed) < 1e-12)
+            {
+                unique_seeds.push(seed);
+            }
+        }
+        unique_seeds.truncate(max_seed_attempts.max(1));
+        unique_seeds
     }
 }
 
@@ -956,6 +1076,66 @@ mod tests {
             distance_from_current(&candidates[0].0, &[0.0, 0.0])
                 <= distance_from_current(&candidates[1].0, &[0.0, 0.0])
         );
+    }
+
+    #[test]
+    fn bounded_ik_seed_search_returns_precise_candidates_with_less_work() {
+        let model = synth_planar_two_link();
+        let chain = model.ee_joint_chain("ee").unwrap();
+        crate::work_counters::reset_work_counters();
+        let bounded = solve_ik_candidates_with_seed_budget(
+            &model,
+            &chain,
+            "ee",
+            [0.2, 0.0, 0.0],
+            &[0.0, 0.0],
+            16,
+            8,
+        )
+        .unwrap();
+        let bounded_work = crate::work_counters::work_snapshot();
+        crate::work_counters::reset_work_counters();
+        let exhaustive =
+            solve_ik_candidates(&model, &chain, "ee", [0.2, 0.0, 0.0], &[0.0, 0.0], 16).unwrap();
+        let exhaustive_work = crate::work_counters::work_snapshot();
+
+        assert!(!bounded.is_empty() && bounded.len() <= 8);
+        assert!(ik_residual_is_precise(bounded[0].1.residual));
+        assert!(
+            bounded_work.jacobian_evaluations < exhaustive_work.jacobian_evaluations,
+            "bounded seed search should cost less than branch enumeration: bounded={bounded_work:?}, exhaustive={exhaustive_work:?}"
+        );
+        assert!(exhaustive.len() >= bounded.len());
+    }
+
+    #[test]
+    fn ik_search_stops_when_a_precise_candidate_is_accepted() {
+        let model = synth_planar_two_link();
+        let chain = model.ee_joint_chain("ee").unwrap();
+        let mut visited = 0;
+        crate::work_counters::reset_work_counters();
+        let accepted = solve_ik_first_candidate_matching(
+            &model,
+            &chain,
+            "ee",
+            [0.2, 0.0, 0.0],
+            &[0.0, 0.0],
+            usize::MAX,
+            |_, trace| {
+                visited += 1;
+                ik_residual_is_precise(trace.residual)
+            },
+        )
+        .unwrap();
+        let early_work = crate::work_counters::work_snapshot();
+        crate::work_counters::reset_work_counters();
+        let _ =
+            solve_ik_candidates(&model, &chain, "ee", [0.2, 0.0, 0.0], &[0.0, 0.0], 16).unwrap();
+        let exhaustive_work = crate::work_counters::work_snapshot();
+
+        assert!(accepted.is_some());
+        assert_eq!(visited, 1, "stop after the first accepted candidate");
+        assert!(early_work.jacobian_evaluations < exhaustive_work.jacobian_evaluations);
     }
 
     #[test]

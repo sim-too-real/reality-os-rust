@@ -25,7 +25,8 @@ use crate::future_interaction::{
 };
 use crate::grasp_hold::{evaluate_pinch_hold, HoldFeasibility, PinchHoldInput};
 use crate::kinematics::{
-    forward_kinematics, ik_residual_is_precise, solve_ik, solve_ik_candidates, with_ik_q_seed,
+    forward_kinematics, ik_residual_is_precise, solve_ik, solve_ik_candidates,
+    solve_ik_candidates_with_seed_budget, solve_ik_first_candidate_matching, with_ik_q_seed,
 };
 use crate::pair_friction::PairFriction;
 use crate::physical_belief::{BeliefEpistemicStatus, PhysicalParameter, PhysicalParameterBelief};
@@ -51,7 +52,7 @@ pub const PUSH_PROBE_APPROACH_GAP_M: f64 = 0.004;
 
 const PUSH_FAMILY: &str = "planar_push";
 const GRASP_FAMILY: &str = "pinch_grasp";
-const MAX_TRANSIT_WAYPOINT_ALTERNATIVES: usize = 8;
+const FAST_IK_SEED_BUDGET: usize = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PhysicalObjective {
@@ -1304,6 +1305,41 @@ fn prove_arm_path(
     candidate: &RawCandidate,
     grasp: bool,
 ) -> Result<SolvedPose, &'static str> {
+    let debug_timing = std::env::var_os("REALITYOS_DEBUG_IK_PLAN").is_some();
+    let fast_started = std::time::Instant::now();
+    let fast = prove_arm_path_with_ik_mode(model, request, candidate, grasp, true);
+    if debug_timing {
+        eprintln!(
+            "ik-plan bounded result={} elapsed={:.3}s",
+            fast.as_ref().map(|_| "proved").unwrap_or("refused"),
+            fast_started.elapsed().as_secs_f64()
+        );
+    }
+    match fast {
+        Ok(solution) => Ok(solution),
+        Err(fast_reason) => {
+            let exhaustive_started = std::time::Instant::now();
+            let exhaustive = prove_arm_path_with_ik_mode(model, request, candidate, grasp, false);
+            if debug_timing {
+                eprintln!(
+                    "ik-plan exhaustive result={} reason={} elapsed={:.3}s",
+                    exhaustive.as_ref().map(|_| "proved").unwrap_or("refused"),
+                    exhaustive.as_ref().err().copied().unwrap_or(fast_reason),
+                    exhaustive_started.elapsed().as_secs_f64()
+                );
+            }
+            exhaustive
+        }
+    }
+}
+
+fn prove_arm_path_with_ik_mode(
+    model: &EmbodimentModel,
+    request: &ReasoningRequest,
+    candidate: &RawCandidate,
+    grasp: bool,
+    fast_seed_only: bool,
+) -> Result<SolvedPose, &'static str> {
     let standoff_xyz = if grasp {
         // Approach from the support-plane normal so open fingers clear the
         // supported object before reaching the pinch pose. Approaching along
@@ -1317,11 +1353,12 @@ fn prove_arm_path(
         push_approach_standoff(request, candidate)
     };
     const MAX_COLLISION_ALTERNATIVES: usize = 8;
-    let q_transit_candidates = solve_precise_candidates(
+    let q_transit_candidates = solve_precise_candidates_with_ik_mode(
         model,
         &request.scene,
         standoff_xyz,
         MAX_COLLISION_ALTERNATIVES,
+        fast_seed_only,
     )?;
     let approach_phase = if grasp {
         ContactPhase::GraspApproach
@@ -1368,11 +1405,12 @@ fn prove_arm_path(
     for (q_transit, transit_waypoints) in transit_solutions {
         let mut contact_scene = request.scene.clone();
         contact_scene.arm_q = q_transit.clone();
-        let q_contact_candidates = match solve_precise_candidates(
+        let q_contact_candidates = match solve_precise_candidates_with_ik_mode(
             model,
             &contact_scene,
             candidate.target_xyz,
             MAX_COLLISION_ALTERNATIVES,
+            fast_seed_only,
         ) {
             Ok(candidates) => candidates,
             Err(reason) => {
@@ -1440,52 +1478,38 @@ fn prove_arm_path(
                         candidate.target_xyz,
                         scale3(candidate.direction, end_distance),
                     );
-                    let mut stroke_scene = request.scene.clone();
-                    stroke_scene.arm_q = segment_start_q.clone();
-                    let q_candidates = match solve_precise_candidates(
+                    let next_q = solve_first_ik_candidate_matching(
                         model,
-                        &stroke_scene,
+                        request,
                         end_xyz,
-                        MAX_COLLISION_ALTERNATIVES,
-                    ) {
-                        Ok(candidates) => candidates,
+                        &segment_start_q,
+                        |q_candidate| {
+                            for object_fraction in [0.0, 0.5, 1.0] {
+                                let object_distance = start_distance
+                                    + (end_distance - start_distance) * object_fraction;
+                                let mut stroke_request = request.clone();
+                                stroke_request.scene.object_center = add3(
+                                    request.scene.object_center,
+                                    scale3(candidate.direction, object_distance),
+                                );
+                                arm_motion_clear(
+                                    model,
+                                    &stroke_request,
+                                    &segment_start_q,
+                                    q_candidate,
+                                    ContactPhase::ContactStroke,
+                                )?;
+                            }
+                            Ok(())
+                        },
+                    );
+                    let next_q = match next_q {
+                        Ok(q) => q,
                         Err(reason) => {
                             last_refusal = Some(reason);
                             segment_clear = false;
                             break;
                         }
-                    };
-                    let mut next_q = None;
-                    for q_candidate in q_candidates {
-                        let mut clear = true;
-                        for object_fraction in [0.0, 0.5, 1.0] {
-                            let object_distance =
-                                start_distance + (end_distance - start_distance) * object_fraction;
-                            let mut stroke_request = request.clone();
-                            stroke_request.scene.object_center = add3(
-                                request.scene.object_center,
-                                scale3(candidate.direction, object_distance),
-                            );
-                            if let Err(reason) = arm_motion_clear(
-                                model,
-                                &stroke_request,
-                                &segment_start_q,
-                                &q_candidate,
-                                ContactPhase::ContactStroke,
-                            ) {
-                                last_refusal = Some(reason);
-                                clear = false;
-                                break;
-                            }
-                        }
-                        if clear {
-                            next_q = Some(q_candidate);
-                            break;
-                        }
-                    }
-                    let Some(next_q) = next_q else {
-                        segment_clear = false;
-                        break;
                     };
                     segment_start_q = next_q.clone();
                     stroke_states.push(next_q);
@@ -1512,47 +1536,38 @@ fn prove_arm_path(
                         candidate.stroke_m - PROBE_RETREAT_CLEARANCE_M,
                     ),
                 );
-                let retreat_candidates = match solve_precise_candidates(
-                    model,
-                    &retreat_scene,
-                    retreat_target,
-                    MAX_COLLISION_ALTERNATIVES,
-                ) {
-                    Ok(candidates) => candidates,
-                    Err(reason) => {
-                        last_refusal = Some(reason);
-                        continue;
-                    }
-                };
                 let mut retreat_request = request.clone();
                 retreat_request.scene = retreat_scene;
-                let mut clear_retract = None;
-                for q_candidate_retract in retreat_candidates {
-                    if let Err(reason) = arm_motion_clear(
-                        model,
-                        &retreat_request,
-                        &q_candidate_retract,
-                        &q_candidate_retract,
-                        ContactPhase::CurrentToApproach,
-                    ) {
+                let retract = solve_first_ik_candidate_matching(
+                    model,
+                    &retreat_request,
+                    retreat_target,
+                    &q_end,
+                    |q_candidate_retract| {
+                        arm_motion_clear(
+                            model,
+                            &retreat_request,
+                            q_candidate_retract,
+                            q_candidate_retract,
+                            ContactPhase::CurrentToApproach,
+                        )?;
+                        arm_motion_clear(
+                            model,
+                            &retreat_request,
+                            &q_end,
+                            q_candidate_retract,
+                            ContactPhase::CurrentToApproach,
+                        )
+                    },
+                );
+                let q_retract = match retract {
+                    Ok(q) => Some(q),
+                    Err(reason) => {
                         last_refusal = Some(reason);
-                        continue;
+                        None
                     }
-                    match arm_motion_clear(
-                        model,
-                        &retreat_request,
-                        &q_end,
-                        &q_candidate_retract,
-                        ContactPhase::CurrentToApproach,
-                    ) {
-                        Ok(()) => {
-                            clear_retract = Some(q_candidate_retract);
-                            break;
-                        }
-                        Err(reason) => last_refusal = Some(reason),
-                    }
-                }
-                let Some(retract) = clear_retract else {
+                };
+                let Some(retract) = q_retract else {
                     continue;
                 };
                 Some(retract)
@@ -1567,46 +1582,35 @@ fn prove_arm_path(
                 let lift_target = add3(candidate.target_xyz, [0.0, 0.0, BOUNDED_GRASP_LIFT_M]);
                 let mut lift_scene = request.scene.clone();
                 lift_scene.arm_q = q_contact.clone();
-                let q_lift_candidates = match solve_precise_candidates(
+                let mut lift_request = request.clone();
+                lift_request.scene = lift_scene;
+                let q_lift = match solve_first_ik_candidate_matching(
                     model,
-                    &lift_scene,
+                    &lift_request,
                     lift_target,
-                    MAX_COLLISION_ALTERNATIVES,
+                    &q_contact,
+                    |q_candidate_lift| {
+                        arm_motion_clear(
+                            model,
+                            &lift_request,
+                            q_candidate_lift,
+                            q_candidate_lift,
+                            ContactPhase::GraspLift,
+                        )?;
+                        arm_motion_clear(
+                            model,
+                            &lift_request,
+                            &q_contact,
+                            q_candidate_lift,
+                            ContactPhase::GraspLift,
+                        )
+                    },
                 ) {
-                    Ok(candidates) => candidates,
+                    Ok(q) => q,
                     Err(reason) => {
                         last_refusal = Some(reason);
                         continue;
                     }
-                };
-                let mut clear_lift = None;
-                for q_candidate_lift in q_lift_candidates {
-                    if let Err(reason) = arm_motion_clear(
-                        model,
-                        request,
-                        &q_candidate_lift,
-                        &q_candidate_lift,
-                        ContactPhase::GraspLift,
-                    ) {
-                        last_refusal = Some(reason);
-                        continue;
-                    }
-                    match arm_motion_clear(
-                        model,
-                        request,
-                        &q_contact,
-                        &q_candidate_lift,
-                        ContactPhase::GraspLift,
-                    ) {
-                        Ok(()) => {
-                            clear_lift = Some(q_candidate_lift);
-                            break;
-                        }
-                        Err(reason) => last_refusal = Some(reason),
-                    }
-                }
-                let Some(q_lift) = clear_lift else {
-                    continue;
                 };
                 carried_object_lift_clear(request, MAXIMUM_GRASP_LIFT_M)?;
                 let states = vec![q_contact.clone(), q_lift];
@@ -1667,33 +1671,14 @@ fn collision_checked_contact_approach(
     for segment_index in 1..segment_count {
         let fraction = segment_index as f64 / segment_count as f64;
         let target = add3(standoff_xyz, scale3(delta, fraction));
-        let candidates = solve_precise_candidates_from_seed(
+        let next_q = solve_first_collision_free_candidate(
             model,
-            &request.scene,
+            request,
             target,
             &prior_q,
-            MAX_TRANSIT_WAYPOINT_ALTERNATIVES,
+            &prior_q,
+            ContactPhase::CurrentToApproach,
         )?;
-        let mut clear_candidate = None;
-        let mut last_refusal = "IK_FAILED";
-        for candidate in candidates {
-            match arm_motion_clear(
-                model,
-                request,
-                &prior_q,
-                &candidate,
-                ContactPhase::CurrentToApproach,
-            ) {
-                Ok(()) => {
-                    clear_candidate = Some(candidate);
-                    break;
-                }
-                Err(reason) => last_refusal = reason,
-            }
-        }
-        let Some(next_q) = clear_candidate else {
-            return Err(last_refusal);
-        };
         waypoints.push(next_q.clone());
         prior_q = next_q;
     }
@@ -1876,30 +1861,106 @@ fn solve_collision_free_waypoint(
     segment_start_q: &[f64],
     phase: ContactPhase,
 ) -> Result<Vec<f64>, &'static str> {
-    let candidates = solve_precise_candidates_from_seed(
-        model,
-        &request.scene,
-        target,
-        seed_q,
-        MAX_TRANSIT_WAYPOINT_ALTERNATIVES,
-    )?;
-    let mut last_refusal = "IK_FAILED";
-    for candidate in candidates {
-        match arm_motion_clear(model, request, segment_start_q, &candidate, phase) {
-            Ok(()) => return Ok(candidate),
-            Err(reason) => last_refusal = reason,
-        }
-    }
-    Err(last_refusal)
+    solve_first_collision_free_candidate(model, request, target, seed_q, segment_start_q, phase)
 }
 
-fn solve_precise_candidates(
+fn solve_first_collision_free_candidate(
+    model: &EmbodimentModel,
+    request: &ReasoningRequest,
+    target: [f64; 3],
+    seed_q: &[f64],
+    segment_start_q: &[f64],
+    phase: ContactPhase,
+) -> Result<Vec<f64>, &'static str> {
+    solve_first_ik_candidate_matching(model, request, target, seed_q, |candidate_q| {
+        arm_motion_clear(model, request, segment_start_q, candidate_q, phase)
+    })
+}
+
+fn solve_first_ik_candidate_matching<F>(
+    model: &EmbodimentModel,
+    request: &ReasoningRequest,
+    target: [f64; 3],
+    seed_q: &[f64],
+    mut accept: F,
+) -> Result<Vec<f64>, &'static str>
+where
+    F: FnMut(&[f64]) -> Result<(), &'static str>,
+{
+    let chain = model.ee_joint_chain(&request.scene.ee).ok_or("NO_CHAIN")?;
+    if seed_q.len() != chain.len() {
+        return Err("Q_LENGTH");
+    }
+    let mut last_refusal = "IK_FAILED";
+    let search = with_ik_q_seed(Some(seed_q), || {
+        solve_ik_first_candidate_matching(
+            model,
+            &chain,
+            &request.scene.ee,
+            target,
+            seed_q,
+            usize::MAX,
+            |candidate_q, _| match accept(candidate_q) {
+                Ok(()) => true,
+                Err(reason) => {
+                    last_refusal = reason;
+                    false
+                }
+            },
+        )
+    });
+    match search {
+        Ok(Some((q, _))) => Ok(q),
+        Ok(None) | Err(_) => Err(last_refusal),
+    }
+}
+
+fn solve_precise_candidates_with_ik_mode(
     model: &EmbodimentModel,
     scene: &TableScene,
     target: [f64; 3],
     limit: usize,
+    fast_seed_only: bool,
 ) -> Result<Vec<Vec<f64>>, &'static str> {
-    solve_precise_candidates_from_seed(model, scene, target, &scene.arm_q, limit)
+    solve_precise_candidates_from_seed_with_ik_mode(
+        model,
+        scene,
+        target,
+        &scene.arm_q,
+        limit,
+        fast_seed_only,
+    )
+}
+
+fn solve_precise_candidates_from_seed_with_ik_mode(
+    model: &EmbodimentModel,
+    scene: &TableScene,
+    target: [f64; 3],
+    seed_q: &[f64],
+    limit: usize,
+    fast_seed_only: bool,
+) -> Result<Vec<Vec<f64>>, &'static str> {
+    if !fast_seed_only {
+        return solve_precise_candidates_from_seed(model, scene, target, seed_q, limit);
+    }
+    let chain = model.ee_joint_chain(&scene.ee).ok_or("NO_CHAIN")?;
+    if seed_q.len() != chain.len() {
+        return Err("Q_LENGTH");
+    }
+    let candidates = with_ik_q_seed(Some(seed_q), || {
+        solve_ik_candidates_with_seed_budget(
+            model,
+            &chain,
+            &scene.ee,
+            target,
+            seed_q,
+            limit,
+            FAST_IK_SEED_BUDGET,
+        )
+    });
+    candidates
+        .map(|candidates| candidates.into_iter().map(|(q, _)| q).collect())
+        .map_err(|_| "IK_FAILED")
 }
 
 fn solve_precise_candidates_from_seed(
@@ -3540,6 +3601,7 @@ mod tests {
     fn candidate_preview_proves_only_the_named_action_without_authority() {
         let (model, request) = benchmark_scene();
         let mut reasoner = PhysicalReasoner::new(model);
+        work_counters::reset_work_counters();
 
         let probe = reasoner.preview_candidate(&request, "probe:+x");
 
@@ -3548,6 +3610,11 @@ mod tests {
         assert!(probe.witness_digest.is_some());
         assert!(probe.witness_contents.is_some());
         assert_eq!(reasoner.cache_stats().executable_misses, 1);
+        let work = work_counters::work_snapshot();
+        assert!(
+            work.jacobian_evaluations < 1_000,
+            "a collision-clear seeded route should avoid exhaustive IK branch ranking: {work:?}"
+        );
     }
 
     #[test]
