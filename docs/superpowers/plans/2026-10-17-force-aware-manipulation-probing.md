@@ -205,11 +205,11 @@ The worker uses MuJoCo's built-in force/torque sensors, which report the child-p
 
 ### Task 9: Close runtime inference-gating review findings
 
-- [ ] Add per-physics-step detection for unexpected contacts on the instrumented tool subtree and stop under the pre-authorized hold; carry a typed ambiguity gate into inference without passing raw contact identities to the estimator.
-- [ ] Detect force-limited robot-actuator saturation on every monitored physics step, audit the actuator IDs, invoke the same authorized stop, and block friction inference for that window.
-- [ ] Refuse friction inference for caller-supplied `Hardware` origin until a trusted adapter attests device identity; retain physical evidence as unverified.
-- [ ] Add regressions for unexpected-contact refusal, actuator-bound detection and event parsing, and forged hardware-origin refusal; run the focused semantics and MuJoCo worker tests.
-- [ ] Rerun required non-holdout MuJoCo integration, formatting, strict Clippy, and final code review; only then commit and sync the completed implementation.
+- [x] Add per-physics-step detection for unexpected contacts on the instrumented tool subtree and stop under the pre-authorized hold; carry a typed ambiguity gate into inference without passing raw contact identities to the estimator.
+- [x] Detect force-limited robot-actuator saturation on every monitored physics step, audit the actuator IDs, invoke the same authorized stop, and block friction inference for that window.
+- [x] Refuse friction inference for caller-supplied `Hardware` origin until a trusted adapter attests device identity; retain physical evidence as unverified.
+- [x] Add regressions for unexpected-contact refusal, actuator-bound detection and event parsing, and forged hardware-origin refusal; focused semantics tests passed 21/21 and MuJoCo worker tests passed 5/5.
+- [x] Rerun required non-holdout MuJoCo integration (95/95), formatting, strict Clippy, and code review. A broader `cargo test -p realityos-semantics` run still has six failures; one was reproduced against checked-in reasoner source, with the remaining failures in untouched contact-maneuver/reasoner paths.
 
 ### Task 8: Fresh baseline and force-observable suite v3
 
@@ -222,6 +222,9 @@ The worker uses MuJoCo's built-in force/torque sensors, which report the child-p
 - [x] Resolve four signed push-face support extents from the observed end-effector pose; after IK, recheck the contact and stroke configurations, replan the standoff to the resolved support, and refuse unstable orientation or non-convergence. Keep the isotropic radius for clearance. Test aligned and orthogonal support on both development arms and direction-to-candidate mapping.
 - [x] Make v3 the active CLI suite so future pilots and public records cannot accidentally use the old fixture population.
 - [x] Finish required-MuJoCo end-to-end positive probe and force-estimator validation on both development embodiments. The IIWA-14 seed-21000 positive path passes with posterior friction interval `[0.639, 0.8]`; the UR5e seed-21000 path completes its authorized probe and retract. A contact regression verifies the free-space residual against independently reconstructed wrench even when live contact changes qacc.
-- [ ] Run the full non-holdout integration suite, formatting, and strict Clippy.
-- [ ] Commit the candidate, run a clean-worktree v3 pilot, and record all outcomes including correct and false refusals. Treat that run as a new baseline; do not inspect or run holdout.
-- [ ] Request code review, resolve any critical/high-risk findings, then commit/push the completed work to `main`.
+- [x] Run the required non-holdout MuJoCo integration suite (95/95), formatting, and strict Clippy. Targeted worker tests passed 5/5; focused probe-inference tests passed 21/21. The full semantics package suite has six known failures documented above and is not claimed green.
+- [x] Commit the candidate and run a clean-worktree v3 pilot. The 60-trial campaign completed with zero infrastructure, invalid, or unaccounted trials, but its safety gate failed; the paired screen was not evaluated because this is the first v3 baseline. Record all outcomes in `docs/superpowers/evidence/force-aware-probe-4e5e6fc/`. Do not inspect or run holdout.
+- [x] Request code review and resolve findings. The code review found no actionable code findings; the evidence review identified stale document statuses, now corrected.
+- [ ] Commit and push the final spec, plan, analysis, report, JSON, and 60 raw trial records to `main` after final verification.
+
+The v3 pilot is a diagnostic baseline, not a passing screen or a performance claim. Its 14/31 expected-success task rate, eight false refusals, two false acceptances (both stopped before control writes), 3/7 verified holds, and 1,768-second worst-case runtime define the next public-only tuning targets. Every record is simulation-only; no physical experiment or holdout inspection was performed.
