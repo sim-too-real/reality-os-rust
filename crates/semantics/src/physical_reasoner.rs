@@ -1100,7 +1100,9 @@ fn prove_push(
     for _ in 0..MAX_CONTACT_EXTENT_REPLANS {
         let path = match prove_arm_path(model, request, &resolved_candidate, false) {
             Ok(path) => path,
-            Err(reason) => return rejected(PUSH_FAMILY, &resolved_candidate, reason, mechanics),
+            Err(reason) => {
+                return rejected(PUSH_FAMILY, &resolved_candidate, reason, mechanics);
+            }
         };
         let contact_extents = std::iter::once(&path.q_contact)
             .chain(path.stroke_states.iter())
@@ -1578,13 +1580,16 @@ fn prove_arm_path_with_ik_mode(
         push_approach_standoff(request, candidate)
     };
     const MAX_COLLISION_ALTERNATIVES: usize = 8;
-    let q_transit_candidates = solve_precise_candidates_with_ik_mode(
+    let q_transit_candidates = match solve_precise_candidates_with_ik_mode(
         model,
         &request.scene,
         standoff_xyz,
         MAX_COLLISION_ALTERNATIVES,
         fast_seed_only,
-    )?;
+    ) {
+        Ok(candidates) => candidates,
+        Err(reason) => return Err(reason),
+    };
     let approach_phase = if grasp {
         ContactPhase::GraspApproach
     } else {
@@ -2019,7 +2024,208 @@ fn collision_checked_transit_path(
             return Ok((prior_q, path));
         }
     }
+    // A planar arm cannot take the vertical clearance. Route around the object
+    // in the support plane. CurrentToApproach still rejects any segment that
+    // intersects the object or an obstacle.
+    match planar_bypass_transit(model, request, current_fk.ee.xyz, standoff_xyz, phase) {
+        Ok(path) => Ok(path),
+        Err(reason) => Err(if last_refusal == "TRANSIT_PATH_UNAVAILABLE" {
+            reason
+        } else {
+            last_refusal
+        }),
+    }
+}
+
+fn planar_bypass_transit(
+    model: &EmbodimentModel,
+    request: &ReasoningRequest,
+    current_xyz: [f64; 3],
+    standoff_xyz: [f64; 3],
+    phase: ContactPhase,
+) -> Result<(Vec<f64>, Vec<Vec<f64>>), &'static str> {
+    let travel_x = standoff_xyz[0] - current_xyz[0];
+    let travel_y = standoff_xyz[1] - current_xyz[1];
+    let travel = travel_x.hypot(travel_y);
+    if !travel.is_finite() || travel <= 1.0e-6 {
+        return Err("TRANSIT_PATH_UNAVAILABLE");
+    }
+    let mut last_refusal = "TRANSIT_PATH_UNAVAILABLE";
+    for waypoints in planar_clearance_routes(request, current_xyz, standoff_xyz) {
+        match follow_cartesian_waypoints(model, request, &waypoints, phase) {
+            Ok(path) => return Ok(path),
+            Err(reason) => last_refusal = reason,
+        }
+    }
     Err(last_refusal)
+}
+
+/// Routes that stay outside the object in the support plane. A chord that
+/// cuts across the object is not a clearance path. Both windings are tried
+/// so an obstacle on one side does not hide the other side.
+fn planar_clearance_routes(
+    request: &ReasoningRequest,
+    current_xyz: [f64; 3],
+    standoff_xyz: [f64; 3],
+) -> Vec<Vec<[f64; 3]>> {
+    let radius = request.scene.tool_radius_m.max(0.0);
+    let margin = 0.012;
+    let half = [
+        request.scene.object_half[0].abs() + radius + margin,
+        request.scene.object_half[1].abs() + radius + margin,
+    ];
+    let center = request.scene.object_center;
+    let z = current_xyz[2];
+    let corners = [
+        [center[0] - half[0], center[1] - half[1], z],
+        [center[0] + half[0], center[1] - half[1], z],
+        [center[0] + half[0], center[1] + half[1], z],
+        [center[0] - half[0], center[1] + half[1], z],
+    ];
+    let escaped = escape_planar_box(current_xyz, center, half);
+    let start = nearest_planar_index(escaped, &corners);
+    let goal = nearest_planar_index(standoff_xyz, &corners);
+    let mut routes = Vec::new();
+    for step in [1isize, -1] {
+        let mut waypoints = vec![escaped];
+        if start == goal {
+            waypoints.extend(corner_loop(start, step, &corners));
+        } else {
+            waypoints.extend(corner_walk(start, goal, step, &corners));
+        }
+        waypoints.push(standoff_xyz);
+        routes.push(densify_polyline(&waypoints, 0.025));
+    }
+    let travel_x = standoff_xyz[0] - current_xyz[0];
+    let travel_y = standoff_xyz[1] - current_xyz[1];
+    let travel = travel_x.hypot(travel_y);
+    if travel > 1.0e-6 {
+        let perpendiculars = [
+            [-travel_y / travel, travel_x / travel],
+            [travel_y / travel, -travel_x / travel],
+        ];
+        let base = half[0].max(half[1]);
+        for perpendicular in perpendiculars {
+            for scale in [1.0, 1.8] {
+                let offset = (base * scale).clamp(0.03, 0.16);
+                let side = [
+                    current_xyz[0] + perpendicular[0] * offset,
+                    current_xyz[1] + perpendicular[1] * offset,
+                    z,
+                ];
+                let across = [
+                    standoff_xyz[0] + perpendicular[0] * offset,
+                    standoff_xyz[1] + perpendicular[1] * offset,
+                    z,
+                ];
+                routes.push(densify_polyline(&[side, across, standoff_xyz], 0.025));
+            }
+        }
+    }
+    routes
+}
+
+fn escape_planar_box(point: [f64; 3], center: [f64; 3], half: [f64; 2]) -> [f64; 3] {
+    let dx = point[0] - center[0];
+    let dy = point[1] - center[1];
+    let px = dx.abs() / half[0].max(1.0e-6);
+    let py = dy.abs() / half[1].max(1.0e-6);
+    if px > 1.0 || py > 1.0 {
+        return point;
+    }
+    if px >= py {
+        let sign = if dx >= 0.0 { 1.0 } else { -1.0 };
+        [center[0] + sign * (half[0] + 0.004), point[1], point[2]]
+    } else {
+        let sign = if dy >= 0.0 { 1.0 } else { -1.0 };
+        [point[0], center[1] + sign * (half[1] + 0.004), point[2]]
+    }
+}
+
+fn nearest_planar_index(point: [f64; 3], corners: &[[f64; 3]; 4]) -> usize {
+    let mut best = 0usize;
+    let mut best_distance = f64::INFINITY;
+    for (index, corner) in corners.iter().enumerate() {
+        let distance = (corner[0] - point[0]).hypot(corner[1] - point[1]);
+        if distance < best_distance {
+            best_distance = distance;
+            best = index;
+        }
+    }
+    best
+}
+
+fn corner_walk(from: usize, to: usize, step: isize, corners: &[[f64; 3]; 4]) -> Vec<[f64; 3]> {
+    let mut index = from as isize;
+    let mut out = Vec::new();
+    for _ in 0..4 {
+        let wrapped = index.rem_euclid(4) as usize;
+        out.push(corners[wrapped]);
+        if wrapped == to {
+            break;
+        }
+        index += step;
+    }
+    out
+}
+
+fn corner_loop(from: usize, step: isize, corners: &[[f64; 3]; 4]) -> Vec<[f64; 3]> {
+    let mut index = from as isize;
+    let mut out = Vec::new();
+    for _ in 0..4 {
+        out.push(corners[index.rem_euclid(4) as usize]);
+        index += step;
+    }
+    out
+}
+
+fn densify_polyline(points: &[[f64; 3]], spacing: f64) -> Vec<[f64; 3]> {
+    let mut out = Vec::new();
+    let Some(first) = points.first().copied() else {
+        return out;
+    };
+    out.push(first);
+    for window in points.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        let distance = (end[0] - start[0])
+            .hypot(end[1] - start[1])
+            .hypot(end[2] - start[2]);
+        let count = (distance / spacing.max(1.0e-6)).floor() as usize;
+        for step in 1..count {
+            let fraction = step as f64 / count as f64;
+            out.push([
+                start[0] + (end[0] - start[0]) * fraction,
+                start[1] + (end[1] - start[1]) * fraction,
+                start[2] + (end[2] - start[2]) * fraction,
+            ]);
+        }
+        out.push(end);
+    }
+    out
+}
+
+fn follow_cartesian_waypoints(
+    model: &EmbodimentModel,
+    request: &ReasoningRequest,
+    waypoints: &[[f64; 3]],
+    phase: ContactPhase,
+) -> Result<(Vec<f64>, Vec<Vec<f64>>), &'static str> {
+    let mut prior_q = request.scene.arm_q.clone();
+    let mut path = Vec::new();
+    for waypoint in waypoints {
+        let next_q =
+            solve_collision_free_waypoint(model, request, *waypoint, &prior_q, &prior_q, phase)?;
+        if prior_q
+            .iter()
+            .zip(&next_q)
+            .any(|(from, to)| (to - from).abs() > 1.0e-9)
+        {
+            path.push(next_q.clone());
+        }
+        prior_q = next_q;
+    }
+    Ok((prior_q, path))
 }
 
 fn support_edge_waypoint(
@@ -2204,12 +2410,13 @@ fn solve_precise_candidates_from_seed(
     });
     match candidates {
         Ok(candidates) => Ok(candidates.into_iter().map(|(q, _)| q).collect()),
-        Err(_) if seed_q == scene.arm_q => {
-            // Preserve the existing refusal detail when no precise solution is
-            // available; best-effort IK may distinguish residual from failure.
-            let _ = solve_precise(model, scene, target)?;
-            Err("IK_FAILED")
-        }
+        Err(_) if seed_q == scene.arm_q => match solve_precise(model, scene, target) {
+            // A precise pose is a solution. Discarding it reported IK_FAILED
+            // for a target the actuator can reach. A failed precise solve keeps
+            // its own refusal detail.
+            Ok(q) => Ok(vec![q]),
+            Err(reason) => Err(reason),
+        },
         Err(_) => Err("IK_FAILED"),
     }
 }

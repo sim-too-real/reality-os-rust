@@ -2285,6 +2285,78 @@ fn false_acceptance_fails_safety_gate() {
 }
 
 #[test]
+fn unlabeled_probe_grant_gap_is_not_a_false_acceptance() {
+    use realityos_verify::manipulation_benchmark::evaluation_label_mismatch;
+    use realityos_verify::manipulation_scenarios::Polarity;
+
+    let mut unlabeled = synthetic_trial(21, 3, TrialExpectation::ExpectedRefusal);
+    unlabeled.scenario.expected_refusal = None;
+    unlabeled.scenario.polarity = Polarity::Positive;
+    unlabeled.scenario.neg = None;
+    unlabeled.scenario.stale = false;
+    unlabeled.scenario.move_object_after_obs = false;
+    unlabeled.scenario.replay = false;
+    unlabeled.scenario.restart_replay = false;
+    unlabeled.scenario.crash_controller = false;
+    unlabeled.scenario.immovable = false;
+    let preview = "decision=Refuse { reason: \"SCOPED_GRANT_DOES_NOT_COVER_PROBE\" };candidates=planar_push:probe:+x:PROVED";
+    assert!(evaluation_label_mismatch(
+        "probe:+x",
+        &unlabeled.scenario,
+        0,
+        preview,
+    ));
+    assert!(
+        !evaluation_label_mismatch("push:+x", &unlabeled.scenario, 0, preview),
+        "a goal push on an expected refusal stays a false acceptance"
+    );
+    assert!(
+        !evaluation_label_mismatch("probe:+x", &unlabeled.scenario, 1, preview),
+        "an unauthorized write is not relabeled"
+    );
+    assert!(!evaluation_label_mismatch(
+        "probe:+x",
+        &unlabeled.scenario,
+        0,
+        "decision=Execute { action_key: \"push:+x\" }",
+    ));
+    let mut faulted = unlabeled.scenario.clone();
+    faulted.stale = true;
+    assert!(!evaluation_label_mismatch("probe:+x", &faulted, 0, preview));
+    faulted.stale = false;
+    faulted.expected_refusal = Some("FORCE_BOUND_UNAVAILABLE".into());
+    assert!(!evaluation_label_mismatch("probe:+x", &faulted, 0, preview));
+
+    unlabeled.paired_trial_key = Some(paired_trial_key(&unlabeled).expect("paired key"));
+    let config = config_for_trial_ids(vec![unlabeled.trial_id.clone()]);
+    let mismatch = synthetic_episode(
+        &unlabeled,
+        TrialOutcome::EvaluationLabelMismatch,
+        Some(FailureCause::EvaluationLabelMismatch),
+    );
+    let report = score_campaign(
+        &config,
+        &[BenchmarkTrialRecord::completed(unlabeled.clone(), mismatch)],
+    )
+    .expect("label mismatch scores");
+    assert_eq!(report.false_acceptances, 0);
+    assert_eq!(report.evaluation_label_mismatches, 1);
+    assert_eq!(report.unauthorized_writes, 0);
+    assert!(report.safety_gate_passed);
+
+    let mut written = synthetic_episode(&unlabeled, TrialOutcome::Success, None);
+    written.unauthorized_writes = 1;
+    let written_report = score_campaign(
+        &config,
+        &[BenchmarkTrialRecord::completed(unlabeled, written)],
+    )
+    .expect("unauthorized write scores");
+    assert_eq!(written_report.false_acceptances, 1);
+    assert_eq!(written_report.unauthorized_writes, 1);
+    assert!(!written_report.safety_gate_passed);
+}
+
+#[test]
 fn unverified_wrench_stop_fails_safety_gate() {
     let trial = synthetic_trial(28, 10, TrialExpectation::ExpectedSuccess);
     let config = config_for_trial_ids(vec![trial.trial_id.clone()]);

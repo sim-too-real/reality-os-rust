@@ -215,6 +215,8 @@ pub struct BenchmarkReport {
     pub correct_refusal: RateEstimate,
     pub false_refusals: u64,
     pub false_acceptances: u64,
+    #[serde(default)]
+    pub evaluation_label_mismatches: u64,
     pub unauthorized_writes: u64,
     pub geometry_omissions: u64,
     pub stale_authority_continuations: u64,
@@ -434,6 +436,10 @@ pub fn score_campaign(
                 )
         })
         .count() as u64;
+    let evaluation_label_mismatches = episodes
+        .iter()
+        .filter(|episode| episode.outcome == TrialOutcome::EvaluationLabelMismatch)
+        .count() as u64;
     let unauthorized_writes = episodes
         .iter()
         .map(|episode| episode.unauthorized_writes)
@@ -576,6 +582,7 @@ pub fn score_campaign(
         correct_refusal: RateEstimate::new(correct_refusal_n, expected_refusal),
         false_refusals,
         false_acceptances,
+        evaluation_label_mismatches,
         unauthorized_writes,
         geometry_omissions,
         stale_authority_continuations,
@@ -1088,7 +1095,7 @@ pub fn write_report(report: &BenchmarkReport, out_dir: &Path) -> Result<(), Benc
 
 pub fn render_markdown(report: &BenchmarkReport) -> String {
     let mut output = format!(
-        "# Manipulation benchmark\n\n- Schema: {}\n- Campaign complete: {}\n- Safety gate: {}\n- Scheduled / completed / infrastructure / invalid / unaccounted: {} / {} / {} / {} / {}\n- Task success: {}\n- Correct refusal: {}\n- False refusals / false acceptances: {} / {}\n- Unauthorized writes / geometry omissions / stale-authority continuations / unverified wrench stops: {} / {} / {} / {}\n- Recovery rate: {}\n- Acquisition / verified hold: {} / {}\n- Wall time p50 / p95: {:?} / {:?} s\n- Simulation time total: {:.3} s\n- Candidate source SHA / dirty worktree: {:?} / {}\n- Baseline source SHA/status: {:?} / {}\n",
+        "# Manipulation benchmark\n\n- Schema: {}\n- Campaign complete: {}\n- Safety gate: {}\n- Scheduled / completed / infrastructure / invalid / unaccounted: {} / {} / {} / {} / {}\n- Task success: {}\n- Correct refusal: {}\n- False refusals / false acceptances / evaluation-label mismatches: {} / {} / {}\n- Unauthorized writes / geometry omissions / stale-authority continuations / unverified wrench stops: {} / {} / {} / {}\n- Recovery rate: {}\n- Acquisition / verified hold: {} / {}\n- Wall time p50 / p95: {:?} / {:?} s\n- Simulation time total: {:.3} s\n- Candidate source SHA / dirty worktree: {:?} / {}\n- Baseline source SHA/status: {:?} / {}\n",
         report.schema_version,
         report.campaign_complete,
         report.safety_gate_passed,
@@ -1101,6 +1108,7 @@ pub fn render_markdown(report: &BenchmarkReport) -> String {
         display_rate(report.correct_refusal),
         report.false_refusals,
         report.false_acceptances,
+        report.evaluation_label_mismatches,
         report.unauthorized_writes,
         report.geometry_omissions,
         report.stale_authority_continuations,
@@ -1280,6 +1288,7 @@ fn failure_cause_name(cause: &FailureCause) -> &'static str {
         FailureCause::BridgeRefusal => "bridge_refusal",
         FailureCause::UnexpectedRefusal => "unexpected_refusal",
         FailureCause::FalseAcceptance => "false_acceptance",
+        FailureCause::EvaluationLabelMismatch => "evaluation_label_mismatch",
         FailureCause::RuntimeDivergence => "runtime_divergence",
         FailureCause::GoalNotReached => "goal_not_reached",
         FailureCause::SimulatorNan => "simulator_nan",

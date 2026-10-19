@@ -8,7 +8,8 @@ pub mod scenario;
 pub mod wrench_sensor;
 
 pub use execution::{
-    run_benchmark_trial, ActionTrace, BenchmarkEpisode, FailureCause, TrialOutcome,
+    evaluation_label_mismatch, run_benchmark_trial, ActionTrace, BenchmarkEpisode, FailureCause,
+    TrialOutcome,
 };
 pub use geometry::{
     validate_collision_geometry, CollisionGeomRecord, CollisionGeometryManifest,

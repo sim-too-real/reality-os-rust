@@ -78,6 +78,9 @@ pub enum TrialOutcome {
     ValidRefusal,
     UnexpectedRefusal,
     FalseAcceptance,
+    /// Stratum label said refuse, but the scenario carried no refusal cause
+    /// and the authorized action was only the missing-grant probe.
+    EvaluationLabelMismatch,
     ActionFailed,
 }
 
@@ -90,6 +93,7 @@ pub enum FailureCause {
     BridgeRefusal,
     UnexpectedRefusal,
     FalseAcceptance,
+    EvaluationLabelMismatch,
     RuntimeDivergence,
     GoalNotReached,
     SimulatorNan,
@@ -600,8 +604,26 @@ pub fn run_benchmark_trial(
         };
         let action_key = frozen.action_key.clone();
         if trial.expectation == TrialExpectation::ExpectedRefusal {
-            // The benchmark's evaluator fence prevents a false acceptance from
-            // reaching the simulator while retaining it as a scored violation.
+            // The evaluator fence keeps the action out of the simulator.
+            // A probe on an unlabeled positive scenario is a label mismatch.
+            // A goal push, a faulted scenario, or any unauthorized write stays
+            // a scored false acceptance.
+            let preview = episode
+                .decision_audits
+                .last()
+                .map(String::as_str)
+                .unwrap_or("");
+            if evaluation_label_mismatch(
+                &action_key,
+                &trial.scenario,
+                episode.unauthorized_writes,
+                preview,
+            ) {
+                episode.refusal_code = Some("EVALUATION_LABEL_MISMATCH".into());
+                episode.failure_cause = Some(FailureCause::EvaluationLabelMismatch);
+                episode.outcome = TrialOutcome::EvaluationLabelMismatch;
+                break;
+            }
             episode.refusal_code = Some("FALSE_ACCEPTANCE_BLOCKED_BEFORE_CONTROL_WRITE".into());
             episode.failure_cause = Some(FailureCause::FalseAcceptance);
             episode.outcome = TrialOutcome::FalseAcceptance;
@@ -3377,6 +3399,30 @@ fn ensure_robot_prefix(
         ));
     }
     Ok(())
+}
+
+/// Probe authorization on a positive scenario that the stratum still marked
+/// `ExpectedRefusal`. This is an evaluation-label mismatch, not a physical
+/// write and not a proved goal push.
+pub fn evaluation_label_mismatch(
+    action_key: &str,
+    scenario: &ManipulationScenario,
+    unauthorized_writes: u64,
+    preview_decision: &str,
+) -> bool {
+    let unlabeled_positive = scenario.polarity == crate::manipulation_scenarios::Polarity::Positive
+        && scenario.expected_refusal.is_none()
+        && scenario.neg.is_none()
+        && !scenario.stale
+        && !scenario.move_object_after_obs
+        && !scenario.replay
+        && !scenario.restart_replay
+        && !scenario.crash_controller
+        && !scenario.immovable;
+    action_key.starts_with("probe:")
+        && unlabeled_positive
+        && unauthorized_writes == 0
+        && preview_decision.contains("SCOPED_GRANT_DOES_NOT_COVER_PROBE")
 }
 
 fn finish_refusal(episode: &mut BenchmarkEpisode, expectation: &TrialExpectation) {

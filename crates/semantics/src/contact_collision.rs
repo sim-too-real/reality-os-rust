@@ -1246,7 +1246,32 @@ pub fn apply_collision_admissibility(
         });
         (kind, hit)
     });
-    refuse_if_needed(&mut w.current_to_approach, reports[0].1);
+    // Repositioning onto the standoff may already be touching the object or
+    // pass the face. That is not an approach strike: ApproachToContact still
+    // forbids every sample except the contact configuration. Probe transit
+    // keeps using ContactPhase::CurrentToApproach directly and stays clear.
+    let transit_hit = match reports[0].1 {
+        Some((reason, class))
+            if reason == BLOCK_WRONG_PHASE_CONTACT
+                && class == ContactEvidenceClass::IntendedToolContact =>
+        {
+            match forbidden_class_on_interpolation(
+                model,
+                ee,
+                names,
+                w.start_q.as_slice(),
+                w.approach.q.as_slice(),
+                world,
+                TransitionKind::CurrentToApproach,
+            ) {
+                Ok(Some((kept, kept_class))) => Some((kept, kept_class)),
+                Ok(None) => None,
+                Err(_) => Some((BLOCK_COLLISION_PROOF_INCOMPLETE, class)),
+            }
+        }
+        other => other,
+    };
+    refuse_if_needed(&mut w.current_to_approach, transit_hit);
     refuse_if_needed(&mut w.approach_to_contact, reports[1].1);
     refuse_if_needed(&mut w.contact_to_mid, reports[2].1);
     refuse_if_needed(&mut w.mid_to_end, reports[3].1);

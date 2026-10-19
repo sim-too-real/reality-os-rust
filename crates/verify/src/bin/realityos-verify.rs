@@ -10,8 +10,9 @@ use realityos_verify::families::{family_spec, MILESTONE_FAMILIES};
 use realityos_verify::foundation_report::{run_campaign, write_report};
 use realityos_verify::honesty::{refuse_physical_proof_origin, SIMULATION_ONLY};
 use realityos_verify::manipulation_benchmark::{
-    resolve_benchmark_trial_with_suite, score_campaign, write_report as write_benchmark_report,
-    BenchmarkConfig, BenchmarkExecutionError, BenchmarkReport, BenchmarkTask, BenchmarkTrialRecord,
+    evaluate_paired_screening_gate, paired_campaign_delta, resolve_benchmark_trial_with_suite,
+    score_campaign, write_report as write_benchmark_report, BenchmarkConfig,
+    BenchmarkExecutionError, BenchmarkReport, BenchmarkTask, BenchmarkTrialRecord,
     EmbodimentRegistry, EmbodimentRole, ScenarioSuiteManifest, SimulationWrenchSensorProfile,
 };
 use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, require_mujoco_env};
@@ -64,7 +65,7 @@ fn manipulation_benchmark(args: &[String]) {
     let parsed = match parse_benchmark_args(args) {
         Ok(parsed) => parsed,
         Err(error) => {
-            eprintln!("{error}\nusage: realityos-verify manipulation-benchmark [--seeds N] [--pilot] [--holdout] [--suite FILE] [--out DIR] [--replay TRIAL.json]");
+            eprintln!("{error}\nusage: realityos-verify manipulation-benchmark [--seeds N] [--pilot] [--holdout] [--suite FILE] [--out DIR] [--replay TRIAL.json] [--baseline DIR]");
             std::process::exit(2);
         }
     };
@@ -189,20 +190,48 @@ fn manipulation_benchmark(args: &[String]) {
     };
     report.candidate_source_sha = Some(candidate_sha);
     report.candidate_worktree_dirty = dirty;
-    report.baseline_source_sha = None;
-    report.baseline_status = if parsed.replay.is_some() {
-        "historical_replay_not_compared".into()
-    } else if parsed.pilot {
-        "suite_v3_pilot_screening_not_compared".into()
+    let mut pairing_error: Option<String> = None;
+    if let Some(baseline_dir) = parsed.baseline.as_ref() {
+        report.baseline_source_sha = baseline_candidate_sha(baseline_dir);
+        match load_baseline_records(baseline_dir).and_then(|baseline| {
+            paired_campaign_delta(&baseline, &records).map_err(|error| error.to_string())
+        }) {
+            Ok(delta) => {
+                let gate = evaluate_paired_screening_gate(&delta);
+                println!(
+                    "PAIRED_BASELINE matched={} screening_gate={} best_gain={:?} worst_regression={:?}",
+                    delta.matched_trial_keys,
+                    gate.passed,
+                    gate.best_gain,
+                    gate.worst_regression
+                );
+                report.paired_screening_gate = Some(gate);
+                report.paired_delta = Some(delta);
+                report.baseline_status = "suite_v3_paired_preserved_pilot".into();
+            }
+            Err(error) => {
+                pairing_error = Some(error);
+            }
+        }
     } else {
-        "suite_v3_public_baseline".into()
-    };
+        report.baseline_source_sha = None;
+        report.baseline_status = if parsed.replay.is_some() {
+            "historical_replay_not_compared".into()
+        } else if parsed.pilot {
+            "suite_v3_pilot_screening_not_compared".into()
+        } else {
+            "suite_v3_public_baseline".into()
+        };
+    }
+    if let Some(error) = pairing_error.as_ref() {
+        report.baseline_status = format!("suite_v3_pairing_failed: {error}");
+    }
     if let Err(error) = write_benchmark_report(&report, &parsed.out_dir) {
         eprintln!("benchmark report write failed: {error}");
         std::process::exit(1);
     }
     println!(
-        "MANIPULATION_BENCHMARK scheduled={} completed={} infra={} invalid={} unaccounted={} safety_gate={} task_success={}/{} correct_refusal={}/{}",
+        "MANIPULATION_BENCHMARK scheduled={} completed={} infra={} invalid={} unaccounted={} safety_gate={} task_success={}/{} correct_refusal={}/{} false_refusals={} false_acceptances={} evaluation_label_mismatches={} unauthorized_writes={} friction_narrowings={}/{}",
         report.scheduled_trials,
         report.completed_trials,
         report.infrastructure_trials,
@@ -213,11 +242,21 @@ fn manipulation_benchmark(args: &[String]) {
         report.task_success.denominator,
         report.correct_refusal.numerator,
         report.correct_refusal.denominator,
+        report.false_refusals,
+        report.false_acceptances,
+        report.evaluation_label_mismatches,
+        report.unauthorized_writes,
+        report.wrench_metrics.strict_friction_narrowings,
+        report.wrench_metrics.episodes_with_samples,
     );
     println!(
         "wrote {}/manipulation_benchmark.json and raw trial records",
         parsed.out_dir.display()
     );
+    if let Some(error) = pairing_error {
+        eprintln!("baseline pairing failed: {error}");
+        std::process::exit(1);
+    }
     if !report.safety_gate_passed {
         std::process::exit(1);
     }
@@ -234,6 +273,7 @@ struct BenchmarkArgs {
     out_dir: PathBuf,
     replay: Option<PathBuf>,
     suite: Option<PathBuf>,
+    baseline: Option<PathBuf>,
 }
 
 fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
@@ -244,6 +284,7 @@ fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
         out_dir: PathBuf::from("verify-out/manipulation-benchmark"),
         replay: None,
         suite: None,
+        baseline: None,
     };
     let mut index = 0;
     while index < args.len() {
@@ -276,6 +317,13 @@ fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
                     args.get(index).ok_or("--suite requires a scenario file")?,
                 ));
             }
+            "--baseline" => {
+                index += 1;
+                parsed.baseline = Some(PathBuf::from(
+                    args.get(index)
+                        .ok_or("--baseline requires a report directory")?,
+                ));
+            }
             other => return Err(format!("unknown benchmark option: {other}")),
         }
         index += 1;
@@ -283,8 +331,12 @@ fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
     if parsed.holdout && parsed.pilot {
         return Err("--holdout and --pilot are separate seed sets".into());
     }
-    if parsed.replay.is_some() && (parsed.holdout || parsed.pilot || parsed.seeds.is_some()) {
-        return Err("--replay cannot be combined with --holdout, --pilot, or --seeds".into());
+    if parsed.replay.is_some()
+        && (parsed.holdout || parsed.pilot || parsed.seeds.is_some() || parsed.baseline.is_some())
+    {
+        return Err(
+            "--replay cannot be combined with --holdout, --pilot, --seeds, or --baseline".into(),
+        );
     }
     if parsed.seeds == Some(0) {
         return Err("--seeds must be greater than zero".into());
@@ -585,6 +637,40 @@ fn load_trial_bundle(repo_root: &Path, robot_id: &str) -> Result<RobotBundle, St
         .find(|entry| entry.robot_id == robot_id)
         .ok_or_else(|| format!("robot {robot_id} is not registered in manipulation benchmark"))?;
     RobotBundle::load(repo_root.join(&entry.bundle_path)).map_err(|error| error.to_string())
+}
+
+fn load_baseline_records(dir: &Path) -> Result<Vec<BenchmarkTrialRecord>, String> {
+    let trials = dir.join("trials");
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&trials)
+        .map_err(|error| format!("baseline trials {}: {error}", trials.display()))?
+    {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    if paths.is_empty() {
+        return Err(format!("no baseline trial records in {}", trials.display()));
+    }
+    let mut records = Vec::with_capacity(paths.len());
+    for path in paths {
+        let bytes = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let record: BenchmarkTrialRecord = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        records.push(record);
+    }
+    Ok(records)
+}
+
+fn baseline_candidate_sha(dir: &Path) -> Option<String> {
+    let bytes = fs::read(dir.join("manipulation_benchmark.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    value
+        .get("candidate_source_sha")
+        .and_then(|sha| sha.as_str())
+        .map(str::to_string)
 }
 
 fn git_revision(repo_root: &Path) -> (String, bool) {
