@@ -330,10 +330,15 @@ fn wrench_monitor_compensates_registered_bias_before_checking_the_load() {
     profile.limit_policy.scope.policy_digest = profile.limit_policy.digest();
     let mut calibration_request = monitored_worker_request(&profile, false);
     calibration_request["n"] = serde_json::json!(1);
+    calibration_request["expected_contact_body"] = serde_json::json!("bias_compensation_probe");
     let calibration = worker
         .rpc(&calibration_request)
         .expect("read the contact load before configuring its bias");
     assert_eq!(calibration["ok"], true, "{calibration}");
+    assert!(
+        calibration["abort"].is_null(),
+        "the calibration read must not trip the monitor: {calibration}"
+    );
     let expected_load = calibration["samples"][0]["wrench"][0]
         .as_f64()
         .expect("sampled contact load");
@@ -356,6 +361,7 @@ fn wrench_monitor_compensates_registered_bias_before_checking_the_load() {
     assert!(profile.validate().is_ok());
     let mut monitored_request = monitored_worker_request(&profile, false);
     monitored_request["n"] = serde_json::json!(5);
+    monitored_request["expected_contact_body"] = serde_json::json!("bias_compensation_probe");
     let response = worker.rpc(&monitored_request).expect("monitored response");
 
     assert_eq!(response["ok"], true, "{response}");
