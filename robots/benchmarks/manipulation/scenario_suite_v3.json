@@ -27,7 +27,8 @@
     "push_distance_m": [0.04, 0.08],
     "obstacle_count": [0, 2],
     "obstacle_forward_m": [0.01, 0.04],
-    "obstacle_lateral_m": [0.14, 0.17]
+    "obstacle_lateral_m": [0.14, 0.17],
+    "support_solref": [0.005, 1.0]
   },
   "unidentifiable_push": {
     "mass_kg": [0.05, 0.18],

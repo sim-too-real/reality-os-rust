@@ -10,12 +10,12 @@
       ],
       "simulation_wrench_profile": {
         "sensor_id": "sim-ft-menagerie-ur5e-v1",
-        "model_id": "mujoco-force-torque-sensor-gravity-baseline-v2",
+        "model_id": "mujoco-force-torque-sensor-free-space-model-v1",
         "calibration_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "sensor_frame": "attachment_site",
         "units": "N,N*m",
-        "sample_rate_hz": 250.0,
-        "latency_s": 0.004,
+        "sample_rate_hz": 500.0,
+        "latency_s": 0.002,
         "resolution": [
           0.001,
           0.001,
@@ -40,6 +40,14 @@
           0.005,
           0.005
         ],
+        "free_space_model_error_bounds": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
         "seeded_noise_bound": [
           0.01,
           0.01,
@@ -60,11 +68,11 @@
               2.0,
               2.0
             ],
-            "policy_digest": "087d42a0033cef6464ccd096b2602e52eaccdee01348eb7a81ae876a240f1eba",
+            "policy_digest": "089e00c96692eaab8f5712678bd5e306be2ee9e232adc524b629ab0d9bad9849",
             "abort_contract_id": "sim-wrench-stop-v1"
           },
           "sensor_calibration_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "sensor_sample_rate_hz": 250.0,
+          "sensor_sample_rate_hz": 500.0,
           "max_position_tracking_correction_rad": 0.01,
           "position_tracking_correction_gain": 1.0,
           "max_rise_rate": [
@@ -75,13 +83,13 @@
             25.0,
             25.0
           ],
-          "max_sensing_latency_s": 0.004,
+          "max_sensing_latency_s": 0.002,
           "max_abort_latency_s": 0.005,
           "max_sample_age_s": 0.02,
           "max_inter_sample_gap_s": 0.01,
           "max_cross_sensor_skew_s": 0.005,
           "monitor_id": "mujoco-wrench-monitor-ur5e-v1",
-          "compensation_digest": "44945664b4ca76682a9b58e11a06098fc5538c056b008cf2da279eee33a1f1b1",
+          "compensation_digest": "9006d96244b9fd8e1ae07073993ad9d8c8698bab0b97238d1bcf6521be2f5d43",
           "abort_contract": {
             "contract_id": "sim-wrench-stop-v1",
             "hold_mode": "hold_current_joint_position",
@@ -108,12 +116,12 @@
       ],
       "simulation_wrench_profile": {
         "sensor_id": "sim-ft-menagerie-iiwa14-v1",
-        "model_id": "mujoco-force-torque-sensor-gravity-baseline-v2",
+        "model_id": "mujoco-force-torque-sensor-free-space-model-v1",
         "calibration_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "sensor_frame": "attachment_site",
         "units": "N,N*m",
-        "sample_rate_hz": 250.0,
-        "latency_s": 0.004,
+        "sample_rate_hz": 500.0,
+        "latency_s": 0.002,
         "resolution": [
           0.001,
           0.001,
@@ -138,6 +146,14 @@
           0.005,
           0.005
         ],
+        "free_space_model_error_bounds": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
         "seeded_noise_bound": [
           0.01,
           0.01,
@@ -158,11 +174,11 @@
               2.0,
               2.0
             ],
-            "policy_digest": "bf2abce9a6302934074fc7d7bed295775fc45772b66ba4f946facc2d2b28d749",
+            "policy_digest": "838a6ecbef25db2b088123185f8ff89024448b2c8ac14aac83dbbe4fb7ca5185",
             "abort_contract_id": "sim-wrench-stop-v1"
           },
           "sensor_calibration_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "sensor_sample_rate_hz": 250.0,
+          "sensor_sample_rate_hz": 500.0,
           "max_position_tracking_correction_rad": 0.01,
           "position_tracking_correction_gain": 1.0,
           "max_rise_rate": [
@@ -173,13 +189,13 @@
             25.0,
             25.0
           ],
-          "max_sensing_latency_s": 0.004,
+          "max_sensing_latency_s": 0.002,
           "max_abort_latency_s": 0.005,
           "max_sample_age_s": 0.02,
           "max_inter_sample_gap_s": 0.01,
           "max_cross_sensor_skew_s": 0.005,
           "monitor_id": "mujoco-wrench-monitor-iiwa14-v1",
-          "compensation_digest": "44945664b4ca76682a9b58e11a06098fc5538c056b008cf2da279eee33a1f1b1",
+          "compensation_digest": "9006d96244b9fd8e1ae07073993ad9d8c8698bab0b97238d1bcf6521be2f5d43",
           "abort_contract": {
             "contract_id": "sim-wrench-stop-v1",
             "hold_mode": "hold_current_joint_position",

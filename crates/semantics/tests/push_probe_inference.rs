@@ -48,7 +48,8 @@ fn measurement() -> PushProbeMeasurement {
             sample(2, 1.008, [-3.1, 0.0, 0.0, 0.0, 0.0, 0.0]),
         ],
         precontact_baseline: Some(sample(0, 1.001, [0.0; 6])),
-        sample_gravity_wrenches: Vec::new(),
+        sample_free_space_wrenches: Vec::new(),
+        sample_free_space_wrench_error_bounds: Vec::new(),
         sample_sensor_transforms: Vec::new(),
         sensor_to_support: WrenchTransform {
             rotation_to_support: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
@@ -81,6 +82,7 @@ fn measurement() -> PushProbeMeasurement {
             target_body_id: "object".into(),
             plausible_contact_sets: vec![vec!["tool".into(), "object".into()]],
         },
+        runtime_contact_ambiguous: false,
         saturated: false,
         origin: WrenchEvidenceOrigin::Simulation,
     }
@@ -108,7 +110,8 @@ fn precontact_gravity_baseline_is_removed_from_each_inference_sample() {
     for sample in &mut measured.samples {
         sample.digest = wrench_sample_digest(sample);
     }
-    measured.sample_gravity_wrenches = vec![[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]; 2];
+    measured.sample_free_space_wrenches = vec![[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]; 2];
+    measured.sample_free_space_wrench_error_bounds = vec![[0.0; 6]; 2];
 
     let FrictionInferenceResult::Updated { interval, .. } = infer_support_friction(&measured)
     else {
@@ -138,7 +141,8 @@ fn per_sample_sensor_pose_transforms_the_wrench_into_support_axes() {
     let mut measured = measurement();
     measured.samples[1].wrench = [0.0, 3.1, 0.0, 0.0, 0.0, 0.0];
     measured.samples[1].digest = wrench_sample_digest(&measured.samples[1]);
-    measured.sample_gravity_wrenches = vec![[0.0; 6]; 2];
+    measured.sample_free_space_wrenches = vec![[0.0; 6]; 2];
+    measured.sample_free_space_wrench_error_bounds = vec![[0.0; 6]; 2];
     measured.sample_sensor_transforms = vec![
         measured.sensor_to_support.clone(),
         WrenchTransform {
@@ -153,6 +157,42 @@ fn per_sample_sensor_pose_transforms_the_wrench_into_support_axes() {
             mode: FrictionInferenceMode::Sticking,
             interval,
         } if interval[0] > 0.30
+    ));
+}
+
+#[test]
+fn free_space_model_error_is_added_to_the_conservative_force_bound() {
+    let mut nominal = measurement();
+    nominal.sample_free_space_wrenches = vec![[0.0; 6]; nominal.samples.len()];
+    nominal.sample_free_space_wrench_error_bounds = vec![[0.0; 6]; nominal.samples.len()];
+    let FrictionInferenceResult::Updated {
+        interval: nominal_interval,
+        ..
+    } = infer_support_friction(&nominal)
+    else {
+        panic!("nominal evidence should produce an interval");
+    };
+
+    let mut bounded = nominal.clone();
+    bounded.sample_free_space_wrench_error_bounds =
+        vec![[0.25, 0.0, 0.0, 0.0, 0.0, 0.0]; bounded.samples.len()];
+    let FrictionInferenceResult::Updated {
+        interval: bounded_interval,
+        ..
+    } = infer_support_friction(&bounded)
+    else {
+        panic!("bounded free-space uncertainty should preserve a conservative interval");
+    };
+    assert!(
+        bounded_interval[0] < nominal_interval[0],
+        "a larger free-space model bound must lower the friction lower bound: nominal={nominal_interval:?}, bounded={bounded_interval:?}"
+    );
+
+    let mut misaligned = bounded;
+    misaligned.sample_free_space_wrench_error_bounds.pop();
+    assert!(matches!(
+        infer_support_friction(&misaligned),
+        FrictionInferenceResult::NoInference(FrictionNoInferenceReason::InvalidMeasurement)
     ));
 }
 
@@ -279,6 +319,32 @@ fn measurement_origin_and_digest_are_appended_to_belief() {
     assert_eq!(entry.evidence.len(), 1);
     assert_eq!(entry.evidence[0].origin, WrenchEvidenceOrigin::Simulation);
     assert_eq!(entry.evidence[0].measurement_digest, measurement.digest());
+}
+
+#[test]
+fn direct_belief_update_rejects_caller_labeled_hardware_evidence() {
+    let mut belief = PhysicalParameterBelief::declared_point(
+        PhysicalParameter::SupportFriction,
+        0.5,
+        "scene.support_friction",
+    );
+    belief.narrow_interval(PhysicalParameter::SupportFriction, [0.1, 0.9], "prior");
+    let digest = "a".repeat(64);
+    let result = belief.intersect_interval_with_evidence(
+        PhysicalParameter::SupportFriction,
+        [0.7, 0.8],
+        BeliefEvidenceReference {
+            measurement_digest: digest,
+            origin: WrenchEvidenceOrigin::Hardware,
+        },
+    );
+    assert_eq!(
+        result,
+        Err(realityos_semantics::physical_belief::BeliefUpdateError::HardwareOriginUntrusted)
+    );
+    let entry = belief.entry(PhysicalParameter::SupportFriction).unwrap();
+    assert_eq!(entry.empirical_interval, Some([0.1, 0.9]));
+    assert!(entry.evidence.is_empty());
 }
 
 #[test]
@@ -446,18 +512,26 @@ fn hardware_and_simulation_origins_are_preserved_and_must_match_samples() {
     baseline.digest = wrench_sample_digest(baseline);
     assert!(matches!(
         infer_support_friction(&hardware),
-        FrictionInferenceResult::Updated {
-            mode: FrictionInferenceMode::Sticking,
-            ..
-        }
+        FrictionInferenceResult::NoInference(FrictionNoInferenceReason::HardwareOriginUntrusted)
     ));
 
     let mut mismatched = measurement();
-    mismatched.origin = WrenchEvidenceOrigin::Hardware;
+    mismatched.samples[0].origin = WrenchSampleOrigin::Hardware;
+    mismatched.samples[0].digest = wrench_sample_digest(&mismatched.samples[0]);
     assert!(matches!(
         infer_support_friction(&mismatched),
         FrictionInferenceResult::NoInference(FrictionNoInferenceReason::OriginMismatch)
     ));
+}
+
+#[test]
+fn runtime_unexpected_tool_contact_refuses_friction_inference() {
+    let mut measurement = measurement();
+    measurement.runtime_contact_ambiguous = true;
+    assert_eq!(
+        infer_support_friction(&measurement),
+        FrictionInferenceResult::NoInference(FrictionNoInferenceReason::UnexpectedContact)
+    );
 }
 
 #[test]
@@ -514,8 +588,15 @@ fn measurement_digest_binds_sample_values_origin_and_transform() {
 
     let baseline = measurement();
     let mut changed_gravity = baseline.clone();
-    changed_gravity.sample_gravity_wrenches = vec![[0.1, 0.0, 0.0, 0.0, 0.0, 0.0]; 2];
+    changed_gravity.sample_free_space_wrenches = vec![[0.1, 0.0, 0.0, 0.0, 0.0, 0.0]; 2];
+    changed_gravity.sample_free_space_wrench_error_bounds = vec![[0.0; 6]; 2];
     assert_ne!(baseline.digest(), changed_gravity.digest());
+
+    let mut changed_model_bound = baseline.clone();
+    changed_model_bound.sample_free_space_wrenches = vec![[0.0; 6]; 2];
+    changed_model_bound.sample_free_space_wrench_error_bounds =
+        vec![[0.01, 0.0, 0.0, 0.0, 0.0, 0.0]; 2];
+    assert_ne!(baseline.digest(), changed_model_bound.digest());
 
     let mut changed_sample_pose = baseline.clone();
     changed_sample_pose.sample_sensor_transforms = vec![

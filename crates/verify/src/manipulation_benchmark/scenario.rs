@@ -46,6 +46,13 @@ pub struct PositivePushRandomization {
     pub obstacle_count: [u32; 2],
     pub obstacle_forward_m: [f64; 2],
     pub obstacle_lateral_m: [f64; 2],
+    /// Fixed rigid-support response for reproducible friction probes.
+    #[serde(default = "default_support_solref")]
+    pub support_solref: [f64; 2],
+}
+
+fn default_support_solref() -> [f64; 2] {
+    [0.02, 1.0]
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -191,6 +198,15 @@ impl ScenarioSuiteManifest {
             || positive.obstacle_lateral_m[0] <= 0.0
         {
             return Err(invalid("positive scenario physical bounds are invalid"));
+        }
+        if positive
+            .support_solref
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+        {
+            return Err(invalid(
+                "support contact solref must use positive finite time constant and damping ratio",
+            ));
         }
         if self.suite_version == 3
             && self
@@ -1161,6 +1177,7 @@ fn suite_push_scenario(
             target["size"] = json!([half_size, half_size, half_height]);
             target["mass"] = json!(mass);
             target["friction"] = json!(friction);
+            target["solref"] = json!(suite.positive_push.support_solref);
             target["movable"] = json!(true);
             let table = scenario
                 .objects
@@ -1170,6 +1187,7 @@ fn suite_push_scenario(
                     BenchmarkError::InvalidTrial("suite push scenario has no support table".into())
                 })?;
             table["friction"] = json!(friction);
+            table["solref"] = json!(suite.positive_push.support_solref);
             scenario
                 .objects
                 .retain(|object| object["name"] == scenario.object_id || object["name"] == "table");
@@ -1200,73 +1218,6 @@ fn suite_push_scenario(
             }
             Ok(scenario)
         }
-    }
-}
-
-#[cfg(test)]
-mod suite_v3_tests {
-    use super::*;
-
-    #[test]
-    fn v3_unidentifiable_refusal_randomizes_low_load_without_fault_injection() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../robots/benchmarks/manipulation/scenario_suite_v3.json");
-        let suite = ScenarioSuiteManifest::load(&path).expect("v3 scenario suite");
-        let expected = suite.unidentifiable_push.as_ref().unwrap();
-
-        let first =
-            suite_push_scenario(21_003, false, 3, &suite, PushTrialStratum::ExpectedRefusal)
-                .expect("unidentifiable friction trial");
-        let second =
-            suite_push_scenario(21_003, false, 3, &suite, PushTrialStratum::ExpectedRefusal)
-                .expect("deterministic replay");
-
-        let target = first
-            .objects
-            .iter()
-            .find(|object| object["name"] == first.object_id)
-            .expect("target object");
-        let mass = target["mass"].as_f64().expect("randomized mass");
-        let friction = target["friction"].as_f64().expect("randomized friction");
-        let table = first
-            .objects
-            .iter()
-            .find(|object| object["name"] == "table")
-            .expect("support table");
-        assert!((expected.mass_kg[0]..=expected.mass_kg[1]).contains(&mass));
-        assert!((expected.friction[0]..=expected.friction[1]).contains(&friction));
-        assert_eq!(table["friction"], target["friction"]);
-        assert_eq!(target["movable"], true);
-        assert_eq!(first.polarity, Polarity::Positive);
-        assert_eq!(first.neg, None);
-        assert_eq!(first.expected_refusal, None);
-        assert_eq!(first, second);
-    }
-
-    #[test]
-    fn v3_positive_stratum_randomizes_effective_support_friction() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../robots/benchmarks/manipulation/scenario_suite_v3.json");
-        let suite = ScenarioSuiteManifest::load(&path).expect("v3 scenario suite");
-        let scenario =
-            suite_push_scenario(21_000, false, 0, &suite, PushTrialStratum::ExpectedSuccess)
-                .expect("force-observable positive trial");
-        let target = scenario
-            .objects
-            .iter()
-            .find(|object| object["name"] == scenario.object_id)
-            .expect("target object");
-        let table = scenario
-            .objects
-            .iter()
-            .find(|object| object["name"] == "table")
-            .expect("support table");
-        let friction = target["friction"].as_f64().expect("sampled friction");
-
-        assert!(
-            (suite.positive_push.friction[0]..=suite.positive_push.friction[1]).contains(&friction)
-        );
-        assert_eq!(table["friction"].as_f64(), Some(friction));
     }
 }
 
@@ -2117,4 +2068,73 @@ fn vec3(value: &Value) -> Option<[f64; 3]> {
         .iter()
         .all(|number| number.is_finite())
         .then_some(result)
+}
+
+#[cfg(test)]
+mod suite_v3_tests {
+    use super::*;
+
+    #[test]
+    fn v3_unidentifiable_refusal_randomizes_low_load_without_fault_injection() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../robots/benchmarks/manipulation/scenario_suite_v3.json");
+        let suite = ScenarioSuiteManifest::load(&path).expect("v3 scenario suite");
+        let expected = suite.unidentifiable_push.as_ref().unwrap();
+
+        let first =
+            suite_push_scenario(21_003, false, 3, &suite, PushTrialStratum::ExpectedRefusal)
+                .expect("unidentifiable friction trial");
+        let second =
+            suite_push_scenario(21_003, false, 3, &suite, PushTrialStratum::ExpectedRefusal)
+                .expect("deterministic replay");
+
+        let target = first
+            .objects
+            .iter()
+            .find(|object| object["name"] == first.object_id)
+            .expect("target object");
+        let mass = target["mass"].as_f64().expect("randomized mass");
+        let friction = target["friction"].as_f64().expect("randomized friction");
+        let table = first
+            .objects
+            .iter()
+            .find(|object| object["name"] == "table")
+            .expect("support table");
+        assert!((expected.mass_kg[0]..=expected.mass_kg[1]).contains(&mass));
+        assert!((expected.friction[0]..=expected.friction[1]).contains(&friction));
+        assert_eq!(table["friction"], target["friction"]);
+        assert_eq!(target["movable"], true);
+        assert_eq!(first.polarity, Polarity::Positive);
+        assert_eq!(first.neg, None);
+        assert_eq!(first.expected_refusal, None);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn v3_positive_stratum_randomizes_effective_support_friction() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../robots/benchmarks/manipulation/scenario_suite_v3.json");
+        let suite = ScenarioSuiteManifest::load(&path).expect("v3 scenario suite");
+        let scenario =
+            suite_push_scenario(21_000, false, 0, &suite, PushTrialStratum::ExpectedSuccess)
+                .expect("force-observable positive trial");
+        let target = scenario
+            .objects
+            .iter()
+            .find(|object| object["name"] == scenario.object_id)
+            .expect("target object");
+        let table = scenario
+            .objects
+            .iter()
+            .find(|object| object["name"] == "table")
+            .expect("support table");
+        let friction = target["friction"].as_f64().expect("sampled friction");
+
+        assert!(
+            (suite.positive_push.friction[0]..=suite.positive_push.friction[1]).contains(&friction)
+        );
+        assert_eq!(table["friction"].as_f64(), Some(friction));
+        assert_eq!(target["solref"], json!([0.005, 1.0]));
+        assert_eq!(table["solref"], json!([0.005, 1.0]));
+    }
 }

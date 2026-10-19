@@ -150,6 +150,7 @@ pub struct BenchmarkSliceReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct WrenchReportMetrics {
     pub push_trials: u64,
     pub episodes_with_samples: u64,
@@ -158,6 +159,8 @@ pub struct WrenchReportMetrics {
     pub inference_refusals: u64,
     pub force_cap_trips: u64,
     pub stale_or_missing_sample_aborts: u64,
+    pub unexpected_contact_aborts: u64,
+    pub actuator_saturation_aborts: u64,
     pub inference_rate: RateEstimate,
 }
 
@@ -898,6 +901,23 @@ fn score_wrench_metrics(episodes: &[&BenchmarkEpisode]) -> WrenchReportMetrics {
             })
         })
         .count() as u64;
+    let unexpected_contact_aborts = push_episodes
+        .iter()
+        .filter(|episode| {
+            episode
+                .wrench_abort
+                .as_ref()
+                .is_some_and(|abort| matches!(abort.reason, WrenchAbortReason::UnexpectedContact))
+        })
+        .count() as u64;
+    let actuator_saturation_aborts = push_episodes
+        .iter()
+        .filter(|episode| {
+            episode.wrench_abort.as_ref().is_some_and(|abort| {
+                matches!(abort.reason, WrenchAbortReason::ActuatorSaturation { .. })
+            })
+        })
+        .count() as u64;
     WrenchReportMetrics {
         push_trials: push_episodes.len() as u64,
         episodes_with_samples,
@@ -909,6 +929,8 @@ fn score_wrench_metrics(episodes: &[&BenchmarkEpisode]) -> WrenchReportMetrics {
         inference_refusals,
         force_cap_trips,
         stale_or_missing_sample_aborts,
+        unexpected_contact_aborts,
+        actuator_saturation_aborts,
         inference_rate: RateEstimate::new(strict_friction_narrowings, episodes_with_samples),
     }
 }
@@ -1123,7 +1145,7 @@ pub fn render_markdown(report: &BenchmarkReport) -> String {
     }
     output.push_str("\nEvery simulator episode is labeled SIMULATION_ONLY. A missing physical sensor trace does not establish transfer.\n");
     output.push_str(&format!(
-        "\n## Force/torque evidence\n\n- Push episodes / episodes with samples / samples: {} / {} / {}\n- Strict friction narrowings / inference refusals: {} / {}\n- Force-cap trips / stale-or-missing-sample aborts: {} / {}\n- Strict narrowing rate among sampled episodes: {}\n",
+        "\n## Force/torque evidence\n\n- Push episodes / episodes with samples / samples: {} / {} / {}\n- Strict friction narrowings / inference refusals: {} / {}\n- Force-cap trips / stale-or-missing-sample aborts: {} / {}\n- Unexpected-contact / actuator-saturation aborts: {} / {}\n- Strict narrowing rate among sampled episodes: {}\n",
         report.wrench_metrics.push_trials,
         report.wrench_metrics.episodes_with_samples,
         report.wrench_metrics.sample_count,
@@ -1131,6 +1153,8 @@ pub fn render_markdown(report: &BenchmarkReport) -> String {
         report.wrench_metrics.inference_refusals,
         report.wrench_metrics.force_cap_trips,
         report.wrench_metrics.stale_or_missing_sample_aborts,
+        report.wrench_metrics.unexpected_contact_aborts,
+        report.wrench_metrics.actuator_saturation_aborts,
         display_rate(report.wrench_metrics.inference_rate),
     ));
     if let Some(delta) = &report.paired_delta {

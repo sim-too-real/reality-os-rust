@@ -74,14 +74,102 @@ pub struct TableScene {
     pub joint_names: Vec<String>,
     pub ee: String,
     pub tool_radius_m: f64,
-    /// How far collision geometry extends past the end-effector frame along the
-    /// outward tool axis. The isotropic `tool_radius_m` remains the clearance
-    /// bound. A smaller contact extent is what a directed probe can actually reach.
-    pub tool_contact_extent_m: f64,
+    /// Collision support beyond the end-effector frame for push directions
+    /// `[+object-x, -object-x, +object-y, -object-y]` at the observed tool pose.
+    /// The isotropic `tool_radius_m` remains the clearance bound.
+    pub tool_contact_extents_m: [f64; 4],
     pub observation_epoch: String,
     pub held: bool,
     pub finger_names: Vec<String>,
     pub finger_q: Vec<f64>,
+}
+
+/// Compute the tool collision support from its observed orientation along a
+/// world-space contact normal. Clearance planning remains separately bounded
+/// by the tool's isotropic radius.
+pub fn directed_tool_contact_extent(
+    model: &EmbodimentModel,
+    ee_name: &str,
+    ee_orientation_world: [f64; 4],
+    direction_world: [f64; 3],
+) -> Option<f64> {
+    use crate::geometry::{CollisionRole, PrimitiveShape};
+
+    let ee = model.end_effectors.iter().find(|ee| ee.name == ee_name)?;
+    let frame = model.frames.iter().find(|frame| frame.name == ee.frame)?;
+    let frame_pose = frame.pose()?;
+    let direction_norm = norm3(direction_world);
+    if !direction_norm.is_finite() || direction_norm <= 1.0e-9 {
+        return None;
+    }
+    let ee_world = crate::transform::Se3::try_new([0.0; 3], ee_orientation_world).ok()?;
+    let direction_in_ee = ee_world
+        .inverse()
+        .rotate(scale3(direction_world, 1.0 / direction_norm));
+    let body_from_ee = frame_pose.inverse();
+    let mut found = false;
+    let mut support = 0.0_f64;
+    for geom in model
+        .collision_geoms
+        .iter()
+        .filter(|geom| geom.owner_body == frame.parent_body)
+    {
+        match geom.collision_role {
+            CollisionRole::Visual => continue,
+            CollisionRole::Collision => {}
+            CollisionRole::Unknown => return None,
+        }
+        let ee_from_geom = body_from_ee.compose(geom.local_pose);
+        let center = ee_from_geom.xyz[0] * direction_in_ee[0]
+            + ee_from_geom.xyz[1] * direction_in_ee[1]
+            + ee_from_geom.xyz[2] * direction_in_ee[2];
+        let along = |local: [f64; 3]| {
+            let projected = ee_from_geom.rotate(local);
+            projected[0] * direction_in_ee[0]
+                + projected[1] * direction_in_ee[1]
+                + projected[2] * direction_in_ee[2]
+        };
+        let geom_support = match &geom.shape {
+            PrimitiveShape::Sphere { radius } => center + radius.abs(),
+            PrimitiveShape::Cylinder {
+                radius,
+                half_length,
+            } => {
+                let axial = along([0.0, 0.0, 1.0]).abs();
+                let radial = (1.0 - axial * axial).max(0.0).sqrt();
+                center + half_length.abs() * axial + radius.abs() * radial
+            }
+            PrimitiveShape::Capsule {
+                radius,
+                half_length,
+            } => {
+                let axial = along([0.0, 0.0, 1.0]).abs();
+                center + half_length.abs() * axial + radius.abs()
+            }
+            PrimitiveShape::Box { half_extents } => {
+                center
+                    + half_extents[0].abs() * along([1.0, 0.0, 0.0]).abs()
+                    + half_extents[1].abs() * along([0.0, 1.0, 0.0]).abs()
+                    + half_extents[2].abs() * along([0.0, 0.0, 1.0]).abs()
+            }
+            PrimitiveShape::ConvexMesh { vertices } => vertices
+                .iter()
+                .map(|vertex| {
+                    let placed = ee_from_geom.transform_point(*vertex);
+                    placed[0] * direction_in_ee[0]
+                        + placed[1] * direction_in_ee[1]
+                        + placed[2] * direction_in_ee[2]
+                })
+                .reduce(f64::max)?,
+            PrimitiveShape::Plane { .. } | PrimitiveShape::Unsupported { .. } => return None,
+        };
+        if !geom_support.is_finite() {
+            return None;
+        }
+        found = true;
+        support = support.max(geom_support);
+    }
+    found.then_some(support.max(0.0))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -468,6 +556,7 @@ impl PhysicalReasoner {
                 stroke_m: 0.0,
                 target_xyz: [0.0, 0.0, 0.0],
                 probe: false,
+                contact_extent_m: 0.0,
             },
             "UNKNOWN_ACTION",
             MechanicsStatus::Unknown,
@@ -682,7 +771,7 @@ pub fn benchmark_scene() -> (EmbodimentModel, ReasoningRequest) {
             joint_names: chain,
             ee: "ee".into(),
             tool_radius_m: 0.004,
-            tool_contact_extent_m: 0.004,
+            tool_contact_extents_m: [0.004; 4],
             observation_epoch: "epoch:table".into(),
             held: false,
             finger_names: vec!["finger_l".into(), "finger_r".into()],
@@ -744,12 +833,14 @@ fn add_bench_fingers(model: &mut EmbodimentModel) {
     }
 }
 
+#[derive(Clone)]
 struct RawCandidate {
     action_key: String,
     direction: [f64; 3],
     stroke_m: f64,
     target_xyz: [f64; 3],
     probe: bool,
+    contact_extent_m: f64,
 }
 
 fn push_candidates(request: &ReasoningRequest) -> Vec<RawCandidate> {
@@ -757,7 +848,7 @@ fn push_candidates(request: &ReasoningRequest) -> Vec<RawCandidate> {
     let axis_y = planar_object_axis(request.scene.object_quat, [0.0, 1.0, 0.0]);
     let directions = [axis_x, scale3(axis_x, -1.0), axis_y, scale3(axis_y, -1.0)];
     let mut out = Vec::new();
-    for direction in directions {
+    for (index, direction) in directions.into_iter().enumerate() {
         let label = axis_label(direction);
         out.push(push_raw(
             request,
@@ -765,6 +856,7 @@ fn push_candidates(request: &ReasoningRequest) -> Vec<RawCandidate> {
             direction,
             request.goal_stroke_m,
             false,
+            request.scene.tool_contact_extents_m[index],
         ));
     }
     if friction_straddles(
@@ -778,6 +870,7 @@ fn push_candidates(request: &ReasoningRequest) -> Vec<RawCandidate> {
             axis_x,
             request.probe_stroke_m,
             true,
+            request.scene.tool_contact_extents_m[0],
         ));
     }
     out
@@ -797,25 +890,40 @@ fn planar_object_axis(object_quat: [f64; 4], local_axis: [f64; 3]) -> [f64; 3] {
     }
 }
 
+fn push_object_face_extent(request: &ReasoningRequest, direction: [f64; 3]) -> f64 {
+    let axis_x = planar_object_axis(request.scene.object_quat, [1.0, 0.0, 0.0]);
+    let axis_y = planar_object_axis(request.scene.object_quat, [0.0, 1.0, 0.0]);
+    let x_alignment = direction[0] * axis_x[0] + direction[1] * axis_x[1];
+    let y_alignment = direction[0] * axis_y[0] + direction[1] * axis_y[1];
+    if x_alignment.abs() >= y_alignment.abs() {
+        request.scene.object_half[0]
+    } else {
+        request.scene.object_half[1]
+    }
+}
+
+fn push_face_gap(request: &ReasoningRequest, candidate: &RawCandidate) -> f64 {
+    let center_to_tool = sub3(request.scene.object_center, candidate.target_xyz);
+    (center_to_tool[0] * candidate.direction[0]
+        + center_to_tool[1] * candidate.direction[1]
+        + center_to_tool[2] * candidate.direction[2]
+        - push_object_face_extent(request, candidate.direction))
+    .max(0.0)
+}
+
 fn push_raw(
     request: &ReasoningRequest,
     key: &str,
     direction: [f64; 3],
     stroke: f64,
     probe: bool,
+    contact_extent_m: f64,
 ) -> RawCandidate {
-    let axis_x = planar_object_axis(request.scene.object_quat, [1.0, 0.0, 0.0]);
-    let axis_y = planar_object_axis(request.scene.object_quat, [0.0, 1.0, 0.0]);
-    let x_alignment = direction[0] * axis_x[0] + direction[1] * axis_x[1];
-    let y_alignment = direction[0] * axis_y[0] + direction[1] * axis_y[1];
-    let extent = if x_alignment.abs() >= y_alignment.abs() {
-        request.scene.object_half[0]
-    } else {
-        request.scene.object_half[1]
-    };
+    let extent = push_object_face_extent(request, direction);
+    let contact_extent = contact_extent_m.max(0.0);
     let mut target = sub3(
         request.scene.object_center,
-        scale3(direction, extent + request.scene.tool_radius_m),
+        scale3(direction, extent + contact_extent),
     );
     let radius = request.scene.tool_radius_m.max(0.0);
     if direction[2].abs() <= 1e-9
@@ -841,8 +949,16 @@ fn push_raw(
         let cross_section = (radius * radius - vertical_excess * vertical_excess)
             .max(0.0)
             .sqrt();
-        target[0] = request.scene.object_center[0] - direction[0] * (extent + cross_section);
-        target[1] = request.scene.object_center[1] - direction[1] * (extent + cross_section);
+        // The contact face determines the normal standoff. The larger
+        // clearance radius is still used to keep the approach above the
+        // support, but it is not an isotropic contact shape: a flat or
+        // end-face pusher can reach the object face with its axis centered
+        // there. Sphere-like tools declare contact_extent equal to radius.
+        let normal_contact_extent = contact_extent.min(cross_section);
+        target[0] =
+            request.scene.object_center[0] - direction[0] * (extent + normal_contact_extent);
+        target[1] =
+            request.scene.object_center[1] - direction[1] * (extent + normal_contact_extent);
     }
     RawCandidate {
         action_key: key.into(),
@@ -850,6 +966,7 @@ fn push_raw(
         stroke_m: stroke,
         target_xyz: target,
         probe,
+        contact_extent_m,
     }
 }
 
@@ -904,6 +1021,7 @@ fn grasp_candidates(request: &ReasoningRequest) -> Vec<RawCandidate> {
         stroke_m: 0.0,
         target_xyz: target,
         probe: false,
+        contact_extent_m: 0.0,
     }]
 }
 
@@ -924,6 +1042,19 @@ fn prove_push(
             PUSH_FAMILY,
             candidate,
             "LINEAR_EXECUTION_BOUND_INVALID",
+            MechanicsStatus::Unknown,
+        );
+    }
+    if request
+        .scene
+        .tool_contact_extents_m
+        .iter()
+        .any(|extent| !extent.is_finite() || *extent < 0.0)
+    {
+        return rejected(
+            PUSH_FAMILY,
+            candidate,
+            "TOOL_CONTACT_EXTENT_INVALID",
             MechanicsStatus::Unknown,
         );
     }
@@ -961,10 +1092,70 @@ fn prove_push(
     if !candidate.probe && mechanics != MechanicsStatus::Feasible {
         return rejected(PUSH_FAMILY, candidate, "MECHANICS_UNKNOWN", mechanics);
     }
-    let solved = match prove_arm_path(model, request, candidate, false) {
-        Ok(solved) => solved,
-        Err(reason) => return rejected(PUSH_FAMILY, candidate, reason, mechanics),
+    const MAX_CONTACT_EXTENT_REPLANS: usize = 4;
+    const CONTACT_EXTENT_CONVERGENCE_M: f64 = 0.0005;
+    const CONTACT_EXTENT_PATH_VARIATION_M: f64 = 0.002;
+    let mut resolved_candidate = candidate.clone();
+    let mut solved = None;
+    for _ in 0..MAX_CONTACT_EXTENT_REPLANS {
+        let path = match prove_arm_path(model, request, &resolved_candidate, false) {
+            Ok(path) => path,
+            Err(reason) => return rejected(PUSH_FAMILY, &resolved_candidate, reason, mechanics),
+        };
+        let contact_extents = std::iter::once(&path.q_contact)
+            .chain(path.stroke_states.iter())
+            .map(|q| tool_contact_extent_at_configuration(model, request, &resolved_candidate, q))
+            .collect::<Option<Vec<_>>>();
+        let Some(contact_extents) = contact_extents else {
+            return rejected(
+                PUSH_FAMILY,
+                &resolved_candidate,
+                "TOOL_CONTACT_EXTENT_UNRESOLVED",
+                mechanics,
+            );
+        };
+        let minimum_extent = contact_extents
+            .iter()
+            .copied()
+            .reduce(f64::min)
+            .unwrap_or(0.0);
+        let maximum_extent = contact_extents
+            .iter()
+            .copied()
+            .reduce(f64::max)
+            .unwrap_or(0.0);
+        if maximum_extent - minimum_extent > CONTACT_EXTENT_PATH_VARIATION_M {
+            return rejected(
+                PUSH_FAMILY,
+                &resolved_candidate,
+                "TOOL_CONTACT_ORIENTATION_UNSTABLE",
+                mechanics,
+            );
+        }
+        if (maximum_extent - resolved_candidate.contact_extent_m).abs()
+            <= CONTACT_EXTENT_CONVERGENCE_M
+        {
+            solved = Some(path);
+            break;
+        }
+        resolved_candidate = push_raw(
+            request,
+            &resolved_candidate.action_key,
+            resolved_candidate.direction,
+            resolved_candidate.stroke_m,
+            resolved_candidate.probe,
+            maximum_extent,
+        );
+    }
+    let Some(solved) = solved else {
+        return rejected(
+            PUSH_FAMILY,
+            &resolved_candidate,
+            "TOOL_CONTACT_EXTENT_UNRESOLVED",
+            mechanics,
+        );
     };
+    let candidate = &resolved_candidate;
     let end = add3(
         request.scene.object_center,
         scale3(candidate.direction, candidate.stroke_m),
@@ -1014,6 +1205,35 @@ fn prove_push(
     )
 }
 
+fn tool_contact_extent_at_configuration(
+    model: &EmbodimentModel,
+    request: &ReasoningRequest,
+    candidate: &RawCandidate,
+    q: &[f64],
+) -> Option<f64> {
+    let ee = model
+        .end_effectors
+        .iter()
+        .find(|ee| ee.name == request.scene.ee)?;
+    let frame = model.frames.iter().find(|frame| frame.name == ee.frame)?;
+    if !model.collision_geoms.iter().any(|geom| {
+        geom.owner_body == frame.parent_body
+            && !matches!(geom.collision_role, crate::geometry::CollisionRole::Visual)
+    }) {
+        // Some abstract reasoner fixtures declare contact support in the
+        // request but intentionally provide no tool collision geometry.
+        return Some(candidate.contact_extent_m);
+    }
+    let chain = model.ee_joint_chain(&request.scene.ee)?;
+    let pose = forward_kinematics(model, &chain, &request.scene.ee, q).ok()?;
+    directed_tool_contact_extent(
+        model,
+        &request.scene.ee,
+        pose.ee.quat_wxyz,
+        candidate.direction,
+    )
+}
+
 fn finish_probe(
     model: &EmbodimentModel,
     request: &ReasoningRequest,
@@ -1053,7 +1273,7 @@ fn finish_probe(
         object_half: request.scene.object_half,
         push_direction: candidate.direction,
         support_normal: request.scene.support_normal,
-        face_gap_m: request.scene.tool_radius_m,
+        face_gap_m: push_face_gap(request, candidate),
         translation_radius_m: candidate.stroke_m,
         yaw_abs_rad: 0.0,
         geometry_residual_m: 0.0,
@@ -2952,7 +3172,7 @@ fn joint_margin(model: &EmbodimentModel, names: &[String], q: &[f64]) -> f64 {
     }
 }
 
-const PROOF_ALGORITHM: &str = "physical-proof/8";
+const PROOF_ALGORITHM: &str = "physical-proof/10";
 
 fn witness_text(
     family: &str,
@@ -2964,8 +3184,9 @@ fn witness_text(
 ) -> String {
     let dependency = proof_dependency_digest(family, model, request, candidate);
     let mut witness = format!(
-        "algorithm={PROOF_ALGORITHM}\nfamily={family}\nkey={}\npush_bits={}\nstroke_bits={}\nq0_bits={}\nq_transit_bits={}\ntransit_state_count={}\napproach_state_count={}\nq_contact_bits={}\nq_end_bits={}\nstroke_state_count={}\nq_retract_bits={}\nfinger_bits={}\naction_envelope={}\nlift_trajectory_digest={}\ndependency={dependency}\nsegments=transit,approach,contact,stroke,retreat,close,lift\ncontact_observed=false\n",
+        "algorithm={PROOF_ALGORITHM}\nfamily={family}\nkey={}\ntarget_body_id={}\npush_bits={}\nstroke_bits={}\nq0_bits={}\nq_transit_bits={}\ntransit_state_count={}\napproach_state_count={}\nq_contact_bits={}\nq_end_bits={}\nstroke_state_count={}\nq_retract_bits={}\nfinger_bits={}\naction_envelope={}\nlift_trajectory_digest={}\ndependency={dependency}\nsegments=transit,approach,contact,stroke,retreat,close,lift\ncontact_observed=false\n",
         hex::encode(candidate.action_key.as_bytes()),
+        hex::encode(request.scene.object_id.as_bytes()),
         bits3(candidate.direction),
         candidate.stroke_m.to_bits(),
         bits_q(&solved.q0),
@@ -3156,13 +3377,14 @@ fn proof_dependency_digest(
         push_q(&mut bytes, &obstacle.quat_wxyz);
     }
     push_f64(&mut bytes, request.scene.tool_radius_m);
-    push_f64(&mut bytes, request.scene.tool_contact_extent_m);
+    push_q(&mut bytes, &request.scene.tool_contact_extents_m);
     push_str(&mut bytes, &request.scene.ee);
     bytes.push(u8::from(request.scene.held));
     push_q(&mut bytes, &candidate.direction);
     push_f64(&mut bytes, candidate.stroke_m);
     push_q(&mut bytes, &candidate.target_xyz);
     bytes.push(u8::from(candidate.probe));
+    push_f64(&mut bytes, candidate.contact_extent_m);
     push_f64(&mut bytes, request.mu_required);
     push_f64(&mut bytes, request.goal_stroke_m);
     push_f64(&mut bytes, request.probe_stroke_m);
@@ -3647,6 +3869,31 @@ mod tests {
     }
 
     #[test]
+    fn measured_friction_below_the_required_threshold_never_grants_a_goal_push() {
+        let (model, mut request) = benchmark_scene();
+        request.belief.narrow_interval(
+            PhysicalParameter::SupportFriction,
+            [0.1, 0.19],
+            "force-aware-probe-below-required-threshold",
+        );
+        let candidate = push_candidates(&request)
+            .into_iter()
+            .find(|candidate| candidate.action_key == "push:+x")
+            .expect("positive push candidate");
+
+        let action = prove_push(&model, &request, &candidate);
+
+        assert_eq!(action.summary.status, "MECHANICS_UNKNOWN");
+        assert!(action.step.is_none());
+        assert!(
+            !push_candidates(&request)
+                .iter()
+                .any(|candidate| candidate.probe),
+            "a friction interval wholly below the threshold does not justify probing to authorize a stronger push"
+        );
+    }
+
+    #[test]
     fn blocked_translation_needs_a_probe_then_an_intermediate_push() {
         let (model, mut request) = benchmark_scene();
         let mut reasoner = PhysicalReasoner::new(model);
@@ -3961,13 +4208,78 @@ mod tests {
     }
 
     #[test]
+    fn push_contact_uses_directed_face_extent_instead_of_clearance_radius() {
+        let (_, mut request) = benchmark_scene();
+        request.scene.object_center = [0.624, 0.017, 0.451];
+        request.scene.object_half = [0.066, 0.066, 0.031];
+        request.scene.support_origin = [0.9, 0.0, 0.42];
+        request.scene.tool_radius_m = 0.04;
+        request.scene.tool_contact_extents_m = [0.0; 4];
+
+        let candidate = push_candidates(&request)
+            .into_iter()
+            .find(|candidate| candidate.action_key == "push:+x")
+            .expect("positive local-x push");
+        let face_gap =
+            request.scene.object_center[0] - request.scene.object_half[0] - candidate.target_xyz[0];
+
+        assert!(
+            face_gap.abs() < 1e-12,
+            "an end-face pusher must reach the object face while its larger radius only keeps the approach clear; face gap={face_gap}"
+        );
+    }
+
+    #[test]
+    fn push_candidates_use_the_contact_extent_for_each_directed_face() {
+        let (_, mut request) = benchmark_scene();
+        request.scene.object_center = [0.2, -0.1, 0.4];
+        request.scene.object_half = [0.03, 0.05, 0.02];
+        request.scene.tool_radius_m = 0.05;
+        request.scene.tool_contact_extents_m = [0.01, 0.02, 0.03, 0.04];
+
+        let candidates = push_candidates(&request);
+        let target = |key: &str| {
+            candidates
+                .iter()
+                .find(|candidate| candidate.action_key == key)
+                .expect("directed push candidate")
+                .target_xyz
+        };
+        let positive_x = target("push:+x");
+        let negative_x = target("push:-x");
+        let positive_y = target("push:+y");
+        let negative_y = target("push:-y");
+
+        assert!((positive_x[0] - (0.2 - 0.03 - 0.01)).abs() < 1e-12);
+        assert!((negative_x[0] - (0.2 + 0.03 + 0.02)).abs() < 1e-12);
+        assert!((positive_y[1] - (-0.1 - 0.05 - 0.03)).abs() < 1e-12);
+        assert!((negative_y[1] - (-0.1 + 0.05 + 0.04)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn invalid_directed_contact_extent_is_refused_before_witness_creation() {
+        let (model, mut request) = benchmark_scene();
+        request.scene.tool_contact_extents_m[0] = f64::NAN;
+        let candidate = push_candidates(&request)
+            .into_iter()
+            .find(|candidate| candidate.action_key == "push:+x")
+            .expect("positive push candidate");
+
+        let action = prove_push(&model, &request, &candidate);
+
+        assert_eq!(action.summary.status, "TOOL_CONTACT_EXTENT_INVALID");
+        assert!(action.step.is_none());
+        assert!(action.evidence.is_none());
+    }
+
+    #[test]
     fn push_contact_clears_support_while_preserving_sphere_contact() {
         let (_, mut request) = benchmark_scene();
         request.scene.object_center = [0.3, 0.0, 0.12];
         request.scene.object_half = [0.02, 0.02, 0.02];
         request.scene.support_origin = [0.3, 0.0, 0.10];
         request.scene.tool_radius_m = 0.06;
-        request.scene.tool_contact_extent_m = 0.06;
+        request.scene.tool_contact_extents_m = [0.06; 4];
 
         let candidate = push_candidates(&request)
             .into_iter()
@@ -3993,7 +4305,7 @@ mod tests {
         request.scene.object_half = [0.02, 0.02, 0.005];
         request.scene.support_origin = [0.3, 0.0, 0.08];
         request.scene.tool_radius_m = 0.06;
-        request.scene.tool_contact_extent_m = 0.06;
+        request.scene.tool_contact_extents_m = [0.06; 4];
         let candidate = push_candidates(&request)
             .into_iter()
             .find(|candidate| candidate.action_key == "push:+x")
@@ -4013,7 +4325,7 @@ mod tests {
         request.scene.object_half = [0.02, 0.02, 0.02];
         request.scene.support_origin = [0.3, 0.0, 0.10];
         request.scene.tool_radius_m = 0.06;
-        request.scene.tool_contact_extent_m = 0.06;
+        request.scene.tool_contact_extents_m = [0.06; 4];
         let candidate = push_candidates(&request)
             .into_iter()
             .find(|candidate| candidate.action_key == "probe:+x")
@@ -4278,6 +4590,28 @@ mod tests {
         let mut changed_observation = request;
         changed_observation.scene.arm_q[0] += 0.001;
         assert!(reasoner.prepare_step(&changed_observation, &step).is_err());
+    }
+
+    #[test]
+    fn frozen_action_witness_binds_the_target_body() {
+        let (model, request) = benchmark_scene();
+        let mut reasoner = PhysicalReasoner::new(model);
+        let step = reasoner
+            .consider(&request)
+            .authority_request
+            .expect("fixture probe request");
+        let target_line = step
+            .witness_contents
+            .lines()
+            .find_map(|line| line.strip_prefix("target_body_id="))
+            .expect("frozen action witness must name the contact target");
+
+        assert_eq!(target_line, hex::encode(request.scene.object_id.as_bytes()));
+        assert_eq!(
+            step.witness_digest,
+            contents_digest(&step.witness_contents),
+            "the target body must be included in the digest bound by the grant"
+        );
     }
 
     #[test]

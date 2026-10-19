@@ -64,7 +64,7 @@ fn manipulation_benchmark(args: &[String]) {
     let parsed = match parse_benchmark_args(args) {
         Ok(parsed) => parsed,
         Err(error) => {
-            eprintln!("{error}\nusage: realityos-verify manipulation-benchmark [--seeds N] [--pilot] [--holdout] [--out DIR] [--replay TRIAL.json]");
+            eprintln!("{error}\nusage: realityos-verify manipulation-benchmark [--seeds N] [--pilot] [--holdout] [--suite FILE] [--out DIR] [--replay TRIAL.json]");
             std::process::exit(2);
         }
     };
@@ -91,7 +91,10 @@ fn manipulation_benchmark(args: &[String]) {
 
     let mut config = BenchmarkConfig::default();
     let scenario_suite = if parsed.replay.is_none() {
-        let path = repo_root.join(SCENARIO_SUITE_V3);
+        let path = parsed
+            .suite
+            .clone()
+            .unwrap_or_else(|| repo_root.join(SCENARIO_SUITE_V3));
         let suite = ScenarioSuiteManifest::load(&path).unwrap_or_else(|error| {
             eprintln!("invalid scenario suite {}: {error}", path.display());
             std::process::exit(2);
@@ -230,6 +233,7 @@ struct BenchmarkArgs {
     holdout: bool,
     out_dir: PathBuf,
     replay: Option<PathBuf>,
+    suite: Option<PathBuf>,
 }
 
 fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
@@ -239,6 +243,7 @@ fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
         holdout: false,
         out_dir: PathBuf::from("verify-out/manipulation-benchmark"),
         replay: None,
+        suite: None,
     };
     let mut index = 0;
     while index < args.len() {
@@ -263,6 +268,12 @@ fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
                 index += 1;
                 parsed.replay = Some(PathBuf::from(
                     args.get(index).ok_or("--replay requires a trial record")?,
+                ));
+            }
+            "--suite" => {
+                index += 1;
+                parsed.suite = Some(PathBuf::from(
+                    args.get(index).ok_or("--suite requires a scenario file")?,
                 ));
             }
             other => return Err(format!("unknown benchmark option: {other}")),

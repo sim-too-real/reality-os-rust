@@ -36,6 +36,11 @@ pub struct SimulationWrenchSensorProfile {
     pub resolution: [f64; 6],
     pub bias: [f64; 6],
     pub error_bounds: [f64; 6],
+    /// Worst-case per-axis model uncertainty for the same-state, contact-free
+    /// wrench prediction. Zero is only valid for the registered deterministic
+    /// MuJoCo model; hardware profiles must use a different model identity.
+    #[serde(default)]
+    pub free_space_model_error_bounds: [f64; 6],
     pub seeded_noise_bound: [f64; 6],
     pub limit_policy: WrenchLimitPolicy,
 }
@@ -55,7 +60,12 @@ impl SimulationWrenchSensorProfile {
     }
 
     pub fn compensation_policy_digest(&self) -> String {
-        Self::compensation_policy_digest_for(&self.model_id, &self.compensation())
+        let mut compensation = self.compensation();
+        for axis in 0..6 {
+            compensation.residual_error[axis] += self.free_space_model_error_bounds[axis];
+        }
+        compensation.digest = compensation.digest();
+        Self::compensation_policy_digest_for(&self.model_id, &compensation)
     }
 
     pub fn validate(&self) -> Result<(), WrenchSensorError> {
@@ -92,6 +102,11 @@ impl SimulationWrenchSensorProfile {
             if !self.error_bounds[axis].is_finite() || self.error_bounds[axis] < 0.0 {
                 return Err(WrenchSensorError::Profile("error_bounds"));
             }
+            if !self.free_space_model_error_bounds[axis].is_finite()
+                || self.free_space_model_error_bounds[axis] < 0.0
+            {
+                return Err(WrenchSensorError::Profile("free_space_model_error_bounds"));
+            }
             if !self.seeded_noise_bound[axis].is_finite()
                 || self.seeded_noise_bound[axis] < 0.0
                 || self.seeded_noise_bound[axis] + self.resolution[axis] * 0.5
@@ -99,6 +114,14 @@ impl SimulationWrenchSensorProfile {
             {
                 return Err(WrenchSensorError::Profile("seeded_noise_bound"));
             }
+        }
+        if self.model_id != "mujoco-force-torque-sensor-free-space-model-v1"
+            && self
+                .free_space_model_error_bounds
+                .iter()
+                .any(|bound| *bound != 0.0)
+        {
+            return Err(WrenchSensorError::Profile("free_space_model_identity"));
         }
         self.limit_policy
             .validate()
@@ -173,7 +196,7 @@ impl SimulationWrenchSensorProfile {
         }
 
         let mut hash = Sha256::new();
-        hash.update(b"realityos.simulation_wrench_sensor_profile/1\0");
+        hash.update(b"realityos.simulation_wrench_sensor_profile/2\0");
         write_string(&mut hash, &self.sensor_id);
         write_string(&mut hash, &self.model_id);
         write_string(&mut hash, &self.calibration_hash);
@@ -188,6 +211,9 @@ impl SimulationWrenchSensorProfile {
             write_f64(&mut hash, value);
         }
         for value in self.error_bounds {
+            write_f64(&mut hash, value);
+        }
+        for value in self.free_space_model_error_bounds {
             write_f64(&mut hash, value);
         }
         for value in self.seeded_noise_bound {
@@ -207,6 +233,11 @@ fn is_integral_step_count(value: f64) -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SimulationWrenchWindow {
     pub samples: Vec<WrenchSample>,
+    #[serde(default)]
+    pub sample_free_space_wrenches: Vec<[f64; 6]>,
+    /// Per-sample uncertainty paired with `sample_free_space_wrenches`.
+    #[serde(default)]
+    pub sample_free_space_wrench_error_bounds: Vec<[f64; 6]>,
     #[serde(default)]
     pub sensor_positions: Vec<[f64; 3]>,
     #[serde(default)]
@@ -238,8 +269,10 @@ pub struct SimulationWrenchWindow {
 /// instrumented child subtree, so rotate its force and moment into the current
 /// sensor frame without translating its origin with the sensor. The v1 model
 /// retains its historical point-wrench translation for old evidence profiles;
-/// v2 fixes that model for body-fixed loads. Returned error bounds include both
-/// measurements and the selected wrench-frame transform.
+/// v2 fixes that model for body-fixed loads. The free-space-model v1 monitor
+/// reference keeps those same stationary-load semantics; its separate,
+/// per-sample model wrench is used by probe inference. Returned error bounds
+/// include both measurements and the selected wrench-frame transform.
 pub fn gravity_compensated_wrench(
     sample: &WrenchSample,
     sample_position: [f64; 3],
@@ -252,6 +285,7 @@ pub fn gravity_compensated_wrench(
         model_id,
         "mujoco-force-torque-sensor-gravity-baseline-v1"
             | "mujoco-force-torque-sensor-gravity-baseline-v2"
+            | "mujoco-force-torque-sensor-free-space-model-v1"
     ) {
         return Err(WrenchAbortReason::MonitorFault);
     }
@@ -457,6 +491,10 @@ pub enum WrenchAbortReason {
     StaleSample,
     GapExceeded,
     DigestMismatch,
+    UnexpectedContact,
+    ActuatorSaturation {
+        actuator_ids: Vec<String>,
+    },
     MonitorFault,
 }
 
@@ -566,6 +604,8 @@ impl SimulationWrenchWindow {
             .as_array()
             .ok_or(WrenchSensorError::Worker("samples_missing"))?;
         let mut samples = Vec::with_capacity(records.len());
+        let mut sample_free_space_wrenches = Vec::with_capacity(records.len());
+        let mut sample_free_space_wrench_error_bounds = Vec::with_capacity(records.len());
         let mut sensor_positions = Vec::with_capacity(records.len());
         let mut sensor_orientations = Vec::with_capacity(records.len());
         let mut max_gap_s: f64 = 0.0;
@@ -574,6 +614,41 @@ impl SimulationWrenchWindow {
         for record in records {
             let (sample, sensor_position, sensor_quaternion) =
                 parse_worker_sample(record, profile, transform_epoch)?;
+            let model_free_space_wrench = if record["model_free_space_wrench"].is_null() {
+                if profile.model_id == "mujoco-force-torque-sensor-free-space-model-v1" {
+                    return Err(WrenchSensorError::Sample("model_free_space_wrench_missing"));
+                }
+                [0.0; 6]
+            } else {
+                parse_six(&record["model_free_space_wrench"])
+                    .ok_or(WrenchSensorError::Sample("model_free_space_wrench"))?
+            };
+            let model_free_space_error_bound =
+                if record["model_free_space_wrench_error_bounds"].is_null() {
+                    if profile.model_id == "mujoco-force-torque-sensor-free-space-model-v1" {
+                        return Err(WrenchSensorError::Sample(
+                            "model_free_space_wrench_error_bounds_missing",
+                        ));
+                    }
+                    [0.0; 6]
+                } else {
+                    parse_six(&record["model_free_space_wrench_error_bounds"]).ok_or(
+                        WrenchSensorError::Sample("model_free_space_wrench_error_bounds"),
+                    )?
+                };
+            if model_free_space_error_bound != profile.free_space_model_error_bounds {
+                return Err(WrenchSensorError::Sample(
+                    "model_free_space_wrench_error_bounds_mismatch",
+                ));
+            }
+            if model_free_space_error_bound
+                .iter()
+                .any(|value| !value.is_finite() || *value < 0.0)
+            {
+                return Err(WrenchSensorError::Sample(
+                    "model_free_space_wrench_error_bounds_invalid",
+                ));
+            }
             let sequence = sample.sequence;
             let capture_s = sample.capture_s;
             if previous_sequence.is_some_and(|previous| sequence != previous + 1) {
@@ -587,6 +662,8 @@ impl SimulationWrenchWindow {
                 max_gap_s = max_gap_s.max(gap);
             }
             samples.push(sample);
+            sample_free_space_wrenches.push(model_free_space_wrench);
+            sample_free_space_wrench_error_bounds.push(model_free_space_error_bound);
             sensor_positions.push(sensor_position);
             sensor_orientations.push(sensor_quaternion);
             previous_capture = Some(capture_s);
@@ -656,6 +733,8 @@ impl SimulationWrenchWindow {
         };
         Ok(Self {
             samples,
+            sample_free_space_wrenches,
+            sample_free_space_wrench_error_bounds,
             sensor_positions,
             sensor_orientations,
             precontact_baseline,

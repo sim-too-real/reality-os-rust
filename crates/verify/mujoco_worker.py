@@ -102,6 +102,7 @@ class Instance:
         self.wrench_last_received_capture_by_profile: dict[str, float] = {}
         self.wrench_monitor_started_by_profile: dict[str, float] = {}
         self.wrench_gravity_reference_by_profile: dict[str, dict[str, Any]] = {}
+        self.wrench_free_space_by_profile: dict[str, tuple[Any, Any]] = {}
         self.wrench_abort_latched = False
 
     def inspect(self) -> dict[str, Any]:
@@ -318,6 +319,7 @@ class Instance:
                     "quat": [float(x) for x in m.geom_quat[i]],
                     "size": [float(x) for x in m.geom_size[i]],
                     "friction": [float(x) for x in m.geom_friction[i]],
+                    "solref": [float(x) for x in m.geom_solref[i]],
                     "type": gtype,
                     "type_name": _geom_names.get(gtype, f"type_{gtype}"),
                     "mesh_asset": self.mesh_asset_by_id.get(mesh_id),
@@ -614,6 +616,11 @@ def _add_scenario_objects(spec: Any, extras: list[dict[str, Any]]) -> None:
         if obj.get("friction") is not None:
             fr = float(obj["friction"])
             kwargs["friction"] = [fr, fr, 0.01]
+        if obj.get("solref") is not None:
+            solref = [float(value) for value in obj["solref"]]
+            if len(solref) != 2 or not all(math.isfinite(value) and value > 0.0 for value in solref):
+                raise ValueError("scenario_contact_solref_invalid")
+            kwargs["solref"] = solref
         if kind == "sphere":
             body.add_geom(type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[size[0], 0, 0], **kwargs)
         elif kind == "capsule":
@@ -665,6 +672,7 @@ def _drop_runtime(keep_if_cached: bool = True) -> None:
     prev = INST.model
     INST.model = None
     INST.data = None
+    INST.wrench_free_space_by_profile = {}
     cached = keep_if_cached and any(prev is m for m in _BASE_MODEL.values())
     if prev is not None and not cached:
         del prev
@@ -747,13 +755,20 @@ def _policy_digest(policy: dict[str, Any]) -> str:
 
 def _simulation_profile_digest(profile: dict[str, Any]) -> str:
     hasher = hashlib.sha256()
-    hasher.update(b"realityos.simulation_wrench_sensor_profile/1\0")
+    hasher.update(b"realityos.simulation_wrench_sensor_profile/2\0")
     for field in ("sensor_id", "model_id", "calibration_hash", "sensor_frame", "units"):
         _digest_string(hasher, str(profile[field]))
     hasher.update(struct.pack("<d", float(profile["sample_rate_hz"])))
     hasher.update(struct.pack("<d", float(profile["latency_s"])))
-    for field in ("resolution", "bias", "error_bounds", "seeded_noise_bound"):
-        for value in profile[field]:
+    for field in (
+        "resolution",
+        "bias",
+        "error_bounds",
+        "free_space_model_error_bounds",
+        "seeded_noise_bound",
+    ):
+        values = profile.get(field, [0.0] * 6) if field == "free_space_model_error_bounds" else profile[field]
+        for value in values:
             hasher.update(struct.pack("<d", float(value)))
     _digest_string(hasher, _policy_digest(profile["limit_policy"]))
     return hasher.hexdigest()
@@ -773,6 +788,7 @@ def _wrench_profile_steps(profile: dict[str, Any], profile_digest: str, timestep
         or profile.get("model_id") not in {
             "mujoco-force-torque-sensor-gravity-baseline-v1",
             "mujoco-force-torque-sensor-gravity-baseline-v2",
+            "mujoco-force-torque-sensor-free-space-model-v1",
         }
         or not sensor_frame
         or profile.get("units") != "N,N*m"
@@ -804,6 +820,13 @@ def _wrench_profile_steps(profile: dict[str, Any], profile_digest: str, timestep
         raise ValueError("wrench_bias")
     if not _finite_six(profile.get("error_bounds")) or any(float(x) < 0.0 for x in profile["error_bounds"]):
         raise ValueError("wrench_error_bounds")
+    free_space_error = profile.get("free_space_model_error_bounds", [0.0] * 6)
+    if not _finite_six(free_space_error) or any(float(x) < 0.0 for x in free_space_error):
+        raise ValueError("wrench_free_space_model_error_bounds")
+    if str(profile.get("model_id")) != "mujoco-force-torque-sensor-free-space-model-v1" and any(
+        float(value) != 0.0 for value in free_space_error
+    ):
+        raise ValueError("wrench_free_space_model_identity")
     if not _finite_six(profile.get("seeded_noise_bound")) or any(
         float(noise) < 0.0
         or float(noise) + float(resolution) * 0.5 > float(error) + 1e-12
@@ -889,10 +912,11 @@ def _wrench_sensor_ids(profile: dict[str, Any]) -> tuple[int, int]:
     return force_id, torque_id
 
 
-def _tool_sensor_wrench(sensor_ids: tuple[int, int]):
+def _tool_sensor_wrench(sensor_ids: tuple[int, int], data=None):
     import numpy as np
 
-    m, d = INST.model, INST.data
+    m, live_data = INST.model, INST.data
+    d = data if data is not None else live_data
     assert m is not None and d is not None
     force_id, torque_id = sensor_ids
     force_start = int(m.sensor_adr[force_id])
@@ -908,6 +932,66 @@ def _tool_sensor_wrench(sensor_ids: tuple[int, int]):
     )
 
 
+def _model_free_space_wrench(
+    profile_digest: str, sensor_ids: tuple[int, int]
+) -> list[float]:
+    """Predict the instrumented robot subtree's load without environment contacts.
+
+    This model term is paired with, and subtracted from, the live MuJoCo force
+    sensor sample. It includes the current articulated gravity and inertial load
+    at the same simulator state. Geoms in the instrumented robot's root subtree
+    retain self-contact; all other geoms are collision-disabled only while the
+    separate shadow data is forwarded. The live simulation state is untouched.
+    """
+    m, d = INST.model, INST.data
+    assert m is not None and d is not None
+    cache = INST.wrench_free_space_by_profile.get(profile_digest)
+    if cache is None:
+        site_id = int(m.sensor_objid[sensor_ids[0]])
+        body_id = int(m.site_bodyid[site_id])
+        root_body = body_id
+        while root_body > 0 and int(m.body_parentid[root_body]) > 0:
+            root_body = int(m.body_parentid[root_body])
+        if root_body <= 0:
+            raise ValueError("wrench_sensor_robot_root_missing")
+        robot_bodies = set()
+        for candidate in range(1, int(m.nbody)):
+            ancestor = candidate
+            while ancestor > 0 and ancestor != root_body:
+                ancestor = int(m.body_parentid[ancestor])
+            if ancestor == root_body:
+                robot_bodies.add(candidate)
+        external_geoms = np.asarray(
+            [int(m.geom_bodyid[geom_id]) not in robot_bodies for geom_id in range(int(m.ngeom))],
+            dtype=bool,
+        )
+        cache = (mujoco.MjData(m), external_geoms)
+        INST.wrench_free_space_by_profile[profile_digest] = cache
+    shadow, external_geoms = cache
+    mujoco.mj_copyData(shadow, m, d)
+    captured_qacc = np.asarray(d.qacc, dtype=float).copy()
+    original_contype = np.asarray(m.geom_contype[external_geoms]).copy()
+    original_conaffinity = np.asarray(m.geom_conaffinity[external_geoms]).copy()
+    try:
+        m.geom_contype[external_geoms] = 0
+        m.geom_conaffinity[external_geoms] = 0
+        # A full shadow forward pass refreshes collision and no-contact
+        # constraint forces. Its free-space qacc is only an intermediate:
+        # restore the captured live acceleration before evaluating force
+        # sensors so the prediction is paired with the measured motion state.
+        mujoco.mj_forward(m, shadow)
+        np.copyto(shadow.qacc, captured_qacc)
+        # Rebuild the acceleration-dependent internal-force cache from the
+        # restored live qacc before evaluating sensors. mj_sensorAcc alone can
+        # reuse cacc/cfrc_int from the preceding no-contact forward pass.
+        mujoco.mj_rnePostConstraint(m, shadow)
+        mujoco.mj_sensorAcc(m, shadow)
+        return [float(value) for value in _tool_sensor_wrench(sensor_ids, shadow)]
+    finally:
+        m.geom_contype[external_geoms] = original_contype
+        m.geom_conaffinity[external_geoms] = original_conaffinity
+
+
 def _seeded_wrench_noise(seed: int, profile_digest: str, sequence: int, axis: int, bound: float) -> float:
     payload = f"{seed}:{profile_digest}:{sequence}:{axis}".encode("utf-8")
     integer = int.from_bytes(hashlib.sha256(payload).digest()[:8], "little")
@@ -920,10 +1004,15 @@ def _sample_tool_wrench(
 ) -> dict[str, Any]:
     m, d = INST.model, INST.data
     assert m is not None and d is not None
-    # MuJoCo force/torque sensors already report the complete transmitted
-    # wrench in the declared site frame, including contacts and distal-body
-    # gravity/inertial loads.
+    # mj_step integrates to the next state after computing its sensors. Re-run
+    # forward at the captured state so the measured and model-only wrenches are
+    # timestamp-aligned rather than mixing adjacent physics steps.
+    mujoco.mj_forward(m, d)
+    # Keep the raw complete force-sensor reading. The same-state shadow model
+    # supplies a separate free-space load for typed probe compensation; safety
+    # monitoring still sees this unfiltered raw wrench.
     true_wrench = _tool_sensor_wrench(sensor_ids)
+    model_free_space_wrench = _model_free_space_wrench(profile_digest, sensor_ids)
     measured = []
     for axis in range(6):
         bound = float(profile["seeded_noise_bound"][axis])
@@ -948,6 +1037,10 @@ def _sample_tool_wrench(
         "capture_s": capture_s,
         "receive_s": capture_s + float(profile["latency_s"]),
         "wrench": measured,
+        "model_free_space_wrench": model_free_space_wrench,
+        "model_free_space_wrench_error_bounds": [
+            float(value) for value in profile.get("free_space_model_error_bounds", [0.0] * 6)
+        ],
         "error_bounds": [float(value) for value in profile["error_bounds"]],
         "sensor_position": sensor_position,
         "sensor_quaternion": [float(value) for value in sensor_quaternion],
@@ -973,6 +1066,123 @@ def _sensor_subtree_has_contact(sensor_ids: tuple[int, int]) -> bool:
         body1 = int(m.geom_bodyid[int(contact.geom1)])
         body2 = int(m.geom_bodyid[int(contact.geom2)])
         if in_sensor_subtree(body1) or in_sensor_subtree(body2):
+            return True
+    return False
+
+
+def _sensor_subtree_body_ids(sensor_ids: tuple[int, int]) -> set[int]:
+    """Return the instrumented body and all descendants whose loads cross its sensor."""
+    m = INST.model
+    assert m is not None
+    site_id = int(m.sensor_objid[sensor_ids[0]])
+    root_body = int(m.site_bodyid[site_id])
+    if root_body <= 0:
+        raise ValueError("wrench_sensor_robot_root_missing")
+    result: set[int] = set()
+    for candidate in range(1, int(m.nbody)):
+        ancestor = candidate
+        while ancestor > 0 and ancestor != root_body:
+            ancestor = int(m.body_parentid[ancestor])
+        if ancestor == root_body:
+            result.add(candidate)
+    return result
+
+
+def _sensor_contact_pair_is_expected(
+    body1_id: int,
+    body2_id: int,
+    sensor_subtree_body_ids: set[int],
+    expected_contact_body_id: int | None,
+) -> bool:
+    """Ignore unrelated contacts; accept only a tool-subtree/authorized-target pair."""
+    body1_in_sensor = body1_id in sensor_subtree_body_ids
+    body2_in_sensor = body2_id in sensor_subtree_body_ids
+    if not body1_in_sensor and not body2_in_sensor:
+        return True
+    if expected_contact_body_id is None:
+        return False
+    return (
+        body1_in_sensor
+        and not body2_in_sensor
+        and body2_id == expected_contact_body_id
+    ) or (
+        body2_in_sensor
+        and not body1_in_sensor
+        and body1_id == expected_contact_body_id
+    )
+
+
+def _actuator_force_limit_reached(
+    force: float, force_limited: bool, force_range: tuple[float, float]
+) -> bool:
+    """Detect force clipping conservatively, including values just outside a bound."""
+    if not force_limited:
+        return False
+    low, high = (float(value) for value in force_range)
+    force = float(force)
+    if (
+        not math.isfinite(force)
+        or not math.isfinite(low)
+        or not math.isfinite(high)
+        or low >= high
+    ):
+        raise ValueError("actuator_force_limit_invalid")
+    tolerance = max(1e-8, 1e-6 * max(1.0, abs(low), abs(high), high - low))
+    return force <= low + tolerance or force >= high - tolerance
+
+
+def _sensor_subtree_actuator_saturations(sensor_ids: tuple[int, int]) -> list[str]:
+    """Return force-limited robot actuators at a force bound on each physics step."""
+    m, d = INST.model, INST.data
+    assert m is not None and d is not None
+    site_id = int(m.sensor_objid[sensor_ids[0]])
+    sensor_body = int(m.site_bodyid[site_id])
+    robot_root = sensor_body
+    while robot_root > 0 and int(m.body_parentid[robot_root]) > 0:
+        robot_root = int(m.body_parentid[robot_root])
+    if robot_root <= 0:
+        raise ValueError("wrench_sensor_robot_root_missing")
+
+    saturated: list[str] = []
+    for actuator_id in range(int(m.nu)):
+        if not bool(m.actuator_forcelimited[actuator_id]):
+            continue
+        transmission_type = int(m.actuator_trntype[actuator_id])
+        if transmission_type not in (0, 1):
+            name = m.actuator(actuator_id).name or f"actuator_{actuator_id}"
+            raise ValueError(
+                f"wrench_force_limited_actuator_transmission_unsupported:{name}"
+            )
+        joint_id = int(m.actuator_trnid[actuator_id][0])
+        if joint_id < 0 or joint_id >= int(m.njnt):
+            name = m.actuator(actuator_id).name or f"actuator_{actuator_id}"
+            raise ValueError(f"wrench_force_limited_actuator_joint_invalid:{name}")
+        actuator_body = int(m.jnt_bodyid[joint_id])
+        ancestor = actuator_body
+        while ancestor > 0 and ancestor != robot_root:
+            ancestor = int(m.body_parentid[ancestor])
+        if ancestor != robot_root:
+            continue
+        force_range = tuple(float(value) for value in m.actuator_forcerange[actuator_id])
+        if _actuator_force_limit_reached(
+            float(d.actuator_force[actuator_id]), True, force_range
+        ):
+            saturated.append(m.actuator(actuator_id).name or f"actuator_{actuator_id}")
+    return saturated
+
+
+def _has_unexpected_sensor_subtree_contact(
+    sensor_subtree_body_ids: set[int], expected_contact_body_id: int | None
+) -> bool:
+    m, d = INST.model, INST.data
+    assert m is not None and d is not None
+    for contact_index in range(int(d.ncon)):
+        contact = d.contact[contact_index]
+        body1_id = int(m.geom_bodyid[int(contact.geom1)])
+        body2_id = int(m.geom_bodyid[int(contact.geom2)])
+        if not _sensor_contact_pair_is_expected(
+            body1_id, body2_id, sensor_subtree_body_ids, expected_contact_body_id
+        ):
             return True
     return False
 
@@ -1356,6 +1566,7 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
     INST.wrench_last_received_capture_by_profile = {}
     INST.wrench_monitor_started_by_profile = {}
     INST.wrench_gravity_reference_by_profile = {}
+    INST.wrench_free_space_by_profile = {}
     INST.wrench_abort_latched = False
     fmt = str(msg.get("format", "mjcf")).lower()
     INST.source_format = fmt
@@ -1636,6 +1847,19 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
             _validate_monitored_grant(msg, policy)
             # Resolve the sensor and every stop target before advancing physics.
             sensor_ids = _wrench_sensor_ids(profile)
+            sensor_subtree_body_ids = _sensor_subtree_body_ids(sensor_ids)
+            expected_contact_name = msg.get("expected_contact_body")
+            expected_contact_body_id = None
+            if expected_contact_name is not None:
+                if not isinstance(expected_contact_name, str) or not expected_contact_name.strip():
+                    raise ValueError("wrench_expected_contact_body_invalid")
+                expected_contact_body_id = int(
+                    mujoco.mj_name2id(
+                        INST.model, mujoco.mjtObj.mjOBJ_BODY, expected_contact_name
+                    )
+                )
+                if expected_contact_body_id <= 0 or expected_contact_body_id in sensor_subtree_body_ids:
+                    raise ValueError("wrench_expected_contact_body_unknown_or_instrumented")
             _hold_target_names = _validate_wrench_abort_contract(policy)
             for actuator_name in _hold_target_names:
                 actuator_id = int(mujoco.mj_name2id(INST.model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name))
@@ -1787,6 +2011,24 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                     break
                 step_count += 1
                 now_s = float(INST.data.time)
+                saturated_actuator_ids = _sensor_subtree_actuator_saturations(sensor_ids)
+                if saturated_actuator_ids:
+                    abort = _trip_wrench_monitor(
+                        {
+                            "kind": "actuator_saturation",
+                            "actuator_ids": saturated_actuator_ids,
+                        },
+                        policy,
+                        now_s,
+                    )
+                    break
+                if _has_unexpected_sensor_subtree_contact(
+                    sensor_subtree_body_ids, expected_contact_body_id
+                ):
+                    abort = _trip_wrench_monitor(
+                        {"kind": "unexpected_contact"}, policy, now_s
+                    )
+                    break
                 if not drop_wrench_samples and step_count % step_interval == 0:
                     sampled = _sample_tool_wrench(profile, profile_digest, sequence, sensor_ids)
                     samples.append(sampled)

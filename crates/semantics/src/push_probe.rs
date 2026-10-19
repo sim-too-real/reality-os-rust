@@ -91,10 +91,12 @@ pub struct PushProbeMeasurement {
     pub samples: Vec<WrenchSample>,
     #[serde(default)]
     pub precontact_baseline: Option<WrenchSample>,
-    /// Optional per-sample gravity wrench in that sample's sensor frame.
-    /// Simulated probes derive these values from the ordered no-contact baseline.
+    /// Optional same-state model wrench without environment contact, in each sample's sensor frame.
     #[serde(default)]
-    pub sample_gravity_wrenches: Vec<[f64; 6]>,
+    pub sample_free_space_wrenches: Vec<[f64; 6]>,
+    /// Per-sample uncertainty paired with each free-space model prediction.
+    #[serde(default)]
+    pub sample_free_space_wrench_error_bounds: Vec<[f64; 6]>,
     #[serde(default)]
     pub sample_sensor_transforms: Vec<WrenchTransform>,
     pub sensor_to_support: WrenchTransform,
@@ -111,6 +113,10 @@ pub struct PushProbeMeasurement {
     pub max_sample_motion_skew_s: f64,
     pub max_wrench_rise_rate: [f64; 6],
     pub intended_contact: IntendedContactEvidence,
+    /// True when runtime contacts on the instrumented tool subtree were not
+    /// limited to the authorized target object.
+    #[serde(default)]
+    pub runtime_contact_ambiguous: bool,
     pub saturated: bool,
     pub origin: WrenchEvidenceOrigin,
 }
@@ -118,7 +124,7 @@ pub struct PushProbeMeasurement {
 impl PushProbeMeasurement {
     /// Digest all inputs in fixed order so a belief reference identifies the exact evidence.
     pub fn digest(&self) -> String {
-        let mut bytes = b"realityos.push_probe_measurement/2\0".to_vec();
+        let mut bytes = b"realityos.push_probe_measurement/5\0".to_vec();
         bytes.extend_from_slice(&(self.samples.len() as u64).to_le_bytes());
         for sample in &self.samples {
             push_string(&mut bytes, &sample.digest);
@@ -130,9 +136,15 @@ impl PushProbeMeasurement {
             }
             None => bytes.push(0),
         }
-        bytes.extend_from_slice(&(self.sample_gravity_wrenches.len() as u64).to_le_bytes());
-        for gravity_wrench in &self.sample_gravity_wrenches {
-            push_f64s(&mut bytes, gravity_wrench);
+        bytes.extend_from_slice(&(self.sample_free_space_wrenches.len() as u64).to_le_bytes());
+        for free_space_wrench in &self.sample_free_space_wrenches {
+            push_f64s(&mut bytes, free_space_wrench);
+        }
+        bytes.extend_from_slice(
+            &(self.sample_free_space_wrench_error_bounds.len() as u64).to_le_bytes(),
+        );
+        for error_bound in &self.sample_free_space_wrench_error_bounds {
+            push_f64s(&mut bytes, error_bound);
         }
         bytes.extend_from_slice(&(self.sample_sensor_transforms.len() as u64).to_le_bytes());
         for transform in &self.sample_sensor_transforms {
@@ -179,6 +191,7 @@ impl PushProbeMeasurement {
                 push_string(&mut bytes, body_id);
             }
         }
+        bytes.push(u8::from(self.runtime_contact_ambiguous));
         bytes.push(u8::from(self.saturated));
         push_string(&mut bytes, self.origin.as_str());
         sha256(&bytes)
@@ -209,7 +222,9 @@ pub enum FrictionNoInferenceReason {
     AmbiguousContact,
     NoIntendedContact,
     ActuatorSaturated,
+    UnexpectedContact,
     SyntheticEvidence,
+    HardwareOriginUntrusted,
     OriginMismatch,
     InvalidSample,
     InsufficientSamples,
@@ -323,10 +338,17 @@ pub fn infer_support_friction(measurement: &PushProbeMeasurement) -> FrictionInf
     if measurement.origin == WrenchSampleOrigin::Synthetic {
         return fail(FrictionNoInferenceReason::SyntheticEvidence);
     }
-    if measurement.origin != WrenchSampleOrigin::Hardware
-        && measurement.origin != WrenchSampleOrigin::Simulation
-    {
+    // A public enum value is not proof that evidence came through a trusted
+    // device adapter. Until a registered hardware adapter can attest its
+    // device identity and provenance, hardware-origin updates fail closed.
+    if measurement.origin == WrenchSampleOrigin::Hardware {
+        return fail(FrictionNoInferenceReason::HardwareOriginUntrusted);
+    }
+    if measurement.origin != WrenchSampleOrigin::Simulation {
         return fail(FrictionNoInferenceReason::OriginMismatch);
+    }
+    if measurement.runtime_contact_ambiguous {
+        return fail(FrictionNoInferenceReason::UnexpectedContact);
     }
     if measurement.saturated {
         return fail(FrictionNoInferenceReason::ActuatorSaturated);
@@ -442,15 +464,24 @@ pub fn infer_support_friction(measurement: &PushProbeMeasurement) -> FrictionInf
     if measurement.precontact_baseline.is_none() {
         return fail(FrictionNoInferenceReason::PrecontactBaselineMissing);
     }
-    if (!measurement.sample_gravity_wrenches.is_empty()
-        && measurement.sample_gravity_wrenches.len() != measurement.samples.len())
+    if (!measurement.sample_free_space_wrenches.is_empty()
+        && measurement.sample_free_space_wrenches.len() != measurement.samples.len())
+        || (!measurement.sample_free_space_wrench_error_bounds.is_empty()
+            && measurement.sample_free_space_wrench_error_bounds.len() != measurement.samples.len())
+        || (measurement.sample_free_space_wrenches.is_empty()
+            != measurement.sample_free_space_wrench_error_bounds.is_empty())
         || (!measurement.sample_sensor_transforms.is_empty()
             && measurement.sample_sensor_transforms.len() != measurement.samples.len())
         || measurement
-            .sample_gravity_wrenches
+            .sample_free_space_wrenches
             .iter()
             .flatten()
             .any(|value| !value.is_finite())
+        || measurement
+            .sample_free_space_wrench_error_bounds
+            .iter()
+            .flatten()
+            .any(|value| !value.is_finite() || *value < 0.0)
     {
         return fail(FrictionNoInferenceReason::InvalidMeasurement);
     }
@@ -565,22 +596,6 @@ pub fn infer_support_friction(measurement: &PushProbeMeasurement) -> FrictionInf
             if pre_force[0] <= 0.0 || post_force[1] <= 0.0 {
                 return fail(FrictionNoInferenceReason::Unidentifiable);
             }
-            if std::env::var_os("REALITYOS_TRACE_FRICTION_INFERENCE").is_some() {
-                eprintln!(
-                    "probe-friction-slip onset={onset:.6} before_t={:.6} after_t={:.6} mass={:?} before_raw={:?} after_raw={:?} before_wrench={:?} after_wrench={:?} pre_force={:?} pre_normal={:?} post_force={:?} post_normal={:?}",
-                    before.capture_s,
-                    after.capture_s,
-                    measurement.mass_kg,
-                    before.wrench,
-                    after.wrench,
-                    before_wrench,
-                    after_wrench,
-                    pre_force,
-                    pre_normal,
-                    post_force,
-                    post_normal,
-                );
-            }
             [pre_force[0] / pre_normal[1], post_force[1] / post_normal[0]]
         }
     };
@@ -605,13 +620,17 @@ fn compensation_for_sample(
     sample: &WrenchSample,
 ) -> Result<WrenchCompensation, FrictionNoInferenceReason> {
     let mut compensation = measurement.compensation.clone();
-    if !measurement.sample_gravity_wrenches.is_empty() {
+    if !measurement.sample_free_space_wrenches.is_empty() {
         let index = measurement
             .samples
             .iter()
             .position(|candidate| candidate.sequence == sample.sequence)
             .ok_or(FrictionNoInferenceReason::InvalidSample)?;
-        compensation.gravity_wrench = measurement.sample_gravity_wrenches[index];
+        compensation.gravity_wrench = measurement.sample_free_space_wrenches[index];
+        for axis in 0..6 {
+            compensation.residual_error[axis] +=
+                measurement.sample_free_space_wrench_error_bounds[index][axis];
+        }
         compensation.digest = compensation.digest();
     }
     Ok(compensation)

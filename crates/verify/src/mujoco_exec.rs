@@ -468,6 +468,8 @@ impl MujocoInstance {
         grant: &ScopedSimulationGrant,
         request_precontact_baseline: bool,
         request_monitor_gravity_reference: bool,
+        action_witness_contents: &str,
+        allow_expected_target_contact: bool,
         control_ramp: Option<MonitoredControlRamp<'_>>,
     ) -> Result<MonitoredStepResult, ExecError> {
         if self.wrench_abort_latched {
@@ -524,6 +526,10 @@ impl MujocoInstance {
         let profile_digest = profile
             .digest()
             .map_err(|error| ExecError::Msg(error.to_string()))?;
+        let witness_target =
+            authorized_contact_target(action_witness_contents, &grant.scope.witness_digest)?;
+        let expected_contact_body =
+            allow_expected_target_contact.then_some(witness_target.as_str());
         let grant_action_envelope = json!({
             "kind": "linear_stroke",
             "requested_m": requested_m,
@@ -538,6 +544,18 @@ impl MujocoInstance {
                 "total_steps": ramp.total_steps,
             })
         });
+        if expected_contact_body.is_some_and(|name| {
+            name.trim().is_empty()
+                || !self.inspect["bodies"].as_array().is_some_and(|bodies| {
+                    bodies
+                        .iter()
+                        .any(|body| body["name"].as_str() == Some(name))
+                })
+        }) {
+            return Err(ExecError::Msg(
+                "wrench_expected_contact_body_unknown".into(),
+            ));
+        }
         let response = self.rpc(&json!({
             "cmd": "step_monitored",
             "n": n,
@@ -551,6 +569,7 @@ impl MujocoInstance {
             "observation_epoch": grant.scope.observation_epoch,
             "request_precontact_baseline": request_precontact_baseline,
             "request_monitor_gravity_reference": request_monitor_gravity_reference,
+            "expected_contact_body": expected_contact_body,
             "control_ramp": control_ramp,
         }))?;
         if response["ok"] != true {
@@ -812,6 +831,32 @@ fn validate_stop_actuators(inspect: &Value, policy: &WrenchLimitPolicy) -> Resul
     Ok(())
 }
 
+fn authorized_contact_target(
+    witness_contents: &str,
+    grant_witness_digest: &str,
+) -> Result<String, ExecError> {
+    if realityos_semantics::execution_envelope::contents_digest(witness_contents)
+        != grant_witness_digest
+    {
+        return Err(ExecError::Msg("wrench_witness_digest_mismatch".into()));
+    }
+    let target_lines = witness_contents
+        .lines()
+        .filter_map(|line| line.strip_prefix("target_body_id="))
+        .collect::<Vec<_>>();
+    if target_lines.len() != 1 {
+        return Err(ExecError::Msg("wrench_witness_target_body_invalid".into()));
+    }
+    let target_bytes = hex::decode(target_lines[0])
+        .map_err(|_| ExecError::Msg("wrench_witness_target_body_invalid".into()))?;
+    let target = String::from_utf8(target_bytes)
+        .map_err(|_| ExecError::Msg("wrench_witness_target_body_invalid".into()))?;
+    if target.trim().is_empty() || target.contains('\0') {
+        return Err(ExecError::Msg("wrench_witness_target_body_invalid".into()));
+    }
+    Ok(target)
+}
+
 pub fn wait_brief() {
     std::thread::sleep(Duration::from_millis(1));
 }
@@ -824,6 +869,25 @@ fn _read_discard(mut r: impl Read) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authorized_contact_target_requires_the_exact_witness_digest_and_one_target() {
+        let witness = "algorithm=physical-proof/10\ntarget_body_id=746172676574\n";
+        let digest = realityos_semantics::execution_envelope::contents_digest(witness);
+
+        assert_eq!(
+            authorized_contact_target(witness, &digest).unwrap(),
+            "target"
+        );
+        assert!(authorized_contact_target(witness, "different-digest").is_err());
+        assert!(authorized_contact_target(
+            "target_body_id=746172676574\ntarget_body_id=6f74686572\n",
+            &realityos_semantics::execution_envelope::contents_digest(
+                "target_body_id=746172676574\ntarget_body_id=6f74686572\n"
+            )
+        )
+        .is_err());
+    }
 
     #[test]
     fn hello_reports_simulation_only() {

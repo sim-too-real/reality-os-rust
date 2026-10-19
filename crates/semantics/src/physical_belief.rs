@@ -68,6 +68,8 @@ pub enum BeliefUpdateError {
     InvalidEvidenceDigest,
     #[error("synthetic evidence cannot update physical friction")]
     SyntheticEvidence,
+    #[error("hardware evidence requires provenance from a trusted device adapter")]
+    HardwareOriginUntrusted,
     #[error("measurement evidence was already applied")]
     DuplicateEvidence,
     #[error("contradicted belief cannot be narrowed by this update")]
@@ -207,6 +209,9 @@ impl PhysicalParameterBelief {
         }
         if reference.origin == WrenchSampleOrigin::Synthetic {
             return Err(BeliefUpdateError::SyntheticEvidence);
+        }
+        if reference.origin == WrenchSampleOrigin::Hardware {
+            return Err(BeliefUpdateError::HardwareOriginUntrusted);
         }
         if entry.evidence.contains(&reference) {
             return Err(BeliefUpdateError::DuplicateEvidence);
