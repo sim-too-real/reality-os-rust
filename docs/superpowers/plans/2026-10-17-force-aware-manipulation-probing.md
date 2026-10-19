@@ -225,6 +225,6 @@ The worker uses MuJoCo's built-in force/torque sensors, which report the child-p
 - [x] Run the required non-holdout MuJoCo integration suite (95/95), formatting, and strict Clippy. Targeted worker tests passed 5/5; focused probe-inference tests passed 21/21. The full semantics package suite has six known failures documented above and is not claimed green.
 - [x] Commit the candidate and run a clean-worktree v3 pilot. The 60-trial campaign completed with zero infrastructure, invalid, or unaccounted trials, but its safety gate failed; the paired screen was not evaluated because this is the first v3 baseline. Record all outcomes in `docs/superpowers/evidence/force-aware-probe-4e5e6fc/`. Do not inspect or run holdout.
 - [x] Request code review and resolve findings. The code review found no actionable code findings; the evidence review identified stale document statuses, now corrected.
-- [ ] Commit and push the final spec, plan, analysis, report, JSON, and 60 raw trial records to `main` after final verification.
+- [x] Commit and push the final spec, plan, analysis, report, JSON, and 60 raw trial records to `main` after final verification (`c2ea637`).
 
 The v3 pilot is a diagnostic baseline, not a passing screen or a performance claim. Its 14/31 expected-success task rate, eight false refusals, two false acceptances (both stopped before control writes), 3/7 verified holds, and 1,768-second worst-case runtime define the next public-only tuning targets. Every record is simulation-only; no physical experiment or holdout inspection was performed.
