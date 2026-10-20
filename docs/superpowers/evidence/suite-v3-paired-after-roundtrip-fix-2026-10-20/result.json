@@ -1,0 +1,96 @@
+{
+  "schema": "realityos.manipulation-paired-comparison/v1",
+  "classification": "REPLAYED_PAIRED_ANALYSIS_OF_PRESERVED_TRIALS",
+  "pairing_fix": "serde_json float_roundtrip feature enabled for realityos-verify",
+  "execution": {
+    "simulations_rerun": false,
+    "baseline_record_count": 60,
+    "candidate_record_count": 60,
+    "matched_trial_keys": 60,
+    "scenario_manifest_digest": "8e7755a27b7c340d2104d6419ff8717e94f1372d74a81b438aa8211f9a706bd4",
+    "bootstrap_resamples": 10000
+  },
+  "baseline": {
+    "artifact": "docs/superpowers/evidence/force-aware-probe-4e5e6fc",
+    "source_commit": "4e5e6fc35ca7260974a2b2f5e82b1617a8eeb071"
+  },
+  "candidate": {
+    "artifact": "docs/superpowers/evidence/suite-v3-paired-after-label-fix",
+    "source_commit": "18eac3011d82a33a49e0cdf4a3303ed5d222d143"
+  },
+  "paired_metrics": {
+    "development:menagerie_iiwa14": {
+      "expected_success": {
+        "baseline": "7/12",
+        "candidate": "7/12",
+        "delta": 0.0,
+        "confidence_95": [
+          0.0,
+          0.0
+        ]
+      },
+      "information_bearing_probe": {
+        "baseline": "7/12",
+        "candidate": "7/12",
+        "delta": 0.0,
+        "confidence_95": [
+          0.0,
+          0.0
+        ]
+      },
+      "justified_followup": {
+        "baseline": "7/12",
+        "candidate": "7/12",
+        "delta": 0.0,
+        "confidence_95": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "development:menagerie_ur5e": {
+      "expected_success": {
+        "baseline": "4/12",
+        "candidate": "4/12",
+        "delta": 0.0,
+        "confidence_95": [
+          0.0,
+          0.0
+        ]
+      },
+      "information_bearing_probe": {
+        "baseline": "6/12",
+        "candidate": "6/12",
+        "delta": 0.0,
+        "confidence_95": [
+          0.0,
+          0.0
+        ]
+      },
+      "justified_followup": {
+        "baseline": "4/12",
+        "candidate": "4/12",
+        "delta": 0.0,
+        "confidence_95": [
+          0.0,
+          0.0
+        ]
+      }
+    }
+  },
+  "screening_gate": {
+    "passed": false,
+    "gain_at_least_10pp": false,
+    "no_metric_regressed_more_than_5pp": true,
+    "best_gain": 0.0,
+    "worst_regression": 0.0
+  },
+  "preserved_evaluation_findings": {
+    "evaluation_label_mismatches": 2,
+    "false_acceptances": 0,
+    "unauthorized_writes": 0,
+    "interpretation": "Both mismatches are positive movable-object scenes with no refusal/fault flags, mislabeled as expected_refusal; probe authority was denied before any write."
+  },
+  "evidence_status": "SIMULATION_ONLY",
+  "metal": false
+}

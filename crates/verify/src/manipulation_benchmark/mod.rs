@@ -20,10 +20,10 @@ pub use physical_evidence::{
     PhysicalSensorIdentity, PhysicalSensorRequirement, PhysicalSensorTrace, SensorOrigin,
 };
 pub use report::{
-    evaluate_paired_screening_gate, paired_campaign_delta, render_markdown, score_campaign,
-    write_report, BenchmarkExecutionError, BenchmarkReport, BenchmarkSliceReport,
-    BenchmarkTrialRecord, PairedCampaignDelta, PairedEmbodimentDelta, PairedMetricDelta,
-    PairedScreeningGate, RateEstimate, WrenchReportMetrics,
+    evaluate_paired_screening_gate, load_benchmark_trial_record, paired_campaign_delta,
+    render_markdown, score_campaign, write_report, BenchmarkExecutionError, BenchmarkReport,
+    BenchmarkSliceReport, BenchmarkTrialRecord, PairedCampaignDelta, PairedEmbodimentDelta,
+    PairedMetricDelta, PairedScreeningGate, RateEstimate, WrenchReportMetrics,
 };
 pub use scenario::{
     paired_trial_key, resolve_benchmark_trial, resolve_benchmark_trial_with_suite, trial_digest,

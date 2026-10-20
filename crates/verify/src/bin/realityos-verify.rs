@@ -657,7 +657,7 @@ fn load_baseline_records(dir: &Path) -> Result<Vec<BenchmarkTrialRecord>, String
     let mut records = Vec::with_capacity(paths.len());
     for path in paths {
         let bytes = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-        let record: BenchmarkTrialRecord = serde_json::from_slice(&bytes)
+        let record = realityos_verify::manipulation_benchmark::load_benchmark_trial_record(&bytes)
             .map_err(|error| format!("{}: {error}", path.display()))?;
         records.push(record);
     }

@@ -10,6 +10,7 @@ use super::BenchmarkError;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
+use serde_json::{Number, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -861,6 +862,126 @@ fn validate_paired_key(
     }
     Ok(())
 }
+
+/// serde_json f64 text does not always round-trip bit-exactly. Trial files keep
+/// the original spelling, so restore the f64 that produces each saved token
+/// before the paired-key check runs.
+pub fn load_benchmark_trial_record(bytes: &[u8]) -> Result<BenchmarkTrialRecord, BenchmarkError> {
+    let mut value: Value = serde_json::from_slice(bytes)?;
+    let raw = std::str::from_utf8(bytes).map_err(|error| {
+        BenchmarkError::InvalidTrial(format!("trial record is not utf-8: {error}"))
+    })?;
+    let tokens = json_number_tokens(raw);
+    let mut token_index = 0usize;
+    restore_number_tokens(&mut value, &tokens, &mut token_index, "$");
+    Ok(serde_json::from_value(value)?)
+}
+
+fn json_number_tokens(raw: &str) -> Vec<&str> {
+    let bytes = raw.as_bytes();
+    let mut tokens = Vec::new();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'"' {
+            index += 1;
+            while index < bytes.len() {
+                match bytes[index] {
+                    b'\\' => index += 2,
+                    b'"' => {
+                        index += 1;
+                        break;
+                    }
+                    _ => index += 1,
+                }
+            }
+            continue;
+        }
+        if byte == b'-' || byte.is_ascii_digit() {
+            let start = index;
+            index += 1;
+            while index < bytes.len()
+                && matches!(
+                    bytes[index],
+                    b'+' | b'-' | b'.' | b'e' | b'E' | b'0'..=b'9'
+                )
+            {
+                index += 1;
+            }
+            tokens.push(&raw[start..index]);
+            continue;
+        }
+        index += 1;
+    }
+    tokens
+}
+
+fn restore_number_tokens(
+    value: &mut Value,
+    tokens: &[&str],
+    token_index: &mut usize,
+    path: &str,
+) {
+    match value {
+        Value::Array(items) => {
+            for (index, item) in items.iter_mut().enumerate() {
+                restore_number_tokens(item, tokens, token_index, &format!("{path}[{index}]"));
+            }
+        }
+        Value::Object(map) => {
+            for (key, item) in map.iter_mut() {
+                restore_number_tokens(item, tokens, token_index, &format!("{path}.{key}"));
+            }
+        }
+        Value::Number(_) => {
+            let Some(token) = tokens.get(*token_index).copied() else {
+                return;
+            };
+            *token_index += 1;
+            if token.contains("04406504808427868") {
+                eprintln!("path={path} token={token} value={value}");
+            }
+            if !(token.contains('.') || token.contains('e') || token.contains('E')) {
+                return;
+            }
+            let Some(parsed) = value.as_f64() else {
+                return;
+            };
+            let restored = f64_for_json_token(parsed, token);
+            if restored.to_bits() != parsed.to_bits() {
+                if let Some(number) = Number::from_f64(restored) {
+                    *value = Value::Number(number);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn f64_for_json_token(parsed: f64, token: &str) -> f64 {
+    if token.contains("04406504808427868") {
+        eprintln!(
+            "token={token} parsed_bits={:x} rendered={}",
+            parsed.to_bits(),
+            serde_json::to_string(&parsed).unwrap_or_default()
+        );
+    }
+    if serde_json::to_string(&parsed).ok().as_deref() == Some(token) {
+        return parsed;
+    }
+    for step in 1..32u64 {
+        for candidate in [
+            f64::from_bits(parsed.to_bits().wrapping_add(step)),
+            f64::from_bits(parsed.to_bits().wrapping_sub(step)),
+        ] {
+            if serde_json::to_string(&candidate).ok().as_deref() == Some(token) {
+                return candidate;
+            }
+        }
+    }
+    parsed
+}
+
 
 fn score_wrench_metrics(episodes: &[&BenchmarkEpisode]) -> WrenchReportMetrics {
     let push_episodes = episodes
