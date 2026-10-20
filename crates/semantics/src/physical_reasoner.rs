@@ -1580,16 +1580,13 @@ fn prove_arm_path_with_ik_mode(
         push_approach_standoff(request, candidate)
     };
     const MAX_COLLISION_ALTERNATIVES: usize = 8;
-    let q_transit_candidates = match solve_precise_candidates_with_ik_mode(
+    let q_transit_candidates = solve_precise_candidates_with_ik_mode(
         model,
         &request.scene,
         standoff_xyz,
         MAX_COLLISION_ALTERNATIVES,
         fast_seed_only,
-    ) {
-        Ok(candidates) => candidates,
-        Err(reason) => return Err(reason),
-    };
+    )?;
     let approach_phase = if grasp {
         ContactPhase::GraspApproach
     } else {
