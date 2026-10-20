@@ -901,10 +901,7 @@ fn json_number_tokens(raw: &str) -> Vec<&str> {
             let start = index;
             index += 1;
             while index < bytes.len()
-                && matches!(
-                    bytes[index],
-                    b'+' | b'-' | b'.' | b'e' | b'E' | b'0'..=b'9'
-                )
+                && matches!(bytes[index], b'+' | b'-' | b'.' | b'e' | b'E' | b'0'..=b'9')
             {
                 index += 1;
             }
@@ -916,12 +913,7 @@ fn json_number_tokens(raw: &str) -> Vec<&str> {
     tokens
 }
 
-fn restore_number_tokens(
-    value: &mut Value,
-    tokens: &[&str],
-    token_index: &mut usize,
-    path: &str,
-) {
+fn restore_number_tokens(value: &mut Value, tokens: &[&str], token_index: &mut usize, path: &str) {
     match value {
         Value::Array(items) => {
             for (index, item) in items.iter_mut().enumerate() {
@@ -981,7 +973,6 @@ fn f64_for_json_token(parsed: f64, token: &str) -> f64 {
     }
     parsed
 }
-
 
 fn score_wrench_metrics(episodes: &[&BenchmarkEpisode]) -> WrenchReportMetrics {
     let push_episodes = episodes
