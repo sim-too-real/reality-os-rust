@@ -368,7 +368,12 @@ fn wrench_monitor_compensates_registered_bias_before_checking_the_load() {
     profile.limit_policy.scope.policy_digest = profile.limit_policy.digest();
     assert!(profile.validate().is_ok());
     let mut monitored_request = monitored_worker_request(&profile, false);
-    monitored_request["n"] = serde_json::json!(5);
+    // The 125 Hz sample taken on solver step 4 is captured at 0.008 s and
+    // received one 0.010 s sensing latency later. Five steps end at 0.010 s,
+    // so only the pre-solver reading (the injected bias, near zero once
+    // removed) is eligible for the limit check. Nine 0.002 s steps reach the
+    // receive time without raising the force cap or shrinking the latency.
+    monitored_request["n"] = serde_json::json!(9);
     monitored_request["expected_contact_body"] = serde_json::json!("bias_compensation_probe");
     let response = worker.rpc(&monitored_request).expect("monitored response");
 
