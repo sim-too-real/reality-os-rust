@@ -329,7 +329,10 @@ fn wrench_monitor_compensates_registered_bias_before_checking_the_load() {
     profile.limit_policy.scope.caps[0] = 20.0;
     profile.limit_policy.scope.policy_digest = profile.limit_policy.digest();
     let mut calibration_request = monitored_worker_request(&profile, false);
-    calibration_request["n"] = serde_json::json!(1);
+    // Four steps cross one 125 Hz sample after the constraint solver runs.
+    // The pre-step sample can be only sensor noise; the contact load is the
+    // largest positive axis-0 reading in the batch.
+    calibration_request["n"] = serde_json::json!(4);
     calibration_request["expected_contact_body"] = serde_json::json!("bias_compensation_probe");
     let calibration = worker
         .rpc(&calibration_request)
@@ -339,12 +342,17 @@ fn wrench_monitor_compensates_registered_bias_before_checking_the_load() {
         calibration["abort"].is_null(),
         "the calibration read must not trip the monitor: {calibration}"
     );
-    let expected_load = calibration["samples"][0]["wrench"][0]
-        .as_f64()
-        .expect("sampled contact load");
+    let expected_load = calibration["samples"]
+        .as_array()
+        .expect("wrench samples")
+        .iter()
+        .filter_map(|sample| sample["wrench"][0].as_f64())
+        .fold(f64::NEG_INFINITY, f64::max);
+    let probe = &calibration["state"]["xpos"]["bias_compensation_probe"];
     assert!(
         expected_load > 0.25,
-        "fixture must create positive load: {expected_load}"
+        "fixture must create positive load: {expected_load} probe {probe} contacts {}",
+        calibration["state"]["ncon"]
     );
     worker.reset(None, None).expect("reset contact fixture");
     profile.bias[0] = -expected_load;
