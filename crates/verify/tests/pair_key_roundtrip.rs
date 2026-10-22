@@ -54,14 +54,14 @@ fn reloaded_suite_trials_pair_on_the_persisted_key() {
     let error = paired_campaign_delta(std::slice::from_ref(&broken), std::slice::from_ref(&broken))
         .expect_err("a different serialized pose is not the persisted key");
     let message = error.to_string();
-    assert!(
-        message.contains("mismatched paired_trial_key"),
-        "{message}"
-    );
+    assert!(message.contains("mismatched paired_trial_key"), "{message}");
 
     let mut stamped = candidate[0].clone();
     let trial = stamped.trial.as_mut().expect("resolved trial");
     trial.paired_trial_key = Some(paired_trial_key(trial).unwrap());
-    paired_campaign_delta(std::slice::from_ref(&stamped), std::slice::from_ref(&stamped))
-        .expect("the reloaded bits are a valid key when stamped as such");
+    paired_campaign_delta(
+        std::slice::from_ref(&stamped),
+        std::slice::from_ref(&stamped),
+    )
+    .expect("the reloaded bits are a valid key when stamped as such");
 }
