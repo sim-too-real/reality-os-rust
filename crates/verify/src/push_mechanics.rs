@@ -1644,15 +1644,16 @@ mod tests {
                         if dn > 1e-9 {
                             dir = [dir[0] / dn, dir[1] / dn, dir[2] / dn];
                         }
-                        // EE site is ~1 cm behind the fingertips. Start far enough
-                        // that t0 is not an overlap teleport; command just past the
-                        // face, not a 5 cm slam.
-                        let backoff = 0.028;
-                        let pre_pt = [
-                            contact_shifted[0] - backoff * n[0],
-                            contact_shifted[1] - backoff * n[1],
-                            contact_shifted[2] - backoff * n[2],
-                        ];
+                        // EE site is behind the fingertips. Increase the backoff until
+                        // the placed pose has no robot-object contact, then command
+                        // just past the face.
+                        let tool_obj_contact = |t: &VerifierTruth| {
+                            t.contacts.iter().any(|c| {
+                                let a = c.body1.as_str();
+                                let b = c.body2.as_str();
+                                (a == object_id || b == object_id) && a != "table" && b != "table"
+                            })
+                        };
                         let stroke_m = 0.055;
                         let nudge = 0.008;
                         let push_pt = [
@@ -1660,40 +1661,65 @@ mod tests {
                             contact_shifted[1] + nudge * dir[1],
                             contact_shifted[2] + nudge * dir[2],
                         ];
-                        let (q_at, pre_tr) = solve_ik(model, &chain, &ee_name, pre_pt, &q_c)
-                            .map_err(|e| format!("{name}: ik_pre {e:?}"))?;
-                        if pre_tr.residual > 5e-3 {
-                            return Err(format!(
-                                "{name}: pre-contact IK residual {} m (target {pre_pt:?})",
-                                pre_tr.residual
-                            ));
-                        }
-                        let (q_push, push_tr) = solve_ik(model, &chain, &ee_name, push_pt, &q_at)
-                            .map_err(|e| format!("{name}: ik_push {e:?}"))?;
-                        if push_tr.residual > 8e-3 {
-                            return Err(format!(
-                                "{name}: push IK residual {} m (target {push_pt:?})",
-                                push_tr.residual
-                            ));
-                        }
-                        q_cmd = q_push.clone();
-                        let after_place = truth_now(inst)?;
-                        let mut qpos = after_place.qpos.clone();
-                        for (jn, qi) in chain.iter().zip(q_at.iter()) {
-                            if let Some(j) = model.joints.iter().find(|j| j.name == *jn) {
-                                if let Some(adr) = j.qpos_adr {
-                                    if let Some(slot) = qpos.get_mut(adr as usize) {
-                                        *slot = *qi;
+                        let mut backoff = 0.028_f64;
+                        let mut q_push = Vec::new();
+                        let mut qpos = Vec::new();
+                        let mut placed_clear = false;
+                        for _attempt in 0..6 {
+                            let pre_pt = [
+                                contact_shifted[0] - backoff * n[0],
+                                contact_shifted[1] - backoff * n[1],
+                                contact_shifted[2] - backoff * n[2],
+                            ];
+                            let (q_pre, pre_tr) = solve_ik(model, &chain, &ee_name, pre_pt, &q_c)
+                                .map_err(|e| format!("{name}: ik_pre {e:?}"))?;
+                            if pre_tr.residual > 5e-3 {
+                                return Err(format!(
+                                    "{name}: pre-contact IK residual {} m at backoff {backoff} (target {pre_pt:?})",
+                                    pre_tr.residual
+                                ));
+                            }
+                            let (q_end, push_tr) =
+                                solve_ik(model, &chain, &ee_name, push_pt, &q_pre)
+                                    .map_err(|e| format!("{name}: ik_push {e:?}"))?;
+                            if push_tr.residual > 8e-3 {
+                                return Err(format!(
+                                    "{name}: push IK residual {} m (target {push_pt:?})",
+                                    push_tr.residual
+                                ));
+                            }
+                            let after_place = truth_now(inst)?;
+                            let mut next_qpos = after_place.qpos.clone();
+                            for (jn, qi) in chain.iter().zip(q_pre.iter()) {
+                                if let Some(j) = model.joints.iter().find(|j| j.name == *jn) {
+                                    if let Some(adr) = j.qpos_adr {
+                                        if let Some(slot) = next_qpos.get_mut(adr as usize) {
+                                            *slot = *qi;
+                                        }
                                     }
                                 }
                             }
+                            let nv = after_place.qvel.len();
+                            inst.reset(Some(&next_qpos), Some(&vec![0.0; nv.max(1)]))
+                                .map_err(|e| e.to_string())?;
+                            // Object COM stays at the freeze COM. Do not add y_off here.
+                            inst.set_body_pos(&object_id, placed)
+                                .map_err(|e| e.to_string())?;
+                            let probe = truth_now(inst)?;
+                            q_push = q_end;
+                            qpos = next_qpos;
+                            if !tool_obj_contact(&probe) {
+                                placed_clear = true;
+                                break;
+                            }
+                            backoff += 0.012;
                         }
-                        let nv = after_place.qvel.len();
-                        inst.reset(Some(&qpos), Some(&vec![0.0; nv.max(1)]))
-                            .map_err(|e| e.to_string())?;
-                        // Object COM stays at the freeze COM. Do not add y_off here.
-                        inst.set_body_pos(&object_id, placed)
-                            .map_err(|e| e.to_string())?;
+                        if !placed_clear {
+                            return Err(format!(
+                                "{name}: pre-contact pose remains in object contact at backoff {backoff} m"
+                            ));
+                        }
+                        q_cmd = q_push.clone();
                         apply_named_q(inst, model, &chain, &q_push, &qpos)?;
                         let t0 = truth_now(inst)?;
                         t0_q = chain
@@ -1707,13 +1733,6 @@ mod tests {
                         start_xy_rec = body_xyz(&t0, &object_id).map(|p| [p[0], p[1]]);
                         let start_xy = start_xy_rec;
                         let start_yaw = t0.xquat.get(&object_id).and_then(|q| yaw_wxyz(q));
-                        let tool_obj_contact = |t: &VerifierTruth| {
-                            t.contacts.iter().any(|c| {
-                                let a = c.body1.as_str();
-                                let b = c.body2.as_str();
-                                (a == object_id || b == object_id) && a != "table" && b != "table"
-                            })
-                        };
                         t0_contact_rec = tool_obj_contact(&t0);
                         let ee0 = t0
                             .named_pos
