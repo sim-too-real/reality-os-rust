@@ -78,6 +78,7 @@ fn menagerie_ur5e_declared_body_transforms_match_mujoco_geometry() {
     if !ensure_mujoco_or_skip() {
         return;
     }
+    realityos_verify::menagerie::ensure_development_model().expect("pinned UR5e menagerie model");
     let bundle_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../robots/external/ur5e");
     let bundle = RobotBundle::load(&bundle_path).expect("UR5e bundle");
     let (mut worker, manifest) = load_and_normalize(&bundle, &[], 17).expect("load UR5e");
@@ -161,6 +162,7 @@ fn ur5e_finds_a_collision_checked_push_from_a_side_precontact_pose() {
     if !ensure_mujoco_or_skip() {
         return;
     }
+    realityos_verify::menagerie::ensure_development_model().expect("pinned UR5e menagerie model");
     let bundle_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../robots/external/ur5e");
     let bundle = RobotBundle::load(&bundle_path).expect("UR5e bundle");
     let (worker, manifest) = load_and_normalize(&bundle, &[], 17).expect("load UR5e");

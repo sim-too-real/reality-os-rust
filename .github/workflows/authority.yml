@@ -52,9 +52,24 @@ jobs:
           print("tier2 smoke ok", rec.get("n_instances"), rec.get("verdict"))
           PY
       - name: test
-        # Skip only tests that score/evaluate frozen holdout outcomes. Keep
-        # holdout/quarantine and freeze-gating safety tests in every routine run.
-        run: cargo test --workspace --all-targets --exclude realityos-metal -- --skip holdout_postfix_score_does_not_rewrite_first_score --skip v2_holdout_first_score_is_recorded_after_freeze --skip rules_majority_logistic_run_on_arm_gripper_holdout --skip held_out_first_evaluation_is_recorded
+        # The manipulation benchmark needs MuJoCo and pinned Menagerie models.
+        # verify-mujoco runs that file. This job keeps the tests that do not.
+        run: |
+          set -euo pipefail
+          skips=(
+            --skip holdout_postfix_score_does_not_rewrite_first_score
+            --skip v2_holdout_first_score_is_recorded_after_freeze
+            --skip rules_majority_logistic_run_on_arm_gripper_holdout
+            --skip held_out_first_evaluation_is_recorded
+          )
+          cargo test --workspace --all-targets --exclude realityos-metal --exclude realityos-verify -- "${skips[@]}"
+          cargo test -p realityos-verify --lib --bins \
+            --test pair_key_roundtrip \
+            --test production_reasoner_authority \
+            --test typed_grasp_verification \
+            --test physical_experiment_decision \
+            --test production_mujoco_reasoner \
+            -- "${skips[@]}"
 
   verify-mujoco:
     runs-on: ubuntu-latest

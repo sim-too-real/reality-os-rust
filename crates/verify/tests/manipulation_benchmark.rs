@@ -1566,16 +1566,22 @@ fn collision_fixture() -> (
 }
 
 fn ur5e_bundle() -> RobotBundle {
+    realityos_verify::menagerie::ensure_development_model()
+        .expect("pinned UR5e menagerie model");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../robots/external/ur5e");
     RobotBundle::load(root).expect("checked-in UR5e bundle with mesh assets")
 }
 
 fn iiwa14_bundle() -> RobotBundle {
+    realityos_verify::menagerie::ensure_v2_holdout_model()
+        .expect("pinned IIWA-14 menagerie model");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../robots/external/iiwa14");
     RobotBundle::load(root).expect("checked-in IIWA-14 bundle with mesh assets")
 }
 
 fn wx250s_bundle() -> RobotBundle {
+    realityos_verify::menagerie::ensure_manipulation_holdout_model()
+        .expect("pinned WX250S menagerie model");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../robots/external/wx250s");
     RobotBundle::load(root).expect("checked-in WX250S holdout bundle with mesh assets")
 }
