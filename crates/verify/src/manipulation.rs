@@ -3996,7 +3996,7 @@ pub fn run_phase_b_development(
         let (pu_a, pu_am) = run_push_matrix(&arm, n_push, sha)?;
         write_phase_b_evidence(
             out_dir,
-            "manipulation_arm_gripper.json",
+            "manipulation_arm_gripper_phase_b.json",
             &rel_a
                 .iter()
                 .chain(gr_a.iter())
@@ -4047,9 +4047,10 @@ pub fn run_phase_b_development(
                     let out = run_grasp_matrix(&panda, n_grasp, sha)?;
                     gr_p = out.0;
                     gr_pm = out.1;
+                    // Diagnostic corpus files stay separate from this probe dump.
                     write_phase_b_evidence(
                         out_dir,
-                        "manipulation_panda_grasp.json",
+                        "manipulation_panda_grasp_phase_b.json",
                         &gr_p,
                         &gr_pm,
                         json!({"robot":"menagerie_panda","skill":"grasp"}),
@@ -4061,7 +4062,7 @@ pub fn run_phase_b_development(
                     pu_pm = out.1;
                     write_phase_b_evidence(
                         out_dir,
-                        "manipulation_panda_push.json",
+                        "manipulation_panda_push_phase_b.json",
                         &pu_p,
                         &pu_pm,
                         json!({"robot":"menagerie_panda","skill":"push"}),

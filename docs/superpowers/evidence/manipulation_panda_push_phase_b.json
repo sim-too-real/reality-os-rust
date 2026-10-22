@@ -1,0 +1,2317 @@
+{
+  "episodes": [
+    {
+      "apparent_robot_object_contact": false,
+      "approach_pose_error_m": null,
+      "approach_pose_reached": false,
+      "approach_q_reached": false,
+      "authority_decisions": [],
+      "commands": [],
+      "contact_establishment": "maneuver_v2",
+      "contact_pose_error_m": null,
+      "contact_pose_reached": false,
+      "contact_q_reached": false,
+      "contact_select_funnel": {
+        "last_block_reason": "",
+        "n_complete_ik_chains": 0,
+        "n_complete_witnesses": 0,
+        "n_executable_candidates": 0,
+        "n_geometric_candidates": 0,
+        "n_ik_solutions": 0,
+        "n_joint_margin_valid": 0,
+        "n_phase_ik_attempts": 0,
+        "n_phase_ik_successes": 0,
+        "n_selected_executable": 0,
+        "n_transition_valid": 0
+      },
+      "contacts": [],
+      "ctrl_writes": 0,
+      "current_to_approach_feasible": false,
+      "current_to_approach_reason": "",
+      "earliest_failure_stage": "EXPECTED_REFUSAL",
+      "earliest_pipeline_failed": "",
+      "end_q_reached": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "executed_witness_q": false,
+      "expected_refusal": true,
+      "failure_taxonomy": "NO_FEASIBLE_CONTACT_POSE",
+      "first_stage_entered": "TARGET_AVAILABLE",
+      "had_feasible_contact_maneuver": false,
+      "intended_tool_contact": false,
+      "joint_state": [],
+      "last_stage_completed": "",
+      "metal": false,
+      "mid_q_reached": false,
+      "model_hash": "2c830fd36bdd7feb6db48cee1af811cc87839b97473035294c237b360e5ecedf",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.7266674626722762,
+          "mass": 80.0,
+          "movable": false,
+          "name": "obj0",
+          "pos": [
+            1.8,
+            0.0,
+            0.2
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.03363860201384389,
+            0.03363860201384389,
+            0.03363860201384389
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "obstacle_contact": false,
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "pre_contact_taxonomy": "UNKNOWN",
+      "replay_write_delta": null,
+      "requested_push_direction": [
+        1.0,
+        -0.017385427303781953,
+        0.0
+      ],
+      "requested_push_distance_m": 0.07870498833187692,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "selected_rank_why": "",
+      "self_collision": false,
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_contact": false,
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "unintended_robot_contact": false,
+      "witness_causal": {
+        "cartesian_residual_after": 0.0,
+        "cartesian_residual_before": 0.0,
+        "expected_fk_ee_from_got": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expected_fk_ee_from_target": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "first_divergence_layer": "",
+        "first_divergence_phase": "",
+        "first_divergence_reason": "",
+        "fk_mujoco_residual": 0.0,
+        "joint_error_after": 0.0,
+        "joint_error_before": 0.0,
+        "post_hoc_mujoco_ee": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "steps": []
+      },
+      "world_adapted_to_robot": false,
+      "world_construction": "fixed_world",
+      "world_seed": 3000
+    },
+    {
+      "apparent_robot_object_contact": false,
+      "approach_pose_error_m": null,
+      "approach_pose_reached": false,
+      "approach_q_reached": false,
+      "authority_decisions": [],
+      "commands": [],
+      "contact_establishment": "maneuver_v2",
+      "contact_pose_error_m": null,
+      "contact_pose_reached": false,
+      "contact_q_reached": false,
+      "contact_select_funnel": {
+        "last_block_reason": "",
+        "n_complete_ik_chains": 0,
+        "n_complete_witnesses": 0,
+        "n_executable_candidates": 0,
+        "n_geometric_candidates": 2,
+        "n_ik_solutions": 0,
+        "n_joint_margin_valid": 0,
+        "n_phase_ik_attempts": 7,
+        "n_phase_ik_successes": 0,
+        "n_selected_executable": 0,
+        "n_transition_valid": 0
+      },
+      "contacts": [],
+      "ctrl_writes": 0,
+      "current_to_approach_feasible": false,
+      "current_to_approach_reason": "",
+      "earliest_failure_stage": "EXPECTED_REFUSAL",
+      "earliest_pipeline_failed": "",
+      "end_q_reached": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "executed_witness_q": false,
+      "expected_refusal": true,
+      "failure_taxonomy": "ORIENTATION_INFEASIBLE",
+      "first_stage_entered": "TARGET_AVAILABLE",
+      "had_feasible_contact_maneuver": false,
+      "intended_tool_contact": false,
+      "joint_state": [],
+      "last_stage_completed": "",
+      "metal": false,
+      "mid_q_reached": false,
+      "model_hash": "2c830fd36bdd7feb6db48cee1af811cc87839b97473035294c237b360e5ecedf",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.4922767182321847,
+          "mass": 0.29016770753565674,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.43187424914901673,
+            -0.04854654289834617,
+            0.44430800054412595
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.024308000544125956,
+            0.024308000544125956,
+            0.024308000544125956
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "obstacle_contact": false,
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "pre_contact_taxonomy": "UNKNOWN",
+      "replay_write_delta": null,
+      "requested_push_direction": [
+        1.0,
+        0.028782797736243454,
+        0.0
+      ],
+      "requested_push_distance_m": 0.08498117970885248,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "selected_rank_why": "reject=ORIENTATION_INFEASIBLE cloud=129 geo=2 ik=0 wit=0 exec=0 block=",
+      "self_collision": false,
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_contact": false,
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "unintended_robot_contact": false,
+      "witness_causal": {
+        "cartesian_residual_after": 0.0,
+        "cartesian_residual_before": 0.0,
+        "expected_fk_ee_from_got": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expected_fk_ee_from_target": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "first_divergence_layer": "",
+        "first_divergence_phase": "",
+        "first_divergence_reason": "",
+        "fk_mujoco_residual": 0.0,
+        "joint_error_after": 0.0,
+        "joint_error_before": 0.0,
+        "post_hoc_mujoco_ee": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "steps": []
+      },
+      "world_adapted_to_robot": false,
+      "world_construction": "fixed_world",
+      "world_seed": 3001
+    },
+    {
+      "apparent_robot_object_contact": false,
+      "approach_pose_error_m": null,
+      "approach_pose_reached": false,
+      "approach_q_reached": false,
+      "authority_decisions": [],
+      "commands": [],
+      "contact_establishment": "maneuver_v2",
+      "contact_pose_error_m": null,
+      "contact_pose_reached": false,
+      "contact_q_reached": false,
+      "contact_select_funnel": {
+        "last_block_reason": "",
+        "n_complete_ik_chains": 0,
+        "n_complete_witnesses": 0,
+        "n_executable_candidates": 0,
+        "n_geometric_candidates": 2,
+        "n_ik_solutions": 0,
+        "n_joint_margin_valid": 0,
+        "n_phase_ik_attempts": 6,
+        "n_phase_ik_successes": 0,
+        "n_selected_executable": 0,
+        "n_transition_valid": 0
+      },
+      "contacts": [],
+      "ctrl_writes": 0,
+      "current_to_approach_feasible": false,
+      "current_to_approach_reason": "",
+      "earliest_failure_stage": "EXPECTED_REFUSAL",
+      "earliest_pipeline_failed": "",
+      "end_q_reached": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "executed_witness_q": false,
+      "expected_refusal": true,
+      "failure_taxonomy": "ORIENTATION_INFEASIBLE",
+      "first_stage_entered": "TARGET_AVAILABLE",
+      "had_feasible_contact_maneuver": false,
+      "intended_tool_contact": false,
+      "joint_state": [],
+      "last_stage_completed": "",
+      "metal": false,
+      "mid_q_reached": false,
+      "model_hash": "2c830fd36bdd7feb6db48cee1af811cc87839b97473035294c237b360e5ecedf",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.9774988030664433,
+          "mass": 0.11470638173212044,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.4543387418841276,
+            0.04832055135494345,
+            0.44951279797017474
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.029512797970174743,
+            0.029512797970174743,
+            0.029512797970174743
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "obstacle_contact": false,
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "pre_contact_taxonomy": "UNKNOWN",
+      "replay_write_delta": null,
+      "requested_push_direction": [
+        1.0,
+        -0.11268305081429474,
+        0.0
+      ],
+      "requested_push_distance_m": 0.06941469022923732,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "selected_rank_why": "reject=ORIENTATION_INFEASIBLE cloud=129 geo=2 ik=0 wit=0 exec=0 block=",
+      "self_collision": false,
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_contact": false,
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "unintended_robot_contact": false,
+      "witness_causal": {
+        "cartesian_residual_after": 0.0,
+        "cartesian_residual_before": 0.0,
+        "expected_fk_ee_from_got": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expected_fk_ee_from_target": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "first_divergence_layer": "",
+        "first_divergence_phase": "",
+        "first_divergence_reason": "",
+        "fk_mujoco_residual": 0.0,
+        "joint_error_after": 0.0,
+        "joint_error_before": 0.0,
+        "post_hoc_mujoco_ee": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "steps": []
+      },
+      "world_adapted_to_robot": false,
+      "world_construction": "fixed_world",
+      "world_seed": 3002
+    },
+    {
+      "apparent_robot_object_contact": false,
+      "approach_pose_error_m": null,
+      "approach_pose_reached": false,
+      "approach_q_reached": false,
+      "authority_decisions": [],
+      "commands": [],
+      "contact_establishment": "maneuver_v2",
+      "contact_pose_error_m": null,
+      "contact_pose_reached": false,
+      "contact_q_reached": false,
+      "contact_select_funnel": {
+        "last_block_reason": "",
+        "n_complete_ik_chains": 21,
+        "n_complete_witnesses": 0,
+        "n_executable_candidates": 0,
+        "n_geometric_candidates": 6,
+        "n_ik_solutions": 21,
+        "n_joint_margin_valid": 0,
+        "n_phase_ik_attempts": 143,
+        "n_phase_ik_successes": 84,
+        "n_selected_executable": 0,
+        "n_transition_valid": 0
+      },
+      "contacts": [],
+      "ctrl_writes": 0,
+      "current_to_approach_feasible": false,
+      "current_to_approach_reason": "",
+      "earliest_failure_stage": "EXPECTED_REFUSAL",
+      "earliest_pipeline_failed": "",
+      "end_q_reached": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "executed_witness_q": false,
+      "expected_refusal": true,
+      "failure_taxonomy": "SUPPORT_PLANE_BLOCKS_EE",
+      "first_stage_entered": "TARGET_AVAILABLE",
+      "had_feasible_contact_maneuver": false,
+      "intended_tool_contact": false,
+      "joint_state": [],
+      "last_stage_completed": "",
+      "metal": false,
+      "mid_q_reached": false,
+      "model_hash": "2c830fd36bdd7feb6db48cee1af811cc87839b97473035294c237b360e5ecedf",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.6667529211533125,
+          "mass": 0.08328797227782439,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.5447196713748845,
+            -0.08768847507915556,
+            0.4446776114322545
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.024677611432254474,
+            0.024677611432254474,
+            0.024677611432254474
+          ],
+          "type": "box"
+        },
+        {
+          "mass": 2.0,
+          "movable": false,
+          "name": "obstacle",
+          "pos": [
+            0.6247196713748845,
+            -0.08768847507915556,
+            0.4446776114322545
+          ],
+          "size": [
+            0.03,
+            0.03,
+            0.03
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "obstacle_contact": false,
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "pre_contact_taxonomy": "UNKNOWN",
+      "replay_write_delta": null,
+      "requested_push_direction": [
+        1.0,
+        0.03278937372389085,
+        0.0
+      ],
+      "requested_push_distance_m": 0.05146245283684885,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "selected_rank_why": "reject=SUPPORT_PLANE_BLOCKS_EE cloud=129 geo=6 ik=21 wit=0 exec=0 block=",
+      "self_collision": false,
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_contact": false,
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "unintended_robot_contact": false,
+      "witness_causal": {
+        "cartesian_residual_after": 0.0,
+        "cartesian_residual_before": 0.0,
+        "expected_fk_ee_from_got": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expected_fk_ee_from_target": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "first_divergence_layer": "",
+        "first_divergence_phase": "",
+        "first_divergence_reason": "",
+        "fk_mujoco_residual": 0.0,
+        "joint_error_after": 0.0,
+        "joint_error_before": 0.0,
+        "post_hoc_mujoco_ee": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "steps": []
+      },
+      "world_adapted_to_robot": false,
+      "world_construction": "fixed_world",
+      "world_seed": 3003
+    },
+    {
+      "apparent_robot_object_contact": false,
+      "approach_pose_error_m": null,
+      "approach_pose_reached": false,
+      "approach_q_reached": false,
+      "authority_decisions": [],
+      "commands": [],
+      "contact_establishment": "maneuver_v2",
+      "contact_pose_error_m": null,
+      "contact_pose_reached": false,
+      "contact_q_reached": false,
+      "contact_select_funnel": {
+        "last_block_reason": "JOINT_LIMIT",
+        "n_complete_ik_chains": 50,
+        "n_complete_witnesses": 5,
+        "n_executable_candidates": 0,
+        "n_geometric_candidates": 6,
+        "n_ik_solutions": 50,
+        "n_joint_margin_valid": 0,
+        "n_phase_ik_attempts": 254,
+        "n_phase_ik_successes": 200,
+        "n_selected_executable": 0,
+        "n_transition_valid": 0
+      },
+      "contacts": [],
+      "ctrl_writes": 0,
+      "current_to_approach_feasible": false,
+      "current_to_approach_reason": "",
+      "earliest_failure_stage": "EXPECTED_REFUSAL",
+      "earliest_pipeline_failed": "",
+      "end_q_reached": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "executed_witness_q": false,
+      "expected_refusal": true,
+      "failure_taxonomy": "INSUFFICIENT_JOINT_MARGIN",
+      "first_stage_entered": "TARGET_AVAILABLE",
+      "had_feasible_contact_maneuver": false,
+      "intended_tool_contact": false,
+      "joint_state": [],
+      "last_stage_completed": "",
+      "metal": false,
+      "mid_q_reached": false,
+      "model_hash": "2c830fd36bdd7feb6db48cee1af811cc87839b97473035294c237b360e5ecedf",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.01,
+          "mass": 0.27619923746883374,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.5336306391394692,
+            -0.09557940713778473,
+            0.4422566004114591
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.02225660041145911,
+            0.02225660041145911,
+            0.02225660041145911
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "obstacle_contact": false,
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "pre_contact_taxonomy": "UNKNOWN",
+      "replay_write_delta": null,
+      "requested_push_direction": [
+        1.0,
+        -0.022856770654695324,
+        0.0
+      ],
+      "requested_push_distance_m": 0.06774381055591963,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "selected_rank_why": "reject=INSUFFICIENT_JOINT_MARGIN cloud=129 geo=6 ik=50 wit=5 exec=0 block=JOINT_LIMIT",
+      "self_collision": false,
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_contact": false,
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "unintended_robot_contact": false,
+      "witness_causal": {
+        "cartesian_residual_after": 0.0,
+        "cartesian_residual_before": 0.0,
+        "expected_fk_ee_from_got": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expected_fk_ee_from_target": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "first_divergence_layer": "",
+        "first_divergence_phase": "",
+        "first_divergence_reason": "",
+        "fk_mujoco_residual": 0.0,
+        "joint_error_after": 0.0,
+        "joint_error_before": 0.0,
+        "post_hoc_mujoco_ee": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "steps": []
+      },
+      "world_adapted_to_robot": false,
+      "world_construction": "fixed_world",
+      "world_seed": 3004
+    },
+    {
+      "apparent_robot_object_contact": false,
+      "approach_pose_error_m": null,
+      "approach_pose_reached": false,
+      "approach_q_reached": false,
+      "authority_decisions": [],
+      "commands": [],
+      "contact_establishment": "maneuver_v2",
+      "contact_pose_error_m": null,
+      "contact_pose_reached": false,
+      "contact_q_reached": false,
+      "contact_select_funnel": {
+        "last_block_reason": "",
+        "n_complete_ik_chains": 0,
+        "n_complete_witnesses": 0,
+        "n_executable_candidates": 0,
+        "n_geometric_candidates": 4,
+        "n_ik_solutions": 0,
+        "n_joint_margin_valid": 0,
+        "n_phase_ik_attempts": 15,
+        "n_phase_ik_successes": 0,
+        "n_selected_executable": 0,
+        "n_transition_valid": 0
+      },
+      "contacts": [],
+      "ctrl_writes": 0,
+      "current_to_approach_feasible": false,
+      "current_to_approach_reason": "",
+      "earliest_failure_stage": "EXPECTED_REFUSAL",
+      "earliest_pipeline_failed": "",
+      "end_q_reached": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "executed_witness_q": false,
+      "expected_refusal": true,
+      "failure_taxonomy": "ORIENTATION_INFEASIBLE",
+      "first_stage_entered": "TARGET_AVAILABLE",
+      "had_feasible_contact_maneuver": false,
+      "intended_tool_contact": false,
+      "joint_state": [],
+      "last_stage_completed": "",
+      "metal": false,
+      "mid_q_reached": false,
+      "model_hash": "2c830fd36bdd7feb6db48cee1af811cc87839b97473035294c237b360e5ecedf",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.45745146211916893,
+          "mass": 0.14497503135877457,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.49171519571598976,
+            0.029222179791501685,
+            0.4499206676964817
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.029920667696481724,
+            0.029920667696481724,
+            0.029920667696481724
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "obstacle_contact": false,
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "pre_contact_taxonomy": "UNKNOWN",
+      "replay_write_delta": null,
+      "requested_push_direction": [
+        1.0,
+        0.11170476429507936,
+        0.0
+      ],
+      "requested_push_distance_m": 0.08584471742374994,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "selected_rank_why": "reject=ORIENTATION_INFEASIBLE cloud=129 geo=4 ik=0 wit=0 exec=0 block=",
+      "self_collision": false,
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_contact": false,
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "unintended_robot_contact": false,
+      "witness_causal": {
+        "cartesian_residual_after": 0.0,
+        "cartesian_residual_before": 0.0,
+        "expected_fk_ee_from_got": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expected_fk_ee_from_target": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "first_divergence_layer": "",
+        "first_divergence_phase": "",
+        "first_divergence_reason": "",
+        "fk_mujoco_residual": 0.0,
+        "joint_error_after": 0.0,
+        "joint_error_before": 0.0,
+        "post_hoc_mujoco_ee": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "steps": []
+      },
+      "world_adapted_to_robot": false,
+      "world_construction": "fixed_world",
+      "world_seed": 3005
+    },
+    {
+      "apparent_robot_object_contact": false,
+      "approach_pose_error_m": null,
+      "approach_pose_reached": false,
+      "approach_q_reached": false,
+      "authority_decisions": [],
+      "commands": [],
+      "contact_establishment": "maneuver_v2",
+      "contact_pose_error_m": null,
+      "contact_pose_reached": false,
+      "contact_q_reached": false,
+      "contact_select_funnel": {
+        "last_block_reason": "",
+        "n_complete_ik_chains": 14,
+        "n_complete_witnesses": 0,
+        "n_executable_candidates": 0,
+        "n_geometric_candidates": 3,
+        "n_ik_solutions": 14,
+        "n_joint_margin_valid": 0,
+        "n_phase_ik_attempts": 73,
+        "n_phase_ik_successes": 56,
+        "n_selected_executable": 0,
+        "n_transition_valid": 0
+      },
+      "contacts": [],
+      "ctrl_writes": 0,
+      "current_to_approach_feasible": false,
+      "current_to_approach_reason": "",
+      "earliest_failure_stage": "EXPECTED_REFUSAL",
+      "earliest_pipeline_failed": "",
+      "end_q_reached": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "executed_witness_q": false,
+      "expected_refusal": true,
+      "failure_taxonomy": "CONTACT_POSE_UNREACHABLE_FROM_APPROACH",
+      "first_stage_entered": "TARGET_AVAILABLE",
+      "had_feasible_contact_maneuver": false,
+      "intended_tool_contact": false,
+      "joint_state": [],
+      "last_stage_completed": "",
+      "metal": false,
+      "mid_q_reached": false,
+      "model_hash": "2c830fd36bdd7feb6db48cee1af811cc87839b97473035294c237b360e5ecedf",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.8735514511019415,
+          "mass": 0.11611937045723636,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.40518384886366304,
+            0.027591146764126412,
+            0.4544220276778047
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.03442202767780474,
+            0.03442202767780474,
+            0.03442202767780474
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "obstacle_contact": false,
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "pre_contact_taxonomy": "UNKNOWN",
+      "replay_write_delta": null,
+      "requested_push_direction": [
+        1.0,
+        0.028035065357721045,
+        0.0
+      ],
+      "requested_push_distance_m": 0.04535979702045272,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "selected_rank_why": "reject=CONTACT_POSE_UNREACHABLE_FROM_APPROACH cloud=129 geo=3 ik=14 wit=0 exec=0 block=",
+      "self_collision": false,
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_contact": false,
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "unintended_robot_contact": false,
+      "witness_causal": {
+        "cartesian_residual_after": 0.0,
+        "cartesian_residual_before": 0.0,
+        "expected_fk_ee_from_got": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expected_fk_ee_from_target": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "first_divergence_layer": "",
+        "first_divergence_phase": "",
+        "first_divergence_reason": "",
+        "fk_mujoco_residual": 0.0,
+        "joint_error_after": 0.0,
+        "joint_error_before": 0.0,
+        "post_hoc_mujoco_ee": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "steps": []
+      },
+      "world_adapted_to_robot": false,
+      "world_construction": "fixed_world",
+      "world_seed": 3006
+    },
+    {
+      "apparent_robot_object_contact": false,
+      "approach_pose_error_m": null,
+      "approach_pose_reached": false,
+      "approach_q_reached": false,
+      "authority_decisions": [],
+      "commands": [],
+      "contact_establishment": "maneuver_v2",
+      "contact_pose_error_m": null,
+      "contact_pose_reached": false,
+      "contact_q_reached": false,
+      "contact_select_funnel": {
+        "last_block_reason": "SELF_COLLISION",
+        "n_complete_ik_chains": 103,
+        "n_complete_witnesses": 6,
+        "n_executable_candidates": 0,
+        "n_geometric_candidates": 6,
+        "n_ik_solutions": 103,
+        "n_joint_margin_valid": 0,
+        "n_phase_ik_attempts": 457,
+        "n_phase_ik_successes": 412,
+        "n_selected_executable": 0,
+        "n_transition_valid": 0
+      },
+      "contacts": [],
+      "ctrl_writes": 0,
+      "current_to_approach_feasible": false,
+      "current_to_approach_reason": "",
+      "earliest_failure_stage": "EXPECTED_REFUSAL",
+      "earliest_pipeline_failed": "",
+      "end_q_reached": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "executed_witness_q": false,
+      "expected_refusal": true,
+      "failure_taxonomy": "COLLISION_INADMISSIBLE",
+      "first_stage_entered": "TARGET_AVAILABLE",
+      "had_feasible_contact_maneuver": false,
+      "intended_tool_contact": false,
+      "joint_state": [],
+      "last_stage_completed": "",
+      "metal": false,
+      "mid_q_reached": false,
+      "model_hash": "2c830fd36bdd7feb6db48cee1af811cc87839b97473035294c237b360e5ecedf",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.44644054950709666,
+          "mass": 0.19327705405062776,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.5061724578666628,
+            -0.030625618977307895,
+            0.45615587328856505
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.03615587328856506,
+            0.03615587328856506,
+            0.03615587328856506
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "obstacle_contact": false,
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "pre_contact_taxonomy": "UNKNOWN",
+      "replay_write_delta": null,
+      "requested_push_direction": [
+        1.0,
+        -0.0274484069299768,
+        0.0
+      ],
+      "requested_push_distance_m": 0.07377819759039034,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "selected_rank_why": "reject=COLLISION_INADMISSIBLE cloud=129 geo=6 ik=103 wit=6 exec=0 block=SELF_COLLISION",
+      "self_collision": false,
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_contact": false,
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "unintended_robot_contact": false,
+      "witness_causal": {
+        "cartesian_residual_after": 0.0,
+        "cartesian_residual_before": 0.0,
+        "expected_fk_ee_from_got": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expected_fk_ee_from_target": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "first_divergence_layer": "",
+        "first_divergence_phase": "",
+        "first_divergence_reason": "",
+        "fk_mujoco_residual": 0.0,
+        "joint_error_after": 0.0,
+        "joint_error_before": 0.0,
+        "post_hoc_mujoco_ee": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "steps": []
+      },
+      "world_adapted_to_robot": false,
+      "world_construction": "fixed_world",
+      "world_seed": 3007
+    },
+    {
+      "apparent_robot_object_contact": false,
+      "approach_pose_error_m": null,
+      "approach_pose_reached": false,
+      "approach_q_reached": false,
+      "authority_decisions": [],
+      "commands": [],
+      "contact_establishment": "maneuver_v2",
+      "contact_pose_error_m": null,
+      "contact_pose_reached": false,
+      "contact_q_reached": false,
+      "contact_select_funnel": {
+        "last_block_reason": "",
+        "n_complete_ik_chains": 0,
+        "n_complete_witnesses": 0,
+        "n_executable_candidates": 0,
+        "n_geometric_candidates": 2,
+        "n_ik_solutions": 0,
+        "n_joint_margin_valid": 0,
+        "n_phase_ik_attempts": 9,
+        "n_phase_ik_successes": 0,
+        "n_selected_executable": 0,
+        "n_transition_valid": 0
+      },
+      "contacts": [],
+      "ctrl_writes": 0,
+      "current_to_approach_feasible": false,
+      "current_to_approach_reason": "",
+      "earliest_failure_stage": "EXPECTED_REFUSAL",
+      "earliest_pipeline_failed": "",
+      "end_q_reached": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "executed_witness_q": false,
+      "expected_refusal": true,
+      "failure_taxonomy": "ORIENTATION_INFEASIBLE",
+      "first_stage_entered": "TARGET_AVAILABLE",
+      "had_feasible_contact_maneuver": false,
+      "intended_tool_contact": false,
+      "joint_state": [],
+      "last_stage_completed": "",
+      "metal": false,
+      "mid_q_reached": false,
+      "model_hash": "2c830fd36bdd7feb6db48cee1af811cc87839b97473035294c237b360e5ecedf",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.6398790619174367,
+          "mass": 0.3970420599526694,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.41944100958074987,
+            0.019010168728303828,
+            0.4451920940718422
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.025192094071842194,
+            0.025192094071842194,
+            0.025192094071842194
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "obstacle_contact": false,
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "pre_contact_taxonomy": "UNKNOWN",
+      "replay_write_delta": null,
+      "requested_push_direction": [
+        1.0,
+        -0.17233097202932585,
+        0.0
+      ],
+      "requested_push_distance_m": 0.08294146714244355,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "selected_rank_why": "reject=ORIENTATION_INFEASIBLE cloud=129 geo=2 ik=0 wit=0 exec=0 block=",
+      "self_collision": false,
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_contact": false,
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "unintended_robot_contact": false,
+      "witness_causal": {
+        "cartesian_residual_after": 0.0,
+        "cartesian_residual_before": 0.0,
+        "expected_fk_ee_from_got": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expected_fk_ee_from_target": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "first_divergence_layer": "",
+        "first_divergence_phase": "",
+        "first_divergence_reason": "",
+        "fk_mujoco_residual": 0.0,
+        "joint_error_after": 0.0,
+        "joint_error_before": 0.0,
+        "post_hoc_mujoco_ee": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "steps": []
+      },
+      "world_adapted_to_robot": false,
+      "world_construction": "fixed_world",
+      "world_seed": 3008
+    },
+    {
+      "apparent_robot_object_contact": false,
+      "approach_pose_error_m": null,
+      "approach_pose_reached": false,
+      "approach_q_reached": false,
+      "authority_decisions": [],
+      "commands": [],
+      "contact_establishment": "maneuver_v2",
+      "contact_pose_error_m": null,
+      "contact_pose_reached": false,
+      "contact_q_reached": false,
+      "contact_select_funnel": {
+        "last_block_reason": "",
+        "n_complete_ik_chains": 0,
+        "n_complete_witnesses": 0,
+        "n_executable_candidates": 0,
+        "n_geometric_candidates": 0,
+        "n_ik_solutions": 0,
+        "n_joint_margin_valid": 0,
+        "n_phase_ik_attempts": 0,
+        "n_phase_ik_successes": 0,
+        "n_selected_executable": 0,
+        "n_transition_valid": 0
+      },
+      "contacts": [],
+      "ctrl_writes": 0,
+      "current_to_approach_feasible": false,
+      "current_to_approach_reason": "",
+      "earliest_failure_stage": "EXPECTED_REFUSAL",
+      "earliest_pipeline_failed": "",
+      "end_q_reached": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "executed_witness_q": false,
+      "expected_refusal": true,
+      "failure_taxonomy": "NO_FEASIBLE_CONTACT_POSE",
+      "first_stage_entered": "TARGET_AVAILABLE",
+      "had_feasible_contact_maneuver": false,
+      "intended_tool_contact": false,
+      "joint_state": [],
+      "last_stage_completed": "",
+      "metal": false,
+      "mid_q_reached": false,
+      "model_hash": "2c830fd36bdd7feb6db48cee1af811cc87839b97473035294c237b360e5ecedf",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.867314161120637,
+          "mass": 0.10319526406097446,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            1.8,
+            0.0,
+            0.2
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.036218507831715735,
+            0.036218507831715735,
+            0.036218507831715735
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "obstacle_contact": false,
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "pre_contact_taxonomy": "UNKNOWN",
+      "replay_write_delta": null,
+      "requested_push_direction": [
+        1.0,
+        -0.0052997910698992234,
+        0.0
+      ],
+      "requested_push_distance_m": 0.09323112512625895,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "selected_rank_why": "",
+      "self_collision": false,
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_contact": false,
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "unintended_robot_contact": false,
+      "witness_causal": {
+        "cartesian_residual_after": 0.0,
+        "cartesian_residual_before": 0.0,
+        "expected_fk_ee_from_got": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expected_fk_ee_from_target": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "first_divergence_layer": "",
+        "first_divergence_phase": "",
+        "first_divergence_reason": "",
+        "fk_mujoco_residual": 0.0,
+        "joint_error_after": 0.0,
+        "joint_error_before": 0.0,
+        "post_hoc_mujoco_ee": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "steps": []
+      },
+      "world_adapted_to_robot": false,
+      "world_construction": "fixed_world",
+      "world_seed": 3009
+    },
+    {
+      "apparent_robot_object_contact": false,
+      "approach_pose_error_m": null,
+      "approach_pose_reached": false,
+      "approach_q_reached": false,
+      "authority_decisions": [],
+      "commands": [],
+      "contact_establishment": "maneuver_v2",
+      "contact_pose_error_m": null,
+      "contact_pose_reached": false,
+      "contact_q_reached": false,
+      "contact_select_funnel": {
+        "last_block_reason": "",
+        "n_complete_ik_chains": 17,
+        "n_complete_witnesses": 0,
+        "n_executable_candidates": 0,
+        "n_geometric_candidates": 3,
+        "n_ik_solutions": 17,
+        "n_joint_margin_valid": 0,
+        "n_phase_ik_attempts": 79,
+        "n_phase_ik_successes": 68,
+        "n_selected_executable": 0,
+        "n_transition_valid": 0
+      },
+      "contacts": [],
+      "ctrl_writes": 0,
+      "current_to_approach_feasible": false,
+      "current_to_approach_reason": "",
+      "earliest_failure_stage": "CONTACT_POSE_UNREACHABLE_FROM_APPROACH",
+      "earliest_pipeline_failed": "",
+      "end_q_reached": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "executed_witness_q": false,
+      "expected_refusal": false,
+      "failure_taxonomy": "CONTACT_POSE_UNREACHABLE_FROM_APPROACH",
+      "first_stage_entered": "TARGET_AVAILABLE",
+      "had_feasible_contact_maneuver": false,
+      "intended_tool_contact": false,
+      "joint_state": [],
+      "last_stage_completed": "",
+      "metal": false,
+      "mid_q_reached": false,
+      "model_hash": "2c830fd36bdd7feb6db48cee1af811cc87839b97473035294c237b360e5ecedf",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.2924124100191772,
+          "mass": 0.19280914168233507,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.42462236474877774,
+            -0.06633181783733369,
+            0.4597412520310437
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.039741252031043714,
+            0.039741252031043714,
+            0.039741252031043714
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "obstacle_contact": false,
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "pre_contact_taxonomy": "UNKNOWN",
+      "replay_write_delta": null,
+      "requested_push_direction": [
+        1.0,
+        -0.018501914034472933,
+        0.0
+      ],
+      "requested_push_distance_m": 0.09493042891106132,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "selected_rank_why": "reject=CONTACT_POSE_UNREACHABLE_FROM_APPROACH cloud=129 geo=3 ik=17 wit=0 exec=0 block=",
+      "self_collision": false,
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_contact": false,
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "unintended_robot_contact": false,
+      "witness_causal": {
+        "cartesian_residual_after": 0.0,
+        "cartesian_residual_before": 0.0,
+        "expected_fk_ee_from_got": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expected_fk_ee_from_target": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "first_divergence_layer": "",
+        "first_divergence_phase": "",
+        "first_divergence_reason": "",
+        "fk_mujoco_residual": 0.0,
+        "joint_error_after": 0.0,
+        "joint_error_before": 0.0,
+        "post_hoc_mujoco_ee": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "steps": []
+      },
+      "world_adapted_to_robot": false,
+      "world_construction": "fixed_world",
+      "world_seed": 3010
+    },
+    {
+      "apparent_robot_object_contact": false,
+      "approach_pose_error_m": null,
+      "approach_pose_reached": false,
+      "approach_q_reached": false,
+      "authority_decisions": [],
+      "commands": [],
+      "contact_establishment": "maneuver_v2",
+      "contact_pose_error_m": null,
+      "contact_pose_reached": false,
+      "contact_q_reached": false,
+      "contact_select_funnel": {
+        "last_block_reason": "",
+        "n_complete_ik_chains": 0,
+        "n_complete_witnesses": 0,
+        "n_executable_candidates": 0,
+        "n_geometric_candidates": 4,
+        "n_ik_solutions": 0,
+        "n_joint_margin_valid": 0,
+        "n_phase_ik_attempts": 24,
+        "n_phase_ik_successes": 0,
+        "n_selected_executable": 0,
+        "n_transition_valid": 0
+      },
+      "contacts": [],
+      "ctrl_writes": 0,
+      "current_to_approach_feasible": false,
+      "current_to_approach_reason": "",
+      "earliest_failure_stage": "ORIENTATION_INFEASIBLE",
+      "earliest_pipeline_failed": "",
+      "end_q_reached": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "executed_witness_q": false,
+      "expected_refusal": false,
+      "failure_taxonomy": "ORIENTATION_INFEASIBLE",
+      "first_stage_entered": "TARGET_AVAILABLE",
+      "had_feasible_contact_maneuver": false,
+      "intended_tool_contact": false,
+      "joint_state": [],
+      "last_stage_completed": "",
+      "metal": false,
+      "mid_q_reached": false,
+      "model_hash": "2c830fd36bdd7feb6db48cee1af811cc87839b97473035294c237b360e5ecedf",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.48653086945711177,
+          "mass": 0.0920818652152243,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.42880707354049974,
+            -0.09302419904263975,
+            0.45510821416978
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.03510821416978,
+            0.03510821416978,
+            0.03510821416978
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "obstacle_contact": false,
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "pre_contact_taxonomy": "UNKNOWN",
+      "replay_write_delta": null,
+      "requested_push_direction": [
+        1.0,
+        0.19163474570923944,
+        0.0
+      ],
+      "requested_push_distance_m": 0.05745872618128543,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "selected_rank_why": "reject=ORIENTATION_INFEASIBLE cloud=129 geo=4 ik=0 wit=0 exec=0 block=",
+      "self_collision": false,
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_contact": false,
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "unintended_robot_contact": false,
+      "witness_causal": {
+        "cartesian_residual_after": 0.0,
+        "cartesian_residual_before": 0.0,
+        "expected_fk_ee_from_got": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expected_fk_ee_from_target": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "first_divergence_layer": "",
+        "first_divergence_phase": "",
+        "first_divergence_reason": "",
+        "fk_mujoco_residual": 0.0,
+        "joint_error_after": 0.0,
+        "joint_error_before": 0.0,
+        "post_hoc_mujoco_ee": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "steps": []
+      },
+      "world_adapted_to_robot": false,
+      "world_construction": "fixed_world",
+      "world_seed": 3011
+    },
+    {
+      "apparent_robot_object_contact": false,
+      "approach_pose_error_m": null,
+      "approach_pose_reached": false,
+      "approach_q_reached": false,
+      "authority_decisions": [],
+      "commands": [],
+      "contact_establishment": "maneuver_v2",
+      "contact_pose_error_m": null,
+      "contact_pose_reached": false,
+      "contact_q_reached": false,
+      "contact_select_funnel": {
+        "last_block_reason": "",
+        "n_complete_ik_chains": 0,
+        "n_complete_witnesses": 0,
+        "n_executable_candidates": 0,
+        "n_geometric_candidates": 5,
+        "n_ik_solutions": 0,
+        "n_joint_margin_valid": 0,
+        "n_phase_ik_attempts": 29,
+        "n_phase_ik_successes": 0,
+        "n_selected_executable": 0,
+        "n_transition_valid": 0
+      },
+      "contacts": [],
+      "ctrl_writes": 0,
+      "current_to_approach_feasible": false,
+      "current_to_approach_reason": "",
+      "earliest_failure_stage": "EXPECTED_REFUSAL",
+      "earliest_pipeline_failed": "",
+      "end_q_reached": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "executed_witness_q": false,
+      "expected_refusal": true,
+      "failure_taxonomy": "ORIENTATION_INFEASIBLE",
+      "first_stage_entered": "TARGET_AVAILABLE",
+      "had_feasible_contact_maneuver": false,
+      "intended_tool_contact": false,
+      "joint_state": [],
+      "last_stage_completed": "",
+      "metal": false,
+      "mid_q_reached": false,
+      "model_hash": "2c830fd36bdd7feb6db48cee1af811cc87839b97473035294c237b360e5ecedf",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.23552272865198987,
+          "mass": 0.2629934685090899,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.4845946289426065,
+            -0.0855811579851983,
+            0.4458616623367777
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.025861662336777752,
+            0.025861662336777752,
+            0.025861662336777752
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "obstacle_contact": false,
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "pre_contact_taxonomy": "UNKNOWN",
+      "replay_write_delta": null,
+      "requested_push_direction": [
+        1.0,
+        0.08415630835117704,
+        0.0
+      ],
+      "requested_push_distance_m": 0.06606474079833807,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "selected_rank_why": "reject=ORIENTATION_INFEASIBLE cloud=129 geo=5 ik=0 wit=0 exec=0 block=",
+      "self_collision": false,
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_contact": false,
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "unintended_robot_contact": false,
+      "witness_causal": {
+        "cartesian_residual_after": 0.0,
+        "cartesian_residual_before": 0.0,
+        "expected_fk_ee_from_got": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expected_fk_ee_from_target": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "first_divergence_layer": "",
+        "first_divergence_phase": "",
+        "first_divergence_reason": "",
+        "fk_mujoco_residual": 0.0,
+        "joint_error_after": 0.0,
+        "joint_error_before": 0.0,
+        "post_hoc_mujoco_ee": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "steps": []
+      },
+      "world_adapted_to_robot": false,
+      "world_construction": "fixed_world",
+      "world_seed": 3012
+    },
+    {
+      "apparent_robot_object_contact": false,
+      "approach_pose_error_m": null,
+      "approach_pose_reached": false,
+      "approach_q_reached": false,
+      "authority_decisions": [],
+      "commands": [],
+      "contact_establishment": "maneuver_v2",
+      "contact_pose_error_m": null,
+      "contact_pose_reached": false,
+      "contact_q_reached": false,
+      "contact_select_funnel": {
+        "last_block_reason": "SELF_COLLISION",
+        "n_complete_ik_chains": 77,
+        "n_complete_witnesses": 35,
+        "n_executable_candidates": 0,
+        "n_geometric_candidates": 6,
+        "n_ik_solutions": 77,
+        "n_joint_margin_valid": 0,
+        "n_phase_ik_attempts": 337,
+        "n_phase_ik_successes": 308,
+        "n_selected_executable": 0,
+        "n_transition_valid": 0
+      },
+      "contacts": [],
+      "ctrl_writes": 0,
+      "current_to_approach_feasible": false,
+      "current_to_approach_reason": "",
+      "earliest_failure_stage": "EXPECTED_REFUSAL",
+      "earliest_pipeline_failed": "",
+      "end_q_reached": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "executed_witness_q": false,
+      "expected_refusal": true,
+      "failure_taxonomy": "COLLISION_INADMISSIBLE",
+      "first_stage_entered": "TARGET_AVAILABLE",
+      "had_feasible_contact_maneuver": false,
+      "intended_tool_contact": false,
+      "joint_state": [],
+      "last_stage_completed": "",
+      "metal": false,
+      "mid_q_reached": false,
+      "model_hash": "2c830fd36bdd7feb6db48cee1af811cc87839b97473035294c237b360e5ecedf",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.01,
+          "mass": 0.3019877540100258,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.4225345395599842,
+            0.02772488267556872,
+            0.45951170681984843
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.03951170681984844,
+            0.03951170681984844,
+            0.03951170681984844
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "obstacle_contact": false,
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "pre_contact_taxonomy": "UNKNOWN",
+      "replay_write_delta": null,
+      "requested_push_direction": [
+        1.0,
+        0.18102400774321542,
+        0.0
+      ],
+      "requested_push_distance_m": 0.08221073270082244,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "selected_rank_why": "reject=COLLISION_INADMISSIBLE cloud=129 geo=6 ik=77 wit=35 exec=0 block=SELF_COLLISION",
+      "self_collision": false,
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_contact": false,
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "unintended_robot_contact": false,
+      "witness_causal": {
+        "cartesian_residual_after": 0.0,
+        "cartesian_residual_before": 0.0,
+        "expected_fk_ee_from_got": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expected_fk_ee_from_target": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "first_divergence_layer": "",
+        "first_divergence_phase": "",
+        "first_divergence_reason": "",
+        "fk_mujoco_residual": 0.0,
+        "joint_error_after": 0.0,
+        "joint_error_before": 0.0,
+        "post_hoc_mujoco_ee": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "steps": []
+      },
+      "world_adapted_to_robot": false,
+      "world_construction": "fixed_world",
+      "world_seed": 3013
+    },
+    {
+      "apparent_robot_object_contact": false,
+      "approach_pose_error_m": null,
+      "approach_pose_reached": false,
+      "approach_q_reached": false,
+      "authority_decisions": [],
+      "commands": [],
+      "contact_establishment": "maneuver_v2",
+      "contact_pose_error_m": null,
+      "contact_pose_reached": false,
+      "contact_q_reached": false,
+      "contact_select_funnel": {
+        "last_block_reason": "JOINT_LIMIT",
+        "n_complete_ik_chains": 30,
+        "n_complete_witnesses": 1,
+        "n_executable_candidates": 0,
+        "n_geometric_candidates": 5,
+        "n_ik_solutions": 30,
+        "n_joint_margin_valid": 0,
+        "n_phase_ik_attempts": 142,
+        "n_phase_ik_successes": 120,
+        "n_selected_executable": 0,
+        "n_transition_valid": 0
+      },
+      "contacts": [],
+      "ctrl_writes": 0,
+      "current_to_approach_feasible": false,
+      "current_to_approach_reason": "",
+      "earliest_failure_stage": "EXPECTED_REFUSAL",
+      "earliest_pipeline_failed": "",
+      "end_q_reached": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "executed_witness_q": false,
+      "expected_refusal": true,
+      "failure_taxonomy": "INSUFFICIENT_JOINT_MARGIN",
+      "first_stage_entered": "TARGET_AVAILABLE",
+      "had_feasible_contact_maneuver": false,
+      "intended_tool_contact": false,
+      "joint_state": [],
+      "last_stage_completed": "",
+      "metal": false,
+      "mid_q_reached": false,
+      "model_hash": "2c830fd36bdd7feb6db48cee1af811cc87839b97473035294c237b360e5ecedf",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.5287027302268733,
+          "mass": 0.26604596302096023,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.4245537249792661,
+            0.057759088831460303,
+            0.4565894294838355
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.03658942948383553,
+            0.03658942948383553,
+            0.03658942948383553
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "obstacle_contact": false,
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "pre_contact_taxonomy": "UNKNOWN",
+      "replay_write_delta": null,
+      "requested_push_direction": [
+        1.0,
+        -0.11684558560460455,
+        0.0
+      ],
+      "requested_push_distance_m": 0.07393838100221381,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "selected_rank_why": "reject=INSUFFICIENT_JOINT_MARGIN cloud=129 geo=5 ik=30 wit=1 exec=0 block=JOINT_LIMIT",
+      "self_collision": false,
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_contact": false,
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "unintended_robot_contact": false,
+      "witness_causal": {
+        "cartesian_residual_after": 0.0,
+        "cartesian_residual_before": 0.0,
+        "expected_fk_ee_from_got": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expected_fk_ee_from_target": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "first_divergence_layer": "",
+        "first_divergence_phase": "",
+        "first_divergence_reason": "",
+        "fk_mujoco_residual": 0.0,
+        "joint_error_after": 0.0,
+        "joint_error_before": 0.0,
+        "post_hoc_mujoco_ee": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "steps": []
+      },
+      "world_adapted_to_robot": false,
+      "world_construction": "fixed_world",
+      "world_seed": 3014
+    },
+    {
+      "apparent_robot_object_contact": false,
+      "approach_pose_error_m": null,
+      "approach_pose_reached": false,
+      "approach_q_reached": false,
+      "authority_decisions": [],
+      "commands": [],
+      "contact_establishment": "maneuver_v2",
+      "contact_pose_error_m": null,
+      "contact_pose_reached": false,
+      "contact_q_reached": false,
+      "contact_select_funnel": {
+        "last_block_reason": "",
+        "n_complete_ik_chains": 0,
+        "n_complete_witnesses": 0,
+        "n_executable_candidates": 0,
+        "n_geometric_candidates": 6,
+        "n_ik_solutions": 0,
+        "n_joint_margin_valid": 0,
+        "n_phase_ik_attempts": 35,
+        "n_phase_ik_successes": 0,
+        "n_selected_executable": 0,
+        "n_transition_valid": 0
+      },
+      "contacts": [],
+      "ctrl_writes": 0,
+      "current_to_approach_feasible": false,
+      "current_to_approach_reason": "",
+      "earliest_failure_stage": "ORIENTATION_INFEASIBLE",
+      "earliest_pipeline_failed": "",
+      "end_q_reached": false,
+      "evidence_status": "SIMULATION_ONLY",
+      "evidence_used": [],
+      "executed_witness_q": false,
+      "expected_refusal": false,
+      "failure_taxonomy": "ORIENTATION_INFEASIBLE",
+      "first_stage_entered": "TARGET_AVAILABLE",
+      "had_feasible_contact_maneuver": false,
+      "intended_tool_contact": false,
+      "joint_state": [],
+      "last_stage_completed": "",
+      "metal": false,
+      "mid_q_reached": false,
+      "model_hash": "2c830fd36bdd7feb6db48cee1af811cc87839b97473035294c237b360e5ecedf",
+      "object_definitions": [
+        {
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.45,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.25,
+            0.25,
+            0.02
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.3112137641421379,
+          "mass": 0.3032562122575228,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.46920957111114525,
+            0.01683829846058535,
+            0.4493718791223442
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.029371879122344263,
+            0.029371879122344263,
+            0.029371879122344263
+          ],
+          "type": "box"
+        }
+      ],
+      "object_evidence": {
+        "perception": "PERFECT_PERCEPTION"
+      },
+      "obstacle_contact": false,
+      "perception": "PERFECT_PERCEPTION",
+      "physical_violations": [],
+      "pre_contact_taxonomy": "UNKNOWN",
+      "replay_write_delta": null,
+      "requested_push_direction": [
+        1.0,
+        -0.05670238435125238,
+        0.0
+      ],
+      "requested_push_distance_m": 0.06580487267097905,
+      "resource_topology": null,
+      "robot_id": "menagerie_panda",
+      "selected_rank_why": "reject=ORIENTATION_INFEASIBLE cloud=129 geo=6 ik=0 wit=0 exec=0 block=",
+      "self_collision": false,
+      "semantic_resource": null,
+      "simulation_only": true,
+      "skill_contract": "skill.push",
+      "software_sha": "local",
+      "support_contact": false,
+      "support_relations": [],
+      "task_result": "refuse",
+      "unauthorized_writes": 0,
+      "unintended_robot_contact": false,
+      "witness_causal": {
+        "cartesian_residual_after": 0.0,
+        "cartesian_residual_before": 0.0,
+        "expected_fk_ee_from_got": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "expected_fk_ee_from_target": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "first_divergence_layer": "",
+        "first_divergence_phase": "",
+        "first_divergence_reason": "",
+        "fk_mujoco_residual": 0.0,
+        "joint_error_after": 0.0,
+        "joint_error_before": 0.0,
+        "post_hoc_mujoco_ee": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "steps": []
+      },
+      "world_adapted_to_robot": false,
+      "world_construction": "fixed_world",
+      "world_seed": 3015
+    }
+  ],
+  "evidence_status": "SIMULATION_ONLY",
+  "extra": {
+    "robot": "menagerie_panda",
+    "skill": "push"
+  },
+  "metal": false,
+  "metrics": {
+    "authority_violations": 0,
+    "expected_refusals": 13,
+    "grasp_acquisition_success": 0,
+    "grasp_episodes": 0,
+    "grasp_slip": 0,
+    "grasp_verified_hold_success": 0,
+    "push_contact_establishment": 0,
+    "push_episodes": 16,
+    "push_task_success": 0,
+    "release_episodes": 0,
+    "release_success": 0,
+    "safe_completion": 16,
+    "unauthorized_writes": 0,
+    "unexpected_physical_violations": 0
+  },
+  "n_episodes": 16,
+  "perception": "PERFECT_PERCEPTION",
+  "simulation_only": true
+}
