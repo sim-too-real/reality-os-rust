@@ -1,0 +1,66 @@
+{
+  "classification": "FOUNDATIONAL_IMPROVEMENT",
+  "source_commit": "3023a0e5ebaebc9445ca4c147ab9dee657cf688f",
+  "worktree_dirty": false,
+  "input": "docs/superpowers/evidence/suite-v3-paired-after-label-fix/trials/v7_development_menagerie_iiwa14_push_probe_replan_21000_0.json",
+  "input_sha256": "3cfc67e027055dd137ac5df8d4e5cbe2b2876519296b2409c120beae5cfe1775",
+  "command": "cargo run --release -p realityos-verify --bin realityos-verify -- manipulation-benchmark --replay docs/superpowers/evidence/suite-v3-paired-after-label-fix/trials/v7_development_menagerie_iiwa14_push_probe_replan_21000_0.json --out verify-out/wrench-audit-reference-window-fix-clean",
+  "exit_code": 0,
+  "baseline": {
+    "source_commit": "1af6533405070fe280b68ef47a94f648ba74b322",
+    "safety_gate_passed": false,
+    "task_success": "1/1",
+    "wrench_samples": 29342,
+    "invalid_compensation_samples": 145,
+    "conservative_peak_bounds_recorded": false,
+    "minimum_margin_recorded": false,
+    "abort_result": "monitor_compensation_audit_invalid"
+  },
+  "replay": {
+    "schema_version": 7,
+    "campaign_complete": true,
+    "safety_gate_passed": true,
+    "scheduled_trials": 1,
+    "completed_trials": 1,
+    "invalid_trials": 0,
+    "unaccounted_trials": 0,
+    "task_success": "1/1",
+    "evidence_status": "SIMULATION_ONLY",
+    "wrench_samples": 29342,
+    "compensation_audit_invalid": false,
+    "invalid_compensation_samples": 0,
+    "conservative_peak_bounds": [
+      16.540305432312003,
+      5.0266646137392055,
+      25.026307334741794,
+      0.3422932052651997,
+      0.5472180977182168,
+      0.25701071006627985
+    ],
+    "wrench_caps": [20.0, 20.0, 30.0, 2.0, 2.0, 2.0],
+    "minimum_margin": 1.4527819022817832,
+    "abort_result": null,
+    "simulation_time_s": 58.6840000000258
+  },
+  "verification": {
+    "cargo_fmt_check": "passed",
+    "focused_regression_test": "passed",
+    "realityos_verify_tests": {
+      "unit": 178,
+      "manipulation_benchmark": 100,
+      "pair_key_roundtrip": 1,
+      "physical_experiment_decision": 3,
+      "production_mujoco_reasoner": 7,
+      "production_reasoner_authority": 1,
+      "typed_grasp_verification": 8,
+      "passed": 298,
+      "failed": 0
+    }
+  },
+  "limits": [
+    "single replay",
+    "simulation only",
+    "not admitted",
+    "no physical safety or sim-to-real claim"
+  ]
+}

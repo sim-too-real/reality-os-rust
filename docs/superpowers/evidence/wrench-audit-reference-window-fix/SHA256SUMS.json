@@ -1,0 +1,10 @@
+{
+  "algorithm": "SHA-256",
+  "files": {
+    "README.md": "bc785b55250c367f1add19d2d2d76bc13092e63720e0f5daad38668555ae7706",
+    "RESULT.json": "730032228659b18323c360dfe86ec66f9fb7246ba777e2ecaa02df45590e3d79",
+    "MANIPULATION_BENCHMARK.md": "eda7e6442f05bec498bd0e30271d79f718764554f3932224cb51fc68780d0798",
+    "manipulation_benchmark.json": "711a5c7a64eabd46c9184ad9920704ba13eca740a181db290a65a1f73a6c2f40",
+    "trials/v7_development_menagerie_iiwa14_push_probe_replan_21000_0.json": "85dd82050adf86c5ba5c217b9a88abff7e1080609781d9f9af100ef840556eb8"
+  }
+}
