@@ -1084,7 +1084,18 @@ fn record_push_wrench_window(audit: &mut PushWitnessAudit, window: SimulationWre
     };
     audit
         .sample_gravity_reference_indices
-        .extend(std::iter::repeat(reference_index).take(window.samples.len()));
+        .extend(window.samples.iter().map(|sample| {
+            reference_index.filter(|_| {
+                window
+                    .monitor_gravity_reference
+                    .as_ref()
+                    .is_some_and(|reference| {
+                        reference.sequence <= sample.sequence
+                            && reference.capture_s <= sample.capture_s
+                            && reference.receive_s <= sample.receive_s
+                    })
+            })
+        }));
     audit
         .sample_free_space_wrenches
         .extend(window.sample_free_space_wrenches);
@@ -4271,10 +4282,12 @@ mod witness_tests {
 #[cfg(test)]
 mod audit_summary_tests {
     use super::{
-        update_wrench_episode_audit, BenchmarkEpisode, PushMotionAudit, PushWitnessAudit,
-        WitnessExecution,
+        record_push_wrench_window, update_wrench_episode_audit, BenchmarkEpisode, PushMotionAudit,
+        PushWitnessAudit, WitnessExecution,
     };
-    use crate::manipulation_benchmark::scenario::EmbodimentRegistry;
+    use crate::manipulation_benchmark::{
+        scenario::EmbodimentRegistry, wrench_sensor::SimulationWrenchWindow,
+    };
     use realityos_semantics::observation::{wrench_sample_digest, WrenchSample};
     use realityos_semantics::sensor::WrenchSampleOrigin;
     use std::path::PathBuf;
@@ -4340,6 +4353,46 @@ mod audit_summary_tests {
             motion: PushMotionAudit::default(),
             control_correction_max_rad: 0.0,
         }
+    }
+
+    #[test]
+    fn window_reference_only_applies_after_sample_captured_and_received_it() {
+        let profile = iiwa_profile();
+        let reference = sample(&profile, 145, 0.292, 0.008, 0.0);
+        let samples = vec![
+            sample(&profile, 143, 0.288, 0.002, 1.0),
+            sample(&profile, 144, 0.290, 0.002, 1.0),
+            reference.clone(),
+            sample(&profile, 146, 0.294, 0.002, 1.0),
+            sample(&profile, 147, 0.296, 0.002, 1.0),
+            sample(&profile, 149, 0.300, 0.002, 1.0),
+        ];
+        let window = SimulationWrenchWindow {
+            samples,
+            sample_free_space_wrenches: Vec::new(),
+            sample_free_space_wrench_error_bounds: Vec::new(),
+            sensor_positions: vec![[0.0; 3]; 6],
+            sensor_orientations: vec![[1.0, 0.0, 0.0, 0.0]; 6],
+            precontact_baseline: None,
+            precontact_baseline_status: None,
+            precontact_baseline_position: None,
+            precontact_baseline_orientation: None,
+            triggering_sample: None,
+            monitor_gravity_reference: Some(reference),
+            monitor_gravity_reference_status: Some("captured".into()),
+            monitor_gravity_reference_position: Some([0.0; 3]),
+            monitor_gravity_reference_orientation: Some([1.0, 0.0, 0.0, 0.0]),
+            max_gap_s: 0.002,
+            compensation_digest: profile.limit_policy.compensation_digest,
+        };
+        let mut audit = audit(Vec::new());
+
+        record_push_wrench_window(&mut audit, window);
+
+        assert_eq!(
+            audit.sample_gravity_reference_indices,
+            vec![None, None, Some(0), None, None, Some(0)]
+        );
     }
 
     #[test]
