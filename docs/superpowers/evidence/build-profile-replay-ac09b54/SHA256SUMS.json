@@ -1,0 +1,10 @@
+{
+  "debug/manipulation_benchmark.json": "92a0d0138f33f66f61615f6a852f5154432d2c4c81c1705fd0c7e842322ad229",
+  "debug/MANIPULATION_BENCHMARK.md": "908ea0d9a10286715b9da2e86149bb72c79ee59c089e781a4f2a0f7627574ce5",
+  "debug/trials/v7_development_menagerie_iiwa14_push_probe_replan_21000_0.json": "cbbf305d2769fabd109d1b9325225b669bec18eb9cc3324fad873f4fb1453994",
+  "optimized/manipulation_benchmark.json": "0a02668e1b8ca839457817fa4a8f7a2b04aa2edaf21f46fa5946e4f3c680a466",
+  "optimized/MANIPULATION_BENCHMARK.md": "d9958f42eb1703fd9bc553646e2ff3eecbd94afdbfa8428923fa6862ac031aab",
+  "optimized/trials/v7_development_menagerie_iiwa14_push_probe_replan_21000_0.json": "904896037f7e260bb4ff20cb2861a33948343fa66e98104d9e25093b46dc6b28",
+  "README.md": "3eac539ac0e4187eac9bacb559aa7c1e047809ff2596b8657a2d8e4dce622e40",
+  "RESULT.json": "ef2e96115e190c205ddf0e4d06cd0921d6bef2bfab2a37a061eb01cfc210279d"
+}

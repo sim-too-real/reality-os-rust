@@ -1,0 +1,64 @@
+{
+  "schema": "realityos.build-profile-replay-comparison/v1",
+  "classification": "ONE_TRIAL_EXACT_INPUT_REPLAY; SIMULATION_ONLY; NO_GENERALIZATION_CLAIM",
+  "source_commit": "ac09b54dc368f0474fe61218b291a2be04ebfb00",
+  "input_trial_file": "docs/superpowers/evidence/suite-v3-paired-after-label-fix/trials/v7_development_menagerie_iiwa14_push_probe_replan_21000_0.json",
+  "input_trial_sha256": "3cfc67e027055dd137ac5df8d4e5cbe2b2876519296b2409c120beae5cfe1775",
+  "runs": [
+    {
+      "report_profile": "debug_assertions_enabled",
+      "candidate_source_sha": "ac09b54dc368f0474fe61218b291a2be04ebfb00",
+      "candidate_worktree_dirty": false,
+      "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21000:0",
+      "outcome": "success",
+      "evidence_status": "SIMULATION_ONLY",
+      "wall_time_s": 129.3728083,
+      "simulation_time_s": 58.684000000025755,
+      "wrench_sample_count": 29342,
+      "control_writes": 27341,
+      "paired_trial_key": "17efc38ab09492aaf96c65bd84caa19919aa1fdd0fbc7aeef94aafd89e4cdb52",
+      "trial_digest": "776dee2c071f47b230131719eca5fea3babcd114e137e2d511e1a04eb9a7ba3d",
+      "raw_trial_file": "trials/v7_development_menagerie_iiwa14_push_probe_replan_21000_0.json",
+      "report_file": "manipulation_benchmark.json"
+    },
+    {
+      "report_profile": "debug_assertions_disabled",
+      "candidate_source_sha": "ac09b54dc368f0474fe61218b291a2be04ebfb00",
+      "candidate_worktree_dirty": false,
+      "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21000:0",
+      "outcome": "success",
+      "evidence_status": "SIMULATION_ONLY",
+      "wall_time_s": 77.7937408,
+      "simulation_time_s": 58.684000000025755,
+      "wrench_sample_count": 29342,
+      "control_writes": 27341,
+      "paired_trial_key": "17efc38ab09492aaf96c65bd84caa19919aa1fdd0fbc7aeef94aafd89e4cdb52",
+      "trial_digest": "776dee2c071f47b230131719eca5fea3babcd114e137e2d511e1a04eb9a7ba3d",
+      "raw_trial_file": "trials/v7_development_menagerie_iiwa14_push_probe_replan_21000_0.json",
+      "report_file": "manipulation_benchmark.json"
+    }
+  ],
+  "paired_checks": {
+    "same_source_commit": true,
+    "both_source_worktrees_clean": true,
+    "same_trial_key": true,
+    "same_trial_digest": true,
+    "same_outcome": true,
+    "same_simulation_time": true,
+    "same_sample_count": true,
+    "same_control_writes": true
+  },
+  "wall_time_reduction_percent": 39.87,
+  "limits": [
+    "One preserved IIWA14 push/probe trial only; no campaign generalization.",
+    "Timing includes local worker startup and execution on this host.",
+    "The run is simulation evidence only; no hardware or physical measurement was involved.",
+    "The debug profile still took 129.37 s for 58.68 s simulated, so optimized compilation does not remove the latency problem."
+  ],
+  "authority": {
+    "admission_status": "NOT_ADMITTED",
+    "metal": false,
+    "shop_release": false,
+    "viewport_admits": false
+  }
+}
