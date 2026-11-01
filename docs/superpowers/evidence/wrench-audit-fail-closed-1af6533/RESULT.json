@@ -1,0 +1,56 @@
+{
+  "schema": "realityos.wrench-compensation-audit-replay/v1",
+  "classification": "FOUNDATIONAL_IMPROVEMENT",
+  "source_commit": "1af6533405070fe280b68ef47a94f648ba74b322",
+  "source_worktree_dirty": false,
+  "command_exit_code": 1,
+  "command_exit_interpretation": "expected because the report safety gate is false",
+  "input": {
+    "path": "docs/superpowers/evidence/suite-v3-paired-after-label-fix/trials/v7_development_menagerie_iiwa14_push_probe_replan_21000_0.json",
+    "sha256": "3cfc67e027055dd137ac5df8d4e5cbe2b2876519296b2409c120beae5cfe1775"
+  },
+  "run": {
+    "scheduled_trials": 1,
+    "completed_trials": 1,
+    "infrastructure_errors": 0,
+    "invalid_records": 0,
+    "unaccounted_trials": 0,
+    "campaign_complete": true,
+    "safety_gate_passed": false,
+    "task_success": {
+      "numerator": 1,
+      "denominator": 1,
+      "rate": 1.0,
+      "confidence_95": [0.20654931437723745, 1.0]
+    }
+  },
+  "wrench_audit": {
+    "sample_count": 29342,
+    "invalid_trials": 1,
+    "invalid_samples": 145,
+    "episode_abort_result": "monitor_compensation_audit_invalid",
+    "episode_audit_invalid": true,
+    "peak_conservative_bounds": null,
+    "minimum_margin": null
+  },
+  "claim_boundary": {
+    "simulation_only": true,
+    "trial_count": 1,
+    "admission_status": "NOT_ADMITTED",
+    "physical_safety_established": false,
+    "sim_to_real_transfer_established": false
+  },
+  "verification": {
+    "focused_audit_regression_tests": "passed",
+    "cargo_fmt_all_check": "passed",
+    "full_package_tests": {
+      "result": "failed",
+      "passed": 168,
+      "failed": 9,
+      "ignored": 0,
+      "duration_seconds": 334.86,
+      "failure_class": "MuJoCo/engine memory allocation errors or empty engine error under parallel package execution",
+      "cross_action_audit_unit_test": "passed"
+    }
+  }
+}
