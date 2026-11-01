@@ -11,11 +11,11 @@
     },
     {
       "path": "README.md",
-      "sha256": "13df755c4672fd5560f22fb58251f1a8c6b27e9913242d5aac899aa9a0c30f9f"
+      "sha256": "13d9be4a4fddc075cd9ef9b3b16ef0abf9b40858278f8cb9558ce7aa063e41e1"
     },
     {
       "path": "RESULT.json",
-      "sha256": "531f20f2077059da7ac53cb4aa0039cf01d4fa192200acb8586f5f588c516e54"
+      "sha256": "c47077f17c4f0613b6aa08428636181aabba86a9874486d3658b27000e52e81b"
     },
     {
       "path": "trials/v7_development_menagerie_iiwa14_push_probe_replan_21000_0.json",

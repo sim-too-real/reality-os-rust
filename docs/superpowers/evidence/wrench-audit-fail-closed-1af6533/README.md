@@ -20,6 +20,9 @@ This is SIMULATION_ONLY, one trial, and NOT_ADMITTED. It does not establish phys
 
 - The two focused regression tests passed before this replay.
 - cargo fmt --all -- --check passed.
-- cargo test -p realityos-verify completed with 168 passed and 9 failed (334.86 s). All nine failures reported MuJoCo/engine allocation errors or an empty engine error under the parallel package run. The cross-action wrench-audit unit regression passed in that run. These package failures remain unresolved; no skip-as-pass interpretation is used.
+- The default parallel cargo test -p realityos-verify run had 168 passed and 9 failed (334.86 s). The failures reported MuJoCo/engine allocation errors or an empty engine error.
+- All nine failed tests passed individually with --test-threads=1.
+- The complete serial command, cargo test -p realityos-verify -- --test-threads=1, passed: 177 library tests, 100 manipulation benchmark tests, 1 pair-key test, 3 physical-decision tests, 7 production MuJoCo tests, 1 production-authority test, and 8 typed-grasp tests (297 passed, 0 failed). The library and manipulation benchmark targets took 1276.73 s and 801.69 s respectively.
+- This evidence strongly supports cross-test memory contention under parallel execution. The single-thread suite is verified; default parallel test scheduling remains resource-sensitive on this machine.
 
 See RESULT.json for machine-readable fields and SHA256SUMS.json for archived file hashes.

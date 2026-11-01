@@ -43,7 +43,7 @@
   "verification": {
     "focused_audit_regression_tests": "passed",
     "cargo_fmt_all_check": "passed",
-    "full_package_tests": {
+    "parallel_full_package_tests": {
       "result": "failed",
       "passed": 168,
       "failed": 9,
@@ -51,6 +51,29 @@
       "duration_seconds": 334.86,
       "failure_class": "MuJoCo/engine memory allocation errors or empty engine error under parallel package execution",
       "cross_action_audit_unit_test": "passed"
+    },
+    "isolated_retries": {
+      "test_threads": 1,
+      "passed": 9,
+      "failed": 0,
+      "interpretation": "All nine tests that failed in the parallel package run pass individually when isolated, supporting cross-test MuJoCo/model memory contention as the cause."
+    },
+    "serial_full_package_tests": {
+      "command": "cargo test -p realityos-verify -- --test-threads=1",
+      "result": "passed",
+      "total_passed": 297,
+      "failed": 0,
+      "ignored": 0,
+      "targets": {
+        "library": {"passed": 177, "failed": 0, "duration_seconds": 1276.73},
+        "manipulation_benchmark": {"passed": 100, "failed": 0, "duration_seconds": 801.69},
+        "pair_key_roundtrip": {"passed": 1, "failed": 0},
+        "physical_experiment_decision": {"passed": 3, "failed": 0},
+        "production_mujoco_reasoner": {"passed": 7, "failed": 0, "duration_seconds": 87.73},
+        "production_reasoner_authority": {"passed": 1, "failed": 0},
+        "typed_grasp_verification": {"passed": 8, "failed": 0}
+      },
+      "interpretation": "The full package passes with one test thread; this supports resource contention rather than deterministic failures in the nine tests."
     }
   }
 }
