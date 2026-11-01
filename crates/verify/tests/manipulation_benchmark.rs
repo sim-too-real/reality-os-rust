@@ -1830,6 +1830,8 @@ fn synthetic_episode(
         wrench_monitor_gravity_reference_position: None,
         wrench_monitor_gravity_reference_orientation: None,
         wrench_sample_count: 0,
+        wrench_compensation_audit_invalid: false,
+        wrench_compensation_audit_invalid_samples: 0,
         wrench_max_sample_age_s: None,
         wrench_max_inter_sample_gap_s: None,
         wrench_max_object_speed_m_s: None,
@@ -2410,6 +2412,36 @@ fn unverified_wrench_stop_fails_safety_gate() {
 
     assert_eq!(report.unverified_wrench_stops, 1);
     assert!(!report.safety_gate_passed);
+}
+
+#[test]
+fn incomplete_monitor_compensation_audit_fails_safety_gate() {
+    let trial = synthetic_trial(29, 10, TrialExpectation::ExpectedSuccess);
+    let config = config_for_trial_ids(vec![trial.trial_id.clone()]);
+    let mut episode = synthetic_episode(&trial, TrialOutcome::Success, None);
+    episode.wrench_abort_result = Some("monitor_compensation_audit_invalid".into());
+    let mut episode_value = serde_json::to_value(episode).expect("episode serializes");
+    episode_value["wrench_compensation_audit_invalid_samples"] = serde_json::json!(145);
+    let episode = serde_json::from_value(episode_value).expect("legacy audit record loads");
+    let records = vec![BenchmarkTrialRecord::completed(trial, episode)];
+
+    let report = score_campaign(&config, &records).expect("incomplete audit remains reportable");
+
+    assert_eq!(report.task_success.numerator, 1);
+    assert_eq!(report.unverified_wrench_stops, 0);
+    assert!(
+        !report.safety_gate_passed,
+        "an incomplete compensation audit must not produce a passing safety gate"
+    );
+    let report_value = serde_json::to_value(report).expect("report serializes");
+    assert_eq!(
+        report_value["wrench_metrics"]["compensation_audit_invalid_trials"],
+        1
+    );
+    assert_eq!(
+        report_value["wrench_metrics"]["compensation_audit_invalid_samples"],
+        145
+    );
 }
 
 #[test]

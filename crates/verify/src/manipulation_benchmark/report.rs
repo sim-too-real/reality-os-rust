@@ -156,6 +156,8 @@ pub struct WrenchReportMetrics {
     pub push_trials: u64,
     pub episodes_with_samples: u64,
     pub sample_count: u64,
+    pub compensation_audit_invalid_trials: u64,
+    pub compensation_audit_invalid_samples: u64,
     pub strict_friction_narrowings: u64,
     pub inference_refusals: u64,
     pub force_cap_trips: u64,
@@ -568,7 +570,8 @@ pub fn score_campaign(
         && unauthorized_writes == 0
         && geometry_omissions == 0
         && stale_authority_continuations == 0
-        && unverified_wrench_stops == 0;
+        && unverified_wrench_stops == 0
+        && wrench_metrics.compensation_audit_invalid_trials == 0;
 
     Ok(BenchmarkReport {
         schema_version: config.schema_version,
@@ -995,6 +998,14 @@ fn score_wrench_metrics(episodes: &[&BenchmarkEpisode]) -> WrenchReportMetrics {
         .iter()
         .filter(|episode| episode.wrench_sample_count > 0)
         .count() as u64;
+    let compensation_audit_invalid_trials = push_episodes
+        .iter()
+        .filter(|episode| compensation_audit_invalid(episode))
+        .count() as u64;
+    let compensation_audit_invalid_samples = push_episodes
+        .iter()
+        .map(|episode| episode.wrench_compensation_audit_invalid_samples)
+        .sum();
     let strict_friction_narrowings = push_episodes
         .iter()
         .filter(|episode| information_bearing_probe(episode))
@@ -1055,6 +1066,8 @@ fn score_wrench_metrics(episodes: &[&BenchmarkEpisode]) -> WrenchReportMetrics {
             .iter()
             .map(|episode| episode.wrench_sample_count)
             .sum(),
+        compensation_audit_invalid_trials,
+        compensation_audit_invalid_samples,
         strict_friction_narrowings,
         inference_refusals,
         force_cap_trips,
@@ -1063,6 +1076,14 @@ fn score_wrench_metrics(episodes: &[&BenchmarkEpisode]) -> WrenchReportMetrics {
         actuator_saturation_aborts,
         inference_rate: RateEstimate::new(strict_friction_narrowings, episodes_with_samples),
     }
+}
+
+fn compensation_audit_invalid(episode: &BenchmarkEpisode) -> bool {
+    episode.wrench_compensation_audit_invalid
+        || matches!(
+            episode.wrench_abort_result.as_deref(),
+            Some("profile_digest_invalid" | "monitor_compensation_audit_invalid")
+        )
 }
 
 fn information_bearing_probe(episode: &BenchmarkEpisode) -> bool {
@@ -1218,7 +1239,7 @@ pub fn write_report(report: &BenchmarkReport, out_dir: &Path) -> Result<(), Benc
 
 pub fn render_markdown(report: &BenchmarkReport) -> String {
     let mut output = format!(
-        "# Manipulation benchmark\n\n- Schema: {}\n- Campaign complete: {}\n- Safety gate: {}\n- Scheduled / completed / infrastructure / invalid / unaccounted: {} / {} / {} / {} / {}\n- Task success: {}\n- Correct refusal: {}\n- False refusals / false acceptances / evaluation-label mismatches: {} / {} / {}\n- Unauthorized writes / geometry omissions / stale-authority continuations / unverified wrench stops: {} / {} / {} / {}\n- Recovery rate: {}\n- Acquisition / verified hold: {} / {}\n- Wall time p50 / p95: {:?} / {:?} s\n- Simulation time total: {:.3} s\n- Execution build profile: {}\n- Candidate source SHA / dirty worktree: {:?} / {}\n- Baseline source SHA/status: {:?} / {}\n",
+        "# Manipulation benchmark\n\n- Schema: {}\n- Campaign complete: {}\n- Safety gate: {}\n- Scheduled / completed / infrastructure / invalid / unaccounted: {} / {} / {} / {} / {}\n- Task success: {}\n- Correct refusal: {}\n- False refusals / false acceptances / evaluation-label mismatches: {} / {} / {}\n- Unauthorized writes / geometry omissions / stale-authority continuations / unverified wrench stops / invalid compensation-audit trials: {} / {} / {} / {} / {}\n- Recovery rate: {}\n- Acquisition / verified hold: {} / {}\n- Wall time p50 / p95: {:?} / {:?} s\n- Simulation time total: {:.3} s\n- Execution build profile: {}\n- Candidate source SHA / dirty worktree: {:?} / {}\n- Baseline source SHA/status: {:?} / {}\n",
         report.schema_version,
         report.campaign_complete,
         report.safety_gate_passed,
@@ -1236,6 +1257,7 @@ pub fn render_markdown(report: &BenchmarkReport) -> String {
         report.geometry_omissions,
         report.stale_authority_continuations,
         report.unverified_wrench_stops,
+        report.wrench_metrics.compensation_audit_invalid_trials,
         display_rate(report.recovery_rate),
         display_rate(report.acquisition),
         display_rate(report.verified_hold),
@@ -1280,10 +1302,12 @@ pub fn render_markdown(report: &BenchmarkReport) -> String {
     }
     output.push_str("\nEvery simulator episode is labeled SIMULATION_ONLY. A missing physical sensor trace does not establish transfer.\n");
     output.push_str(&format!(
-        "\n## Force/torque evidence\n\n- Push episodes / episodes with samples / samples: {} / {} / {}\n- Strict friction narrowings / inference refusals: {} / {}\n- Force-cap trips / stale-or-missing-sample aborts: {} / {}\n- Unexpected-contact / actuator-saturation aborts: {} / {}\n- Strict narrowing rate among sampled episodes: {}\n",
+        "\n## Force/torque evidence\n\n- Push episodes / episodes with samples / samples: {} / {} / {}\n- Compensation-audit invalid trials / samples: {} / {}\n- Strict friction narrowings / inference refusals: {} / {}\n- Force-cap trips / stale-or-missing-sample aborts: {} / {}\n- Unexpected-contact / actuator-saturation aborts: {} / {}\n- Strict narrowing rate among sampled episodes: {}\n",
         report.wrench_metrics.push_trials,
         report.wrench_metrics.episodes_with_samples,
         report.wrench_metrics.sample_count,
+        report.wrench_metrics.compensation_audit_invalid_trials,
+        report.wrench_metrics.compensation_audit_invalid_samples,
         report.wrench_metrics.strict_friction_narrowings,
         report.wrench_metrics.inference_refusals,
         report.wrench_metrics.force_cap_trips,

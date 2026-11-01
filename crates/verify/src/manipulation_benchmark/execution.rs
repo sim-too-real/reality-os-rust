@@ -221,6 +221,11 @@ pub struct BenchmarkEpisode {
     pub wrench_monitor_gravity_reference_orientation: Option<[f64; 4]>,
     #[serde(default)]
     pub wrench_sample_count: u64,
+    /// True when any post-run compensation audit could not validate its inputs.
+    #[serde(default)]
+    pub wrench_compensation_audit_invalid: bool,
+    #[serde(default)]
+    pub wrench_compensation_audit_invalid_samples: u64,
     #[serde(default)]
     pub wrench_max_sample_age_s: Option<f64>,
     #[serde(default)]
@@ -446,6 +451,8 @@ pub fn run_benchmark_trial(
         wrench_monitor_gravity_reference_position: None,
         wrench_monitor_gravity_reference_orientation: None,
         wrench_sample_count: 0,
+        wrench_compensation_audit_invalid: false,
+        wrench_compensation_audit_invalid_samples: 0,
         wrench_max_sample_age_s: None,
         wrench_max_inter_sample_gap_s: None,
         wrench_max_object_speed_m_s: None,
@@ -1724,7 +1731,10 @@ fn update_wrench_episode_audit(
             .max(audit.motion.max_speed_m_s),
     );
     let Ok(profile_digest) = profile.digest() else {
+        episode.wrench_compensation_audit_invalid = true;
         episode.wrench_abort_result = Some("profile_digest_invalid".into());
+        episode.wrench_peak_conservative_bounds = None;
+        episode.wrench_minimum_margin = None;
         return;
     };
     episode.wrench_sensor_profile_digest = Some(profile_digest);
@@ -1827,6 +1837,10 @@ fn update_wrench_episode_audit(
                 ) {
                     Ok(compensated) => compensated,
                     Err(_) => {
+                        episode.wrench_compensation_audit_invalid = true;
+                        episode.wrench_compensation_audit_invalid_samples = episode
+                            .wrench_compensation_audit_invalid_samples
+                            .saturating_add(1);
                         episode.wrench_abort_result =
                             Some("monitor_compensation_audit_invalid".into());
                         continue;
@@ -1843,10 +1857,33 @@ fn update_wrench_episode_audit(
                 minimum_margin = minimum_margin.min(profile.limit_policy.scope.caps[axis] - upper);
             }
         }
-        episode.wrench_max_sample_age_s = Some(max_age_s);
-        episode.wrench_max_inter_sample_gap_s = Some(max_gap_s);
-        episode.wrench_peak_conservative_bounds = Some(peaks);
-        episode.wrench_minimum_margin = Some(minimum_margin);
+        episode.wrench_max_sample_age_s = Some(
+            episode
+                .wrench_max_sample_age_s
+                .map_or(max_age_s, |previous| previous.max(max_age_s)),
+        );
+        episode.wrench_max_inter_sample_gap_s = Some(
+            episode
+                .wrench_max_inter_sample_gap_s
+                .map_or(max_gap_s, |previous| previous.max(max_gap_s)),
+        );
+        if episode.wrench_compensation_audit_invalid {
+            episode.wrench_peak_conservative_bounds = None;
+            episode.wrench_minimum_margin = None;
+        } else {
+            episode.wrench_peak_conservative_bounds = Some(
+                episode
+                    .wrench_peak_conservative_bounds
+                    .map_or(peaks, |previous| {
+                        std::array::from_fn(|axis| previous[axis].max(peaks[axis]))
+                    }),
+            );
+            episode.wrench_minimum_margin = Some(
+                episode
+                    .wrench_minimum_margin
+                    .map_or(minimum_margin, |previous| previous.min(minimum_margin)),
+            );
+        }
     }
     if let Some(abort) = &audit.abort {
         episode.wrench_abort_axis = match abort.reason {
@@ -4228,5 +4265,124 @@ mod witness_tests {
             assert_eq!(alerts[0].asserted.provenance, Provenance::SimulatorDerived);
             assert_eq!(alerts[0].asserted.value, Some(true));
         }
+    }
+}
+
+#[cfg(test)]
+mod audit_summary_tests {
+    use super::{
+        update_wrench_episode_audit, BenchmarkEpisode, PushMotionAudit, PushWitnessAudit,
+        WitnessExecution,
+    };
+    use crate::manipulation_benchmark::scenario::EmbodimentRegistry;
+    use realityos_semantics::observation::{wrench_sample_digest, WrenchSample};
+    use realityos_semantics::sensor::WrenchSampleOrigin;
+    use std::path::PathBuf;
+
+    fn iiwa_profile() -> super::super::wrench_sensor::SimulationWrenchSensorProfile {
+        let registry_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../robots/benchmarks/manipulation/embodiments.json");
+        EmbodimentRegistry::load(&registry_path)
+            .expect("checked-in embodiment registry")
+            .registrations
+            .into_iter()
+            .find(|registration| registration.robot_id == "menagerie_iiwa14")
+            .and_then(|registration| registration.simulation_wrench_profile)
+            .expect("registered IIWA wrench profile")
+    }
+
+    fn sample(
+        profile: &super::super::wrench_sensor::SimulationWrenchSensorProfile,
+        sequence: u64,
+        capture_s: f64,
+        receive_delay_s: f64,
+        force_x_n: f64,
+    ) -> WrenchSample {
+        let mut sample = WrenchSample {
+            sensor_id: profile.sensor_id.clone(),
+            sensor_frame: profile.sensor_frame.clone(),
+            transform_epoch: "audit-test-epoch".into(),
+            units: "N,N*m".into(),
+            wrench: [force_x_n, 0.0, 0.0, 0.0, 0.0, 0.0],
+            error_bounds: profile.error_bounds,
+            capture_s,
+            receive_s: capture_s + receive_delay_s,
+            sequence,
+            clock_domain: "mujoco_simulation_clock".into(),
+            origin: WrenchSampleOrigin::Simulation,
+            digest: String::new(),
+        };
+        sample.digest = wrench_sample_digest(&sample);
+        sample
+    }
+
+    fn audit(samples: Vec<WrenchSample>) -> PushWitnessAudit {
+        let count = samples.len();
+        PushWitnessAudit {
+            execution: WitnessExecution::Wrote,
+            samples,
+            sample_free_space_wrenches: Vec::new(),
+            sample_free_space_wrench_error_bounds: Vec::new(),
+            sensor_positions: vec![[0.0; 3]; count],
+            sensor_orientations: vec![[1.0, 0.0, 0.0, 0.0]; count],
+            precontact_baseline: None,
+            precontact_baseline_status: None,
+            precontact_baseline_position: None,
+            precontact_baseline_orientation: None,
+            wrench_contact_pairs: Vec::new(),
+            monitor_gravity_reference: None,
+            monitor_gravity_reference_status: None,
+            monitor_gravity_reference_position: None,
+            monitor_gravity_reference_orientation: None,
+            monitor_gravity_references: Vec::new(),
+            sample_gravity_reference_indices: vec![None; count],
+            abort: None,
+            motion: PushMotionAudit::default(),
+            control_correction_max_rad: 0.0,
+        }
+    }
+
+    #[test]
+    fn episode_wrench_summary_accumulates_worst_values_across_actions() {
+        let record: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../../docs/superpowers/evidence/build-profile-replay-ac09b54/optimized/trials/v7_development_menagerie_iiwa14_push_probe_replan_21000_0.json"
+        ))
+        .expect("preserved replay record");
+        let mut episode: BenchmarkEpisode =
+            serde_json::from_value(record["episode"].clone()).expect("preserved episode");
+        episode.wrench_sample_count = 0;
+        episode.wrench_max_sample_age_s = None;
+        episode.wrench_max_inter_sample_gap_s = None;
+        episode.wrench_peak_conservative_bounds = None;
+        episode.wrench_minimum_margin = None;
+        episode.wrench_abort_result = None;
+
+        let profile = iiwa_profile();
+        let first = audit(vec![
+            sample(&profile, 100, 0.200, 0.020, 15.0),
+            sample(&profile, 101, 0.220, 0.000, 2.0),
+        ]);
+        update_wrench_episode_audit(&mut episode, &first, &profile);
+        let first_peak = episode.wrench_peak_conservative_bounds.expect("first peak")[0];
+        let first_margin = episode.wrench_minimum_margin.expect("first margin");
+        let first_age = episode.wrench_max_sample_age_s.expect("first age");
+        let first_gap = episode.wrench_max_inter_sample_gap_s.expect("first gap");
+
+        let second = audit(vec![
+            sample(&profile, 102, 0.240, 0.004, 1.0),
+            sample(&profile, 103, 0.241, 0.000, 0.5),
+        ]);
+        update_wrench_episode_audit(&mut episode, &second, &profile);
+
+        assert_eq!(episode.wrench_sample_count, 4);
+        assert!(
+            episode
+                .wrench_peak_conservative_bounds
+                .expect("episode peak")[0]
+                >= first_peak
+        );
+        assert!(episode.wrench_minimum_margin.expect("episode margin") <= first_margin);
+        assert!(episode.wrench_max_sample_age_s.expect("episode age") >= first_age);
+        assert!(episode.wrench_max_inter_sample_gap_s.expect("episode gap") >= first_gap);
     }
 }
