@@ -74,6 +74,26 @@
         "typed_grasp_verification": {"passed": 8, "failed": 0}
       },
       "interpretation": "The full package passes with one test thread; this supports resource contention rather than deterministic failures in the nine tests."
+    },
+    "two_thread_full_package_tests": {
+      "command": "cargo test -p realityos-verify -- --test-threads=2",
+      "result": "passed",
+      "total_passed": 297,
+      "failed": 0,
+      "ignored": 0,
+      "sum_target_duration_seconds": 1619.93,
+      "serial_sum_target_duration_seconds": 2169.20,
+      "summed_target_duration_reduction_percent": 25.3,
+      "targets": {
+        "library": {"passed": 177, "failed": 0, "duration_seconds": 743.02},
+        "manipulation_benchmark": {"passed": 100, "failed": 0, "duration_seconds": 795.14},
+        "pair_key_roundtrip": {"passed": 1, "failed": 0, "duration_seconds": 1.11},
+        "physical_experiment_decision": {"passed": 3, "failed": 0},
+        "production_mujoco_reasoner": {"passed": 7, "failed": 0, "duration_seconds": 80.64},
+        "production_reasoner_authority": {"passed": 1, "failed": 0, "duration_seconds": 0.02},
+        "typed_grasp_verification": {"passed": 8, "failed": 0}
+      },
+      "interpretation": "Two test threads passed the full package without reproducing the default-parallel allocation failures, while reducing summed target runtime by about 25.3% versus one thread."
     }
   }
 }

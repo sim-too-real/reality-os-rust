@@ -23,6 +23,7 @@ This is SIMULATION_ONLY, one trial, and NOT_ADMITTED. It does not establish phys
 - The default parallel cargo test -p realityos-verify run had 168 passed and 9 failed (334.86 s). The failures reported MuJoCo/engine allocation errors or an empty engine error.
 - All nine failed tests passed individually with --test-threads=1.
 - The complete serial command, cargo test -p realityos-verify -- --test-threads=1, passed: 177 library tests, 100 manipulation benchmark tests, 1 pair-key test, 3 physical-decision tests, 7 production MuJoCo tests, 1 production-authority test, and 8 typed-grasp tests (297 passed, 0 failed). The library and manipulation benchmark targets took 1276.73 s and 801.69 s respectively.
-- This evidence strongly supports cross-test memory contention under parallel execution. The single-thread suite is verified; default parallel test scheduling remains resource-sensitive on this machine.
+- The complete two-thread command, cargo test -p realityos-verify -- --test-threads=2, also passed all 297 tests. The library and manipulation benchmark targets took 743.02 s and 795.14 s. Summed target durations were 1619.93 s, about 25.3% lower than the 2169.20 s serial sum.
+- This evidence supports cross-test memory contention at the default parallelism on this machine. Two test threads are verified; default parallel test scheduling remains resource-sensitive.
 
 See RESULT.json for machine-readable fields and SHA256SUMS.json for archived file hashes.
