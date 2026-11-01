@@ -85,6 +85,8 @@ pub struct ScenarioSuiteManifest {
     pub positive_push: PositivePushRandomization,
     #[serde(default)]
     pub unidentifiable_push: Option<UnidentifiablePushRandomization>,
+    #[serde(default)]
+    pub unidentifiable_friction_refusal: Option<String>,
     pub refusal_cycle: Vec<String>,
 }
 
@@ -105,7 +107,7 @@ impl ScenarioSuiteManifest {
         let invalid = |message: &str| BenchmarkError::InvalidManifest(message.into());
         if self.schema_version != 1
             || self.suite_id.trim().is_empty()
-            || !matches!(self.suite_version, 2 | 3)
+            || !matches!(self.suite_version, 2 | 3 | 4)
         {
             return Err(invalid("unsupported or empty scenario suite identity"));
         }
@@ -208,16 +210,40 @@ impl ScenarioSuiteManifest {
                 "support contact solref must use positive finite time constant and damping ratio",
             ));
         }
-        if self.suite_version == 3
-            && self
-                .refusal_cycle
-                .iter()
-                .any(|label| label == "unidentifiable_friction")
+        let has_unidentifiable_friction = self
+            .refusal_cycle
+            .iter()
+            .any(|label| label == "unidentifiable_friction");
+        if self.suite_version >= 3
+            && has_unidentifiable_friction
             && self.unidentifiable_push.is_none()
         {
             return Err(invalid(
-                "v3 unidentifiable-friction refusal stratum needs explicit randomized bounds",
+                "unidentifiable-friction refusal stratum needs explicit randomized bounds",
             ));
+        }
+        match (
+            self.suite_version,
+            has_unidentifiable_friction,
+            self.unidentifiable_friction_refusal.as_deref(),
+        ) {
+            (4, true, Some(reason)) if !reason.trim().is_empty() => {}
+            (4, true, _) => {
+                return Err(invalid(
+                    "v4 unidentifiable-friction refusal stratum needs an explicit refusal reason",
+                ));
+            }
+            (4, false, Some(_)) => {
+                return Err(invalid(
+                    "v4 unidentifiable-friction refusal reason has no matching stratum",
+                ));
+            }
+            (2 | 3, _, Some(_)) => {
+                return Err(invalid(
+                    "unidentifiable-friction refusal reason requires scenario suite v4",
+                ));
+            }
+            _ => {}
         }
         if let Some(unidentifiable) = &self.unidentifiable_push {
             for range in [unidentifiable.mass_kg, unidentifiable.friction] {
@@ -1065,7 +1091,7 @@ fn suite_push_scenario(
                 let mut scenario = push_scenario(seed, planar, 10);
                 scenario.seed = seed;
                 scenario.polarity = Polarity::Positive;
-                scenario.expected_refusal = None;
+                scenario.expected_refusal = suite.unidentifiable_friction_refusal.clone();
                 scenario.neg = None;
                 scenario.stale = false;
                 scenario.move_object_after_obs = false;

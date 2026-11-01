@@ -13,14 +13,14 @@ use realityos_verify::manipulation_benchmark::wrench_sensor::{
     transform_contact_wrench_world, WrenchAbortReason,
 };
 use realityos_verify::manipulation_benchmark::{
-    evaluate_paired_screening_gate, paired_campaign_delta, paired_trial_key,
-    resolve_benchmark_trial, resolve_benchmark_trial_with_suite, score_campaign, trial_digest,
-    upgrade_v5_trial_for_v6, validate_collision_geometry, validate_physical_observation,
-    BenchmarkConfig, BenchmarkExecutionError, BenchmarkTask, BenchmarkTrialRecord,
-    EmbodimentRegistry, EmbodimentRole, FailureCause, GeometryGateResult, PhysicalEvidenceStatus,
-    PhysicalSensorIdentity, PhysicalSensorRequirement, PhysicalSensorTrace, PushTrialStratum,
-    ScenarioSuiteManifest, SensorOrigin, SimulationWrenchSensorProfile, TrialExpectation,
-    TrialOutcome,
+    evaluate_paired_screening_gate, evaluation_label_mismatch, paired_campaign_delta,
+    paired_trial_key, resolve_benchmark_trial, resolve_benchmark_trial_with_suite, score_campaign,
+    trial_digest, upgrade_v5_trial_for_v6, validate_collision_geometry,
+    validate_physical_observation, BenchmarkConfig, BenchmarkExecutionError, BenchmarkTask,
+    BenchmarkTrialRecord, EmbodimentRegistry, EmbodimentRole, FailureCause, GeometryGateResult,
+    PhysicalEvidenceStatus, PhysicalSensorIdentity, PhysicalSensorRequirement, PhysicalSensorTrace,
+    PushTrialStratum, ScenarioSuiteManifest, SensorOrigin, SimulationWrenchSensorProfile,
+    TrialExpectation, TrialOutcome,
 };
 use realityos_verify::mujoco_exec::checkin_worker;
 use realityos_verify::normalize::{DerivedInterface, JointRecord, RobotManifest};
@@ -1548,6 +1548,12 @@ fn scenario_suite_v3() -> ScenarioSuiteManifest {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../robots/benchmarks/manipulation/scenario_suite_v3.json");
     ScenarioSuiteManifest::load(&path).expect("checked-in v3 scenario suite")
+}
+
+fn scenario_suite_v4() -> ScenarioSuiteManifest {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../robots/benchmarks/manipulation/scenario_suite_v4.json");
+    ScenarioSuiteManifest::load(&path).expect("checked-in v4 scenario suite")
 }
 
 fn collision_fixture() -> (
@@ -3638,6 +3644,56 @@ fn scenario_suite_v3_positive_stratum_is_force_observable() {
         .any(|label| label == "unidentifiable_friction"));
     assert_ne!(suite.pilot_seeds, v2.pilot_seeds);
     assert_ne!(suite.public_seeds, v2.public_seeds);
+}
+
+#[test]
+fn v4_names_the_unidentifiable_friction_refusal_and_preserves_v3() {
+    let bundle = planar_bundle();
+    let manifest = planar_manifest();
+    let v3 = scenario_suite_v3();
+    let v4 = scenario_suite_v4();
+    let legacy = resolve_benchmark_trial_with_suite(
+        21_003,
+        3,
+        BenchmarkTask::PushProbeReplan,
+        EmbodimentRole::Development,
+        &bundle,
+        &manifest,
+        &v3,
+    )
+    .expect("frozen v3 unidentifiable-friction case");
+    let corrected = resolve_benchmark_trial_with_suite(
+        21_003,
+        3,
+        BenchmarkTask::PushProbeReplan,
+        EmbodimentRole::Development,
+        &bundle,
+        &manifest,
+        &v4,
+    )
+    .expect("v4 unidentifiable-friction case");
+
+    assert_eq!(legacy.expectation, TrialExpectation::ExpectedRefusal);
+    assert_eq!(legacy.scenario.expected_refusal, None);
+    assert!(evaluation_label_mismatch(
+        "probe:+x",
+        &legacy.scenario,
+        0,
+        "SCOPED_GRANT_DOES_NOT_COVER_PROBE"
+    ));
+    assert_eq!(corrected.expectation, TrialExpectation::ExpectedRefusal);
+    assert_eq!(legacy.scenario.objects, corrected.scenario.objects);
+    assert_ne!(legacy.paired_trial_key, corrected.paired_trial_key);
+    assert_eq!(
+        corrected.scenario.expected_refusal.as_deref(),
+        Some("UNIDENTIFIABLE_FRICTION")
+    );
+    assert!(!evaluation_label_mismatch(
+        "probe:+x",
+        &corrected.scenario,
+        0,
+        "SCOPED_GRANT_DOES_NOT_COVER_PROBE"
+    ));
 }
 
 #[test]

@@ -59,7 +59,7 @@ struct BenchmarkBundleSpec {
     wrench_profile: Option<SimulationWrenchSensorProfile>,
 }
 
-const SCENARIO_SUITE_V3: &str = "robots/benchmarks/manipulation/scenario_suite_v3.json";
+const DEFAULT_SCENARIO_SUITE: &str = "robots/benchmarks/manipulation/scenario_suite_v3.json";
 
 fn manipulation_benchmark(args: &[String]) {
     let parsed = match parse_benchmark_args(args) {
@@ -71,7 +71,7 @@ fn manipulation_benchmark(args: &[String]) {
     };
     if parsed.holdout {
         eprintln!(
-            "suite-v3 does not run the historical WX250S holdout; it is not an untouched holdout"
+            "scenario suite campaigns do not run the historical WX250S holdout; it is not an untouched holdout"
         );
         std::process::exit(2);
     }
@@ -95,7 +95,7 @@ fn manipulation_benchmark(args: &[String]) {
         let path = parsed
             .suite
             .clone()
-            .unwrap_or_else(|| repo_root.join(SCENARIO_SUITE_V3));
+            .unwrap_or_else(|| repo_root.join(DEFAULT_SCENARIO_SUITE));
         let suite = ScenarioSuiteManifest::load(&path).unwrap_or_else(|error| {
             eprintln!("invalid scenario suite {}: {error}", path.display());
             std::process::exit(2);
@@ -112,6 +112,10 @@ fn manipulation_benchmark(args: &[String]) {
     } else {
         None
     };
+    let suite_status_prefix = scenario_suite
+        .as_ref()
+        .map(|suite| format!("suite_v{}", suite.suite_version))
+        .unwrap_or_else(|| "historical_replay".into());
     let records = if let Some(replay_path) = parsed.replay.as_ref() {
         let bytes = match fs::read(replay_path) {
             Ok(bytes) => bytes,
@@ -207,7 +211,7 @@ fn manipulation_benchmark(args: &[String]) {
                 );
                 report.paired_screening_gate = Some(gate);
                 report.paired_delta = Some(delta);
-                report.baseline_status = "suite_v3_paired_preserved_pilot".into();
+                report.baseline_status = format!("{suite_status_prefix}_paired_preserved_pilot");
             }
             Err(error) => {
                 pairing_error = Some(error);
@@ -218,13 +222,13 @@ fn manipulation_benchmark(args: &[String]) {
         report.baseline_status = if parsed.replay.is_some() {
             "historical_replay_not_compared".into()
         } else if parsed.pilot {
-            "suite_v3_pilot_screening_not_compared".into()
+            format!("{suite_status_prefix}_pilot_screening_not_compared")
         } else {
-            "suite_v3_public_baseline".into()
+            format!("{suite_status_prefix}_public_baseline")
         };
     }
     if let Some(error) = pairing_error.as_ref() {
-        report.baseline_status = format!("suite_v3_pairing_failed: {error}");
+        report.baseline_status = format!("{suite_status_prefix}_pairing_failed: {error}");
     }
     if let Err(error) = write_benchmark_report(&report, &parsed.out_dir) {
         eprintln!("benchmark report write failed: {error}");
@@ -261,7 +265,7 @@ fn manipulation_benchmark(args: &[String]) {
         std::process::exit(1);
     }
     if parsed.pilot && !suite_pilot_has_positive_denominators(&report) {
-        eprintln!("suite-v3 pilot did not schedule positive trials on both development arms");
+        eprintln!("selected suite pilot did not schedule positive trials on both development arms");
         std::process::exit(1);
     }
 }
