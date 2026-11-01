@@ -2743,6 +2743,25 @@ fn report_includes_runtime_recovery_and_failure_causes() {
     assert_eq!(report.wall_time_p50_s, Some(1.5));
     assert_eq!(report.wall_time_p95_s, Some(1.5));
 
+    let mut annotated = report.clone();
+    annotated.execution_build_profile = Some("debug_assertions_disabled".into());
+    assert_eq!(
+        serde_json::to_value(&annotated).expect("serialize report")["execution_build_profile"],
+        "debug_assertions_disabled"
+    );
+    assert!(
+        realityos_verify::manipulation_benchmark::render_markdown(&annotated)
+            .contains("- Execution build profile: debug_assertions_disabled")
+    );
+    assert_eq!(
+        realityos_verify::manipulation_benchmark::report::execution_build_profile(),
+        if cfg!(debug_assertions) {
+            "debug_assertions_enabled"
+        } else {
+            "debug_assertions_disabled"
+        }
+    );
+
     let mut stale_episode = records[0].episode.clone().expect("completed episode");
     stale_episode.actions[0].runtime_divergence = true;
     stale_episode.actions[1].grant_id = stale_episode.actions[0].grant_id.clone();

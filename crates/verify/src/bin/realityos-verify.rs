@@ -194,6 +194,8 @@ fn manipulation_benchmark(args: &[String]) {
     };
     report.candidate_source_sha = Some(candidate_sha);
     report.candidate_worktree_dirty = dirty;
+    report.execution_build_profile =
+        Some(realityos_verify::manipulation_benchmark::report::execution_build_profile().into());
     let mut pairing_error: Option<String> = None;
     if let Some(baseline_dir) = parsed.baseline.as_ref() {
         report.baseline_source_sha = baseline_candidate_sha(baseline_dir);

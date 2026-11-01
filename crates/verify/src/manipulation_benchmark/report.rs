@@ -230,6 +230,8 @@ pub struct BenchmarkReport {
     pub wall_time_p50_s: Option<f64>,
     pub wall_time_p95_s: Option<f64>,
     pub simulation_time_total_s: f64,
+    #[serde(default)]
+    pub execution_build_profile: Option<String>,
     pub failure_causes: BTreeMap<String, u64>,
     pub slices: BTreeMap<String, BenchmarkSliceReport>,
     #[serde(default)]
@@ -595,6 +597,7 @@ pub fn score_campaign(
         wall_time_p50_s: percentile(&wall_times, 0.50),
         wall_time_p95_s: percentile(&wall_times, 0.95),
         simulation_time_total_s,
+        execution_build_profile: None,
         failure_causes,
         slices,
         wrench_metrics,
@@ -606,6 +609,14 @@ pub fn score_campaign(
         baseline_source_sha: None,
         baseline_status: "not_run".into(),
     })
+}
+
+pub fn execution_build_profile() -> &'static str {
+    if cfg!(debug_assertions) {
+        "debug_assertions_enabled"
+    } else {
+        "debug_assertions_disabled"
+    }
 }
 
 /// Compare two campaigns only when every scheduled randomized input is paired
@@ -1207,7 +1218,7 @@ pub fn write_report(report: &BenchmarkReport, out_dir: &Path) -> Result<(), Benc
 
 pub fn render_markdown(report: &BenchmarkReport) -> String {
     let mut output = format!(
-        "# Manipulation benchmark\n\n- Schema: {}\n- Campaign complete: {}\n- Safety gate: {}\n- Scheduled / completed / infrastructure / invalid / unaccounted: {} / {} / {} / {} / {}\n- Task success: {}\n- Correct refusal: {}\n- False refusals / false acceptances / evaluation-label mismatches: {} / {} / {}\n- Unauthorized writes / geometry omissions / stale-authority continuations / unverified wrench stops: {} / {} / {} / {}\n- Recovery rate: {}\n- Acquisition / verified hold: {} / {}\n- Wall time p50 / p95: {:?} / {:?} s\n- Simulation time total: {:.3} s\n- Candidate source SHA / dirty worktree: {:?} / {}\n- Baseline source SHA/status: {:?} / {}\n",
+        "# Manipulation benchmark\n\n- Schema: {}\n- Campaign complete: {}\n- Safety gate: {}\n- Scheduled / completed / infrastructure / invalid / unaccounted: {} / {} / {} / {} / {}\n- Task success: {}\n- Correct refusal: {}\n- False refusals / false acceptances / evaluation-label mismatches: {} / {} / {}\n- Unauthorized writes / geometry omissions / stale-authority continuations / unverified wrench stops: {} / {} / {} / {}\n- Recovery rate: {}\n- Acquisition / verified hold: {} / {}\n- Wall time p50 / p95: {:?} / {:?} s\n- Simulation time total: {:.3} s\n- Execution build profile: {}\n- Candidate source SHA / dirty worktree: {:?} / {}\n- Baseline source SHA/status: {:?} / {}\n",
         report.schema_version,
         report.campaign_complete,
         report.safety_gate_passed,
@@ -1231,6 +1242,10 @@ pub fn render_markdown(report: &BenchmarkReport) -> String {
         report.wall_time_p50_s,
         report.wall_time_p95_s,
         report.simulation_time_total_s,
+        report
+            .execution_build_profile
+            .as_deref()
+            .unwrap_or("unknown"),
         report.candidate_source_sha,
         report.candidate_worktree_dirty,
         report.baseline_source_sha,
