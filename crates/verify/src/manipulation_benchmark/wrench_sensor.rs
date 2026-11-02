@@ -5,7 +5,9 @@
 
 use realityos_kernel::physical_action::WrenchLimitPolicy;
 use realityos_semantics::observation::{wrench_sample_digest, WrenchSample};
-use realityos_semantics::push_probe::{ProbeObjectPoseSample, WrenchCompensation};
+use realityos_semantics::push_probe::{
+    ProbeContactPair, ProbeObjectPoseSample, WrenchCompensation,
+};
 use realityos_semantics::sensor::WrenchSampleOrigin;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -588,9 +590,9 @@ pub fn conservative_wrench_upper_bound(
 }
 
 impl SimulationWrenchWindow {
-    /// Convert the worker's identity-free numeric samples into typed simulation
-    /// evidence. Body/geom/contact IDs are deliberately absent from this wire
-    /// projection.
+    /// Convert numeric wrench samples and timestamped target-pose/contact traces
+    /// into typed simulation evidence. Contact identities are kept beside the
+    /// pose captured at the same simulator step.
     pub fn from_worker_response(
         response: &Value,
         profile: &SimulationWrenchSensorProfile,
@@ -792,6 +794,7 @@ fn parse_probe_pose_samples(
                         .ok_or(WrenchSensorError::Worker("object_pose_wrench_sequence"))?,
                 )
             },
+            contact_pairs: Some(parse_probe_contact_pairs(&record["contact_pairs"])?),
             capture_s: record["capture_s"]
                 .as_f64()
                 .ok_or(WrenchSensorError::Worker("object_pose_capture_s"))?,
@@ -818,6 +821,30 @@ fn parse_probe_pose_samples(
         samples.push(sample);
     }
     Ok(samples)
+}
+
+fn parse_probe_contact_pairs(value: &Value) -> Result<Vec<ProbeContactPair>, WrenchSensorError> {
+    let records = value
+        .as_array()
+        .ok_or(WrenchSensorError::Worker("object_pose_contact_pairs"))?;
+    records
+        .iter()
+        .map(|record| {
+            let field = |name| {
+                record[name]
+                    .as_str()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_owned)
+                    .ok_or(WrenchSensorError::Worker("object_pose_contact_identity"))
+            };
+            Ok(ProbeContactPair {
+                body1: field("body1")?,
+                geom1_name: field("geom1_name")?,
+                body2: field("body2")?,
+                geom2_name: field("geom2_name")?,
+            })
+        })
+        .collect()
 }
 
 fn worker_sample_is_future(
@@ -986,7 +1013,7 @@ pub fn contact_force_on_geom(contact_wrench: [f64; 6], is_geom1: bool) -> [f64; 
 
 #[cfg(test)]
 mod probe_pose_trace_tests {
-    use super::parse_probe_pose_samples;
+    use super::{parse_probe_pose_samples, WrenchSensorError};
     use serde_json::json;
 
     #[test]
@@ -999,7 +1026,13 @@ mod probe_pose_trace_tests {
                 "capture_s": 1.25,
                 "clock_domain": "mujoco_simulation_clock",
                 "position_world_m": [0.1, 0.2, 0.3],
-                "orientation_world_wxyz": [1.0, 0.0, 0.0, 0.0]
+                "orientation_world_wxyz": [1.0, 0.0, 0.0, 0.0],
+                "contact_pairs": [{
+                    "body1": "tool0",
+                    "geom1_name": "tool_geom",
+                    "body2": "obj0",
+                    "geom2_name": "obj_geom"
+                }]
             }
         ]))
         .expect("valid tracked pose sample");
@@ -1010,9 +1043,29 @@ mod probe_pose_trace_tests {
         assert_eq!(samples[0].wrench_sequence, Some(7));
         assert_eq!(samples[0].capture_s, 1.25);
         assert_eq!(samples[0].position_world_m, [0.1, 0.2, 0.3]);
+        assert_eq!(samples[0].contact_pairs.as_ref().unwrap()[0].body1, "tool0");
         samples[0]
             .validate()
             .expect("parser seals a valid pose digest");
+    }
+
+    #[test]
+    fn rejects_pose_samples_without_per_step_contact_evidence() {
+        let error = parse_probe_pose_samples(&json!([{
+            "object_id": "obj0",
+            "simulator_step": 19,
+            "wrench_sequence": 7,
+            "capture_s": 1.25,
+            "clock_domain": "mujoco_simulation_clock",
+            "position_world_m": [0.1, 0.2, 0.3],
+            "orientation_world_wxyz": [1.0, 0.0, 0.0, 0.0]
+        }]))
+        .expect_err("new probe traces must retain contacts at every step");
+
+        assert!(matches!(
+            error,
+            WrenchSensorError::Worker("object_pose_contact_pairs")
+        ));
     }
 }
 

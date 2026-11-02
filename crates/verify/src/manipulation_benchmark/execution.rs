@@ -41,8 +41,9 @@ use realityos_semantics::physical_reasoner::{
 };
 use realityos_semantics::provenance::Provenanced;
 use realityos_semantics::push_probe::{
-    infer_support_friction, FrictionInferenceResult, IntendedContactEvidence, ProbeMotionWindow,
-    ProbeObjectPoseSample, ProbeObjectPoseTrace, PushProbeMeasurement, WrenchTransform,
+    infer_support_friction, FrictionInferenceResult, IntendedContactEvidence, ProbeContactPair,
+    ProbeMotionWindow, ProbeObjectPoseSample, ProbeObjectPoseTrace, PushProbeMeasurement,
+    WrenchTransform,
 };
 use realityos_semantics::resource::{
     ControlledResource, QualificationStatus, ResourceKind, ResourceTopology,
@@ -1575,6 +1576,7 @@ struct PushMotionAudit {
     end_s: f64,
     start_position: [f64; 3],
     start_orientation_world_wxyz: [f64; 4],
+    start_contact_pairs: Option<Vec<ProbeContactPair>>,
     end_position: [f64; 3],
     max_speed_m_s: f64,
     first_motion_s: Option<f64>,
@@ -1589,6 +1591,7 @@ impl Default for PushMotionAudit {
             end_s: 0.0,
             start_position: [0.0; 3],
             start_orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
+            start_contact_pairs: None,
             end_position: [0.0; 3],
             max_speed_m_s: 0.0,
             first_motion_s: None,
@@ -1821,7 +1824,7 @@ fn execute_push_witness(
         if stroke_completed_by_observation && target_index != last_target_index {
             continue;
         }
-        let motion_reference = if motion_phase && !audit.motion.started {
+        let mut motion_reference = if motion_phase && !audit.motion.started {
             let state = state_payload(worker)?;
             let orientation = value_quaternion(&state["xquat"][request.scene.object_id.as_str()])
                 .ok_or_else(|| {
@@ -1834,6 +1837,7 @@ fn execute_push_witness(
                 state["time"].as_f64().unwrap_or(0.0),
                 body_position(&state, &request.scene.object_id)?,
                 orientation,
+                probe_contact_pairs_from_state(&state)?,
             ))
         } else {
             None
@@ -1990,17 +1994,16 @@ fn execute_push_witness(
             let time_s = state["time"].as_f64().unwrap_or(0.0);
             if motion_phase {
                 if !audit.motion.started {
-                    let (start_s, start_position, start_orientation) =
-                        motion_reference.unwrap_or((
-                            time_s - f64::from(steps) * manifest.timestep,
-                            request.scene.object_center,
-                            [1.0, 0.0, 0.0, 0.0],
-                        ));
+                    let (start_s, start_position, start_orientation, start_contact_pairs) =
+                        motion_reference.take().ok_or_else(|| {
+                            BenchmarkError::Simulation("probe_motion_reference_missing".into())
+                        })?;
                     audit.motion.started = true;
                     audit.motion.start_s = start_s;
                     audit.motion.end_s = audit.motion.start_s;
                     audit.motion.start_position = start_position;
                     audit.motion.start_orientation_world_wxyz = start_orientation;
+                    audit.motion.start_contact_pairs = Some(start_contact_pairs);
                     audit.motion.end_position = start_position;
                 }
                 let prior_position = audit.motion.end_position;
@@ -2507,6 +2510,32 @@ fn record_wrench_contacts(audit: &mut PushWitnessAudit, state: &Value) {
     }
 }
 
+fn probe_contact_pairs_from_state(state: &Value) -> Result<Vec<ProbeContactPair>, BenchmarkError> {
+    let contacts = state["contacts"]
+        .as_array()
+        .ok_or_else(|| BenchmarkError::Simulation("probe_start_contact_evidence_missing".into()))?;
+    contacts
+        .iter()
+        .map(|contact| {
+            let field = |name| {
+                contact[name]
+                    .as_str()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        BenchmarkError::Simulation("probe_start_contact_identity_missing".into())
+                    })
+            };
+            Ok(ProbeContactPair {
+                body1: field("body1")?,
+                geom1_name: field("geom1_name")?,
+                body2: field("body2")?,
+                geom2_name: field("geom2_name")?,
+            })
+        })
+        .collect()
+}
+
 fn sample_is_after_precontact_baseline(
     sample: &WrenchSample,
     baseline: Option<&WrenchSample>,
@@ -2775,6 +2804,7 @@ fn push_probe_measurement(
             start_position_world_m: audit.motion.start_position,
             start_orientation_world_wxyz: audit.motion.start_orientation_world_wxyz,
             start_wrench_sequence: bootstrap_wrench_sequences.first().copied(),
+            start_contact_pairs: audit.motion.start_contact_pairs.clone(),
             samples,
             digest: String::new(),
         };
@@ -4541,8 +4571,8 @@ mod witness_tests {
         declared_ee_contact_extent, declared_ee_observation_key, declared_ee_push_contact_extents,
         declared_ee_radius, decode_push_witness, injected_safety_fault_alerts,
         joint_control_ramp_steps, observe_probe_motion_sample, observed_frame_quaternion,
-        probe_sample_tangential_force_lower_bound, probe_slip_onset_resolved,
-        sample_is_after_precontact_baseline, PushMotionAudit,
+        probe_contact_pairs_from_state, probe_sample_tangential_force_lower_bound,
+        probe_slip_onset_resolved, sample_is_after_precontact_baseline, PushMotionAudit,
     };
     use crate::bundle::RobotBundle;
     use crate::manipulation_scenarios::{push_scenario, NegKind};
@@ -4896,6 +4926,23 @@ mod witness_tests {
         assert_eq!(motion.start_position, [0.0; 3]);
         assert_eq!(motion.end_position, [0.0024, 0.0, 0.0]);
         assert_eq!(motion.first_motion_s, None);
+    }
+
+    #[test]
+    fn probe_start_contacts_preserve_body_and_geometry_identities() {
+        let contacts = probe_contact_pairs_from_state(&serde_json::json!({
+            "contacts": [{
+                "body1": "obj0",
+                "geom1_name": "object_geom",
+                "body2": "table",
+                "geom2_name": "table_geom"
+            }]
+        }))
+        .expect("complete start-state contact identities");
+
+        assert_eq!(contacts.len(), 1);
+        assert!(contacts[0].contains_bodies("table", "obj0"));
+        assert_eq!(contacts[0].geom1_name, "object_geom");
     }
 
     #[test]

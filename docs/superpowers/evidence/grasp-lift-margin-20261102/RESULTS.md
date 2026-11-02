@@ -244,4 +244,22 @@ Verification:
 - A separate offline evidence consumer passed `verify_for_trial`, `verify_matches_episode`, sidecar verification, and pose-trace validation on the saved artifacts; it launched no simulator.
 - Code review of `c6f1ad5d18adabdc8b34305fbfe9f778a6ce6a69..cf17d77c344c1b94e6c064566a7edd93b3d33a71` found no blocking issues. The code commit and pre-run freeze commit are pushed on canonical `main`.
 
-Next experiment: prepare one new out-of-cohort candidate at seed/index `23021:17`. Before any replay, verify cohort exclusion, resolve and hash its input, require a fresh zero-step preflight selecting `probe:+x`, and commit/push its freeze. Run at most one replay; preserve a no-motion or refusal outcome and never rerun `23020:17` or any frozen, pilot, or public input.
+## Per-step runtime-contact evidence contract
+
+**Classification:** Foundational verification improvement; no benchmark gain. **Status:** `SIMULATION_ONLY`; admission and all release flags remain unchanged.
+
+The 23020:17 episode retained only a unique episode-wide contact-pair list. It showed an object-table pair and no tool-object pair, but it could not independently align contacts to each pose in the measured probe interval. Its old sidecar remains intact and verifies with the prior `NoInference(Unidentifiable)` interpretation; the new contact claim is not retroactively added to it.
+
+New probe pose samples carry structured body and geometry identities for the contacts observed at that simulator step, with a separate list at the exact window start. `Some([])` means the simulator observed no contacts at that step; absent contact fields mean a legacy record. The per-sample and trace digests bind these values. A new trace must include contact evidence at the start and every step; partial evidence is invalid. After validating the trace and wrench alignment, friction inference returns `NoInference(NoIntendedContact)` when the complete trace contains no authorized tool-target pair. Legacy traces retain their previous interpretation.
+
+The simulator worker now emits contact pairs for every monitored probe step, the parser requires that field for each new pose sample, and the replay freeze binds the semantics, execution, parser, worker, and test source hashes. This makes the per-step contact classification recomputable from the sidecar without trusting an episode summary or an inference boolean.
+
+Verification before the next replay:
+
+- `cargo test -p realityos-semantics --test push_probe_inference` — 32 passed, including absent contact, positive contact, partial trace rejection, digest binding, and legacy traces.
+- `cargo test -p realityos-verify --lib probe_` — 14 passed, including start-state identity capture and worker parser requirements.
+- `cargo test -p realityos-verify --test manipulation_benchmark --no-run` — integration target compiled.
+- `cargo fmt --all -- --check`, `git diff --check`, and `python -m py_compile crates/verify/mujoco_worker.py` — passed.
+- The unchanged 23020:17 sidecar verifier returned `PASS`, recomputing its historical `NoInference(Unidentifiable)` result.
+
+Next experiment: prepare one new out-of-cohort candidate at seed/index `23021:17`. Verify exact-ID absence and cohort exclusion; export and hash the resolved input; require a fresh zero-step preflight selecting `probe:+x`; and commit/push a freeze binding the input, preflight, and all evidence-producing source hashes. Run at most one simulation. Require a complete start-to-end contact trace and exact agreement between observed intended contact and the inference gate. Record the 1 mm motion bracket as a diagnostic, not as an acceptance condition for this contact-contract experiment. Never rerun `23020:17` or any frozen, pilot, or public input.

@@ -4,9 +4,9 @@ use realityos_semantics::physical_belief::{
 };
 use realityos_semantics::push_probe::{
     infer_support_friction, transform_sensor_wrench_to_support, FrictionInferenceMode,
-    FrictionInferenceResult, FrictionNoInferenceReason, IntendedContactEvidence, ProbeMotionWindow,
-    ProbeObjectPoseSample, ProbeObjectPoseTrace, PushProbeMeasurement, WrenchCompensation,
-    WrenchEvidenceOrigin, WrenchTransform,
+    FrictionInferenceResult, FrictionNoInferenceReason, IntendedContactEvidence, ProbeContactPair,
+    ProbeMotionWindow, ProbeObjectPoseSample, ProbeObjectPoseTrace, PushProbeMeasurement,
+    WrenchCompensation, WrenchEvidenceOrigin, WrenchTransform,
 };
 use realityos_semantics::sensor::WrenchSampleOrigin;
 
@@ -101,6 +101,7 @@ fn sealed_pose_sample(
         object_id: "object".into(),
         simulator_step: step,
         wrench_sequence,
+        contact_pairs: None,
         capture_s,
         clock_domain: "sim:1".into(),
         position_world_m,
@@ -119,6 +120,7 @@ fn sealed_motion_trace() -> ProbeObjectPoseTrace {
         start_position_world_m: [0.0; 3],
         start_orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
         start_wrench_sequence: None,
+        start_contact_pairs: None,
         samples: vec![
             sealed_pose_sample(10, Some(1), 1.002, [0.0; 3]),
             sealed_pose_sample(11, Some(2), 1.008, [0.0; 3]),
@@ -140,6 +142,7 @@ fn pose_trace_brackets_cumulative_motion_from_the_original_probe_origin() {
         clock_domain: "mujoco:simulation".into(),
         position_world_m: [0.0006, 0.0, 0.0],
         orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
+        contact_pairs: None,
         digest: String::new(),
     };
     first.digest = first.digest();
@@ -151,6 +154,7 @@ fn pose_trace_brackets_cumulative_motion_from_the_original_probe_origin() {
         clock_domain: "mujoco:simulation".into(),
         position_world_m: [0.0011, 0.0, 0.0],
         orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
+        contact_pairs: None,
         digest: String::new(),
     };
     crossing.digest = crossing.digest();
@@ -161,6 +165,7 @@ fn pose_trace_brackets_cumulative_motion_from_the_original_probe_origin() {
         start_position_world_m: [0.0, 0.0, 0.0],
         start_orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
         start_wrench_sequence: None,
+        start_contact_pairs: None,
         samples: vec![first, crossing],
         digest: String::new(),
     };
@@ -202,6 +207,7 @@ fn probe_inference_rejects_pose_trace_wrench_pairs_without_matching_sequence_or_
         start_position_world_m: [0.0; 3],
         start_orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
         start_wrench_sequence: Some(1),
+        start_contact_pairs: None,
         samples: vec![
             sealed_pose_sample(11, Some(2), 1.008, [0.0; 3]),
             sealed_pose_sample(12, None, 1.01, [0.0; 3]),
@@ -238,6 +244,7 @@ fn pose_trace_accepts_a_wrench_paired_at_the_start_boundary() {
         start_position_world_m: [0.0; 3],
         start_orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
         start_wrench_sequence: None,
+        start_contact_pairs: None,
         samples: vec![
             sealed_pose_sample(10, Some(1), 1.0, [0.0; 3]),
             sealed_pose_sample(11, Some(2), 1.008, [0.0; 3]),
@@ -284,6 +291,7 @@ fn pose_trace_pairs_a_bootstrap_wrench_with_its_sealed_start_pose() {
         start_position_world_m: [0.0; 3],
         start_orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
         start_wrench_sequence: Some(1),
+        start_contact_pairs: None,
         samples: vec![
             sealed_pose_sample(11, Some(2), 1.008, [0.0; 3]),
             sealed_pose_sample(12, None, 1.01, [0.0; 3]),
@@ -318,6 +326,7 @@ fn bootstrap_wrench_sequence_is_sealed_into_trace_digest() {
         start_position_world_m: [0.0; 3],
         start_orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
         start_wrench_sequence: Some(1),
+        start_contact_pairs: None,
         samples: vec![
             sealed_pose_sample(11, Some(2), 1.008, [0.0; 3]),
             sealed_pose_sample(12, None, 1.01, [0.0; 3]),
@@ -825,6 +834,78 @@ fn runtime_unexpected_tool_contact_refuses_friction_inference() {
 }
 
 #[test]
+fn absent_runtime_target_contact_refuses_friction_inference() {
+    let mut measurement = measurement();
+    let mut trace = sealed_motion_trace();
+    let table_contact = ProbeContactPair {
+        body1: "object".into(),
+        geom1_name: "geom_1".into(),
+        body2: "table".into(),
+        geom2_name: "geom_2".into(),
+    };
+    trace.start_contact_pairs = Some(vec![table_contact.clone()]);
+    for sample in &mut trace.samples {
+        sample.contact_pairs = Some(vec![table_contact.clone()]);
+        sample.digest = sample.digest();
+    }
+    trace.digest = trace.digest();
+    measurement.motion_trace = Some(trace);
+    assert_eq!(
+        infer_support_friction(&measurement),
+        FrictionInferenceResult::NoInference(FrictionNoInferenceReason::NoIntendedContact)
+    );
+}
+
+#[test]
+fn runtime_probe_trace_with_intended_contact_keeps_friction_inference_available() {
+    let mut measurement = measurement();
+    let mut trace = sealed_motion_trace();
+    let table_contact = ProbeContactPair {
+        body1: "object".into(),
+        geom1_name: "geom_1".into(),
+        body2: "table".into(),
+        geom2_name: "geom_2".into(),
+    };
+    trace.start_contact_pairs = Some(vec![table_contact.clone()]);
+    for sample in &mut trace.samples {
+        sample.contact_pairs = Some(vec![table_contact.clone()]);
+        sample.digest = sample.digest();
+    }
+    trace.samples[0].contact_pairs = Some(vec![ProbeContactPair {
+        body1: "object".into(),
+        geom1_name: "geom_3".into(),
+        body2: "tool".into(),
+        geom2_name: "geom_4".into(),
+    }]);
+    trace.samples[0].digest = trace.samples[0].digest();
+    trace.digest = trace.digest();
+    measurement.motion_trace = Some(trace);
+
+    assert!(matches!(
+        infer_support_friction(&measurement),
+        FrictionInferenceResult::Updated { .. }
+    ));
+}
+
+#[test]
+fn partial_runtime_contact_trace_is_rejected() {
+    let mut measurement = measurement();
+    let mut trace = sealed_motion_trace();
+    trace.start_contact_pairs = Some(Vec::new());
+    trace.samples[0].contact_pairs = Some(Vec::new());
+    trace.samples[0].digest = trace.samples[0].digest();
+    trace.samples[2].contact_pairs = Some(Vec::new());
+    trace.samples[2].digest = trace.samples[2].digest();
+    trace.digest = trace.digest();
+    measurement.motion_trace = Some(trace);
+
+    assert_eq!(
+        infer_support_friction(&measurement),
+        FrictionInferenceResult::NoInference(FrictionNoInferenceReason::InvalidMotionTrace)
+    );
+}
+
+#[test]
 fn sample_gap_and_motion_skew_are_bounded() {
     let mut gap = measurement();
     gap.samples[1] = sample(2, 1.02, [-3.1, 0.0, 0.0, 0.0, 0.0, 0.0]);
@@ -858,6 +939,27 @@ fn empty_friction_intersection_produces_no_inference() {
 fn measurement_digest_binds_sample_values_origin_and_transform() {
     let baseline = measurement();
     let baseline_digest = baseline.digest();
+
+    let mut changed_contacts = baseline.clone();
+    let mut trace = sealed_motion_trace();
+    trace.start_contact_pairs = Some(vec![ProbeContactPair {
+        body1: "object".into(),
+        geom1_name: "geom_1".into(),
+        body2: "table".into(),
+        geom2_name: "geom_2".into(),
+    }]);
+    for sample in &mut trace.samples {
+        sample.contact_pairs = Some(vec![ProbeContactPair {
+            body1: "tool".into(),
+            geom1_name: "geom_1".into(),
+            body2: "object".into(),
+            geom2_name: "geom_3".into(),
+        }]);
+        sample.digest = sample.digest();
+    }
+    trace.digest = trace.digest();
+    changed_contacts.motion_trace = Some(trace);
+    assert_ne!(baseline_digest, changed_contacts.digest());
 
     let mut changed_force = baseline.clone();
     changed_force.samples[0].wrench[0] -= 0.1;

@@ -38,6 +38,33 @@ pub struct ProbeMotionWindow {
     pub unresolved_motion_before_force: bool,
 }
 
+/// A raw simulator contact pair captured alongside a probe pose sample.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeContactPair {
+    pub body1: String,
+    pub geom1_name: String,
+    pub body2: String,
+    pub geom2_name: String,
+}
+
+impl ProbeContactPair {
+    pub fn contains_bodies(&self, first: &str, second: &str) -> bool {
+        (self.body1 == first && self.body2 == second)
+            || (self.body1 == second && self.body2 == first)
+    }
+
+    fn validate(&self) -> Result<(), &'static str> {
+        if self.body1.trim().is_empty()
+            || self.geom1_name.trim().is_empty()
+            || self.body2.trim().is_empty()
+            || self.geom2_name.trim().is_empty()
+        {
+            return Err("contact_pair_identity");
+        }
+        Ok(())
+    }
+}
+
 /// A target-body pose captured at a simulation step during a push probe.
 /// `wrench_sequence` is present when a force sample was captured at the same
 /// simulator time, making the two evidence streams directly pairable offline.
@@ -47,6 +74,10 @@ pub struct ProbeObjectPoseSample {
     pub simulator_step: u64,
     #[serde(default)]
     pub wrench_sequence: Option<u64>,
+    /// `Some([])` records no contacts at this exact simulator step; `None`
+    /// identifies legacy pose evidence that did not record contacts.
+    #[serde(default)]
+    pub contact_pairs: Option<Vec<ProbeContactPair>>,
     pub capture_s: f64,
     pub clock_domain: String,
     pub position_world_m: [f64; 3],
@@ -57,7 +88,11 @@ pub struct ProbeObjectPoseSample {
 
 impl ProbeObjectPoseSample {
     pub fn digest(&self) -> String {
-        let mut bytes = b"realityos.probe_object_pose_sample/1\0".to_vec();
+        let mut bytes = if self.contact_pairs.is_some() {
+            b"realityos.probe_object_pose_sample/2\0".to_vec()
+        } else {
+            b"realityos.probe_object_pose_sample/1\0".to_vec()
+        };
         push_string(&mut bytes, &self.object_id);
         bytes.extend_from_slice(&self.simulator_step.to_le_bytes());
         match self.wrench_sequence {
@@ -66,6 +101,9 @@ impl ProbeObjectPoseSample {
                 bytes.extend_from_slice(&sequence.to_le_bytes());
             }
             None => bytes.push(0),
+        }
+        if let Some(contact_pairs) = &self.contact_pairs {
+            push_contact_pairs(&mut bytes, contact_pairs);
         }
         push_f64(&mut bytes, self.capture_s);
         push_string(&mut bytes, &self.clock_domain);
@@ -86,6 +124,11 @@ impl ProbeObjectPoseSample {
         }
         if self.position_world_m.iter().any(|value| !value.is_finite()) {
             return Err("position");
+        }
+        if let Some(contact_pairs) = &self.contact_pairs {
+            for pair in contact_pairs {
+                pair.validate()?;
+            }
         }
         if self
             .orientation_world_wxyz
@@ -122,15 +165,22 @@ pub struct ProbeObjectPoseTrace {
     /// trace sample. This binds a bootstrap wrench to the sealed start pose.
     #[serde(default)]
     pub start_wrench_sequence: Option<u64>,
+    /// Raw contacts at the exact start pose. `None` denotes legacy evidence.
+    #[serde(default)]
+    pub start_contact_pairs: Option<Vec<ProbeContactPair>>,
     pub samples: Vec<ProbeObjectPoseSample>,
     pub digest: String,
 }
 
 impl ProbeObjectPoseTrace {
     pub fn digest(&self) -> String {
-        let mut bytes = match self.start_wrench_sequence {
-            Some(_) => b"realityos.probe_object_pose_trace/2\0".to_vec(),
-            None => b"realityos.probe_object_pose_trace/1\0".to_vec(),
+        let mut bytes = if self.has_contact_trace() {
+            b"realityos.probe_object_pose_trace/3\0".to_vec()
+        } else {
+            match self.start_wrench_sequence {
+                Some(_) => b"realityos.probe_object_pose_trace/2\0".to_vec(),
+                None => b"realityos.probe_object_pose_trace/1\0".to_vec(),
+            }
         };
         push_string(&mut bytes, &self.object_id);
         push_string(&mut bytes, &self.clock_domain);
@@ -140,11 +190,34 @@ impl ProbeObjectPoseTrace {
         if let Some(sequence) = self.start_wrench_sequence {
             bytes.extend_from_slice(&sequence.to_le_bytes());
         }
+        if let Some(contact_pairs) = &self.start_contact_pairs {
+            push_contact_pairs(&mut bytes, contact_pairs);
+        }
         bytes.extend_from_slice(&(self.samples.len() as u64).to_le_bytes());
         for sample in &self.samples {
             push_string(&mut bytes, &sample.digest);
         }
         sha256(&bytes)
+    }
+
+    pub fn has_contact_trace(&self) -> bool {
+        self.start_contact_pairs.is_some()
+            && self
+                .samples
+                .iter()
+                .all(|sample| sample.contact_pairs.is_some())
+    }
+
+    pub fn contains_contact_between(&self, first: &str, second: &str) -> bool {
+        self.start_contact_pairs
+            .iter()
+            .chain(
+                self.samples
+                    .iter()
+                    .filter_map(|sample| sample.contact_pairs.as_ref()),
+            )
+            .flatten()
+            .any(|pair| pair.contains_bodies(first, second))
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -178,6 +251,20 @@ impl ProbeObjectPoseTrace {
         }
         if self.samples.is_empty() {
             return Err("empty_trace");
+        }
+        let recorded_contact_lists = usize::from(self.start_contact_pairs.is_some())
+            + self
+                .samples
+                .iter()
+                .filter(|sample| sample.contact_pairs.is_some())
+                .count();
+        if recorded_contact_lists != 0 && recorded_contact_lists != self.samples.len() + 1 {
+            return Err("incomplete_contact_trace");
+        }
+        if let Some(contact_pairs) = &self.start_contact_pairs {
+            for pair in contact_pairs {
+                pair.validate()?;
+            }
         }
         if self.start_wrench_sequence.is_some_and(|sequence| {
             self.samples
@@ -714,6 +801,15 @@ pub fn infer_support_friction(measurement: &PushProbeMeasurement) -> FrictionInf
     if let Err(reason) = validate_samples(measurement) {
         return fail(reason);
     }
+    if measurement.motion_trace.as_ref().is_some_and(|trace| {
+        trace.has_contact_trace()
+            && !trace.contains_contact_between(
+                &measurement.intended_contact.tool_body_id,
+                &measurement.intended_contact.target_body_id,
+            )
+    }) {
+        return fail(FrictionNoInferenceReason::NoIntendedContact);
+    }
 
     let bounds = match mode {
         FrictionInferenceMode::Sticking => {
@@ -839,6 +935,16 @@ pub fn infer_support_friction(measurement: &PushProbeMeasurement) -> FrictionInf
         return fail(FrictionNoInferenceReason::EmptyIntersection);
     }
     FrictionInferenceResult::Updated { interval, mode }
+}
+
+fn push_contact_pairs(bytes: &mut Vec<u8>, contact_pairs: &[ProbeContactPair]) {
+    bytes.extend_from_slice(&(contact_pairs.len() as u64).to_le_bytes());
+    for pair in contact_pairs {
+        push_string(bytes, &pair.body1);
+        push_string(bytes, &pair.geom1_name);
+        push_string(bytes, &pair.body2);
+        push_string(bytes, &pair.geom2_name);
+    }
 }
 
 fn compensation_for_sample(

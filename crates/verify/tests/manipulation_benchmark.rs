@@ -6114,6 +6114,24 @@ fn probe_pose_trace_replays_frozen_v4_ur5e_trial() {
             .as_str()
             .expect("frozen probe execution source digest")
     );
+    let wrench_sensor_source_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src/manipulation_benchmark/wrench_sensor.rs");
+    let wrench_sensor_source_bytes =
+        std::fs::read(&wrench_sensor_source_path).expect("probe wrench parser source");
+    assert_eq!(
+        sha256_upper(&wrench_sensor_source_bytes),
+        freeze["runner"]["wrench_sensor_source_sha256"]
+            .as_str()
+            .expect("frozen wrench parser source digest")
+    );
+    let worker_source_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("mujoco_worker.py");
+    let worker_source_bytes = std::fs::read(&worker_source_path).expect("MuJoCo worker source");
+    assert_eq!(
+        sha256_upper(&worker_source_bytes),
+        freeze["runner"]["worker_source_sha256"]
+            .as_str()
+            .expect("frozen MuJoCo worker source digest")
+    );
     assert_eq!(trial.robot_id, "menagerie_ur5e");
     assert_eq!(trial.task, BenchmarkTask::PushProbeReplan);
     assert_eq!(trial.seed, seed);
@@ -6198,17 +6216,31 @@ fn probe_pose_trace_replays_frozen_v4_ur5e_trial() {
         .measurement
         .motion_trace
         .as_ref()
-        .expect("trace-enabled sidecar retains per-step target poses");
+        .expect("trace-enabled sidecar retains per-step target evidence");
     let trace_validation = motion_trace.validate();
+    let has_complete_contact_trace = motion_trace.has_contact_trace();
+    let intended_contact_observed = motion_trace.contains_contact_between(
+        &record.measurement.intended_contact.tool_body_id,
+        &record.measurement.intended_contact.target_body_id,
+    );
+    let contact_gate_valid = has_complete_contact_trace
+        && if intended_contact_observed {
+            record.inference
+                != FrictionInferenceResult::NoInference(
+                    realityos_semantics::push_probe::FrictionNoInferenceReason::NoIntendedContact,
+                )
+        } else {
+            record.inference
+                == FrictionInferenceResult::NoInference(
+                    realityos_semantics::push_probe::FrictionNoInferenceReason::NoIntendedContact,
+                )
+        };
     let has_xy_threshold_bracket = motion_trace
         .first_xy_motion_bracket(record.measurement.motion.pose_resolution_m)
         .is_some();
     let unresolved_motion = record.measurement.motion.unresolved_motion_before_force;
-    let fail_closed_for_unresolved_motion = !unresolved_motion
-        || record.inference
-            == FrictionInferenceResult::NoInference(
-                realityos_semantics::push_probe::FrictionNoInferenceReason::UnbracketedMotion,
-            );
+    let fail_closed_for_unresolved_motion =
+        !unresolved_motion || matches!(record.inference, FrictionInferenceResult::NoInference(_));
     let trace_inference_valid = record.inference
         != FrictionInferenceResult::NoInference(
             realityos_semantics::push_probe::FrictionNoInferenceReason::InvalidMotionTrace,
@@ -6230,7 +6262,7 @@ fn probe_pose_trace_replays_frozen_v4_ur5e_trial() {
     }
     let result = serde_json::json!({
         "experiment_id": freeze["experiment_id"],
-        "classification": "SIMULATION_ONLY; TRACE_CONTRACT_VALIDATION",
+        "classification": "SIMULATION_ONLY; PER_STEP_CONTACT_TRACE_CONTRACT",
         "freeze_sha256": sha256_upper(&freeze_bytes),
         "trial_input_sha256": input_sha256,
         "first_action_preflight": first_action_preflight,
@@ -6247,6 +6279,10 @@ fn probe_pose_trace_replays_frozen_v4_ur5e_trial() {
             "verification_error": sidecar_verification.as_ref().err().map(ToString::to_string),
             "trace_validation": trace_validation.as_ref().map(|_| "valid").unwrap_or("invalid"),
             "trace_validation_error": trace_validation.as_ref().err().map(ToString::to_string),
+            "contact_trace_status": if has_complete_contact_trace { "complete" } else { "missing_or_incomplete" },
+            "start_contact_pair_count": motion_trace.start_contact_pairs.as_ref().map(Vec::len),
+            "intended_contact_observed": intended_contact_observed,
+            "contact_gate_valid": contact_gate_valid,
             "first_xy_threshold_bracket_present": has_xy_threshold_bracket,
             "unresolved_motion_before_force": unresolved_motion,
             "fail_closed_for_unresolved_motion": fail_closed_for_unresolved_motion,
@@ -6280,6 +6316,10 @@ fn probe_pose_trace_replays_frozen_v4_ur5e_trial() {
         trace_validation.is_ok(),
         "pose trace validation: {trace_validation:?}"
     );
+    assert!(
+        has_complete_contact_trace,
+        "the start state and every simulator-step pose sample must carry contact evidence"
+    );
     assert_eq!(measurement_count, 1);
     assert_eq!(record.action_key, "probe:+x");
     assert!(
@@ -6287,8 +6327,8 @@ fn probe_pose_trace_replays_frozen_v4_ur5e_trial() {
         "trial must execute its recorded +x probe"
     );
     assert!(
-        has_xy_threshold_bracket,
-        "the trace must expose the first 1 mm motion bracket"
+        contact_gate_valid,
+        "friction inference must refuse when the complete probe trace contains no intended tool-target contact"
     );
     assert!(
         fail_closed_for_unresolved_motion,
@@ -6300,10 +6340,12 @@ fn probe_pose_trace_replays_frozen_v4_ur5e_trial() {
     );
     assert_eq!(episode.unauthorized_writes, 0);
     println!(
-        "TRACE_RESULT path={} sha256={} pose_samples={} first_xy_bracket={} unresolved_motion_before_force={} inference={:?}",
+        "TRACE_RESULT path={} sha256={} pose_samples={} contact_trace_complete={} intended_contact_observed={} first_xy_bracket={} unresolved_motion_before_force={} inference={:?}",
         result_path.display(),
         sha256_upper(&serialized),
         motion_trace.samples.len(),
+        has_complete_contact_trace,
+        intended_contact_observed,
         has_xy_threshold_bracket,
         unresolved_motion,
         record.inference

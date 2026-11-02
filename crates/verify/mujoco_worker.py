@@ -519,6 +519,28 @@ class Instance:
 INST = Instance()
 
 
+def _probe_contact_pair_evidence() -> list[dict[str, str]]:
+    m, d = INST.model, INST.data
+    if m is None or d is None:
+        raise ValueError("probe_contact_model_missing")
+    pairs = []
+    for index in range(d.ncon):
+        contact = d.contact[index]
+        geom1 = int(contact.geom1)
+        geom2 = int(contact.geom2)
+        body1 = int(m.geom_bodyid[geom1])
+        body2 = int(m.geom_bodyid[geom2])
+        pairs.append(
+            {
+                "body1": m.body(body1).name or f"body_{body1}",
+                "geom1_name": m.geom(geom1).name or f"geom_{geom1}",
+                "body2": m.body(body2).name or f"body_{body2}",
+                "geom2_name": m.geom(geom2).name or f"geom_{geom2}",
+            }
+        )
+    return pairs
+
+
 def _end_effector_chains(m, joints, bodies, sites) -> list[dict[str, Any]]:
     name_to_id = {m.body(i).name or f"body_{i}": i for i in range(m.nbody)}
     chains = []
@@ -2053,6 +2075,7 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                                 float(value)
                                 for value in INST.data.xquat[expected_contact_body_id]
                             ],
+                            "contact_pairs": _probe_contact_pair_evidence(),
                         }
                     )
                 newly_available = []
