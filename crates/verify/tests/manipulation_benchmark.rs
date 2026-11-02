@@ -16,14 +16,14 @@ use realityos_verify::manipulation_benchmark::wrench_sensor::{
 };
 use realityos_verify::manipulation_benchmark::{
     evaluate_paired_screening_gate, evaluation_label_mismatch, paired_campaign_delta,
-    paired_trial_key, resolve_benchmark_trial, resolve_benchmark_trial_with_suite, score_campaign,
-    trial_digest, upgrade_trial_for_current_execution, upgrade_v5_trial_for_v6,
-    validate_collision_geometry, validate_physical_observation, BenchmarkConfig,
-    BenchmarkExecutionError, BenchmarkTask, BenchmarkTrialRecord, EmbodimentRegistry,
-    EmbodimentRole, FailureCause, GeometryGateResult, PhysicalEvidenceStatus,
-    PhysicalSensorIdentity, PhysicalSensorRequirement, PhysicalSensorTrace, PushTrialStratum,
-    ScenarioSuiteManifest, SensorOrigin, SimulationWrenchSensorProfile, TrialExpectation,
-    TrialOutcome, BENCHMARK_SCHEMA_VERSION,
+    paired_trial_key, preflight_benchmark_trial_first_action, resolve_benchmark_trial,
+    resolve_benchmark_trial_with_suite, score_campaign, trial_digest,
+    upgrade_trial_for_current_execution, upgrade_v5_trial_for_v6, validate_collision_geometry,
+    validate_physical_observation, BenchmarkConfig, BenchmarkExecutionError, BenchmarkTask,
+    BenchmarkTrialRecord, EmbodimentRegistry, EmbodimentRole, FailureCause, FirstActionPreflightV1,
+    GeometryGateResult, PhysicalEvidenceStatus, PhysicalSensorIdentity, PhysicalSensorRequirement,
+    PhysicalSensorTrace, PushTrialStratum, ScenarioSuiteManifest, SensorOrigin,
+    SimulationWrenchSensorProfile, TrialExpectation, TrialOutcome, BENCHMARK_SCHEMA_VERSION,
 };
 use realityos_verify::mujoco_exec::checkin_worker;
 use realityos_verify::normalize::{DerivedInterface, JointRecord, RobotManifest};
@@ -5773,6 +5773,97 @@ fn empty_probe_measurement_sidecar_reports_absent_records() {
 }
 
 #[test]
+#[ignore = "SIMULATION_ONLY preflight initializes MuJoCo but performs no control writes or physics steps"]
+fn first_action_preflight_selects_without_control_write_or_simulation_step() {
+    let _mujoco_guard = lock_mujoco_test();
+    let seed = 23019;
+    let index = 17;
+    let trial = resolve_v4_ur5e_probe_trial(seed, index);
+    assert_eq!(trial.expectation, TrialExpectation::ExpectedSuccess);
+    assert!(!(21_000..=21_019).contains(&seed));
+    assert!(!(22_000..=22_099).contains(&seed));
+    let evidence_dir = required_path_env("REALITYOS_FIRST_ACTION_PREFLIGHT_EVIDENCE_DIR");
+    assert!(
+        evidence_dir.is_dir(),
+        "preflight evidence directory must exist"
+    );
+
+    let bundle = ur5e_bundle();
+    let registry_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../robots/benchmarks/manipulation/embodiments.json");
+    let profile = EmbodimentRegistry::load(&registry_path)
+        .expect("checked-in manipulation registry")
+        .registrations
+        .into_iter()
+        .find(|entry| entry.robot_id == trial.robot_id)
+        .and_then(|entry| entry.simulation_wrench_profile)
+        .expect("registered UR5e push profile");
+    let mut admission = simulation_admission(120.0);
+    admission.wrench_limit_policy = profile.limit_policy.clone();
+
+    let preflight =
+        preflight_benchmark_trial_first_action(&bundle, &trial, admission, Some(&profile))
+            .expect("preflight resolves the runtime's first authorized action");
+
+    preflight
+        .verify()
+        .expect("preflight evidence is self-consistent");
+    assert_eq!(preflight.trial_id, trial.trial_id);
+    assert_eq!(
+        preflight.trial_digest,
+        trial_digest(&trial).expect("trial digest")
+    );
+    assert_eq!(preflight.authorized_action_key.as_deref(), Some("probe:+x"));
+    assert_eq!(
+        preflight.control_writes_before, preflight.control_writes_after,
+        "preflight must not write simulator controls"
+    );
+    assert_eq!(
+        preflight.simulation_time_before_s, preflight.simulation_time_after_s,
+        "preflight must not step the simulator"
+    );
+    assert_eq!(preflight.simulator_steps, 0);
+    assert!(!preflight
+        .reasoning_request_audit
+        .contains("ExpectedSuccess"));
+    assert!(!preflight
+        .reasoning_request_audit
+        .contains("ExpectedRefusal"));
+    let trial_bytes = serde_json::to_vec_pretty(&serde_json::json!({ "trial": trial }))
+        .expect("preflighted trial input serializes");
+    let preflight_bytes =
+        serde_json::to_vec_pretty(&preflight).expect("preflight evidence serializes");
+    for (name, bytes) in [
+        ("TRIAL_INPUT.json", trial_bytes.as_slice()),
+        ("PREFLIGHT.json", preflight_bytes.as_slice()),
+    ] {
+        let path = evidence_dir.join(name);
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("preflight evidence path must be new");
+        std::io::Write::write_all(&mut output, bytes).expect("persist preflight evidence");
+        std::io::Write::write_all(&mut output, b"\n").expect("terminate preflight JSON");
+        println!(
+            "PREFLIGHT_ARTIFACT path={} sha256={}",
+            path.display(),
+            sha256_upper(bytes)
+        );
+    }
+    println!(
+        "PREFLIGHT trial={} pregrant={:?} authorized={:?} controls={}->{} time={}->{}",
+        preflight.trial_id,
+        preflight.pregrant_action_key,
+        preflight.authorized_action_key,
+        preflight.control_writes_before,
+        preflight.control_writes_after,
+        preflight.simulation_time_before_s,
+        preflight.simulation_time_after_s,
+    );
+}
+
+#[test]
 #[ignore = "freeze-only: exports a resolved v4 trial input; does not run simulation"]
 fn export_v4_ur5e_probe_trace_trial_input() {
     let seed = std::env::var("REALITYOS_PROBE_TRACE_SEED")
@@ -5898,6 +5989,50 @@ fn probe_pose_trace_replays_frozen_v4_ur5e_trial() {
             .as_str()
             .map(str::to_owned)
     );
+    let first_action_preflight = if freeze["preflight"].is_object() {
+        let preflight_path = required_path_env("REALITYOS_PROBE_TRACE_PREFLIGHT");
+        let preflight_bytes =
+            std::fs::read(&preflight_path).expect("frozen first-action preflight");
+        assert_eq!(
+            sha256_upper(&preflight_bytes),
+            freeze["preflight"]["sha256"]
+                .as_str()
+                .expect("frozen preflight digest")
+        );
+        let preflight: FirstActionPreflightV1 =
+            serde_json::from_slice(&preflight_bytes).expect("preflight evidence JSON");
+        preflight.verify().expect("preflight evidence verifies");
+        assert_eq!(preflight.trial_id, trial.trial_id);
+        assert_eq!(
+            preflight.trial_digest,
+            trial_digest(&trial).expect("frozen trial digest")
+        );
+        assert_eq!(preflight.authorized_action_key.as_deref(), Some("probe:+x"));
+        for (relative_path, digest_key) in [
+            (
+                "src/manipulation_benchmark/scenario.rs",
+                "scenario_source_sha256",
+            ),
+            ("../reasoner-bridge/src/lib.rs", "bridge_source_sha256"),
+            (
+                "../semantics/src/physical_reasoner.rs",
+                "reasoner_source_sha256",
+            ),
+        ] {
+            let source_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_path);
+            let source_bytes = std::fs::read(&source_path).expect("preflight source file");
+            assert_eq!(
+                sha256_upper(&source_bytes),
+                freeze["runner"][digest_key]
+                    .as_str()
+                    .expect("frozen preflight source digest"),
+                "preflight source changed: {relative_path}"
+            );
+        }
+        Some(preflight)
+    } else {
+        None
+    };
 
     let bundle = ur5e_bundle();
     let episode = run_test_benchmark_trial_with_probe_measurement_sidecar(
@@ -5936,11 +6071,23 @@ fn probe_pose_trace_replays_frozen_v4_ur5e_trial() {
         .actions
         .iter()
         .any(|action| action.action_key == "probe:+x");
+    let actual_first_action_key = episode
+        .actions
+        .first()
+        .map(|action| action.action_key.as_str());
+    if let Some(preflight) = first_action_preflight.as_ref() {
+        assert_eq!(
+            actual_first_action_key,
+            preflight.authorized_action_key.as_deref(),
+            "runtime's first authorized action must match preflight"
+        );
+    }
     let result = serde_json::json!({
         "experiment_id": freeze["experiment_id"],
         "classification": "SIMULATION_ONLY; TRACE_CONTRACT_VALIDATION",
         "freeze_sha256": sha256_upper(&freeze_bytes),
         "trial_input_sha256": input_sha256,
+        "first_action_preflight": first_action_preflight,
         "trial": trial,
         "complete_episode": episode,
         "probe_measurement_sidecar": {
@@ -5964,6 +6111,7 @@ fn probe_pose_trace_replays_frozen_v4_ur5e_trial() {
         },
         "observed": {
             "probe_action_present": probe_action_present,
+            "actual_first_action_key": actual_first_action_key,
             "unauthorized_writes": episode.unauthorized_writes,
             "outcome": episode.outcome,
             "inference_reason": episode.wrench_inference_reason,

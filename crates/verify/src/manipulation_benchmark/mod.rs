@@ -8,9 +8,10 @@ pub mod scenario;
 pub mod wrench_sensor;
 
 pub use execution::{
-    evaluation_label_mismatch, run_benchmark_trial,
+    evaluation_label_mismatch, preflight_benchmark_trial_first_action, run_benchmark_trial,
     run_benchmark_trial_with_probe_measurement_sidecar, ActionTrace, BenchmarkEpisode,
-    FailureCause, ProbeMeasurementRecordV1, ProbeMeasurementSidecarV1, TrialOutcome,
+    FailureCause, FirstActionPreflightV1, ProbeMeasurementRecordV1, ProbeMeasurementSidecarV1,
+    TrialOutcome,
 };
 pub use geometry::{
     validate_collision_geometry, CollisionGeomRecord, CollisionGeometryManifest,

@@ -51,6 +51,7 @@ use realityos_semantics::sensor::WrenchSampleOrigin;
 use realityos_session::grant_covers;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{BufWriter, Write};
@@ -279,6 +280,121 @@ pub struct ProbeMeasurementRecordV1 {
     pub measurement: PushProbeMeasurement,
 }
 
+/// Evidence for the first action selected by the normal benchmark runtime,
+/// captured before any simulator control write or physics step.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FirstActionPreflightV1 {
+    pub format: String,
+    pub schema_version: u32,
+    pub evidence_status: String,
+    pub trial_id: String,
+    pub trial_digest: String,
+    pub paired_trial_key: Option<String>,
+    pub initial_observation: Value,
+    pub initial_observation_sha256: String,
+    pub reasoning_request_audit: String,
+    pub decision_audit: String,
+    pub pregrant_action_source: String,
+    pub pregrant_action_key: Option<String>,
+    pub authorized_action_key: Option<String>,
+    pub authorized_grant_id: Option<String>,
+    pub authorized_witness_digest: Option<String>,
+    pub authorized_observation_epoch: Option<String>,
+    pub refusal_code: Option<String>,
+    pub control_writes_before: u64,
+    pub control_writes_after: u64,
+    pub simulation_time_before_s: f64,
+    pub simulation_time_after_s: f64,
+    pub simulation_timestep_s: f64,
+    pub simulator_steps: u64,
+}
+
+impl FirstActionPreflightV1 {
+    fn new(trial: &ResolvedBenchmarkTrial) -> Result<Self, BenchmarkError> {
+        Ok(Self {
+            format: "realityos.first_action_preflight".into(),
+            schema_version: 1,
+            evidence_status: "SIMULATION_ONLY".into(),
+            trial_id: trial.trial_id.clone(),
+            trial_digest: trial_digest(trial)?,
+            paired_trial_key: trial.paired_trial_key.clone(),
+            initial_observation: Value::Null,
+            initial_observation_sha256: String::new(),
+            reasoning_request_audit: String::new(),
+            decision_audit: String::new(),
+            pregrant_action_source: "none".into(),
+            pregrant_action_key: None,
+            authorized_action_key: None,
+            authorized_grant_id: None,
+            authorized_witness_digest: None,
+            authorized_observation_epoch: None,
+            refusal_code: None,
+            control_writes_before: 0,
+            control_writes_after: 0,
+            simulation_time_before_s: 0.0,
+            simulation_time_after_s: 0.0,
+            simulation_timestep_s: 0.0,
+            simulator_steps: 0,
+        })
+    }
+
+    /// Verify the trial/observation binding and the zero-write, zero-step claim.
+    pub fn verify(&self) -> Result<(), String> {
+        if self.format != "realityos.first_action_preflight"
+            || self.schema_version != 1
+            || self.evidence_status != "SIMULATION_ONLY"
+            || self.trial_id.trim().is_empty()
+            || self.trial_digest.len() != 64
+            || !self
+                .trial_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || self
+                .paired_trial_key
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
+        {
+            return Err("invalid first-action preflight identity".into());
+        }
+        if !self.initial_observation.is_object()
+            || self.initial_observation_sha256
+                != json_sha256(&self.initial_observation).map_err(|error| error.to_string())?
+        {
+            return Err("first-action preflight observation digest mismatch".into());
+        }
+        if self.reasoning_request_audit.is_empty() || self.decision_audit.is_empty() {
+            return Err("first-action preflight is missing its request or decision audit".into());
+        }
+        if !self.simulation_timestep_s.is_finite() || self.simulation_timestep_s <= 0.0 {
+            return Err("first-action preflight has an invalid simulator timestep".into());
+        }
+        if self.control_writes_before != self.control_writes_after
+            || self.simulation_time_before_s.to_bits() != self.simulation_time_after_s.to_bits()
+            || self.simulator_steps != 0
+        {
+            return Err("first-action preflight advanced the simulator or wrote controls".into());
+        }
+        if self.authorized_action_key.is_some() == self.refusal_code.is_some() {
+            return Err("first-action preflight must contain one action or one refusal".into());
+        }
+        if self.authorized_action_key.is_some()
+            && (self.authorized_grant_id.is_none()
+                || self.authorized_witness_digest.is_none()
+                || self.authorized_observation_epoch.is_none())
+        {
+            return Err("authorized first action is missing its authority binding".into());
+        }
+        Ok(())
+    }
+}
+
+fn json_sha256(value: &Value) -> Result<String, serde_json::Error> {
+    let digest = Sha256::digest(serde_json::to_vec(value)?);
+    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
 impl ProbeMeasurementSidecarV1 {
     /// Check each sample, the full measurement binding, and the inferred interval.
     pub fn verify(&self) -> Result<(), String> {
@@ -330,7 +446,48 @@ pub fn run_benchmark_trial(
     admission: SimulationAdmission,
     wrench_profile: Option<&SimulationWrenchSensorProfile>,
 ) -> Result<BenchmarkEpisode, BenchmarkError> {
-    run_benchmark_trial_inner(bundle, trial, admission, wrench_profile, None)
+    run_benchmark_trial_inner(bundle, trial, admission, wrench_profile, None, None)
+}
+
+/// Run the benchmark's real initial observation, ranking, and authorization
+/// path, then return before any control write or simulator step.
+pub fn preflight_benchmark_trial_first_action(
+    bundle: &RobotBundle,
+    trial: &ResolvedBenchmarkTrial,
+    admission: SimulationAdmission,
+    wrench_profile: Option<&SimulationWrenchSensorProfile>,
+) -> Result<FirstActionPreflightV1, BenchmarkError> {
+    if trial.task != BenchmarkTask::PushProbeReplan
+        || trial.expectation != TrialExpectation::ExpectedSuccess
+        || trial.scenario.move_object_after_obs
+        || trial.fault_injection.is_some()
+    {
+        return Err(BenchmarkError::InvalidTrial(
+            "first-action preflight supports only expected-success un-faulted push/probe trials"
+                .into(),
+        ));
+    }
+    let mut preflight = FirstActionPreflightV1::new(trial)?;
+    let episode = run_benchmark_trial_inner(
+        bundle,
+        trial,
+        admission,
+        wrench_profile,
+        None,
+        Some(&mut preflight),
+    )?;
+    preflight.control_writes_after = episode.ctrl_writes_after;
+    preflight.simulation_time_after_s = episode.simulation_time_s;
+    let elapsed_steps = (preflight.simulation_time_after_s - preflight.simulation_time_before_s)
+        / preflight.simulation_timestep_s;
+    if !elapsed_steps.is_finite() || elapsed_steps < 0.0 {
+        return Err(BenchmarkError::InvalidTrial(
+            "first-action preflight produced an invalid simulation-time delta".into(),
+        ));
+    }
+    preflight.simulator_steps = elapsed_steps.round() as u64;
+    preflight.verify().map_err(BenchmarkError::InvalidTrial)?;
+    Ok(preflight)
 }
 
 /// Run a benchmark trial and write complete probe measurement data to a new,
@@ -342,7 +499,14 @@ pub fn run_benchmark_trial_with_probe_measurement_sidecar(
     wrench_profile: Option<&SimulationWrenchSensorProfile>,
     sidecar_path: &Path,
 ) -> Result<BenchmarkEpisode, BenchmarkError> {
-    run_benchmark_trial_inner(bundle, trial, admission, wrench_profile, Some(sidecar_path))
+    run_benchmark_trial_inner(
+        bundle,
+        trial,
+        admission,
+        wrench_profile,
+        Some(sidecar_path),
+        None,
+    )
 }
 
 fn run_benchmark_trial_inner(
@@ -351,7 +515,9 @@ fn run_benchmark_trial_inner(
     admission: SimulationAdmission,
     wrench_profile: Option<&SimulationWrenchSensorProfile>,
     sidecar_path: Option<&Path>,
+    mut preflight: Option<&mut FirstActionPreflightV1>,
 ) -> Result<BenchmarkEpisode, BenchmarkError> {
+    let preflight_only = preflight.is_some();
     let wall = Instant::now();
     let mut probe_measurement_records = sidecar_path.map(|_| Vec::new());
     if trial.schema_version != BENCHMARK_SCHEMA_VERSION {
@@ -666,7 +832,7 @@ fn run_benchmark_trial_inner(
                 .as_ref()
                 .map(|step| step.action_key.as_str()),
         );
-        episode.decision_audits.push(format!(
+        let decision_audit = format!(
             "decision={:?};pregrant_action_source={};pregrant_action_key={};support_friction_interval={:?};candidates={}",
             preview.decision,
             pregrant_action_source,
@@ -683,7 +849,24 @@ fn run_benchmark_trial_inner(
                 ))
                 .collect::<Vec<_>>()
                 .join("|")
-        ));
+        );
+        episode.decision_audits.push(decision_audit.clone());
+        if let Some(preflight) = preflight.as_deref_mut() {
+            preflight.initial_observation = current_state.clone();
+            preflight.initial_observation_sha256 = json_sha256(&current_state)?;
+            preflight.reasoning_request_audit = request_debug.clone();
+            preflight.decision_audit = decision_audit;
+            preflight.pregrant_action_source = pregrant_action_source.into();
+            preflight.pregrant_action_key = pregrant_action_key.map(str::to_owned);
+            preflight.control_writes_before = episode.ctrl_writes_before;
+            preflight.simulation_time_before_s =
+                current_state["time"].as_f64().ok_or_else(|| {
+                    BenchmarkError::InvalidTrial(
+                        "initial observation is missing simulator time".into(),
+                    )
+                })?;
+            preflight.simulation_timestep_s = manifest.timestep;
+        }
 
         let authorized = match authorize_current_action(
             &mut os,
@@ -694,6 +877,9 @@ fn run_benchmark_trial_inner(
         ) {
             Ok(authorized) => authorized,
             Err(refusal) => {
+                if let Some(preflight) = preflight.as_deref_mut() {
+                    preflight.refusal_code = Some(refusal.to_string());
+                }
                 let writes_after = worker
                     .peek_ctrl()
                     .map_err(|error| BenchmarkError::Simulation(error.to_string()))?
@@ -709,6 +895,15 @@ fn run_benchmark_trial_inner(
         };
 
         let frozen = authorized.action.frozen();
+        if let Some(preflight) = preflight.as_deref_mut() {
+            preflight.authorized_action_key = Some(frozen.action_key.clone());
+            preflight.authorized_grant_id = Some(authorized.grant.command_id.clone());
+            preflight.authorized_witness_digest = Some(frozen.witness_digest.clone());
+            preflight.authorized_observation_epoch = Some(frozen.observation_epoch.clone());
+        }
+        if preflight_only {
+            return finalize(worker, episode, wall);
+        }
         let Some(authorization) = frozen.execution_authorization.as_ref() else {
             return Err(BenchmarkError::Simulation(
                 "bridge action missing frozen execution authorization".into(),
