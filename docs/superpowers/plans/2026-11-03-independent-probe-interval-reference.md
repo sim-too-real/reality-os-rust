@@ -55,8 +55,8 @@
 
 - [x] Record exact inputs, independent outputs, artifact hashes, verification commands, and limitations.
 - [x] Confirm all safety and release flags remain false in the freeze.
-- [ ] Commit and push the finished Reality OS implementation, then commit and push the First Principles mission-state update.
-- [ ] Fetch both canonical repos and confirm local `main` equals `origin/main` with clean worktrees.
+- [x] Commit and push the finished Reality OS implementation, then commit and push the First Principles mission-state update.
+- [x] Fetch both canonical repos and confirm local `main` equals `origin/main` with clean worktrees.
 
 ## Review ledger
 
