@@ -1,0 +1,71 @@
+{
+  "format": "realityos.probe_preflight_failure_diagnostic",
+  "schema_version": 1,
+  "status": "REJECTED_BEFORE_FREEZE_NO_REPLAY",
+  "experiment_id": "fresh_out_of_cohort_per_step_contact_trace_v1_20261103_23022_17",
+  "source_commit": "160d04ebd160432bdd23acdcaa3dca766da0a9c9",
+  "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23022:17",
+  "seed": 23022,
+  "index": 17,
+  "expectation": "expected_success",
+  "trial_input_sha256": "9A4F45EAB2D97DCD513CF67D923B27BA2CC9A2F9B13DCBB1C5CC6D1C0458EAD9",
+  "preexisting_archive_exact_id_match": false,
+  "cohort_exclusion": {
+    "pilot": true,
+    "historical": true,
+    "public": true
+  },
+  "export_test": "1 passed; freeze-only input resolution",
+  "preflight_attempts": 2,
+  "diagnostic_preflight": {
+    "simulation_time_before_s": 0.0,
+    "pregrant_action_source": "none",
+    "initial_observation_sha256": "8207af614742b3c447441241d5eaf32b1973ba45bb1db6f041426abace4adc36",
+    "simulation_time_after_s": 0.0,
+    "refusal_code": "NO_JUSTIFIED_CURRENT_ACTION",
+    "simulator_steps": 0,
+    "decision_reason": "NO_PHYSICAL_CANDIDATES",
+    "status": "NO_PROBE_AUTHORIZED",
+    "candidate_statuses": [
+      {
+        "status": "MECHANICS_UNKNOWN",
+        "action": "push:+x"
+      },
+      {
+        "status": "MECHANICS_UNKNOWN",
+        "action": "push:-x"
+      },
+      {
+        "status": "MECHANICS_UNKNOWN",
+        "action": "push:+y"
+      },
+      {
+        "status": "MECHANICS_UNKNOWN",
+        "action": "push:-y"
+      },
+      {
+        "status": "UNINTENDED_ROBOT_OBJECT_CONTACT",
+        "action": "probe:+x"
+      },
+      {
+        "status": "GRIPPER_RESOURCE_UNKNOWN",
+        "action": "grasp:y"
+      }
+    ],
+    "control_writes_after": 0,
+    "pregrant_action_key": null,
+    "decision": "CurrentlyUnachievable",
+    "control_writes_before": 0,
+    "authorized_action_key": null
+  },
+  "diagnostic_method": "A temporary stdout-only print exposed the existing preflight receipt fields; it was reverted immediately. Runtime/reasoner/authorization code was unchanged.",
+  "interpretation": "ExpectedSuccess is a suite label, not evidence that a safe probe exists. The selected probe candidate was rejected by the reasoner collision proof as unintended robot-object contact; no action was authorized. This is a selection refusal, not a replay result.",
+  "freeze_created": false,
+  "replay_started": false,
+  "rerun_allowed": false,
+  "physical_actuation_allowed": false,
+  "admission_status": "NOT_ADMITTED",
+  "metal": false,
+  "shop_release": false,
+  "viewport_admits": false
+}

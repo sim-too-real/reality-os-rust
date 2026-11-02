@@ -1,0 +1,66 @@
+{
+  "format": "realityos.probe_candidate_selection_audit",
+  "schema_version": 1,
+  "checked_at_local": "2026-11-03T00:59:49.4233685+05:30",
+  "status": "23023_PREFLIGHT_ELIGIBLE; 23022_REJECTED; NO_REPLAY_YET",
+  "repository_head": "160d04ebd160432bdd23acdcaa3dca766da0a9c9",
+  "branch": "main",
+  "cohort_suite": {
+    "path": "robots/benchmarks/manipulation/scenario_suite_v4.json",
+    "sha256": "027207A6F8BF85FF3DB24036842F85804A8654455AAA9A9046FE928B6D208CCF",
+    "seed": 23023,
+    "index": 17,
+    "pilot_seed_list_contains": false,
+    "public_seed_list_contains": false,
+    "historical_seed_ranges_contain_seed": false,
+    "stratum_period": 5,
+    "index_residue": 2,
+    "expected_success_residues": [
+      0,
+      1,
+      2
+    ],
+    "resolved_expectation": "expected_success"
+  },
+  "exact_trial_archive_audit": {
+    "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23023:17",
+    "exact_id_match_before_export": false,
+    "search_command": "rg -n --fixed-strings <exact trial ID> . -g !target/** -g !**/target/**"
+  },
+  "screened_candidates": [
+    {
+      "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23022:17",
+      "input_sha256": "9A4F45EAB2D97DCD513CF67D923B27BA2CC9A2F9B13DCBB1C5CC6D1C0458EAD9",
+      "status": "REJECTED_BEFORE_FREEZE_NO_REPLAY",
+      "preflight_failure_path": "docs/superpowers/evidence/grasp-lift-margin-20261102/fresh-out-of-cohort-per-step-contact-trace-v1-23022-20261103/PREFLIGHT_FAILURE.json",
+      "preflight_failure_sha256": "681246C8DA21366C7C876E26F77F76D5C31A34FB46CBE77A79184D5C51BF739C",
+      "reason": "NO_PHYSICAL_CANDIDATES",
+      "probe_status": "UNINTENDED_ROBOT_OBJECT_CONTACT",
+      "authorized_action": null,
+      "simulator_steps": 0
+    },
+    {
+      "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23023:17",
+      "input_sha256": "774AB38FDA184379DFBB0F561846326328606D15F2D5EFA216FF6BF590710FE2",
+      "status": "PREFLIGHT_ELIGIBLE",
+      "selected_action": "probe:+x",
+      "pregrant_action": "probe:+x",
+      "preflight_path": "docs/superpowers/evidence/grasp-lift-margin-20261102/fresh-out-of-cohort-per-step-contact-trace-v1-23023-20261103/PREFLIGHT.json",
+      "preflight_sha256": "BDBC7609E5388417B1B50CF7AAF1C73760C2414C1CC8E269CD3BED4C5EBAAC0B",
+      "trial_digest": "4bc50dc3a8307acd662e4ae881d261939a4e0804d498a91176f6d420f5f32cab",
+      "initial_observation_sha256": "a7a80d57e638d491a2068cbd2771d42f20dfe6916e6dc6555e11b8dc372b5169",
+      "control_writes_before": 0,
+      "control_writes_after": 0,
+      "simulation_time_before_s": 0.0,
+      "simulation_time_after_s": 0.0,
+      "simulator_steps": 0
+    }
+  ],
+  "selection_rule": "Freeze only the exact fresh trial whose zero-step preflight self-verifies and authorizes probe:+x; do not replay candidates rejected by that gate.",
+  "replay_started": false,
+  "simulation_runs": 0,
+  "admission_status": "NOT_ADMITTED",
+  "metal": false,
+  "shop_release": false,
+  "viewport_admits": false
+}
