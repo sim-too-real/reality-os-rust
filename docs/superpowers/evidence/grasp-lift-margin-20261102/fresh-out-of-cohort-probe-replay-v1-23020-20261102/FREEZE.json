@@ -1,0 +1,89 @@
+{
+  "schema": "realityos.probe_pose_trace_freeze",
+  "schema_version": 1,
+  "status": "FROZEN_BEFORE_SIMULATION",
+  "experiment_id": "fresh_out_of_cohort_probe_replay_with_observation_binding_v1_20261102_23020_17",
+  "frozen_at_local": "2026-11-03T00:00:17.366+05:30",
+  "classification": "SIMULATION_ONLY exploratory single-trial replay and trace-contract validation",
+  "source_revision": {
+    "repository": "reality-os-rust",
+    "branch": "main",
+    "commit": "cf17d77c344c1b94e6c064566a7edd93b3d33a71"
+  },
+  "trial_input": {
+    "path": "TRIAL_INPUT.json",
+    "sha256": "195D300ED82D41D6CB07935CE532179086DE257472B1C003321146F8B304203B"
+  },
+  "preflight": {
+    "path": "PREFLIGHT.json",
+    "sha256": "A46B905EF3BE5156104D0ABB675EDC2FED23BF5771401E9C25182959E79316B9",
+    "trial_digest": "126a1c53a42891d3dfd6128ec4eb5d60d2b9bba45cbef2b26c1b0aff3663344e",
+    "initial_observation_sha256": "0d5138ff8a2513017a365b21449f7810bf68ff13d52befafc0f56e5fc18dd0a2",
+    "selected_action": "probe:+x",
+    "control_writes_before": 0,
+    "control_writes_after": 0,
+    "simulation_time_before_s": 0.0,
+    "simulation_time_after_s": 0.0,
+    "simulator_steps": 0
+  },
+  "trial": {
+    "seed": 23020,
+    "index": 17,
+    "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23020:17",
+    "robot_id": "menagerie_ur5e",
+    "task": "push_probe_replan",
+    "scenario_suite_version": 4,
+    "expectation": "expected_success",
+    "scenario_expected_refusal": null,
+    "cohort": "outside frozen, pilot, and public cohorts",
+    "cohort_exclusion": {
+      "suite_path": "robots/benchmarks/manipulation/scenario_suite_v4.json",
+      "pilot_seeds_excluded": true,
+      "public_seeds_excluded": true,
+      "historical_seed_ranges_excluded": true,
+      "preexisting_freeze_trial_id_match": false,
+      "preexisting_archive_exact_trial_id_match": false
+    },
+    "baseline": "unavailable; exploratory single-trial result"
+  },
+  "suite": {
+    "path": "robots/benchmarks/manipulation/scenario_suite_v4.json",
+    "sha256": "027207A6F8BF85FF3DB24036842F85804A8654455AAA9A9046FE928B6D208CCF"
+  },
+  "runner": {
+    "test_source_sha256": "76B291D9FA5A6032AF96142CF8F3FC319811CD577025302F5C4F9F4B13EFAE13",
+    "execution_source_sha256": "F57947F8D0A076097745E1491037990D7A40EE1E9F77B4979F0752336F33B37B",
+    "semantics_source_sha256": "F737298A02FE59A66B9B717AC0B930B50B7CB28E3C95BC9F7423D7D5821B1090",
+    "scenario_source_sha256": "62C8074D1E4F9AC2CAEF5CD2897B172DE90FF06728EE5881145209F769FEB4A2",
+    "bridge_source_sha256": "EF3CE6DB6B1396FFE1AC09844B4DFDCD4FA9DB1638C06B9A6D3E38E4F1349E84",
+    "reasoner_source_sha256": "0CCECC88F33A0AE99F22B783730F772812079528D9963D1472C1F0BA7C661357"
+  },
+  "hypothesis": "One fresh out-of-cohort v4 UR5e trial will bind the replay's initial observation bytes and simulator time to its zero-write preflight; the recorded +X probe will either produce a validated motion bracket or fail closed with the precise saved reason. Any unsupported rotated sweep classification and the complete outcome will be preserved without rerun.",
+  "acceptance": {
+    "preflight_selected_action": "probe:+x",
+    "replay_first_action_must_match_preflight": true,
+    "replay_initial_observation_evidence_required": true,
+    "observation_json_sha256_over_exact_utf8_bytes": true,
+    "observation_time_must_match_preflight": true,
+    "sidecar_must_verify": true,
+    "pose_trace_must_validate": true,
+    "first_xy_motion_bracket_required": true,
+    "unresolved_motion_must_fail_closed": true,
+    "unauthorized_control_writes_must_equal": 0
+  },
+  "scope": {
+    "simulation_runs_allowed": 1,
+    "trial_runs_allowed": 1,
+    "rerun_allowed": false,
+    "reseed_allowed": false,
+    "physical_actuation_allowed": false,
+    "purchase_or_external_action_allowed": false,
+    "stop": "Stop after this single replay regardless of success or failure; preserve outputs and update the research record."
+  },
+  "outputs": {
+    "sidecar": "PROBE_MEASUREMENT_SIDECAR.json",
+    "result": "RESULT.json"
+  },
+  "command": "$env:REALITYOS_PROBE_TRACE_FREEZE='docs/superpowers/evidence/grasp-lift-margin-20261102/fresh-out-of-cohort-probe-replay-v1-23020-20261102/FREEZE.json'; $env:REALITYOS_PROBE_TRACE_TRIAL_INPUT='docs/superpowers/evidence/grasp-lift-margin-20261102/fresh-out-of-cohort-probe-replay-v1-23020-20261102/TRIAL_INPUT.json'; $env:REALITYOS_PROBE_TRACE_PREFLIGHT='docs/superpowers/evidence/grasp-lift-margin-20261102/fresh-out-of-cohort-probe-replay-v1-23020-20261102/PREFLIGHT.json'; $env:REALITYOS_PROBE_TRACE_SIDECAR_OUTPUT='docs/superpowers/evidence/grasp-lift-margin-20261102/fresh-out-of-cohort-probe-replay-v1-23020-20261102/PROBE_MEASUREMENT_SIDECAR.json'; $env:REALITYOS_PROBE_TRACE_RESULT_OUTPUT='docs/superpowers/evidence/grasp-lift-margin-20261102/fresh-out-of-cohort-probe-replay-v1-23020-20261102/RESULT.json'; cargo test -p realityos-verify --test manipulation_benchmark probe_pose_trace_replays_frozen_v4_ur5e_trial -- --ignored --exact --nocapture",
+  "authority": "Simulation only. This record is not a physical validation, admission, deployment authorization, or product performance claim."
+}

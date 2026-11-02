@@ -1,0 +1,297 @@
+{
+  "format": "realityos.first_action_preflight",
+  "schema_version": 1,
+  "evidence_status": "SIMULATION_ONLY",
+  "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23020:17",
+  "trial_digest": "126a1c53a42891d3dfd6128ec4eb5d60d2b9bba45cbef2b26c1b0aff3663344e",
+  "paired_trial_key": "9b6bf4d33d1821974ef8917a516c90b8b19a6e28303258ea4a7543785b89f8e6",
+  "initial_observation": {
+    "actuator_force": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "contact_forces": [
+      2.6396013373291765
+    ],
+    "contacts": [
+      {
+        "body1": "obj0",
+        "body2": "table",
+        "dim": 3,
+        "dist": -1.2648025775023737e-16,
+        "force_available": true,
+        "force_local": [
+          2.315002203968753,
+          -0.896732963498554,
+          0.8967329634985525
+        ],
+        "frame": [
+          -0.0,
+          0.0,
+          -1.0,
+          0.0,
+          1.0,
+          0.0,
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "friction": [
+          0.7747145656805232,
+          0.7747145656805232,
+          0.7747145656805232,
+          0.01,
+          0.01
+        ],
+        "geom1": 29,
+        "geom1_name": "geom_29",
+        "geom2": 30,
+        "geom2_name": "geom_30",
+        "group1": 0,
+        "group2": 0,
+        "normal_force": 2.315002203968753,
+        "pos": [
+          0.6827605727654498,
+          -0.06591217492248738,
+          0.42
+        ],
+        "tangential_force": 1.2681719188066716
+      }
+    ],
+    "ctrl": [
+      -0.007662181461317044,
+      0.02782442061654221,
+      0.01834050892100271,
+      -0.06174759852746597,
+      -0.02476782901791824,
+      0.02137615777663926
+    ],
+    "ctrl_write_count": 0,
+    "energy": [
+      0.0,
+      0.0
+    ],
+    "evidence_status": "SIMULATION_ONLY",
+    "interval_max_force": 0.0,
+    "interval_max_speed": 0.0,
+    "kinetic_energy": 0.0,
+    "last_ctrl": [
+      -0.007662181461317044,
+      0.02782442061654221,
+      0.01834050892100271,
+      -0.06174759852746597,
+      -0.02476782901791824,
+      0.02137615777663926
+    ],
+    "metal": false,
+    "nan": false,
+    "ncon": 1,
+    "qacc": [
+      -0.09822577697923654,
+      22.365620490508395,
+      -18.25623524463214,
+      -1.067558608846043,
+      0.08863103416917079,
+      -0.0040128022739271225,
+      -0.7832192603386173,
+      0.7832192603386186,
+      -7.788044314551838,
+      -61.04207978840005,
+      -61.04207978839994,
+      6.897025195559893e-15
+    ],
+    "qpos": [
+      -0.007662181461317044,
+      0.02782442061654221,
+      0.01834050892100271,
+      -0.06174759852746597,
+      -0.02476782901791824,
+      0.02137615777663926,
+      0.6139033386964874,
+      0.0029450591464750195,
+      0.45046869166750053,
+      1.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "qvel": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "safe_write_count": 0,
+    "sensordata": [
+      0.11517100017643976,
+      -0.2461886182640905,
+      -0.012131779726712321,
+      -0.005628611460582778,
+      -0.0026479029572372076,
+      0.00040128022739262145
+    ],
+    "site_xquat": {
+      "attachment_site": [
+        0.706923987996181,
+        0.7072319048928378,
+        0.003997449711748305,
+        0.008094954788333547
+      ]
+    },
+    "sites": {
+      "attachment_site": [
+        -0.8172685865555782,
+        -0.22771401476163428,
+        0.0330594732656692
+      ]
+    },
+    "subtree_com": [
+      -0.2549608340546034,
+      -0.07143477370297496,
+      0.11687186795412106
+    ],
+    "time": 0.0,
+    "xpos": {
+      "base": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "forearm_link": [
+        -0.4248766574251716,
+        -0.003744659728522254,
+        0.15117614704375654
+      ],
+      "obj0": [
+        0.6139033386964874,
+        0.0029450591464750195,
+        0.45046869166750053
+      ],
+      "shoulder_link": [
+        0.0,
+        0.0,
+        0.163
+      ],
+      "table": [
+        0.9,
+        0.0,
+        0.4
+      ],
+      "upper_arm_link": [
+        -0.0010573706953904997,
+        -0.1379959490971113,
+        0.163
+      ],
+      "world": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "wrist_1_link": [
+        -0.8164475216122458,
+        -0.0007443139961357315,
+        0.133085921913207
+      ],
+      "wrist_2_link": [
+        -0.8174206091362646,
+        -0.1277405859913033,
+        0.133085921913207
+      ],
+      "wrist_3_link": [
+        -0.8189787672329818,
+        -0.12772864686757515,
+        0.03309806264617922
+      ]
+    },
+    "xquat": {
+      "base": [
+        0.0,
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "forearm_link": [
+        -0.0026457375006254144,
+        0.7232334266961757,
+        -0.0027707864329788215,
+        -0.6905930301740149
+      ],
+      "obj0": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "shoulder_link": [
+        -0.0038310813590153783,
+        0.0,
+        0.0,
+        -0.9999926613808826
+      ],
+      "table": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "upper_arm_link": [
+        -0.002671034717181226,
+        0.7168701922138486,
+        -0.0027464081850678583,
+        -0.6971961347647447
+      ],
+      "world": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "wrist_1_link": [
+        -0.000029848934347295514,
+        0.9999623093105651,
+        -0.003830965076911227,
+        -0.0077911984894539245
+      ],
+      "wrist_2_link": [
+        -0.0001263297153830976,
+        0.999933073642747,
+        0.008552459909723899,
+        -0.007790231425571515
+      ],
+      "wrist_3_link": [
+        -0.00021773012566799396,
+        0.9999592215167422,
+        0.008550621222858601,
+        0.002897373625599729
+      ]
+    }
+  },
+  "initial_observation_sha256": "0d5138ff8a2513017a365b21449f7810bf68ff13d52befafc0f56e5fc18dd0a2",
+  "reasoning_request_audit": "ReasoningRequest { scene: TableScene { object_id: \"obj0\", object_center: [0.6139033386964874, 0.0029450591464750195, 0.45046869166750053], object_half: [0.06885723406896238, 0.06885723406896238, 0.030468691667500568], object_quat: [1.0, 0.0, 0.0, 0.0], support_origin: [0.9, 0.0, 0.42000000000000004], support_normal: [0.0, 0.0, 1.0], support_half_extents: Some([0.4, 0.25, 0.02]), obstacles: [], arm_q: [-0.007662181461317044, 0.02782442061654221, 0.01834050892100271, -0.06174759852746597, -0.02476782901791824, 0.02137615777663926], joint_names: [\"shoulder_pan_joint\", \"shoulder_lift_joint\", \"elbow_joint\", \"wrist_1_joint\", \"wrist_2_joint\", \"wrist_3_joint\"], ee: \"tool0\", tool_radius_m: 0.0647213595499958, tool_contact_extents_m: [0.03999415013633996, 0.04067822240730139, 0.040678393556479175, 0.0006842463988555328], observation_epoch: \"v7:development:menagerie_ur5e:push_probe_replan:23020:17:0:4621819117588971520\", held: false, finger_names: [], finger_q: [] }, belief: PhysicalParameterBelief { parameters: [ParameterBelief { parameter: SupportFriction, status: DerivedConstraint, declared: Provenanced { value: Some(0.5), provenance: ModelDeclared, source: \"benchmark_prior\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.05, 0.8]), lineage: [BeliefLineage { belief_before: \"SupportFriction status=DeclaredFact declared=Some(0.5) interval=None\", observation: \"benchmark_uncertain_support\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.05, 0.8])\" }], evidence: [] }, ParameterBelief { parameter: ToolObjectFriction, status: Unknown, declared: Provenanced { value: None, provenance: Unknown, source: \"unmeasured_tool_object_pair\", as_of_s: 0.0, uncertainty: None }, empirical_interval: None, lineage: [], evidence: [] }] }, objective: PlanarTranslation { target_xy: [0.6623819267598346, 0.0029450591464750195] }, mu_required: 0.3, goal_stroke_m: 0.025, probe_stroke_m: 0.008, grants: [], now_s: 10.0, evidence_fresh: true, safety_faults: [], mass_kg: Some(1.144932216185361), gripper_force_n: None, gripper_resource: None, linear_execution_bound_m: None, linear_wrench_limit: None, gravity_m_s2: [0.0, 0.0, -9.81] }",
+  "decision_audit": "decision=Refuse { reason: \"SCOPED_GRANT_DOES_NOT_COVER_PROBE\" };pregrant_action_source=authority_request;pregrant_action_key=probe:+x;support_friction_interval=Some([0.05, 0.8]);candidates=planar_push:push:+x:MECHANICS_UNKNOWN|planar_push:push:-x:MECHANICS_UNKNOWN|planar_push:push:+y:MECHANICS_UNKNOWN|planar_push:push:-y:MECHANICS_UNKNOWN|planar_push:probe:+x:PROVED|pinch_grasp:grasp:y:GRIPPER_RESOURCE_UNKNOWN",
+  "pregrant_action_source": "authority_request",
+  "pregrant_action_key": "probe:+x",
+  "authorized_action_key": "probe:+x",
+  "authorized_grant_id": "sim-scope:02fafc1733217da57e638b6d02ef3e02be5d38829494e2afbfbc0d00c524b052",
+  "authorized_witness_digest": "25b8e14b20c8a6bae64705905ff86cd09a882ff2c0cdbe49ca0641ca104ae032",
+  "authorized_observation_epoch": "v7:development:menagerie_ur5e:push_probe_replan:23020:17:0:4621819117588971520",
+  "refusal_code": null,
+  "control_writes_before": 0,
+  "control_writes_after": 0,
+  "simulation_time_before_s": 0.0,
+  "simulation_time_after_s": 0.0,
+  "simulation_timestep_s": 0.002,
+  "simulator_steps": 0
+}
