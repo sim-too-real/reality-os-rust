@@ -155,3 +155,35 @@ The second exploratory selection exposed that an `expected_success` label does n
 
 This is a trial-selection failure, not evidence against the bootstrap-pair fix: the run did not exercise the trace path. A regression now distinguishes an empty measurement sidecar from malformed sidecar identity (`probe measurement sidecar has no measurement records`); its test passed after first reproducing the old ambiguous error. The next action is a source-backed audit of archived v4 action/measurement records and the candidate selection path to identify a pre-run criterion for an expected-success case that actually executes `probe:+x`. Do not spend another simulation on an expected-success label alone. Resume trace replay only after a new frozen input satisfies that criterion; retain all prior trial inputs unchanged.
 
+
+## Runtime first-action preflight and fresh trace replay (2026-11-02)
+
+The runtime now exposes a non-actuating first-action preflight for expected-success, un-faulted push/probe trials. It reuses the normal initial observation, reasoner request/ranking, and authorization path, then returns before control writes or physics steps. Its receipt binds the resolved trial, observation digest, request/decision audits, selected action, grant/witness/epoch, and before/after simulator counters. The implementation and test are at Reality OS source commit 22aa6cb1f489e064741a8bd2a2eeeaa9d574fd99 on canonical local main.
+
+A fresh v4 UR5e trial, seed/index 23019:17, was outside the frozen, pilot, and public cohorts. Its preflight selected and authorized probe:+x; controls were 0 -> 0, simulation time 0 -> 0, and steps 0. The frozen input, preflight receipt, and exact runner/suite sources are retained in probe-action-selection-preflight-v1-ur5e-23019-20261102/.
+
+Exactly one simulation replay was run after freezing. The actual first action matched the preflight (probe:+x). The replay produced one measurement with 5,606 wrench samples and 5,605 pose samples. The sidecar digest and motion-trace contract verify. The offline verifier independently recomputed Updated(Sticking) with interval [0.11775341918041364, 0.8] from prior interval [0.05, 0.8]; it returned no first 1 mm XY motion bracket. The trace endpoint displacement from its start is approximately [0.026370, -0.001116, -0.000235] mm, well below the 1 mm threshold.
+
+The episode ended in unexpected_refusal with NO_JUSTIFIED_CURRENT_ACTION; its only action was the initial probe:+x. The follow-on decision audit reports probe:+x:PROBE_SWEEP_BLOCKED and no justified physical candidate. A subsequent offline source/trace audit narrowed the cause: the final recorded object quaternion implies yaw -7.5232924e-5 rad, rotating local +X to [0.99999999717, -7.52329258e-5, 0]. The sweep checker requires exactly one direction component above 1e-6; this direction has two, so sweep_gap returns None before checking obstacles, and finish_probe maps None to PROBE_SWEEP_BLOCKED. This explains the status as an unsupported slightly rotated sweep, not an observed obstacle collision. The audit is retained in OFFLINE_GEOMETRY_AUDIT.json; it used no new simulation. There were zero unauthorized writes. The replay test failed at the predeclared assertion requiring a 1 mm threshold bracket; this is a bounded negative result, not a trace-contract or sidecar-integrity failure. The trial was not rerun.
+
+The preflight demonstrates that the runtime's first authorized action can be identified before stepping the simulator and matches the subsequent episode. It does not establish task completion, benchmark improvement, or physical performance; no exact-seed baseline was available. The interval is simulation evidence only. No physical loads, purchases, fabrication, or external contacts occurred; admission and release flags remain unchanged.
+
+Artifact SHA-256 values (raw files):
+
+- TRIAL_INPUT.json: 3101BB40DDEA3123ED671FD07B1A06A308E9AC3DFCA199275AB9C015B9185EF5
+- PREFLIGHT.json: 66826E9E19C12225FCA4B40CAE85EAC1F6E7BCE10E45B6FA4795309B02ACD329
+- FREEZE.json: 13BE85B8CA4D96FDE3D7467103A3BF2939B8E46997791B855DC713FF921BB716
+- PROBE_MEASUREMENT_SIDECAR.json: B6FACB3DF06A3F7545C7BB5A7FF503F9FF5D128D1519EC731AD8AAAB0822B928
+- RESULT.json: C8A17B1D78DD96FB71635B3129F510EABA58AC718A631A3D0A83F308DC1C5F9C
+- OFFLINE_VERIFY.json: AA27F849E42798AF13F5D1812202A6B63A8D189DE889049333F64D32E3BD4B0B
+- OFFLINE_GEOMETRY_AUDIT.json: 9D71B5BFEE7604375DF6CB13BB21F619D9600E5C7AAB983E53DF3ADAA7F906C8
+
+Verification:
+
+- cargo test -p realityos-verify --test manipulation_benchmark first_action_preflight_selects_without_control_write_or_simulation_step -- --ignored --exact --nocapture — 1 passed.
+- cargo run --quiet -p realityos-verify --bin realityos-verify -- verify-probe-measurement-sidecar <sidecar> — passed; trace verified, interval recomputed, no XY bracket.
+- cargo test -p realityos-verify --test manipulation_benchmark probe_pose_trace_replays_frozen_v4_ur5e_trial -- --ignored --exact --nocapture — failed at the frozen 1 mm bracket assertion after the one permitted simulation. Do not rerun.
+- Serial verifier library suite — 184 passed. The broader manipulation integration target was 104 passed, 1 failed, 4 ignored; its sole failure was the restricted pilot 21000:0, which must not be rerun. No full integration-suite pass is claimed.
+- cargo fmt --all -- --check and git diff --check — passed before commit.
+
+Next action: add an offline regression for the retained slightly rotated object axis, then make the sweep checker either conservatively validate rotated swept bounds or return a distinct unsupported-direction refusal. Preserve fail-closed collision handling. Validate the chosen rule offline before freezing any new out-of-cohort trial. Do not rerun 23019:17 or any frozen/pilot/public input; do not loosen probe, wrench, authorization, or evaluator-label gates.

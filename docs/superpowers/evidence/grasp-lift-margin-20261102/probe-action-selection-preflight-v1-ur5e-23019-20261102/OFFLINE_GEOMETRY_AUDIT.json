@@ -1,0 +1,60 @@
+{
+  "schema": "realityos.probe_pose_direction_audit/v1",
+  "status": "OFFLINE_SOURCE_AND_TRACE_RECOMPUTATION",
+  "experiment_id": "probe_action_selection_preflight_v1_ur5e_23019_20261102",
+  "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23019:17",
+  "no_simulation_run": true,
+  "inputs": {
+    "sidecar_sha256": "B6FACB3DF06A3F7545C7BB5A7FF503F9FF5D128D1519EC731AD8AAAB0822B928",
+    "motion_trace_digest": "b44ecb63812278bf5daeec551f6fc0f5c21d89bd2b6c9a08fe93d6955e76fec7",
+    "freeze_sha256": "13BE85B8CA4D96FDE3D7467103A3BF2939B8E46997791B855DC713FF921BB716",
+    "physical_reasoner_source_sha256": "75BCF47CC68740FC0297FD86D8C70FA3BFE964F9EB1B14BE788B80F1AC77D017"
+  },
+  "recomputation": {
+    "formula": "Rotate local +X with the trace final world-wxyz quaternion; normalize the XY projection, matching planar_object_axis.",
+    "start_position_world_m": [
+      0.591656701350862,
+      0.001297270894428472,
+      0.4498379395122694
+    ],
+    "end_position_world_m": [
+      0.5916830713778254,
+      0.001296153844452339,
+      0.4498377045764616
+    ],
+    "start_orientation_world_wxyz": [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "end_orientation_world_wxyz": [
+      0.9999999992914946,
+      -6.667657814159195E-07,
+      1.2528082854938016E-06,
+      -3.761646210332858E-05
+    ],
+    "end_yaw_rad": -7.523292422447527E-05,
+    "planar_positive_x_world": [
+      0.9999999971700034,
+      -7.523292582424965E-05,
+      0.0
+    ],
+    "sweep_gap_active_component_threshold": 1E-06,
+    "sweep_gap_active_component_count": 2,
+    "sweep_gap_requires_exactly_one_active_component": true,
+    "sweep_gap_returns_none_before_obstacle_checks": true,
+    "finish_probe_maps_none_to": "PROBE_SWEEP_BLOCKED",
+    "maximum_xy_displacement_m": 2.6393675808765967E-05,
+    "maximum_xy_displacement_mm": 0.026393675808765966,
+    "pose_threshold_m": 0.001,
+    "first_sample_strictly_above_threshold_s": null,
+    "offline_verifier_first_xy_bracket_s": null
+  },
+  "interpretation": "The saved final orientation rotates local +X so both x and y direction components exceed 1e-6. The source sweep checker rejects this unsupported non-axis-aligned direction before checking obstacles, and finish_probe reports PROBE_SWEEP_BLOCKED for the resulting None. This explains the recorded status without establishing an obstacle collision.",
+  "source_locations": {
+    "candidate_direction": "crates/semantics/src/physical_reasoner.rs:846-888",
+    "refusal_mapping": "crates/semantics/src/physical_reasoner.rs:1239-1256",
+    "axis_alignment_guard": "crates/semantics/src/physical_reasoner.rs:3272-3284"
+  }
+}

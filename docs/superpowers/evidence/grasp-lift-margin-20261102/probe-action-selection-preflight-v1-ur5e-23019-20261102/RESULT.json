@@ -1,0 +1,923 @@
+{
+  "classification": "SIMULATION_ONLY; TRACE_CONTRACT_VALIDATION",
+  "complete_episode": {
+    "acquisition_verified": null,
+    "actions": [
+      {
+        "action_key": "probe:+x",
+        "control_tracking_correction_bound_rad": 0.01,
+        "control_tracking_correction_gain": 1.0,
+        "control_tracking_correction_max_rad": 0.010000000000000009,
+        "displacement_m": 0.00004480969898323785,
+        "family": "planar_push",
+        "grant_id": "sim-scope:639bb27f8c8a93206e5d8e00b5df1929d276d514da664f1d75151d0ec3cb82cc",
+        "lateral_displacement_m": 0.000015501486605365607,
+        "observation_epoch": "v7:development:menagerie_ur5e:push_probe_replan:23019:17:0:4621819117588971520",
+        "reauthorized_after_observation": false,
+        "runtime_divergence": false,
+        "witness_digest": "523c569919cb4a4024fa23cca7cf55aa3f42e7f775f30e2741960883290b9d21",
+        "writes_after": 12633,
+        "writes_before": 0
+      }
+    ],
+    "ctrl_writes_after": 12633,
+    "ctrl_writes_before": 0,
+    "decision_audits": [
+      "decision=Refuse { reason: \"SCOPED_GRANT_DOES_NOT_COVER_PROBE\" };pregrant_action_source=authority_request;pregrant_action_key=probe:+x;support_friction_interval=Some([0.05, 0.8]);candidates=planar_push:push:+x:MECHANICS_UNKNOWN|planar_push:push:-x:MECHANICS_UNKNOWN|planar_push:push:+y:COLLISION_NECESSARY_CONDITION|planar_push:push:-y:COLLISION_NECESSARY_CONDITION|planar_push:probe:+x:PROVED|pinch_grasp:grasp:y:GRIPPER_RESOURCE_UNKNOWN;authorized_action_key=probe:+x",
+      "decision=CurrentlyUnachievable { reason: \"NO_PHYSICAL_CANDIDATES\" };pregrant_action_source=none;pregrant_action_key=none;support_friction_interval=Some([0.11775341918041364, 0.8]);candidates=planar_push:push:+x:MECHANICS_UNKNOWN|planar_push:push:-x:MECHANICS_UNKNOWN|planar_push:push:+y:COLLISION_NECESSARY_CONDITION|planar_push:push:-y:COLLISION_NECESSARY_CONDITION|planar_push:probe:+x:PROBE_SWEEP_BLOCKED|pinch_grasp:grasp:y:GRIPPER_RESOURCE_UNKNOWN"
+    ],
+    "evidence_status": "SIMULATION_ONLY",
+    "expectation": "expected_success",
+    "failure_cause": "bridge_refusal",
+    "fault_injection": null,
+    "geometry_digest": "b91ab485e6b636a3a97e5707661c8c2e091fa9ac93b71a6aad4d382f7cf9c0f9",
+    "goal_error_end_m": 0.0735215792421712,
+    "goal_error_start_m": 0.07356355527874003,
+    "goal_xyz": [
+      0.665220256629602,
+      0.001297270894428472,
+      0.4498402822017208
+    ],
+    "grasp_contact_audits": [],
+    "grasp_ee_lift_m": null,
+    "grasp_object_follow_residual_m": null,
+    "grasp_opening_01": null,
+    "grasp_phase_object_positions": [],
+    "grasp_simulated_friction_oracle_interval": null,
+    "grasp_simulated_friction_oracle_samples": [],
+    "grasp_verifier_evidence": [],
+    "hold_verified": null,
+    "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+    "object_end_xyz": [
+      0.5916986790216183,
+      0.0012817694078231063,
+      0.44983793951226914
+    ],
+    "object_id": "obj0",
+    "object_start_xyz": [
+      0.591656701350862,
+      0.001297270894428472,
+      0.4498402822017208
+    ],
+    "outcome": "unexpected_refusal",
+    "paired_trial_key": "321d35a56f13d7b94ce6daeee2183bc314bb0a7654cff3ce5a9ea363bd49ab51",
+    "posterior_support_friction_interval": [
+      0.11775341918041364,
+      0.8
+    ],
+    "prior_support_friction_interval": [
+      0.05,
+      0.8
+    ],
+    "reasoning_request_audits": [
+      "ReasoningRequest { scene: TableScene { object_id: \"obj0\", object_center: [0.591656701350862, 0.001297270894428472, 0.4498402822017208], object_half: [0.05464044638546693, 0.05464044638546693, 0.029840282201720816], object_quat: [1.0, 0.0, 0.0, 0.0], support_origin: [0.9, 0.0, 0.42000000000000004], support_normal: [0.0, 0.0, 1.0], support_half_extents: Some([0.4, 0.25, 0.02]), obstacles: [NamedBox { name: \"benchmark_obstacle_0\", center: [0.6150931157448943, 0.16196017090890358, 0.47464044638546693], half_extents: [0.05323688216896706, 0.05323688216896706, 0.05323688216896706], quat_wxyz: [1.0, 0.0, 0.0, 0.0] }, NamedBox { name: \"benchmark_obstacle_1\", center: [0.6035856212806332, -0.1543455267143759, 0.47464044638546693], half_extents: [0.06981979961496482, 0.06981979961496482, 0.06981979961496482], quat_wxyz: [1.0, 0.0, 0.0, 0.0] }], arm_q: [0.06051539571769947, 0.0793238795484263, 0.07849801438884159, -0.054556734534762646, -0.017478172936179093, -0.06595054842704819], joint_names: [\"shoulder_pan_joint\", \"shoulder_lift_joint\", \"elbow_joint\", \"wrist_1_joint\", \"wrist_2_joint\", \"wrist_3_joint\"], ee: \"tool0\", tool_radius_m: 0.0647213595499958, tool_contact_extents_m: [0.03987869206589008, 0.04299155555694068, 0.04299232447742948, 0.0031136975234798605], observation_epoch: \"v7:development:menagerie_ur5e:push_probe_replan:23019:17:0:4621819117588971520\", held: false, finger_names: [], finger_q: [] }, belief: PhysicalParameterBelief { parameters: [ParameterBelief { parameter: SupportFriction, status: DerivedConstraint, declared: Provenanced { value: Some(0.5), provenance: ModelDeclared, source: \"benchmark_prior\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.05, 0.8]), lineage: [BeliefLineage { belief_before: \"SupportFriction status=DeclaredFact declared=Some(0.5) interval=None\", observation: \"benchmark_uncertain_support\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.05, 0.8])\" }], evidence: [] }, ParameterBelief { parameter: ToolObjectFriction, status: Unknown, declared: Provenanced { value: None, provenance: Unknown, source: \"unmeasured_tool_object_pair\", as_of_s: 0.0, uncertainty: None }, empirical_interval: None, lineage: [], evidence: [] }] }, objective: PlanarTranslation { target_xy: [0.665220256629602, 0.001297270894428472] }, mu_required: 0.3, goal_stroke_m: 0.025, probe_stroke_m: 0.008, grants: [], now_s: 10.0, evidence_fresh: true, safety_faults: [], mass_kg: Some(1.21772844321093), gripper_force_n: None, gripper_resource: None, linear_execution_bound_m: None, linear_wrench_limit: None, gravity_m_s2: [0.0, 0.0, -9.81] }",
+      "ReasoningRequest { scene: TableScene { object_id: \"obj0\", object_center: [0.5916986790216183, 0.0012817694078231063, 0.44983793951226914], object_half: [0.05464044638546693, 0.05464044638546693, 0.029840282201720816], object_quat: [0.9999999991918842, -3.8046827405977465e-16, -3.5980858298532195e-16, -4.020237271919837e-5], support_origin: [0.9, 0.0, 0.42000000000000004], support_normal: [0.0, 0.0, 1.0], support_half_extents: Some([0.4, 0.25, 0.02]), obstacles: [NamedBox { name: \"benchmark_obstacle_0\", center: [0.6150931157448943, 0.16196017090890358, 0.47464044638546693], half_extents: [0.05323688216896706, 0.05323688216896706, 0.05323688216896706], quat_wxyz: [1.0, 0.0, 0.0, 0.0] }, NamedBox { name: \"benchmark_obstacle_1\", center: [0.6035856212806332, -0.1543455267143759, 0.47464044638546693], half_extents: [0.06981979961496482, 0.06981979961496482, 0.06981979961496482], quat_wxyz: [1.0, 0.0, 0.0, 0.0] }], arm_q: [0.5053059323052266, -1.6379003537934413, -1.956526732659569, 0.15582954268633, 0.1521069488316528, 5.7644279447073045e-8], joint_names: [\"shoulder_pan_joint\", \"shoulder_lift_joint\", \"elbow_joint\", \"wrist_1_joint\", \"wrist_2_joint\", \"wrist_3_joint\"], ee: \"tool0\", tool_radius_m: 0.0647213595499958, tool_contact_extents_m: [0.03183898540431517, 0.05605218445821562, 0.056067619824614126, 0.02427808071538211], observation_epoch: \"v7:development:menagerie_ur5e:push_probe_replan:23019:17:1:4630723297002235660\", held: false, finger_names: [], finger_q: [] }, belief: PhysicalParameterBelief { parameters: [ParameterBelief { parameter: SupportFriction, status: DerivedConstraint, declared: Provenanced { value: Some(0.5), provenance: ModelDeclared, source: \"benchmark_prior\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.11775341918041364, 0.8]), lineage: [BeliefLineage { belief_before: \"SupportFriction status=DeclaredFact declared=Some(0.5) interval=None\", observation: \"benchmark_uncertain_support\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.05, 0.8])\" }, BeliefLineage { belief_before: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.05, 0.8])\", observation: \"1c25dda11aa6527a9232f70b9235fe3fab7e340b06c4fc1deba6dbd39005c7fc\", inference: \"WRENCH_EVIDENCE_INTERVAL_INTERSECTED:simulation\", belief_after: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.11775341918041364, 0.8])\" }], evidence: [BeliefEvidenceReference { measurement_digest: \"1c25dda11aa6527a9232f70b9235fe3fab7e340b06c4fc1deba6dbd39005c7fc\", origin: Simulation }] }, ParameterBelief { parameter: ToolObjectFriction, status: Unknown, declared: Provenanced { value: None, provenance: Unknown, source: \"unmeasured_tool_object_pair\", as_of_s: 0.0, uncertainty: None }, empirical_interval: None, lineage: [], evidence: [] }] }, objective: PlanarTranslation { target_xy: [0.665220256629602, 0.001297270894428472] }, mu_required: 0.3, goal_stroke_m: 0.025, probe_stroke_m: 0.008, grants: [], now_s: 39.26799999999466, evidence_fresh: true, safety_faults: [], mass_kg: Some(1.21772844321093), gripper_force_n: None, gripper_resource: None, linear_execution_bound_m: None, linear_wrench_limit: None, gravity_m_s2: [0.0, 0.0, -9.81] }"
+    ],
+    "recovery_count": 0,
+    "refusal_code": "NO_JUSTIFIED_CURRENT_ACTION",
+    "robot_id": "menagerie_ur5e",
+    "role": "development",
+    "safety_fault_observations": [],
+    "schema_version": 7,
+    "seed": 23019,
+    "simulation_time_s": 29.267999999994657,
+    "simulator": "MuJoCo",
+    "simulator_version": "3.7.0",
+    "source_hash": "5caf8ee29d5954a1640432b0652a6bd766feb0aaccb5a647e31dfb396541587b",
+    "task": "push_probe_replan",
+    "trial_digest": "963f11b807661eee78357babd5165cf54c093962948d83aff611337fc26539c5",
+    "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23019:17",
+    "unauthorized_writes": 0,
+    "wall_time_s": 71.8009263,
+    "wrench_abort": null,
+    "wrench_abort_axis": null,
+    "wrench_abort_result": null,
+    "wrench_caps": [
+      20.0,
+      20.0,
+      30.0,
+      2.0,
+      2.0,
+      2.0
+    ],
+    "wrench_compensation_audit_invalid": false,
+    "wrench_compensation_audit_invalid_samples": 0,
+    "wrench_compensation_digest": "9006d96244b9fd8e1ae07073993ad9d8c8698bab0b97238d1bcf6521be2f5d43",
+    "wrench_contact_pairs": [
+      "obj0/geom_31<->table/geom_32",
+      "wrist_3_link/geom_28<->obj0/geom_31"
+    ],
+    "wrench_inference_compensation_digest": "0fd71a1f2cbfa619c8ad29c1820ae9750752039225e51ec91055115959c203af",
+    "wrench_inference_interval": [
+      0.11775341918041364,
+      0.8
+    ],
+    "wrench_inference_measurement_digest": "1c25dda11aa6527a9232f70b9235fe3fab7e340b06c4fc1deba6dbd39005c7fc",
+    "wrench_inference_reason": "updated:Sticking",
+    "wrench_max_inter_sample_gap_s": 0.002000000000000668,
+    "wrench_max_object_speed_m_s": 0.00013928017105955702,
+    "wrench_max_sample_age_s": 0.002000000000000668,
+    "wrench_minimum_margin": 1.7086576178285466,
+    "wrench_monitor_gravity_reference": {
+      "capture_s": 16.00000000000201,
+      "clock_domain": "mujoco_simulation_clock",
+      "digest": "ff9dcbd679f542fff0eb5263f2c06538deef72926e100493b40f19926b2ec560",
+      "error_bounds": [
+        0.05,
+        0.05,
+        0.05,
+        0.005,
+        0.005,
+        0.005
+      ],
+      "origin": "simulation",
+      "receive_s": 16.00200000000201,
+      "sensor_frame": "attachment_site",
+      "sensor_id": "sim-ft-menagerie-ur5e-v1",
+      "sequence": 7999,
+      "transform_epoch": "v7:development:menagerie_ur5e:push_probe_replan:23019:17:0:4621819117588971520",
+      "units": "N,N*m",
+      "wrench": [
+        -0.556,
+        1.76,
+        0.091,
+        0.0398,
+        0.0132,
+        0.0001
+      ]
+    },
+    "wrench_monitor_gravity_reference_history": [
+      {
+        "sample": {
+          "capture_s": 0.9380000000000007,
+          "clock_domain": "mujoco_simulation_clock",
+          "digest": "2f931d8437a749183aa5f0e3c88bbd19b4f7ac44238765d90f351d84cb40c066",
+          "error_bounds": [
+            0.05,
+            0.05,
+            0.05,
+            0.005,
+            0.005,
+            0.005
+          ],
+          "origin": "simulation",
+          "receive_s": 0.9400000000000007,
+          "sensor_frame": "attachment_site",
+          "sensor_id": "sim-ft-menagerie-ur5e-v1",
+          "sequence": 468,
+          "transform_epoch": "v7:development:menagerie_ur5e:push_probe_replan:23019:17:0:4621819117588971520",
+          "units": "N,N*m",
+          "wrench": [
+            -0.132,
+            -1.855,
+            -0.014,
+            -0.042100000000000005,
+            0.0026000000000000003,
+            -0.0005
+          ]
+        },
+        "sensor_orientation": [
+          0.7060184195184127,
+          0.7062671353448049,
+          0.002903268947507306,
+          0.052118095341093046
+        ],
+        "sensor_position": [
+          -0.776726635996967,
+          -0.2814761250895431,
+          -0.05460934300621458
+        ]
+      },
+      {
+        "sample": {
+          "capture_s": 16.00000000000201,
+          "clock_domain": "mujoco_simulation_clock",
+          "digest": "ff9dcbd679f542fff0eb5263f2c06538deef72926e100493b40f19926b2ec560",
+          "error_bounds": [
+            0.05,
+            0.05,
+            0.05,
+            0.005,
+            0.005,
+            0.005
+          ],
+          "origin": "simulation",
+          "receive_s": 16.00200000000201,
+          "sensor_frame": "attachment_site",
+          "sensor_id": "sim-ft-menagerie-ur5e-v1",
+          "sequence": 7999,
+          "transform_epoch": "v7:development:menagerie_ur5e:push_probe_replan:23019:17:0:4621819117588971520",
+          "units": "N,N*m",
+          "wrench": [
+            -0.556,
+            1.76,
+            0.091,
+            0.0398,
+            0.0132,
+            0.0001
+          ]
+        },
+        "sensor_orientation": [
+          -0.11687134100378796,
+          0.3312659502531387,
+          -0.644619868228126,
+          0.6790207547199233
+        ],
+        "sensor_position": [
+          0.502309870039233,
+          0.0020680688706939815,
+          0.5057824636496793
+        ]
+      }
+    ],
+    "wrench_monitor_gravity_reference_orientation": [
+      -0.11687134100378796,
+      0.3312659502531387,
+      -0.644619868228126,
+      0.6790207547199233
+    ],
+    "wrench_monitor_gravity_reference_position": [
+      0.502309870039233,
+      0.0020680688706939815,
+      0.5057824636496793
+    ],
+    "wrench_monitor_gravity_reference_status": "captured",
+    "wrench_peak_conservative_bounds": [
+      4.082018112624393,
+      4.266,
+      3.586795134192117,
+      0.2756,
+      0.2835067555667765,
+      0.2913423821714535
+    ],
+    "wrench_precontact_baseline": {
+      "capture_s": 16.00000000000201,
+      "clock_domain": "mujoco_simulation_clock",
+      "digest": "ff9dcbd679f542fff0eb5263f2c06538deef72926e100493b40f19926b2ec560",
+      "error_bounds": [
+        0.05,
+        0.05,
+        0.05,
+        0.005,
+        0.005,
+        0.005
+      ],
+      "origin": "simulation",
+      "receive_s": 16.00200000000201,
+      "sensor_frame": "attachment_site",
+      "sensor_id": "sim-ft-menagerie-ur5e-v1",
+      "sequence": 7999,
+      "transform_epoch": "v7:development:menagerie_ur5e:push_probe_replan:23019:17:0:4621819117588971520",
+      "units": "N,N*m",
+      "wrench": [
+        -0.556,
+        1.76,
+        0.091,
+        0.0398,
+        0.0132,
+        0.0001
+      ]
+    },
+    "wrench_precontact_baseline_status": "captured",
+    "wrench_sample_count": 14634,
+    "wrench_sensor_profile_digest": "c9ae3324fa8dcfaaeba1e2e04fce6d2c3bcf13cc4467db7e0c884e64691e2956"
+  },
+  "experiment_id": "probe_action_selection_preflight_v1_ur5e_23019_20261102",
+  "first_action_preflight": {
+    "authorized_action_key": "probe:+x",
+    "authorized_grant_id": "sim-scope:639bb27f8c8a93206e5d8e00b5df1929d276d514da664f1d75151d0ec3cb82cc",
+    "authorized_observation_epoch": "v7:development:menagerie_ur5e:push_probe_replan:23019:17:0:4621819117588971520",
+    "authorized_witness_digest": "523c569919cb4a4024fa23cca7cf55aa3f42e7f775f30e2741960883290b9d21",
+    "control_writes_after": 0,
+    "control_writes_before": 0,
+    "decision_audit": "decision=Refuse { reason: \"SCOPED_GRANT_DOES_NOT_COVER_PROBE\" };pregrant_action_source=authority_request;pregrant_action_key=probe:+x;support_friction_interval=Some([0.05, 0.8]);candidates=planar_push:push:+x:MECHANICS_UNKNOWN|planar_push:push:-x:MECHANICS_UNKNOWN|planar_push:push:+y:COLLISION_NECESSARY_CONDITION|planar_push:push:-y:COLLISION_NECESSARY_CONDITION|planar_push:probe:+x:PROVED|pinch_grasp:grasp:y:GRIPPER_RESOURCE_UNKNOWN",
+    "evidence_status": "SIMULATION_ONLY",
+    "format": "realityos.first_action_preflight",
+    "initial_observation": {
+      "actuator_force": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "contact_forces": [
+        2.9582986857941447,
+        2.9582986857941447,
+        2.9582986857941447,
+        2.9582986857941447
+      ],
+      "contacts": [
+        {
+          "body1": "obj0",
+          "body2": "table",
+          "dim": 3,
+          "dist": -5.204170427930421e-17,
+          "force_available": true,
+          "force_local": [
+            2.9582986857941447,
+            0.0,
+            0.0
+          ],
+          "frame": [
+            0.0,
+            0.0,
+            -1.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            -0.0,
+            0.0
+          ],
+          "friction": [
+            0.6836661028623228,
+            0.6836661028623228,
+            0.6836661028623228,
+            0.01,
+            0.01
+          ],
+          "geom1": 31,
+          "geom1_name": "geom_31",
+          "geom2": 32,
+          "geom2_name": "geom_32",
+          "group1": 0,
+          "group2": 0,
+          "normal_force": 2.9582986857941447,
+          "pos": [
+            0.646297147736329,
+            -0.05334317549103846,
+            0.42
+          ],
+          "tangential_force": 0.0
+        },
+        {
+          "body1": "obj0",
+          "body2": "table",
+          "dim": 3,
+          "dist": -5.204170427930421e-17,
+          "force_available": true,
+          "force_local": [
+            2.9582986857941447,
+            0.0,
+            0.0
+          ],
+          "frame": [
+            0.0,
+            0.0,
+            -1.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            -0.0,
+            0.0
+          ],
+          "friction": [
+            0.6836661028623228,
+            0.6836661028623228,
+            0.6836661028623228,
+            0.01,
+            0.01
+          ],
+          "geom1": 31,
+          "geom1_name": "geom_31",
+          "geom2": 32,
+          "geom2_name": "geom_32",
+          "group1": 0,
+          "group2": 0,
+          "normal_force": 2.9582986857941447,
+          "pos": [
+            0.646297147736329,
+            0.0559377172798954,
+            0.42
+          ],
+          "tangential_force": 0.0
+        },
+        {
+          "body1": "obj0",
+          "body2": "table",
+          "dim": 3,
+          "dist": -5.204170427930421e-17,
+          "force_available": true,
+          "force_local": [
+            2.9582986857941447,
+            0.0,
+            0.0
+          ],
+          "frame": [
+            0.0,
+            0.0,
+            -1.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            -0.0,
+            0.0
+          ],
+          "friction": [
+            0.6836661028623228,
+            0.6836661028623228,
+            0.6836661028623228,
+            0.01,
+            0.01
+          ],
+          "geom1": 31,
+          "geom1_name": "geom_31",
+          "geom2": 32,
+          "geom2_name": "geom_32",
+          "group1": 0,
+          "group2": 0,
+          "normal_force": 2.9582986857941447,
+          "pos": [
+            0.5370162549653951,
+            -0.05334317549103846,
+            0.42
+          ],
+          "tangential_force": 0.0
+        },
+        {
+          "body1": "obj0",
+          "body2": "table",
+          "dim": 3,
+          "dist": -5.204170427930421e-17,
+          "force_available": true,
+          "force_local": [
+            2.9582986857941447,
+            0.0,
+            0.0
+          ],
+          "frame": [
+            0.0,
+            0.0,
+            -1.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            -0.0,
+            0.0
+          ],
+          "friction": [
+            0.6836661028623228,
+            0.6836661028623228,
+            0.6836661028623228,
+            0.01,
+            0.01
+          ],
+          "geom1": 31,
+          "geom1_name": "geom_31",
+          "geom2": 32,
+          "geom2_name": "geom_32",
+          "group1": 0,
+          "group2": 0,
+          "normal_force": 2.9582986857941447,
+          "pos": [
+            0.5370162549653951,
+            0.0559377172798954,
+            0.42
+          ],
+          "tangential_force": 0.0
+        }
+      ],
+      "ctrl": [
+        0.06051539571769947,
+        0.0793238795484263,
+        0.07849801438884159,
+        -0.054556734534762646,
+        -0.017478172936179093,
+        -0.06595054842704819
+      ],
+      "ctrl_write_count": 0,
+      "energy": [
+        0.0,
+        0.0
+      ],
+      "evidence_status": "SIMULATION_ONLY",
+      "interval_max_force": 0.0,
+      "interval_max_speed": 0.0,
+      "kinetic_energy": 0.0,
+      "last_ctrl": [
+        0.06051539571769947,
+        0.0793238795484263,
+        0.07849801438884159,
+        -0.054556734534762646,
+        -0.017478172936179093,
+        -0.06595054842704819
+      ],
+      "metal": false,
+      "nan": false,
+      "ncon": 4,
+      "qacc": [
+        -0.24976196475468349,
+        22.419030504827166,
+        -18.623229219395654,
+        -1.587907939117163,
+        0.14050961622378882,
+        -0.002912489246121284,
+        -7.667908045252044e-19,
+        1.5067874160600296e-29,
+        -0.09256684883325213,
+        -5.255331391070091e-28,
+        -2.6743917174077703e-17,
+        -2.0168156589123113e-44
+      ],
+      "qpos": [
+        0.06051539571769947,
+        0.0793238795484263,
+        0.07849801438884159,
+        -0.054556734534762646,
+        -0.017478172936179093,
+        -0.06595054842704819,
+        0.591656701350862,
+        0.001297270894428472,
+        0.4498402822017208,
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "qvel": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "safe_write_count": 0,
+      "sensordata": [
+        0.20871794665978133,
+        -0.22189693243178646,
+        -0.034288681729699524,
+        -0.005070104742194632,
+        -0.004804260571536769,
+        0.00029124892461220866
+      ],
+      "site_xquat": {
+        "attachment_site": [
+          0.7065697270166468,
+          0.706323965839453,
+          0.014340886650273423,
+          0.04074328306030235
+        ]
+      },
+      "sites": {
+        "attachment_site": [
+          -0.7831320682063144,
+          -0.2818633029960589,
+          -0.031574112681380585
+        ]
+      },
+      "subtree_com": [
+        -0.24740874889513884,
+        -0.08851124218051538,
+        0.09963476385170134
+      ],
+      "time": 0.0,
+      "xpos": {
+        "base": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "benchmark_obstacle_0": [
+          0.6150931157448943,
+          0.16196017090890358,
+          0.47464044638546693
+        ],
+        "benchmark_obstacle_1": [
+          0.6035856212806332,
+          -0.1543455267143759,
+          0.47464044638546693
+        ],
+        "forearm_link": [
+          -0.4224647273737513,
+          -0.03260971098385977,
+          0.12932269496276486
+        ],
+        "obj0": [
+          0.591656701350862,
+          0.001297270894428472,
+          0.4498402822017208
+        ],
+        "shoulder_link": [
+          0.0,
+          0.0,
+          0.163
+        ],
+        "table": [
+          0.9,
+          0.0,
+          0.4
+        ],
+        "upper_arm_link": [
+          0.008346028415109284,
+          -0.13774739129905217,
+          0.163
+        ],
+        "world": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "wrist_1_link": [
+          -0.8088842957174227,
+          -0.05602263130950762,
+          0.06771301745252728
+        ],
+        "wrist_2_link": [
+          -0.8012035304368511,
+          -0.1827901580847222,
+          0.06771301745252728
+        ],
+        "wrist_3_link": [
+          -0.790914226933941,
+          -0.18216673561118488,
+          -0.03175427153156274
+        ]
+      },
+      "xquat": {
+        "base": [
+          0.0,
+          0.0,
+          0.0,
+          -1.0
+        ],
+        "benchmark_obstacle_0": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "benchmark_obstacle_1": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "forearm_link": [
+          0.019639265407773922,
+          0.7602987729595293,
+          0.023011913669243714,
+          -0.648868651515664
+        ],
+        "obj0": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "shoulder_link": [
+          0.03025308110718165,
+          0.0,
+          0.0,
+          -0.9995422707837435
+        ],
+        "table": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "upper_arm_link": [
+          0.020527103247050437,
+          0.7342523216977749,
+          0.02222356741755568,
+          -0.6782022406074381
+        ],
+        "world": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "wrist_1_link": [
+          -0.0015613506654612974,
+          0.998210215245202,
+          0.03021276386855685,
+          0.05158601810228247
+        ],
+        "wrist_2_link": [
+          -0.00111048210987117,
+          0.9979080694208943,
+          0.03893494452434113,
+          0.05159769286541025
+        ],
+        "wrist_3_link": [
+          0.00017377939494591342,
+          0.9990667113142513,
+          0.038950389938378766,
+          0.01866931354110682
+        ]
+      }
+    },
+    "initial_observation_sha256": "1cf0a7bf4089ec4467537dbc49449c390731221a74e8d2eebae4c34c725cf6c3",
+    "paired_trial_key": "321d35a56f13d7b94ce6daeee2183bc314bb0a7654cff3ce5a9ea363bd49ab51",
+    "pregrant_action_key": "probe:+x",
+    "pregrant_action_source": "authority_request",
+    "reasoning_request_audit": "ReasoningRequest { scene: TableScene { object_id: \"obj0\", object_center: [0.591656701350862, 0.001297270894428472, 0.4498402822017208], object_half: [0.05464044638546693, 0.05464044638546693, 0.029840282201720816], object_quat: [1.0, 0.0, 0.0, 0.0], support_origin: [0.9, 0.0, 0.42000000000000004], support_normal: [0.0, 0.0, 1.0], support_half_extents: Some([0.4, 0.25, 0.02]), obstacles: [NamedBox { name: \"benchmark_obstacle_0\", center: [0.6150931157448943, 0.16196017090890358, 0.47464044638546693], half_extents: [0.05323688216896706, 0.05323688216896706, 0.05323688216896706], quat_wxyz: [1.0, 0.0, 0.0, 0.0] }, NamedBox { name: \"benchmark_obstacle_1\", center: [0.6035856212806332, -0.1543455267143759, 0.47464044638546693], half_extents: [0.06981979961496482, 0.06981979961496482, 0.06981979961496482], quat_wxyz: [1.0, 0.0, 0.0, 0.0] }], arm_q: [0.06051539571769947, 0.0793238795484263, 0.07849801438884159, -0.054556734534762646, -0.017478172936179093, -0.06595054842704819], joint_names: [\"shoulder_pan_joint\", \"shoulder_lift_joint\", \"elbow_joint\", \"wrist_1_joint\", \"wrist_2_joint\", \"wrist_3_joint\"], ee: \"tool0\", tool_radius_m: 0.0647213595499958, tool_contact_extents_m: [0.03987869206589008, 0.04299155555694068, 0.04299232447742948, 0.0031136975234798605], observation_epoch: \"v7:development:menagerie_ur5e:push_probe_replan:23019:17:0:4621819117588971520\", held: false, finger_names: [], finger_q: [] }, belief: PhysicalParameterBelief { parameters: [ParameterBelief { parameter: SupportFriction, status: DerivedConstraint, declared: Provenanced { value: Some(0.5), provenance: ModelDeclared, source: \"benchmark_prior\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.05, 0.8]), lineage: [BeliefLineage { belief_before: \"SupportFriction status=DeclaredFact declared=Some(0.5) interval=None\", observation: \"benchmark_uncertain_support\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.05, 0.8])\" }], evidence: [] }, ParameterBelief { parameter: ToolObjectFriction, status: Unknown, declared: Provenanced { value: None, provenance: Unknown, source: \"unmeasured_tool_object_pair\", as_of_s: 0.0, uncertainty: None }, empirical_interval: None, lineage: [], evidence: [] }] }, objective: PlanarTranslation { target_xy: [0.665220256629602, 0.001297270894428472] }, mu_required: 0.3, goal_stroke_m: 0.025, probe_stroke_m: 0.008, grants: [], now_s: 10.0, evidence_fresh: true, safety_faults: [], mass_kg: Some(1.21772844321093), gripper_force_n: None, gripper_resource: None, linear_execution_bound_m: None, linear_wrench_limit: None, gravity_m_s2: [0.0, 0.0, -9.81] }",
+    "refusal_code": null,
+    "schema_version": 1,
+    "simulation_time_after_s": 0.0,
+    "simulation_time_before_s": 0.0,
+    "simulation_timestep_s": 0.002,
+    "simulator_steps": 0,
+    "trial_digest": "963f11b807661eee78357babd5165cf54c093962948d83aff611337fc26539c5",
+    "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23019:17"
+  },
+  "freeze_sha256": "13BE85B8CA4D96FDE3D7467103A3BF2939B8E46997791B855DC713FF921BB716",
+  "observed": {
+    "actual_first_action_key": "probe:+x",
+    "inference_reason": "updated:Sticking",
+    "outcome": "unexpected_refusal",
+    "probe_action_present": true,
+    "unauthorized_writes": 0,
+    "wrench_abort": null
+  },
+  "probe_measurement_sidecar": {
+    "fail_closed_for_unresolved_motion": true,
+    "file": "PROBE_MEASUREMENT_SIDECAR.json",
+    "first_xy_threshold_bracket_present": false,
+    "inference": {
+      "Updated": {
+        "interval": [
+          0.11775341918041364,
+          0.8
+        ],
+        "mode": "sticking"
+      }
+    },
+    "measurement_count": 1,
+    "measurement_digest": "1c25dda11aa6527a9232f70b9235fe3fab7e340b06c4fc1deba6dbd39005c7fc",
+    "motion_summary": {
+      "displacement_m": [
+        0.00002637002696337376,
+        -1.1170499761329559e-6,
+        -2.3493580780797885e-7
+      ],
+      "end_s": 27.211999999995797,
+      "first_motion_s": null,
+      "max_quasi_static_speed_m_s": 0.02,
+      "max_speed_m_s": 0.00013928017105955702,
+      "pose_resolution_m": 0.001,
+      "start_s": 16.00200000000201,
+      "unresolved_motion_before_force": false
+    },
+    "motion_trace_digest": "b44ecb63812278bf5daeec551f6fc0f5c21d89bd2b6c9a08fe93d6955e76fec7",
+    "pose_sample_count": 5605,
+    "sha256": "B6FACB3DF06A3F7545C7BB5A7FF503F9FF5D128D1519EC731AD8AAAB0822B928",
+    "trace_inference_valid": true,
+    "trace_validation": "valid",
+    "trace_validation_error": null,
+    "unresolved_motion_before_force": false,
+    "verification": "valid",
+    "verification_error": null,
+    "wrench_sample_count": 5606
+  },
+  "trial": {
+    "expectation": "expected_success",
+    "fault_injection": null,
+    "goal_xyz": [
+      0.665220256629602,
+      0.001297270894428472,
+      0.4498402822017208
+    ],
+    "index": 17,
+    "initial_qpos": [
+      0.06051539571769947,
+      0.0793238795484263,
+      0.07849801438884159,
+      -0.054556734534762646,
+      -0.017478172936179093,
+      -0.06595054842704819
+    ],
+    "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+    "paired_trial_key": "321d35a56f13d7b94ce6daeee2183bc314bb0a7654cff3ce5a9ea363bd49ab51",
+    "robot_id": "menagerie_ur5e",
+    "role": "development",
+    "scenario": {
+      "crash_controller": false,
+      "expected_refusal": null,
+      "immovable": false,
+      "move_object_after_obs": false,
+      "neg": null,
+      "object_id": "obj0",
+      "objects": [
+        {
+          "friction": 0.8,
+          "mass": 1.0,
+          "movable": false,
+          "name": "benchmark_obstacle_0",
+          "pos": [
+            0.6150931157448943,
+            0.16196017090890358,
+            0.47464044638546693
+          ],
+          "size": [
+            0.05323688216896706,
+            0.05323688216896706
+          ],
+          "type": "cylinder"
+        },
+        {
+          "friction": 0.8,
+          "mass": 1.0,
+          "movable": false,
+          "name": "benchmark_obstacle_1",
+          "pos": [
+            0.6035856212806332,
+            -0.1543455267143759,
+            0.47464044638546693
+          ],
+          "size": [
+            0.06981979961496482,
+            0.06981979961496482,
+            0.06981979961496482
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.6836661028623228,
+          "mass": 1.21772844321093,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.591656701350862,
+            0.001297270894428472,
+            0.4498402822017208
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.05464044638546693,
+            0.05464044638546693,
+            0.029840282201720816
+          ],
+          "solref": [
+            0.005,
+            1.0
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.6836661028623228,
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.9,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.4,
+            0.25,
+            0.02
+          ],
+          "solref": [
+            0.005,
+            1.0
+          ],
+          "type": "box"
+        }
+      ],
+      "planar": false,
+      "polarity": "positive",
+      "push_dir": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "push_dist": 0.07356355527874006,
+      "replay": false,
+      "required_opening": 0.8,
+      "restart_replay": false,
+      "seed": 23019,
+      "skill": "PUSH",
+      "stale": false,
+      "world_construction": "fixed_world"
+    },
+    "scenario_suite_id": "force_observable_public_probe",
+    "scenario_suite_version": 4,
+    "schema_version": 7,
+    "seed": 23019,
+    "source_hash": "5caf8ee29d5954a1640432b0652a6bd766feb0aaccb5a647e31dfb396541587b",
+    "stratum": "expected_success",
+    "task": "push_probe_replan",
+    "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23019:17"
+  },
+  "trial_input_sha256": "3101BB40DDEA3123ED671FD07B1A06A308E9AC3DFCA199275AB9C015B9185EF5"
+}
