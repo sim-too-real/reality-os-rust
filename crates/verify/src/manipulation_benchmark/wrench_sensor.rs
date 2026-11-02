@@ -5,7 +5,7 @@
 
 use realityos_kernel::physical_action::WrenchLimitPolicy;
 use realityos_semantics::observation::{wrench_sample_digest, WrenchSample};
-use realityos_semantics::push_probe::WrenchCompensation;
+use realityos_semantics::push_probe::{ProbeObjectPoseSample, WrenchCompensation};
 use realityos_semantics::sensor::WrenchSampleOrigin;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -242,6 +242,9 @@ pub struct SimulationWrenchWindow {
     pub sensor_positions: Vec<[f64; 3]>,
     #[serde(default)]
     pub sensor_orientations: Vec<[f64; 4]>,
+    /// Target-body poses captured alongside monitored probe steps.
+    #[serde(default)]
+    pub object_pose_trace: Vec<ProbeObjectPoseSample>,
     #[serde(default)]
     pub precontact_baseline: Option<WrenchSample>,
     #[serde(default)]
@@ -608,6 +611,7 @@ impl SimulationWrenchWindow {
         let mut sample_free_space_wrench_error_bounds = Vec::with_capacity(records.len());
         let mut sensor_positions = Vec::with_capacity(records.len());
         let mut sensor_orientations = Vec::with_capacity(records.len());
+        let object_pose_trace = parse_probe_pose_samples(&response["object_pose_trace"])?;
         let mut max_gap_s: f64 = 0.0;
         let mut previous_capture: Option<f64> = None;
         let mut previous_sequence: Option<u64> = None;
@@ -737,6 +741,7 @@ impl SimulationWrenchWindow {
             sample_free_space_wrench_error_bounds,
             sensor_positions,
             sensor_orientations,
+            object_pose_trace,
             precontact_baseline,
             precontact_baseline_status: response["precontact_baseline_status"]
                 .as_str()
@@ -754,6 +759,65 @@ impl SimulationWrenchWindow {
             compensation_digest: profile.limit_policy.compensation_digest.clone(),
         })
     }
+}
+
+fn parse_probe_pose_samples(
+    value: &Value,
+) -> Result<Vec<ProbeObjectPoseSample>, WrenchSensorError> {
+    let Some(records) = value.as_array() else {
+        return if value.is_null() {
+            Ok(Vec::new())
+        } else {
+            Err(WrenchSensorError::Worker("object_pose_trace"))
+        };
+    };
+    let mut samples = Vec::with_capacity(records.len());
+    let mut previous_step: Option<u64> = None;
+    let mut previous_time: Option<f64> = None;
+    for record in records {
+        let sample = ProbeObjectPoseSample {
+            object_id: record["object_id"]
+                .as_str()
+                .ok_or(WrenchSensorError::Worker("object_pose_object_id"))?
+                .to_owned(),
+            simulator_step: record["simulator_step"]
+                .as_u64()
+                .ok_or(WrenchSensorError::Worker("object_pose_simulator_step"))?,
+            wrench_sequence: if record["wrench_sequence"].is_null() {
+                None
+            } else {
+                Some(
+                    record["wrench_sequence"]
+                        .as_u64()
+                        .ok_or(WrenchSensorError::Worker("object_pose_wrench_sequence"))?,
+                )
+            },
+            capture_s: record["capture_s"]
+                .as_f64()
+                .ok_or(WrenchSensorError::Worker("object_pose_capture_s"))?,
+            clock_domain: record["clock_domain"]
+                .as_str()
+                .ok_or(WrenchSensorError::Worker("object_pose_clock_domain"))?
+                .to_owned(),
+            position_world_m: parse_three(&record["position_world_m"])
+                .ok_or(WrenchSensorError::Worker("object_pose_position"))?,
+            orientation_world_wxyz: parse_four(&record["orientation_world_wxyz"])
+                .ok_or(WrenchSensorError::Worker("object_pose_orientation"))?,
+            digest: String::new(),
+        };
+        if previous_step.is_some_and(|previous| sample.simulator_step != previous.saturating_add(1))
+            || previous_time.is_some_and(|previous| sample.capture_s <= previous)
+        {
+            return Err(WrenchSensorError::Worker("object_pose_gap_or_order"));
+        }
+        let mut sample = sample;
+        sample.digest = sample.digest();
+        sample.validate().map_err(WrenchSensorError::Worker)?;
+        previous_step = Some(sample.simulator_step);
+        previous_time = Some(sample.capture_s);
+        samples.push(sample);
+    }
+    Ok(samples)
 }
 
 fn worker_sample_is_future(
@@ -918,6 +982,38 @@ pub fn transform_contact_wrench_world(
 pub fn contact_force_on_geom(contact_wrench: [f64; 6], is_geom1: bool) -> [f64; 6] {
     let sign = if is_geom1 { -1.0 } else { 1.0 };
     contact_wrench.map(|value| sign * value)
+}
+
+#[cfg(test)]
+mod probe_pose_trace_tests {
+    use super::parse_probe_pose_samples;
+    use serde_json::json;
+
+    #[test]
+    fn parses_and_seals_time_aligned_target_pose_samples() {
+        let samples = parse_probe_pose_samples(&json!([
+            {
+                "object_id": "obj0",
+                "simulator_step": 19,
+                "wrench_sequence": 7,
+                "capture_s": 1.25,
+                "clock_domain": "mujoco_simulation_clock",
+                "position_world_m": [0.1, 0.2, 0.3],
+                "orientation_world_wxyz": [1.0, 0.0, 0.0, 0.0]
+            }
+        ]))
+        .expect("valid tracked pose sample");
+
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].object_id, "obj0");
+        assert_eq!(samples[0].simulator_step, 19);
+        assert_eq!(samples[0].wrench_sequence, Some(7));
+        assert_eq!(samples[0].capture_s, 1.25);
+        assert_eq!(samples[0].position_world_m, [0.1, 0.2, 0.3]);
+        samples[0]
+            .validate()
+            .expect("parser seals a valid pose digest");
+    }
 }
 
 /// Sum all contact loads on the instrumented tool subtree, including contacts

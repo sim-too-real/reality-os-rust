@@ -5,7 +5,8 @@ use realityos_semantics::physical_belief::{
 use realityos_semantics::push_probe::{
     infer_support_friction, transform_sensor_wrench_to_support, FrictionInferenceMode,
     FrictionInferenceResult, FrictionNoInferenceReason, IntendedContactEvidence, ProbeMotionWindow,
-    PushProbeMeasurement, WrenchCompensation, WrenchEvidenceOrigin, WrenchTransform,
+    ProbeObjectPoseSample, ProbeObjectPoseTrace, PushProbeMeasurement, WrenchCompensation,
+    WrenchEvidenceOrigin, WrenchTransform,
 };
 use realityos_semantics::sensor::WrenchSampleOrigin;
 
@@ -68,6 +69,7 @@ fn measurement() -> PushProbeMeasurement {
             first_motion_s: None,
             unresolved_motion_before_force: false,
         },
+        motion_trace: None,
         prior_support_friction: [0.1, 0.8],
         current_observation_epoch: epoch.clone(),
         current_collision_model_digest: collision_digest.clone(),
@@ -87,6 +89,120 @@ fn measurement() -> PushProbeMeasurement {
         saturated: false,
         origin: WrenchEvidenceOrigin::Simulation,
     }
+}
+
+fn sealed_pose_sample(
+    step: u64,
+    wrench_sequence: Option<u64>,
+    capture_s: f64,
+    position_world_m: [f64; 3],
+) -> ProbeObjectPoseSample {
+    let mut sample = ProbeObjectPoseSample {
+        object_id: "object".into(),
+        simulator_step: step,
+        wrench_sequence,
+        capture_s,
+        clock_domain: "sim:1".into(),
+        position_world_m,
+        orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
+        digest: String::new(),
+    };
+    sample.digest = sample.digest();
+    sample
+}
+
+fn sealed_motion_trace() -> ProbeObjectPoseTrace {
+    let mut trace = ProbeObjectPoseTrace {
+        object_id: "object".into(),
+        clock_domain: "sim:1".into(),
+        start_s: 1.0,
+        start_position_world_m: [0.0; 3],
+        start_orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
+        samples: vec![
+            sealed_pose_sample(10, Some(1), 1.002, [0.0; 3]),
+            sealed_pose_sample(11, Some(2), 1.008, [0.0; 3]),
+            sealed_pose_sample(12, None, 1.01, [0.0; 3]),
+        ],
+        digest: String::new(),
+    };
+    trace.digest = trace.digest();
+    trace
+}
+
+#[test]
+fn pose_trace_brackets_cumulative_motion_from_the_original_probe_origin() {
+    let mut first = ProbeObjectPoseSample {
+        object_id: "object".into(),
+        simulator_step: 41,
+        wrench_sequence: Some(8),
+        capture_s: 2.001,
+        clock_domain: "mujoco:simulation".into(),
+        position_world_m: [0.0006, 0.0, 0.0],
+        orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
+        digest: String::new(),
+    };
+    first.digest = first.digest();
+    let mut crossing = ProbeObjectPoseSample {
+        object_id: "object".into(),
+        simulator_step: 42,
+        wrench_sequence: Some(9),
+        capture_s: 2.002,
+        clock_domain: "mujoco:simulation".into(),
+        position_world_m: [0.0011, 0.0, 0.0],
+        orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
+        digest: String::new(),
+    };
+    crossing.digest = crossing.digest();
+    let trace = ProbeObjectPoseTrace {
+        object_id: "object".into(),
+        clock_domain: "mujoco:simulation".into(),
+        start_s: 2.0,
+        start_position_world_m: [0.0, 0.0, 0.0],
+        start_orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
+        samples: vec![first, crossing],
+        digest: String::new(),
+    };
+
+    assert_eq!(
+        trace.first_xy_motion_bracket(0.001),
+        Some([2.001, 2.002]),
+        "the 0.6 mm sub-threshold step must accumulate against the original origin"
+    );
+}
+
+#[test]
+fn probe_inference_rejects_pose_trace_wrench_pairs_without_a_matching_sample() {
+    let mut measured = measurement();
+    let mut trace = sealed_motion_trace();
+    trace.samples[2].wrench_sequence = Some(99);
+    trace.samples[2].digest = trace.samples[2].digest();
+    trace.digest = trace.digest();
+    measured.motion_trace = Some(trace);
+
+    assert_eq!(
+        infer_support_friction(&measured),
+        FrictionInferenceResult::NoInference(FrictionNoInferenceReason::InvalidMotionTrace)
+    );
+}
+
+#[test]
+fn valid_pose_trace_is_bound_into_the_measurement_digest() {
+    let mut measured = measurement();
+    let legacy_digest = measured.digest();
+    measured.motion_trace = Some(sealed_motion_trace());
+    let traced_digest = measured.digest();
+
+    assert_ne!(traced_digest, legacy_digest);
+    assert!(matches!(
+        infer_support_friction(&measured),
+        FrictionInferenceResult::Updated { .. }
+    ));
+
+    let trace = measured.motion_trace.as_mut().expect("pose trace");
+    trace.samples[0].position_world_m[0] = 0.00001;
+    trace.samples[0].digest = trace.samples[0].digest();
+    trace.digest = trace.digest();
+    assert_ne!(measured.digest(), traced_digest);
 }
 
 #[test]

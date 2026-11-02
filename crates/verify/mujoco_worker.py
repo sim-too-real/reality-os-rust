@@ -1832,6 +1832,7 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
         profile_digest = str(msg.get("profile_digest") or "").lower()
         validated = False
         samples: list[dict[str, Any]] = []
+        object_pose_trace: list[dict[str, Any]] = []
         control_correction_max_rad = 0.0
         precontact_baseline_record = None
         precontact_baseline_status = None
@@ -2029,11 +2030,31 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                         {"kind": "unexpected_contact"}, policy, now_s
                     )
                     break
+                wrench_sequence_at_step = None
                 if not drop_wrench_samples and step_count % step_interval == 0:
                     sampled = _sample_tool_wrench(profile, profile_digest, sequence, sensor_ids)
                     samples.append(sampled)
                     pending.append(sampled)
+                    wrench_sequence_at_step = sequence
                     sequence += 1
+                if expected_contact_body_id is not None:
+                    object_pose_trace.append(
+                        {
+                            "object_id": expected_contact_name,
+                            "simulator_step": step_count,
+                            "wrench_sequence": wrench_sequence_at_step,
+                            "capture_s": now_s,
+                            "clock_domain": "mujoco_simulation_clock",
+                            "position_world_m": [
+                                float(value)
+                                for value in INST.data.xpos[expected_contact_body_id]
+                            ],
+                            "orientation_world_wxyz": [
+                                float(value)
+                                for value in INST.data.xquat[expected_contact_body_id]
+                            ],
+                        }
+                    )
                 newly_available = []
                 still_pending = []
                 for candidate in pending:
@@ -2114,6 +2135,7 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                 "ok": True,
                 "state": state,
                 "samples": samples,
+                "object_pose_trace": object_pose_trace,
                 "sensor_id": str(profile["sensor_id"]),
                 "profile_digest": profile_digest,
                 "precontact_baseline": precontact_baseline_record,
@@ -2139,6 +2161,7 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                     "ok": True,
                     "state": INST.state(),
                     "samples": samples,
+                    "object_pose_trace": object_pose_trace,
                     "sensor_id": str(profile["sensor_id"]),
                     "profile_digest": profile_digest,
                     "precontact_baseline": precontact_baseline_record,

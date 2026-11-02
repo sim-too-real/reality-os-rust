@@ -38,6 +38,182 @@ pub struct ProbeMotionWindow {
     pub unresolved_motion_before_force: bool,
 }
 
+/// A target-body pose captured at a simulation step during a push probe.
+/// `wrench_sequence` is present when a force sample was captured at the same
+/// simulator time, making the two evidence streams directly pairable offline.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProbeObjectPoseSample {
+    pub object_id: String,
+    pub simulator_step: u64,
+    #[serde(default)]
+    pub wrench_sequence: Option<u64>,
+    pub capture_s: f64,
+    pub clock_domain: String,
+    pub position_world_m: [f64; 3],
+    /// MuJoCo quaternion order: w, x, y, z.
+    pub orientation_world_wxyz: [f64; 4],
+    pub digest: String,
+}
+
+impl ProbeObjectPoseSample {
+    pub fn digest(&self) -> String {
+        let mut bytes = b"realityos.probe_object_pose_sample/1\0".to_vec();
+        push_string(&mut bytes, &self.object_id);
+        bytes.extend_from_slice(&self.simulator_step.to_le_bytes());
+        match self.wrench_sequence {
+            Some(sequence) => {
+                bytes.push(1);
+                bytes.extend_from_slice(&sequence.to_le_bytes());
+            }
+            None => bytes.push(0),
+        }
+        push_f64(&mut bytes, self.capture_s);
+        push_string(&mut bytes, &self.clock_domain);
+        push_f64s(&mut bytes, &self.position_world_m);
+        push_f64s(&mut bytes, &self.orientation_world_wxyz);
+        sha256(&bytes)
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.object_id.trim().is_empty() || self.clock_domain.trim().is_empty() {
+            return Err("identity");
+        }
+        if self.simulator_step == 0 {
+            return Err("simulator_step");
+        }
+        if !self.capture_s.is_finite() || self.capture_s < 0.0 {
+            return Err("timestamp");
+        }
+        if self.position_world_m.iter().any(|value| !value.is_finite()) {
+            return Err("position");
+        }
+        if self
+            .orientation_world_wxyz
+            .iter()
+            .any(|value| !value.is_finite())
+            || (self
+                .orientation_world_wxyz
+                .iter()
+                .map(|value| value * value)
+                .sum::<f64>()
+                - 1.0)
+                .abs()
+                > ROTATION_TOLERANCE
+        {
+            return Err("orientation");
+        }
+        if !is_sha256(&self.digest) || self.digest != self.digest() {
+            return Err("digest_mismatch");
+        }
+        Ok(())
+    }
+}
+
+/// A time-aligned target pose trace for independently auditing probe motion.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProbeObjectPoseTrace {
+    pub object_id: String,
+    pub clock_domain: String,
+    pub start_s: f64,
+    pub start_position_world_m: [f64; 3],
+    /// MuJoCo quaternion order: w, x, y, z.
+    pub start_orientation_world_wxyz: [f64; 4],
+    pub samples: Vec<ProbeObjectPoseSample>,
+    pub digest: String,
+}
+
+impl ProbeObjectPoseTrace {
+    pub fn digest(&self) -> String {
+        let mut bytes = b"realityos.probe_object_pose_trace/1\0".to_vec();
+        push_string(&mut bytes, &self.object_id);
+        push_string(&mut bytes, &self.clock_domain);
+        push_f64(&mut bytes, self.start_s);
+        push_f64s(&mut bytes, &self.start_position_world_m);
+        push_f64s(&mut bytes, &self.start_orientation_world_wxyz);
+        bytes.extend_from_slice(&(self.samples.len() as u64).to_le_bytes());
+        for sample in &self.samples {
+            push_string(&mut bytes, &sample.digest);
+        }
+        sha256(&bytes)
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.object_id.trim().is_empty() || self.clock_domain.trim().is_empty() {
+            return Err("identity");
+        }
+        if !self.start_s.is_finite() || self.start_s < 0.0 {
+            return Err("start_timestamp");
+        }
+        if self
+            .start_position_world_m
+            .iter()
+            .any(|value| !value.is_finite())
+        {
+            return Err("start_position");
+        }
+        if self
+            .start_orientation_world_wxyz
+            .iter()
+            .any(|value| !value.is_finite())
+            || (self
+                .start_orientation_world_wxyz
+                .iter()
+                .map(|value| value * value)
+                .sum::<f64>()
+                - 1.0)
+                .abs()
+                > ROTATION_TOLERANCE
+        {
+            return Err("start_orientation");
+        }
+        if self.samples.is_empty() {
+            return Err("empty_trace");
+        }
+        let mut previous_step: Option<u64> = None;
+        let mut previous_time = self.start_s;
+        for sample in &self.samples {
+            sample.validate()?;
+            if sample.object_id != self.object_id || sample.clock_domain != self.clock_domain {
+                return Err("sample_identity_mismatch");
+            }
+            if let Some(previous) = previous_step {
+                if sample.simulator_step != previous.saturating_add(1) {
+                    return Err("step_gap_or_order");
+                }
+            } else if sample.simulator_step == 0 {
+                return Err("step_order");
+            }
+            if sample.capture_s <= previous_time {
+                return Err("time_order");
+            }
+            previous_step = Some(sample.simulator_step);
+            previous_time = sample.capture_s;
+        }
+        if !is_sha256(&self.digest) || self.digest != self.digest() {
+            return Err("digest_mismatch");
+        }
+        Ok(())
+    }
+
+    /// Return the interval containing the first XY displacement threshold
+    /// crossing, measured from the original probe origin.
+    pub fn first_xy_motion_bracket(&self, threshold_m: f64) -> Option<[f64; 2]> {
+        if !threshold_m.is_finite() || threshold_m <= 0.0 {
+            return None;
+        }
+        let mut previous_time = self.start_s;
+        for sample in &self.samples {
+            let dx = sample.position_world_m[0] - self.start_position_world_m[0];
+            let dy = sample.position_world_m[1] - self.start_position_world_m[1];
+            if dx.hypot(dy) > threshold_m {
+                return Some([previous_time, sample.capture_s]);
+            }
+            previous_time = sample.capture_s;
+        }
+        None
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WrenchCompensation {
     pub bias: [f64; 6],
@@ -108,6 +284,8 @@ pub struct PushProbeMeasurement {
     pub mass_kg: [f64; 2],
     pub support_normal_world: [f64; 3],
     pub motion: ProbeMotionWindow,
+    #[serde(default)]
+    pub motion_trace: Option<ProbeObjectPoseTrace>,
     pub prior_support_friction: [f64; 2],
     pub current_observation_epoch: String,
     pub current_collision_model_digest: String,
@@ -128,7 +306,9 @@ pub struct PushProbeMeasurement {
 impl PushProbeMeasurement {
     /// Digest all inputs in fixed order so a belief reference identifies the exact evidence.
     pub fn digest(&self) -> String {
-        let mut bytes = if self.motion.unresolved_motion_before_force {
+        let mut bytes = if self.motion_trace.is_some() {
+            b"realityos.push_probe_measurement/7\0".to_vec()
+        } else if self.motion.unresolved_motion_before_force {
             b"realityos.push_probe_measurement/6\0".to_vec()
         } else {
             // Preserve the v5 digest for existing records with the new field's
@@ -182,6 +362,9 @@ impl PushProbeMeasurement {
         push_opt_f64(&mut bytes, self.motion.first_motion_s);
         if self.motion.unresolved_motion_before_force {
             bytes.push(1);
+        }
+        if let Some(trace) = &self.motion_trace {
+            push_string(&mut bytes, &trace.digest);
         }
         push_f64s(&mut bytes, &self.prior_support_friction);
         push_string(&mut bytes, &self.current_observation_epoch);
@@ -240,6 +423,7 @@ pub enum FrictionNoInferenceReason {
     HardwareOriginUntrusted,
     OriginMismatch,
     InvalidSample,
+    InvalidMotionTrace,
     InsufficientSamples,
     PrecontactBaselineMissing,
     NonMonotonicSamples,
@@ -695,6 +879,9 @@ fn validate_samples(measurement: &PushProbeMeasurement) -> Result<(), FrictionNo
         .precontact_baseline
         .as_ref()
         .ok_or(FrictionNoInferenceReason::PrecontactBaselineMissing)?;
+    if let Some(trace) = &measurement.motion_trace {
+        validate_motion_trace(measurement, trace)?;
+    }
     baseline
         .validate()
         .map_err(|_| FrictionNoInferenceReason::InvalidSample)?;
@@ -761,6 +948,69 @@ fn validate_samples(measurement: &PushProbeMeasurement) -> Result<(), FrictionNo
         .is_some_and(|sample| measurement.now_s - sample.receive_s > measurement.max_sample_age_s)
     {
         return Err(FrictionNoInferenceReason::StaleSample);
+    }
+    Ok(())
+}
+
+fn validate_motion_trace(
+    measurement: &PushProbeMeasurement,
+    trace: &ProbeObjectPoseTrace,
+) -> Result<(), FrictionNoInferenceReason> {
+    trace
+        .validate()
+        .map_err(|_| FrictionNoInferenceReason::InvalidMotionTrace)?;
+    if trace.object_id != measurement.intended_contact.target_body_id
+        || trace.start_s != measurement.motion.start_s
+        || trace.samples.last().map(|sample| sample.capture_s) != Some(measurement.motion.end_s)
+        || trace.clock_domain
+            != measurement
+                .samples
+                .first()
+                .map(|sample| sample.clock_domain.as_str())
+                .unwrap_or_default()
+    {
+        return Err(FrictionNoInferenceReason::InvalidMotionTrace);
+    }
+    let start = trace.start_position_world_m;
+    let end = trace
+        .samples
+        .last()
+        .ok_or(FrictionNoInferenceReason::InvalidMotionTrace)?
+        .position_world_m;
+    let displacement = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
+    if displacement
+        .iter()
+        .zip(measurement.motion.displacement_m.iter())
+        .any(|(actual, recorded)| (actual - recorded).abs() > 1e-9)
+    {
+        return Err(FrictionNoInferenceReason::InvalidMotionTrace);
+    }
+    for sample in &measurement.samples {
+        let mut matching_poses = trace.samples.iter().filter(|pose| {
+            pose.wrench_sequence == Some(sample.sequence) && pose.capture_s == sample.capture_s
+        });
+        if matching_poses.next().is_none() || matching_poses.next().is_some() {
+            return Err(FrictionNoInferenceReason::InvalidMotionTrace);
+        }
+    }
+    for pose in trace
+        .samples
+        .iter()
+        .filter(|pose| pose.wrench_sequence.is_some())
+    {
+        let mut matching_samples = measurement.samples.iter().filter(|sample| {
+            Some(sample.sequence) == pose.wrench_sequence && sample.capture_s == pose.capture_s
+        });
+        if matching_samples.next().is_none() || matching_samples.next().is_some() {
+            return Err(FrictionNoInferenceReason::InvalidMotionTrace);
+        }
+    }
+    let first_motion = trace.first_xy_motion_bracket(measurement.motion.pose_resolution_m);
+    match (first_motion, measurement.motion.first_motion_s) {
+        (Some([_, crossing_end]), Some(resolved_s)) if resolved_s >= crossing_end => {}
+        (Some(_), None) if measurement.motion.unresolved_motion_before_force => {}
+        (None, None) if !measurement.motion.unresolved_motion_before_force => {}
+        _ => return Err(FrictionNoInferenceReason::InvalidMotionTrace),
     }
     Ok(())
 }

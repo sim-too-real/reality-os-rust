@@ -42,7 +42,7 @@ use realityos_semantics::physical_reasoner::{
 use realityos_semantics::provenance::Provenanced;
 use realityos_semantics::push_probe::{
     infer_support_friction, FrictionInferenceResult, IntendedContactEvidence, ProbeMotionWindow,
-    PushProbeMeasurement, WrenchTransform,
+    ProbeObjectPoseSample, ProbeObjectPoseTrace, PushProbeMeasurement, WrenchTransform,
 };
 use realityos_semantics::resource::{
     ControlledResource, QualificationStatus, ResourceKind, ResourceTopology,
@@ -1178,6 +1178,7 @@ struct PushMotionAudit {
     start_s: f64,
     end_s: f64,
     start_position: [f64; 3],
+    start_orientation_world_wxyz: [f64; 4],
     end_position: [f64; 3],
     max_speed_m_s: f64,
     first_motion_s: Option<f64>,
@@ -1191,6 +1192,7 @@ impl Default for PushMotionAudit {
             start_s: 0.0,
             end_s: 0.0,
             start_position: [0.0; 3],
+            start_orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
             end_position: [0.0; 3],
             max_speed_m_s: 0.0,
             first_motion_s: None,
@@ -1206,6 +1208,7 @@ struct PushWitnessAudit {
     sample_free_space_wrench_error_bounds: Vec<[f64; 6]>,
     sensor_positions: Vec<[f64; 3]>,
     sensor_orientations: Vec<[f64; 4]>,
+    object_pose_trace: Vec<ProbeObjectPoseSample>,
     precontact_baseline: Option<WrenchSample>,
     precontact_baseline_status: Option<String>,
     precontact_baseline_position: Option<[f64; 3]>,
@@ -1275,6 +1278,7 @@ fn record_push_wrench_window(audit: &mut PushWitnessAudit, window: SimulationWre
     audit.samples.extend(window.samples);
     audit.sensor_positions.extend(window.sensor_positions);
     audit.sensor_orientations.extend(window.sensor_orientations);
+    audit.object_pose_trace.extend(window.object_pose_trace);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1302,6 +1306,7 @@ fn execute_push_witness(
         sample_free_space_wrench_error_bounds: Vec::new(),
         sensor_positions: Vec::new(),
         sensor_orientations: Vec::new(),
+        object_pose_trace: Vec::new(),
         precontact_baseline: None,
         precontact_baseline_status: None,
         precontact_baseline_position: None,
@@ -1422,9 +1427,17 @@ fn execute_push_witness(
         }
         let motion_reference = if motion_phase && !audit.motion.started {
             let state = state_payload(worker)?;
+            let orientation = value_quaternion(&state["xquat"][request.scene.object_id.as_str()])
+                .ok_or_else(|| {
+                BenchmarkError::Simulation(format!(
+                    "observed body {} has no finite orientation",
+                    request.scene.object_id
+                ))
+            })?;
             Some((
                 state["time"].as_f64().unwrap_or(0.0),
                 body_position(&state, &request.scene.object_id)?,
+                orientation,
             ))
         } else {
             None
@@ -1581,14 +1594,17 @@ fn execute_push_witness(
             let time_s = state["time"].as_f64().unwrap_or(0.0);
             if motion_phase {
                 if !audit.motion.started {
-                    let (start_s, start_position) = motion_reference.unwrap_or((
-                        time_s - f64::from(steps) * manifest.timestep,
-                        request.scene.object_center,
-                    ));
+                    let (start_s, start_position, start_orientation) =
+                        motion_reference.unwrap_or((
+                            time_s - f64::from(steps) * manifest.timestep,
+                            request.scene.object_center,
+                            [1.0, 0.0, 0.0, 0.0],
+                        ));
                     audit.motion.started = true;
                     audit.motion.start_s = start_s;
                     audit.motion.end_s = audit.motion.start_s;
                     audit.motion.start_position = start_position;
+                    audit.motion.start_orientation_world_wxyz = start_orientation;
                     audit.motion.end_position = start_position;
                 }
                 let prior_position = audit.motion.end_position;
@@ -2325,6 +2341,38 @@ fn push_probe_measurement(
         .iter()
         .map(|(_, _, _, model_error_bound)| *model_error_bound)
         .collect::<Vec<_>>();
+    let motion_trace = if audit.motion.started {
+        let samples = audit
+            .object_pose_trace
+            .iter()
+            .filter(|sample| {
+                sample.object_id == request.scene.object_id
+                    && sample.capture_s > start_s
+                    && sample.capture_s <= end_s
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let clock_domain = samples
+            .first()
+            .map(|sample| sample.clock_domain.clone())
+            .ok_or_else(|| BenchmarkError::Simulation("probe_object_pose_trace_missing".into()))?;
+        let mut trace = ProbeObjectPoseTrace {
+            object_id: request.scene.object_id.clone(),
+            clock_domain,
+            start_s,
+            start_position_world_m: audit.motion.start_position,
+            start_orientation_world_wxyz: audit.motion.start_orientation_world_wxyz,
+            samples,
+            digest: String::new(),
+        };
+        trace.digest = trace.digest();
+        trace.validate().map_err(|error| {
+            BenchmarkError::Simulation(format!("probe_object_pose_trace_invalid:{error}"))
+        })?;
+        Some(trace)
+    } else {
+        None
+    };
     let evidence_ready_s = samples
         .iter()
         .map(|sample| sample.receive_s)
@@ -2364,6 +2412,7 @@ fn push_probe_measurement(
             first_motion_s: audit.motion.first_motion_s,
             unresolved_motion_before_force: audit.motion.unresolved_motion_before_force,
         },
+        motion_trace,
         prior_support_friction: request
             .belief
             .entry(PhysicalParameter::SupportFriction)
@@ -4636,6 +4685,7 @@ mod audit_summary_tests {
             sample_free_space_wrench_error_bounds: Vec::new(),
             sensor_positions: vec![[0.0; 3]; count],
             sensor_orientations: vec![[1.0, 0.0, 0.0, 0.0]; count],
+            object_pose_trace: Vec::new(),
             precontact_baseline: None,
             precontact_baseline_status: None,
             precontact_baseline_position: None,
@@ -4671,6 +4721,7 @@ mod audit_summary_tests {
             sample_free_space_wrench_error_bounds: Vec::new(),
             sensor_positions: vec![[0.0; 3]; 6],
             sensor_orientations: vec![[1.0, 0.0, 0.0, 0.0]; 6],
+            object_pose_trace: Vec::new(),
             precontact_baseline: None,
             precontact_baseline_status: None,
             precontact_baseline_position: None,

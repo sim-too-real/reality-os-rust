@@ -5653,14 +5653,24 @@ fn exploratory_v4_low_load_ur5e_probe_feasibility() {
         record.inference
     );
     assert!(!record.measurement.samples.is_empty());
+    assert!(record.measurement.motion.unresolved_motion_before_force);
+    let motion_trace = record
+        .measurement
+        .motion_trace
+        .as_ref()
+        .expect("new probe sidecars retain a time-aligned object pose trace");
+    motion_trace
+        .validate()
+        .expect("pose trace digest and ordering");
+    assert!(motion_trace
+        .first_xy_motion_bracket(record.measurement.motion.pose_resolution_m)
+        .is_some());
     assert_eq!(
         record.inference,
-        FrictionInferenceResult::Updated {
-            interval: episode
-                .wrench_inference_interval
-                .expect("inference interval"),
-            mode: realityos_semantics::push_probe::FrictionInferenceMode::Sticking,
-        }
+        FrictionInferenceResult::NoInference(
+            realityos_semantics::push_probe::FrictionNoInferenceReason::UnbracketedMotion
+        ),
+        "cumulative object motion before force resolution must fail closed"
     );
     let sidecar_sha256 = sha2::Sha256::digest(&sidecar_bytes)
         .iter()
@@ -5682,7 +5692,8 @@ fn exploratory_v4_low_load_ur5e_probe_feasibility() {
             "sha256": sidecar_sha256,
             "measurement_digest": record.measurement_digest,
             "sample_count": record.measurement.samples.len(),
-            "verification": "digest and friction interval recomputed from structured measurement"
+            "pose_sample_count": motion_trace.samples.len(),
+            "verification": "measurement digest, pose-trace alignment, and fail-closed inference recomputed"
         },
         "observed": {
             "inference_interval": episode.wrench_inference_interval,
