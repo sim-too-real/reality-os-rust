@@ -5798,8 +5798,9 @@ fn first_action_preflight_verifier_rejects_legacy_and_binds_replay_observation()
     preflight
         .verify_for_trial(&trial)
         .expect("preflight binds to the resolved trial");
-    assert!(
-        preflight.verify_matches_episode(&episode).is_err(),
+    assert_eq!(
+        preflight.verify_matches_episode(&episode),
+        Err("replay is missing its initial-observation evidence".into()),
         "legacy frozen replay lacks a replay-side initial-observation record"
     );
 
