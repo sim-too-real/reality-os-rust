@@ -15,12 +15,13 @@ use realityos_verify::manipulation_benchmark::wrench_sensor::{
 use realityos_verify::manipulation_benchmark::{
     evaluate_paired_screening_gate, evaluation_label_mismatch, paired_campaign_delta,
     paired_trial_key, resolve_benchmark_trial, resolve_benchmark_trial_with_suite, score_campaign,
-    trial_digest, upgrade_v5_trial_for_v6, validate_collision_geometry,
-    validate_physical_observation, BenchmarkConfig, BenchmarkExecutionError, BenchmarkTask,
-    BenchmarkTrialRecord, EmbodimentRegistry, EmbodimentRole, FailureCause, GeometryGateResult,
-    PhysicalEvidenceStatus, PhysicalSensorIdentity, PhysicalSensorRequirement, PhysicalSensorTrace,
-    PushTrialStratum, ScenarioSuiteManifest, SensorOrigin, SimulationWrenchSensorProfile,
-    TrialExpectation, TrialOutcome,
+    trial_digest, upgrade_trial_for_current_execution, upgrade_v5_trial_for_v6,
+    validate_collision_geometry, validate_physical_observation, BenchmarkConfig,
+    BenchmarkExecutionError, BenchmarkTask, BenchmarkTrialRecord, EmbodimentRegistry,
+    EmbodimentRole, FailureCause, GeometryGateResult, PhysicalEvidenceStatus,
+    PhysicalSensorIdentity, PhysicalSensorRequirement, PhysicalSensorTrace, PushTrialStratum,
+    ScenarioSuiteManifest, SensorOrigin, SimulationWrenchSensorProfile, TrialExpectation,
+    TrialOutcome, BENCHMARK_SCHEMA_VERSION,
 };
 use realityos_verify::mujoco_exec::checkin_worker;
 use realityos_verify::normalize::{DerivedInterface, JointRecord, RobotManifest};
@@ -4059,6 +4060,76 @@ fn frozen_v5_pilot_inputs_upgrade_to_exact_v6_pair_keys() {
     let paired = paired_campaign_delta(&baseline.records, &candidate_records)
         .expect("all 60 frozen v5 records pair exactly to schema v6");
     assert_eq!(paired.matched_trial_keys, 60);
+}
+
+#[test]
+fn historical_v5_trial_upgrades_for_current_execution_without_changing_inputs() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let path = repo_root.join(
+        "docs/superpowers/evidence/manipulation-reliability-generality-8f090bc/trials/v5_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_6_21.json",
+    );
+    let record: BenchmarkTrialRecord =
+        serde_json::from_slice(&std::fs::read(path).expect("frozen historical grasp trial exists"))
+            .expect("historical trial record parses");
+    let legacy = record
+        .trial
+        .expect("historical record contains its resolved input");
+    assert_eq!(legacy.schema_version, 5);
+
+    let current = upgrade_trial_for_current_execution(legacy.clone())
+        .expect("v5 input can be replayed under the current execution schema");
+
+    assert_eq!(current.schema_version, BENCHMARK_SCHEMA_VERSION);
+    assert_eq!(current.trial_id, legacy.trial_id.replacen("v5:", "v7:", 1));
+    assert_eq!(current.scenario, legacy.scenario);
+    assert_eq!(current.expectation, legacy.expectation);
+    assert_eq!(current.fault_injection, legacy.fault_injection);
+    assert_eq!(
+        current.goal_xyz.map(f64::to_bits),
+        legacy.goal_xyz.map(f64::to_bits)
+    );
+    assert_eq!(
+        current
+            .initial_qpos
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+        legacy
+            .initial_qpos
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        current.paired_trial_key,
+        Some(paired_trial_key(&legacy).unwrap())
+    );
+
+    let paired_v6 = upgrade_v5_trial_for_v6(&legacy).expect("legacy input can be paired as v6");
+    let current_from_v6 = upgrade_trial_for_current_execution(paired_v6.clone())
+        .expect("v6 input can be replayed under the current execution schema");
+    assert_eq!(current_from_v6.schema_version, BENCHMARK_SCHEMA_VERSION);
+    assert_eq!(current_from_v6.scenario, paired_v6.scenario);
+    assert_eq!(
+        current_from_v6.goal_xyz.map(f64::to_bits),
+        paired_v6.goal_xyz.map(f64::to_bits)
+    );
+    assert_eq!(
+        current_from_v6
+            .initial_qpos
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+        paired_v6
+            .initial_qpos
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        current_from_v6.paired_trial_key,
+        Some(paired_trial_key(&paired_v6).unwrap())
+    );
 }
 
 #[test]

@@ -1434,6 +1434,35 @@ pub fn upgrade_v5_trial_for_v6(
     Ok(trial)
 }
 
+/// Promote a saved schema-v5 or schema-v6 input to the current execution
+/// schema without resampling or changing its physical trial fields.
+pub fn upgrade_trial_for_current_execution(
+    mut trial: ResolvedBenchmarkTrial,
+) -> Result<ResolvedBenchmarkTrial, BenchmarkError> {
+    if trial.schema_version == BENCHMARK_SCHEMA_VERSION {
+        return Ok(trial);
+    }
+    if !matches!(trial.schema_version, 5 | LEGACY_PAIRED_SCHEMA_VERSION) {
+        return Err(BenchmarkError::InvalidTrial(format!(
+            "schema-v{} replay cannot be upgraded to schema-v{} execution",
+            trial.schema_version, BENCHMARK_SCHEMA_VERSION
+        )));
+    }
+
+    trial.schema_version = BENCHMARK_SCHEMA_VERSION;
+    trial.trial_id = format!(
+        "v{}:{}:{}:{}:{}:{}",
+        BENCHMARK_SCHEMA_VERSION,
+        trial.role.as_str(),
+        trial.robot_id,
+        trial.task.as_str(),
+        trial.seed,
+        trial.index
+    );
+    trial.paired_trial_key = Some(paired_trial_key(&trial)?);
+    Ok(trial)
+}
+
 fn push_canonical_json(value: &Value, bytes: &mut Vec<u8>) -> Result<(), BenchmarkError> {
     match value {
         Value::Null => bytes.push(b'n'),

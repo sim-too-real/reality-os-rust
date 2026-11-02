@@ -11,8 +11,8 @@ use realityos_verify::foundation_report::{run_campaign, write_report};
 use realityos_verify::honesty::{refuse_physical_proof_origin, SIMULATION_ONLY};
 use realityos_verify::manipulation_benchmark::{
     evaluate_paired_screening_gate, paired_campaign_delta, resolve_benchmark_trial_with_suite,
-    score_campaign, write_report as write_benchmark_report, BenchmarkConfig,
-    BenchmarkExecutionError, BenchmarkReport, BenchmarkTask, BenchmarkTrialRecord,
+    score_campaign, upgrade_trial_for_current_execution, write_report as write_benchmark_report,
+    BenchmarkConfig, BenchmarkExecutionError, BenchmarkReport, BenchmarkTask, BenchmarkTrialRecord,
     EmbodimentRegistry, EmbodimentRole, ScenarioSuiteManifest, SimulationWrenchSensorProfile,
 };
 use realityos_verify::mujoco_exec::{ensure_mujoco_or_skip, require_mujoco_env};
@@ -138,6 +138,17 @@ fn manipulation_benchmark(args: &[String]) {
             eprintln!("replay record has no resolved trial input");
             std::process::exit(2);
         };
+        let original_trial_id = trial.trial_id.clone();
+        let trial = upgrade_trial_for_current_execution(trial).unwrap_or_else(|error| {
+            eprintln!("cannot upgrade replay trial {original_trial_id}: {error}");
+            std::process::exit(2);
+        });
+        if trial.trial_id != original_trial_id {
+            eprintln!(
+                "replay input upgraded from {original_trial_id} to {} with physical inputs preserved",
+                trial.trial_id
+            );
+        }
         config.schema_version = trial.schema_version;
         config.scheduled_trial_ids.push(trial.trial_id.clone());
         let bundle = load_trial_bundle(&repo_root, &trial.robot_id).unwrap_or_else(|error| {
