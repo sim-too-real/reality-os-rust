@@ -4259,6 +4259,94 @@ fn historical_grasp_failure_reaches_verified_hold_within_frozen_limits() {
 }
 
 #[test]
+fn fresh_grasp_divergence_records_its_relative_pose_guard() {
+    let _mujoco_guard = lock_mujoco_test();
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let trial_path = repo_root.join(
+        "docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-25mm/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21010_25.json",
+    );
+    let record: BenchmarkTrialRecord = serde_json::from_slice(
+        &std::fs::read(&trial_path).expect("fresh grasp control trial exists"),
+    )
+    .expect("fresh grasp trial record parses");
+    let trial = record
+        .trial
+        .expect("fresh grasp record contains its resolved input");
+    let episode =
+        run_test_benchmark_trial(&grasp_fixture_bundle(), &trial, simulation_admission(120.0))
+            .expect("fresh grasp trial executes under simulation admission");
+
+    assert_eq!(episode.outcome, TrialOutcome::UnexpectedRefusal);
+    assert_eq!(episode.failure_cause, Some(FailureCause::RuntimeDivergence));
+    assert_eq!(episode.hold_verified, None);
+    assert_eq!(episode.unauthorized_writes, 0);
+    assert!(
+        episode
+            .actions
+            .iter()
+            .any(|action| action.runtime_divergence),
+        "the frozen 25 mm replay is expected to expose its known divergence"
+    );
+    let guard = episode
+        .decision_audits
+        .iter()
+        .find(|audit| {
+            audit.starts_with(
+                "grasp_lift_guard_failure=object_tool_relative_pose_exceeded_20mm;relative_pose_error_m=",
+            )
+        })
+        .expect("the first failed grasp-lift guard must be persisted");
+    let relative_pose_error_m = guard
+        .strip_prefix(
+            "grasp_lift_guard_failure=object_tool_relative_pose_exceeded_20mm;relative_pose_error_m=",
+        )
+        .and_then(|value| value.split(';').next())
+        .and_then(|value| value.parse::<f64>().ok())
+        .expect("relative-pose diagnostic contains a numeric measurement");
+    assert!(relative_pose_error_m > 0.02, "{guard}");
+    assert!(guard.ends_with(";waypoint=4"), "{guard}");
+}
+
+#[test]
+fn fresh_grasp_trial_21006_remains_a_hold_verifier_refusal() {
+    let _mujoco_guard = lock_mujoco_test();
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let trial_path = repo_root.join(
+        "docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-25mm/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21006_21.json",
+    );
+    let record: BenchmarkTrialRecord = serde_json::from_slice(
+        &std::fs::read(&trial_path).expect("fresh grasp control trial exists"),
+    )
+    .expect("fresh grasp trial record parses");
+    let trial = record
+        .trial
+        .expect("fresh grasp record contains its resolved input");
+    let episode =
+        run_test_benchmark_trial(&grasp_fixture_bundle(), &trial, simulation_admission(120.0))
+            .expect("fresh grasp trial executes under simulation admission");
+
+    assert_eq!(episode.outcome, TrialOutcome::ActionFailed);
+    assert_eq!(episode.failure_cause, Some(FailureCause::HoldNotVerified));
+    assert_eq!(episode.acquisition_verified, Some(true));
+    assert_eq!(episode.hold_verified, Some(false));
+    assert!(episode.unauthorized_writes == 0);
+    assert!(
+        episode
+            .actions
+            .iter()
+            .all(|action| !action.runtime_divergence),
+        "the 25 mm candidate keeps this control as a verifier refusal"
+    );
+    assert!(
+        episode
+            .grasp_object_follow_residual_m
+            .is_some_and(|residual| residual > 0.005),
+        "the frozen case is an object-follow refusal: {:?}",
+        episode.grasp_object_follow_residual_m
+    );
+}
+
+#[test]
 fn schema_v6_scoring_and_execution_require_persisted_pair_keys() {
     let mut trial = synthetic_trial(9076, 15, TrialExpectation::ExpectedSuccess);
     trial.paired_trial_key = None;

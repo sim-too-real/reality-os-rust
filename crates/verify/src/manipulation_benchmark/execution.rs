@@ -681,43 +681,55 @@ pub fn run_benchmark_trial(
             divergence_fault_pending = false;
         }
         let mut push_witness_audit = None;
-        let (exec, grasp_hold_start, grasp_phase_positions) = match trial.task {
-            BenchmarkTask::PushProbeReplan => {
-                let profile = wrench_profile.expect("push profile was validated above");
-                let result = execute_push_witness(
-                    &mut worker,
-                    &manifest,
-                    &request,
-                    &authorized,
-                    admission.execution_bound_m,
-                    profile,
-                    &admission.wrench_limit_policy,
-                    divergence_injected,
-                )?;
-                let execution = result.execution;
-                push_witness_audit = Some(result);
-                (execution, None, Vec::new())
-            }
-            BenchmarkTask::PinchGraspLift => {
-                let Some(resource) = grasp_resource.as_ref() else {
-                    episode.failure_cause = Some(FailureCause::UnsupportedTask);
-                    episode.refusal_code = Some("QUALIFIED_GRIPPER_RESOURCE_REQUIRED".into());
-                    episode.outcome = TrialOutcome::ActionFailed;
-                    break;
-                };
-                let result =
-                    execute_grasp_witness(&mut worker, &manifest, &request, &authorized, resource)?;
-                episode
-                    .grasp_contact_audits
-                    .extend(result.lift_contact_audits.iter().cloned());
-                (
-                    result.execution,
-                    result.hold_start,
-                    result.phase_object_positions,
-                )
-            }
-        };
+        let (exec, grasp_hold_start, grasp_phase_positions, grasp_divergence_diagnostic) =
+            match trial.task {
+                BenchmarkTask::PushProbeReplan => {
+                    let profile = wrench_profile.expect("push profile was validated above");
+                    let result = execute_push_witness(
+                        &mut worker,
+                        &manifest,
+                        &request,
+                        &authorized,
+                        admission.execution_bound_m,
+                        profile,
+                        &admission.wrench_limit_policy,
+                        divergence_injected,
+                    )?;
+                    let execution = result.execution;
+                    push_witness_audit = Some(result);
+                    (execution, None, Vec::new(), None)
+                }
+                BenchmarkTask::PinchGraspLift => {
+                    let Some(resource) = grasp_resource.as_ref() else {
+                        episode.failure_cause = Some(FailureCause::UnsupportedTask);
+                        episode.refusal_code = Some("QUALIFIED_GRIPPER_RESOURCE_REQUIRED".into());
+                        episode.outcome = TrialOutcome::ActionFailed;
+                        break;
+                    };
+                    let result = execute_grasp_witness(
+                        &mut worker,
+                        &manifest,
+                        &request,
+                        &authorized,
+                        resource,
+                    )?;
+                    episode
+                        .grasp_contact_audits
+                        .extend(result.lift_contact_audits.iter().cloned());
+                    (
+                        result.execution,
+                        result.hold_start,
+                        result.phase_object_positions,
+                        result.divergence_reason,
+                    )
+                }
+            };
         episode.grasp_phase_object_positions = grasp_phase_positions;
+        if let Some(diagnostic) = grasp_divergence_diagnostic {
+            episode
+                .decision_audits
+                .push(format!("grasp_lift_guard_failure={diagnostic}"));
+        }
         let after_state = state_payload(&mut worker)?;
         let object_after = body_position(&after_state, &trial.scenario.object_id)?;
         let displacement_m = distance3(object_before, object_after);
@@ -2379,6 +2391,7 @@ fn strict_witness_joint_line(contents: &str, prefix: &str) -> Option<Vec<f64>> {
 
 struct GraspWitnessExecution {
     execution: WitnessExecution,
+    divergence_reason: Option<String>,
     hold_start: Option<VerifierTruth>,
     phase_object_positions: Vec<[f64; 3]>,
     lift_contact_audits: Vec<GraspContactAudit>,
@@ -2404,6 +2417,7 @@ fn execute_grasp_witness(
     else {
         return Ok(GraspWitnessExecution {
             execution: WitnessExecution::WroteNothing,
+            divergence_reason: None,
             hold_start: None,
             phase_object_positions: Vec::new(),
             lift_contact_audits: Vec::new(),
@@ -2411,6 +2425,7 @@ fn execute_grasp_witness(
     };
     let rejection = || GraspWitnessExecution {
         execution: WitnessExecution::WroteNothing,
+        divergence_reason: None,
         hold_start: None,
         phase_object_positions: Vec::new(),
         lift_contact_audits: Vec::new(),
@@ -2467,8 +2482,16 @@ fn execute_grasp_witness(
     }
     let measured_arm = read_named_joints(worker, manifest, &request.scene.joint_names)?;
     if !vectors_near(&measured_arm, &q0, 0.03) {
+        let max_abs_error_rad = measured_arm
+            .iter()
+            .zip(&q0)
+            .map(|(measured, target)| (measured - target).abs())
+            .fold(0.0_f64, f64::max);
         return Ok(GraspWitnessExecution {
             execution: WitnessExecution::Diverged,
+            divergence_reason: Some(format!(
+                "joint_tracking_error_exceeded_0.03_rad;phase=start;max_abs_error_rad={max_abs_error_rad:.6}"
+            )),
             hold_start: None,
             phase_object_positions: Vec::new(),
             lift_contact_audits: Vec::new(),
@@ -2498,6 +2521,7 @@ fn execute_grasp_witness(
             GraspControlStatus::AuthorityExpired => {
                 return Ok(GraspWitnessExecution {
                     execution: WitnessExecution::AuthorityExpired,
+                    divergence_reason: None,
                     hold_start,
                     phase_object_positions,
                     lift_contact_audits: Vec::new(),
@@ -2506,8 +2530,16 @@ fn execute_grasp_witness(
         }
         let measured = read_named_joints(worker, manifest, &request.scene.joint_names)?;
         if !vectors_near(&measured, arm, 0.08) {
+            let max_abs_error_rad = measured
+                .iter()
+                .zip(arm)
+                .map(|(measured, target)| (measured - target).abs())
+                .fold(0.0_f64, f64::max);
             return Ok(GraspWitnessExecution {
                 execution: WitnessExecution::Diverged,
+                divergence_reason: Some(format!(
+                    "joint_tracking_error_exceeded_0.08_rad;phase={phase};max_abs_error_rad={max_abs_error_rad:.6}"
+                )),
                 hold_start,
                 phase_object_positions,
                 lift_contact_audits: Vec::new(),
@@ -2520,6 +2552,7 @@ fn execute_grasp_witness(
             if !step_with_authority(worker, authorized, request.now_s, GRASP_CLOSE_SETTLE_STEPS)? {
                 return Ok(GraspWitnessExecution {
                     execution: WitnessExecution::AuthorityExpired,
+                    divergence_reason: None,
                     hold_start,
                     phase_object_positions,
                     lift_contact_audits: Vec::new(),
@@ -2527,8 +2560,16 @@ fn execute_grasp_witness(
             }
             let settled = read_named_joints(worker, manifest, &request.scene.joint_names)?;
             if !vectors_near(&settled, arm, 0.08) {
+                let max_abs_error_rad = settled
+                    .iter()
+                    .zip(arm)
+                    .map(|(measured, target)| (measured - target).abs())
+                    .fold(0.0_f64, f64::max);
                 return Ok(GraspWitnessExecution {
                     execution: WitnessExecution::Diverged,
+                    divergence_reason: Some(format!(
+                        "joint_tracking_error_exceeded_0.08_rad;phase=close_settle;max_abs_error_rad={max_abs_error_rad:.6}"
+                    )),
                     hold_start,
                     phase_object_positions,
                     lift_contact_audits: Vec::new(),
@@ -2591,6 +2632,7 @@ fn execute_grasp_witness(
                 GraspControlStatus::AuthorityExpired => {
                     return Ok(GraspWitnessExecution {
                         execution: WitnessExecution::AuthorityExpired,
+                        divergence_reason: None,
                         hold_start,
                         phase_object_positions,
                         lift_contact_audits,
@@ -2599,8 +2641,16 @@ fn execute_grasp_witness(
             }
             let measured = read_named_joints(worker, manifest, &request.scene.joint_names)?;
             if !vectors_near(&measured, &target, 0.08) {
+                let max_abs_error_rad = measured
+                    .iter()
+                    .zip(&target)
+                    .map(|(measured, target)| (measured - target).abs())
+                    .fold(0.0_f64, f64::max);
                 return Ok(GraspWitnessExecution {
                     execution: WitnessExecution::Diverged,
+                    divergence_reason: Some(format!(
+                        "joint_tracking_error_exceeded_0.08_rad;phase=lift_waypoint_{waypoint};max_abs_error_rad={max_abs_error_rad:.6}"
+                    )),
                     hold_start,
                     phase_object_positions,
                     lift_contact_audits,
@@ -2616,13 +2666,25 @@ fn execute_grasp_witness(
                 &request.scene.object_id,
                 resource,
             );
-            let force_safe = audits.len() == resource.finger_bodies.len()
-                && audits.iter().all(|audit| {
-                    audit.force_available
-                        && audit.normal_force_n.is_some_and(|force| {
-                            force.is_finite() && force <= *per_finger_force_ceiling_n + 1e-6
-                        })
-                });
+            let force_failure = if audits.len() != resource.finger_bodies.len() {
+                Some("finger_contact_audit_incomplete".to_owned())
+            } else if let Some((audit, force)) = audits.iter().find_map(|audit| {
+                audit.normal_force_n.and_then(|force| {
+                    (force.is_finite() && force > *per_finger_force_ceiling_n + 1e-6)
+                        .then_some((audit, force))
+                })
+            }) {
+                Some(format!(
+                    "per_finger_force_ceiling_exceeded;finger={};force_n={force:.6};limit_n={:.6}",
+                    audit.finger_body, per_finger_force_ceiling_n
+                ))
+            } else if audits.iter().any(|audit| {
+                !audit.force_available || !audit.normal_force_n.is_some_and(f64::is_finite)
+            }) {
+                Some("finger_force_observation_unavailable".to_owned())
+            } else {
+                None
+            };
             lift_contact_audits.extend(audits);
             let object_hits_obstacle = request.scene.obstacles.iter().any(|obstacle| {
                 truth.contacts.iter().any(|contact| {
@@ -2632,14 +2694,29 @@ fn execute_grasp_witness(
             let relative_pose_error = truth_position(&truth, &request.scene.ee)
                 .map(|ee| distance3(sub3(object_position, ee), start_relative))
                 .unwrap_or(f64::INFINITY);
-            if !bilateral_finger_contact(&truth, &request.scene.object_id, resource)
-                || !force_safe
-                || object_hits_obstacle
-                || !relative_pose_error.is_finite()
-                || relative_pose_error > 0.02
-            {
+            let divergence_reason = if !bilateral_finger_contact(
+                &truth,
+                &request.scene.object_id,
+                resource,
+            ) {
+                Some("bilateral_finger_contact_lost".to_owned())
+            } else if let Some(force_failure) = force_failure {
+                Some(force_failure)
+            } else if object_hits_obstacle {
+                Some("object_contact_with_obstacle".to_owned())
+            } else if !relative_pose_error.is_finite() {
+                Some("object_tool_relative_pose_unavailable".to_owned())
+            } else if relative_pose_error > 0.02 {
+                Some(format!(
+                    "object_tool_relative_pose_exceeded_20mm;relative_pose_error_m={relative_pose_error:.6}"
+                ))
+            } else {
+                None
+            };
+            if let Some(reason) = divergence_reason {
                 return Ok(GraspWitnessExecution {
                     execution: WitnessExecution::Diverged,
+                    divergence_reason: Some(format!("{reason};waypoint={waypoint}")),
                     hold_start,
                     phase_object_positions,
                     lift_contact_audits,
@@ -2649,6 +2726,7 @@ fn execute_grasp_witness(
     }
     Ok(GraspWitnessExecution {
         execution: WitnessExecution::Wrote,
+        divergence_reason: None,
         hold_start,
         phase_object_positions,
         lift_contact_audits,

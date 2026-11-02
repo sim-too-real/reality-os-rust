@@ -1,10 +1,10 @@
 # Grasp lift margin screen
 
 **Evidence status:** `SIMULATION_ONLY`  
-**Classification:** Meaningful advance on a bounded, frozen simulation screen  
+**Classification:** Foundational advance in failure diagnostics; lift-target sweep produced a negative generalization result
 **Fixture:** `arm_gripper_lift` pinch-grasp/lift
 
-**Generalization status:** The six-case gain below did not improve success rate on a fresh seven-case expected-success grasp subset. At 25 mm, one fresh case changed from a completed hold-verifier refusal to executor runtime divergence. Keep the change classified as a narrow screen result.
+**Generalization status:** The six-case gain below did not improve success rate on a fresh seven-case expected-success grasp subset. Targets of 24.3, 24.5, and 25 mm each triggered a different measured guard failure on fresh inputs. Keep the lift result classified as a narrow screen result.
 
 ## Question and intervention
 
@@ -49,13 +49,25 @@ To isolate the lift target, the seven fresh expected-success grasp inputs were r
 
 The 25 mm target raised measured EE lift by about 1.97 mm in the six episodes that completed the lift, but neither target succeeded on more than three of the seven inputs. The three follow-residual failures remained failures. Trial 21010:25 changed from a completed `hold_not_verified` refusal to `runtime_divergence`; both outcomes had zero unauthorized writes. This is an execution-continuity regression, not evidence of an unsafe acceptance. These results show no fresh-cohort task-success gain from the target change.
 
+## Target margin follow-up and guard diagnosis
+
+The same 13 frozen inputs (six selected historical cases and seven fresh expected-success cases) were replayed at 24.5 mm. All 13 paired keys matched both the 23 mm and 25 mm records. All six historical cases were successful, including the four selected lift-threshold recoveries. Fresh success remained 3/7. Trial 21006:21 stopped at its first lift waypoint with a finger-force ceiling violation (`finger_l=1.978583 N`, limit `1.950000 N`); trial 21010:25 completed the lift but remained `hold_not_verified` with 19.83 mm object-follow residual. No unauthorized writes occurred and the individual replay safety gates passed.
+
+A targeted 24.3 mm replay of 21006:21 also stopped at the first lift waypoint for the same guard, at `1.994177 N` on `finger_l`. This was a single-case bracket, not a full 13-case campaign. At 25 mm, 21006:21 remained a completed hold-verifier refusal with 7.36 mm follow residual, while 21010:25 diverged at lift waypoint 4 because object-to-tool relative-pose error reached `0.020099 m`, just above the unchanged 20 mm guard. Its sampled peak finger force was 1.109279 N.
+
+These paired traces reject the scalar-target hypothesis: lowering the target from 25 mm avoids the 21010:25 relative-pose stop but selects a path that exceeds the per-finger force cap on 21006:21; lowering again to 24.3 mm did not remove that force violation. No tested target improves fresh task success beyond 3/7, and the safety thresholds remain unchanged. Further constant tuning is stopped pending a trajectory-level explanation.
+
+Grasp-lift runtime divergence now appends its first failed guard to the episode's existing `decision_audits` as a stable `grasp_lift_guard_failure=...` entry, including waypoint and measured value. This makes the two previously generic `runtime_divergence` outcomes distinguishable and independently reviewable. For the 25 mm replays of 21006:21 and 21010:25, 29 execution and verification fields plus all pre-existing decision-audit strings match the earlier records; the only addition is the guard diagnostic. Admission, force limits, and verifier thresholds are unchanged.
+
 The full suite-v3 candidate report and all 60 raw trial records are in `suite-v3-candidate-25mm/`. The seven current-code 23 mm control reports and raw inputs are in `suite-v3-control-23mm/`. The full-suite baseline used the preserved report at `docs/superpowers/evidence/suite-v3-paired-after-label-fix/manipulation_benchmark.json`.
+
+The 13 saved 24.5 mm replays are in `suite-v3-candidate-24_5mm/`. Structured 24.3, 24.5, and 25 mm guard-diagnostic replays are in `suite-v3-lift-guard-diagnostics-20261102/`.
 
 ## Limits and next experiment
 
-The selected six-trial screen is on one simulated gripper fixture. The four recovery cases were selected because their saved verifier evidence isolated the lift threshold while object-follow passed; several other archived grasp failures have different causes and were not expected to improve from this change. The fresh seven-input control did not show higher success at 25 mm and exposed one runtime-divergence regression. These results do not establish performance on randomized mass, friction, and object dimensions, another embodiment, or physical hardware.
+The selected six-trial screen is on one simulated gripper fixture. The four recovery cases were selected because their saved verifier evidence isolated the lift threshold while object-follow passed; several other archived grasp failures have different causes and were not expected to improve from this change. The fresh seven-input control did not show higher success at any tested target and exposed force or relative-pose stops. These results do not establish performance on randomized mass, friction, and object dimensions, another embodiment, or physical hardware.
 
-Next: test a 24.5 mm lift target against the same seven fresh inputs and six selected historical inputs. Retain it only if it preserves the four selected threshold recoveries while avoiding the 21010:25 runtime divergence. After that targeted check, freeze a separate schema-v7 grasp cohort across randomized mass, friction, and object dimensions, then measure hold success, force margin, and false acceptance without changing labels or verifier limits. Keep all results `SIMULATION_ONLY` until there is independent physical evidence.
+Next: compare the prepared joint-space lift witnesses and deterministic IK branches for 21006:21 and 21010:25, then test one path-continuity candidate-selection change against the same 13 inputs. Keep collision checking, the 1.95 N per-finger limit, the 20–25 mm verifier window, and the 20 mm relative-pose stop fixed. If the branch traces do not support a deterministic candidate-ranking hypothesis, pivot away from the arm-gripper lift fixture before expanding the cohort. Keep all results `SIMULATION_ONLY` until there is independent physical evidence.
 
 ## Replay
 
@@ -69,8 +81,11 @@ The replay reports the schema upgrade and rejects the trial if the current robot
 
 ## Verification
 
-- `cargo test -p realityos-verify --test manipulation_benchmark historical_grasp_failure_reaches_verified_hold_within_frozen_limits -- --nocapture` — passed; includes four prior failures and two success controls.
-- `cargo test -p realityos-verify --test manipulation_benchmark grasp --quiet` — 8 passed.
-- `cargo test -p realityos-semantics --quiet` — 412 tests passed across unit, integration, and documentation targets.
+- `cargo build --release -p realityos-verify --bin realityos-verify` — passed at the retained 25 mm target.
+- `cargo test -p realityos-verify --test manipulation_benchmark --quiet` — 104 passed, including the new guard-diagnostic test and fresh 21006:21 refusal check.
+- `cargo test -p realityos-verify --lib --quiet -- --test-threads=1` — 178 passed.
+- Remaining Rust integration targets (`pair_key_roundtrip`, `physical_experiment_decision`, `production_mujoco_reasoner`, `production_reasoner_authority`, `typed_grasp_verification`) — 20 passed.
+- `cargo test -p realityos-semantics --quiet` — 412 passed across unit, integration, and documentation targets.
+- The three failures reported by an initial default-parallel crate run passed individually; the complete serial library run passed 178/178. The cause of the parallel-only failures is unconfirmed.
 - `cargo fmt --all -- --check` and `git diff --check` — passed.
 
