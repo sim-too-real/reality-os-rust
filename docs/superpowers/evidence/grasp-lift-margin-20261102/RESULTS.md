@@ -292,4 +292,41 @@ Artifact SHA-256 values (raw files):
 - `PROBE_MEASUREMENT_SIDECAR.json`: `BD45EB08908C91E9B0EF1DED67AF152302AFD55F56B4D58FCCE9320BC88B5E5F`
 - `OFFLINE_VERIFY.json`: `085F511F95ECD60C6A7D9087B29271A69ECF79C952A43A30E05681515299CA9F`
 
-Next: export and audit a new out-of-cohort candidate at `23022:17`. Require a fresh zero-step preflight selecting `probe:+x`, bind all source hashes, and push a new freeze before at most one replay. Preserve an absent-contact result if it occurs; never reuse this trial or any frozen, pilot, or public input.
+Candidate `23022:17` was rejected before freeze: its expected-success label did not produce an authorized action. The zero-step preflight returned `NO_JUSTIFIED_CURRENT_ACTION`; the reasoner reported `NO_PHYSICAL_CANDIDATES`, with `probe:+x` classified as `UNINTENDED_ROBOT_OBJECT_CONTACT`. No replay occurred. The failure and resolved input are preserved in `fresh-out-of-cohort-per-step-contact-trace-v1-23022-20261103/`.
+
+The next fresh candidate, `23023:17`, passed the zero-step preflight and was frozen and pushed before its one replay. Its result is recorded below. Do not rerun either candidate or any frozen, pilot, or public input.
+
+## Fresh out-of-cohort per-step contact trace replay: 23023:17
+
+**Classification:** Foundational verification evidence; no benchmark gain. **Status:** `SIMULATION_ONLY`; admission and all release flags remain unchanged.
+
+The exact trial ID `v7:development:menagerie_ur5e:push_probe_replan:23023:17` was absent from the prior archive. Seed 23023 is outside the checked-in v4 pilot, public, and historical seed ranges; index 17 resolves to the expected-success stratum. The first candidate, `23022:17`, was retained as a fail-closed selection refusal and was not simulated. `CANDIDATE_SELECTION.json` records both decisions and their inputs.
+
+For `23023:17`, the resolved input SHA-256 is `774AB38FDA184379DFBB0F561846326328606D15F2D5EFA216FF6BF590710FE2`. Zero-step preflight authorized `probe:+x`, matching the trial digest, with zero control writes, zero simulator-time advance, and zero steps. The freeze binds the preflight, candidate selection, suite, and runner source hashes. It was pushed to Reality OS `main` as `6193ec346e0e3664facc60d485bd8dccc6599c2c` before the only replay.
+
+The frozen replay test passed in one run (56.24 seconds). Its first action matched preflight; the episode outcome was `success`, with zero unauthorized writes. The sidecar contains 5,232 wrench samples and 5,231 pose samples, with complete start and per-step contact evidence. The intended pair (`wrist_3_link/geom_28` with `obj0/geom_31`) appeared in 1,535 pose samples, first at simulator step 9,613 and time 19.226 s. The offline verifier recomputed the first 1 mm motion bracket at `[22.712, 22.714]` s and `Updated(SlipOnset)` with friction interval `[0.4711696053, 0.5484442443]` from prior `[0.05, 0.8]`.
+
+The sidecar CLI verifier returned `PASS`, validated the trace, and independently recomputed the inference from saved samples. This is one model-conditioned simulation result; it establishes no physical friction measurement, held-out performance, broader reliability, or product claim. `OFFLINE_VERIFY.json` contains the raw artifact hashes and contact summary. Admission remains `NOT_ADMITTED`; `metal`, `shop_release`, and `viewport_admits` remain false.
+
+Verification:
+
+- Export test for `23023:17` — 1 passed; exact trial identity and expected-success label recorded.
+- Zero-step preflight for `23023:17` — 1 passed; `probe:+x`, zero writes, zero time advance, zero steps.
+- Pre-run freeze commit `6193ec346e0e3664facc60d485bd8dccc6599c2c` was pushed before replay.
+- Frozen simulation replay — 1 passed; exactly one simulation, preflight action matched, complete per-step contact trace validated.
+- `cargo run --quiet -p realityos-verify --bin realityos-verify -- verify-probe-measurement-sidecar <sidecar>` — `PASS`; interval and motion bracket recomputed.
+- The 23022:17 preflight failure was diagnosed and preserved; it was not replayed. The temporary stdout-only diagnostic instrumentation was reverted before the freeze and replay.
+- The offline regression suite continues to cover absent intended contact, observed intended contact, partial-trace rejection, digest binding, and legacy trace compatibility.
+
+Artifact SHA-256 values (raw files):
+
+- `23022:17/PREFLIGHT_FAILURE.json`: `681246C8DA21366C7C876E26F77F76D5C31A34FB46CBE77A79184D5C51BF739C`
+- `FREEZE.json`: `A3CBAEDC54B1F1B13AB423C51B81EF28E544CB44DDFA4C65FFCCCDF7AC9F79C3`
+- `CANDIDATE_SELECTION.json`: `F59D6A8CED487909FC44C5961B867D585E3F8594E384CDC32C283E111F7AE7D4`
+- `TRIAL_INPUT.json`: `774AB38FDA184379DFBB0F561846326328606D15F2D5EFA216FF6BF590710FE2`
+- `PREFLIGHT.json`: `BDBC7609E5388417B1B50CF7AAF1C73760C2414C1CC8E269CD3BED4C5EBAAC0B`
+- `RESULT.json`: `831738562F4709ECCD0ECF6472C75D693F32FAC17D4434DCBF238DBBB9694A9E`
+- `PROBE_MEASUREMENT_SIDECAR.json`: `2BB3A8FA881AD41AEECE6BC7D573BCD3C640A91E30B438BBE08D33CC70D39E62`
+- `OFFLINE_VERIFY.json`: `02AE04942CB3540F450F97E57072160F37100CB035BB0684E33C5B1CF7424836`
+
+Next: screen one new out-of-cohort input only after exact-ID and cohort checks; require a zero-step `probe:+x` preflight and push a source-bound freeze before at most one replay. Preserve refusals and contact absence as results. Never rerun `23023:17`, `23022:17`, or any frozen, pilot, or public input.
