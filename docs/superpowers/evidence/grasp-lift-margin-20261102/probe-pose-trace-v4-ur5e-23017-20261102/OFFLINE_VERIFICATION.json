@@ -1,0 +1,38 @@
+{
+  "format": "realityos.probe_measurement_sidecar",
+  "measurement_count": 1,
+  "measurements": [
+    {
+      "action_key": "probe:+x",
+      "first_xy_motion_bracket_s": [
+        23.061999999998097,
+        23.063999999998096
+      ],
+      "measurement_digest": "8b15f11ded6afee3950206044bcd7e88a552ff562d46428414acc06abdafce91",
+      "motion_trace_status": "verified",
+      "pose_sample_count": 5590,
+      "posterior_support_friction_interval": [
+        0.3509380227123597,
+        0.456770725562596
+      ],
+      "prior_support_friction_interval": [
+        0.05,
+        0.8
+      ],
+      "recomputed_inference": {
+        "Updated": {
+          "interval": [
+            0.3509380227123597,
+            0.456770725562596
+          ],
+          "mode": "slip_onset"
+        }
+      },
+      "sample_count": 5591
+    }
+  ],
+  "schema_version": 1,
+  "status": "PASS",
+  "trial_digest": "52b191c9b52eb80dfda6760be659f83d77af88f64b4a488f0a31c25cf54235a8",
+  "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23017:17"
+}

@@ -118,6 +118,7 @@ fn sealed_motion_trace() -> ProbeObjectPoseTrace {
         start_s: 1.0,
         start_position_world_m: [0.0; 3],
         start_orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
+        start_wrench_sequence: None,
         samples: vec![
             sealed_pose_sample(10, Some(1), 1.002, [0.0; 3]),
             sealed_pose_sample(11, Some(2), 1.008, [0.0; 3]),
@@ -159,6 +160,7 @@ fn pose_trace_brackets_cumulative_motion_from_the_original_probe_origin() {
         start_s: 2.0,
         start_position_world_m: [0.0, 0.0, 0.0],
         start_orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
+        start_wrench_sequence: None,
         samples: vec![first, crossing],
         digest: String::new(),
     };
@@ -171,12 +173,165 @@ fn pose_trace_brackets_cumulative_motion_from_the_original_probe_origin() {
 }
 
 #[test]
-fn probe_inference_rejects_pose_trace_wrench_pairs_without_a_matching_sample() {
+fn probe_inference_rejects_pose_trace_wrench_pairs_without_matching_sequence_or_time() {
     let mut measured = measurement();
     let mut trace = sealed_motion_trace();
     trace.samples[2].wrench_sequence = Some(99);
     trace.samples[2].digest = trace.samples[2].digest();
     trace.digest = trace.digest();
+    measured.motion_trace = Some(trace);
+
+    assert_eq!(
+        infer_support_friction(&measured),
+        FrictionInferenceResult::NoInference(FrictionNoInferenceReason::InvalidMotionTrace)
+    );
+
+    let mut time_mismatch = measurement();
+    time_mismatch.precontact_baseline = Some(sample(0, 0.995, [0.0; 6]));
+    time_mismatch.samples = vec![
+        sample(1, 1.0, [-3.1, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        sample(2, 1.008, [-3.1, 0.0, 0.0, 0.0, 0.0, 0.0]),
+    ];
+    time_mismatch.motion.start_s = 1.0;
+    time_mismatch.motion.end_s = 1.01;
+    time_mismatch.now_s = 1.02;
+    let mut trace = ProbeObjectPoseTrace {
+        object_id: "object".into(),
+        clock_domain: "sim:1".into(),
+        start_s: 1.0,
+        start_position_world_m: [0.0; 3],
+        start_orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
+        start_wrench_sequence: Some(1),
+        samples: vec![
+            sealed_pose_sample(11, Some(2), 1.008, [0.0; 3]),
+            sealed_pose_sample(12, None, 1.01, [0.0; 3]),
+        ],
+        digest: String::new(),
+    };
+    trace.digest = trace.digest();
+    time_mismatch.samples[0].capture_s = 1.001;
+    time_mismatch.samples[0].receive_s = 1.0011;
+    time_mismatch.samples[0].digest = wrench_sample_digest(&time_mismatch.samples[0]);
+    time_mismatch.motion_trace = Some(trace);
+
+    assert_eq!(
+        infer_support_friction(&time_mismatch),
+        FrictionInferenceResult::NoInference(FrictionNoInferenceReason::InvalidMotionTrace)
+    );
+}
+
+#[test]
+fn pose_trace_accepts_a_wrench_paired_at_the_start_boundary() {
+    let mut measured = measurement();
+    measured.precontact_baseline = Some(sample(0, 0.995, [0.0; 6]));
+    measured.samples = vec![
+        sample(1, 1.0, [-3.1, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        sample(2, 1.008, [-3.1, 0.0, 0.0, 0.0, 0.0, 0.0]),
+    ];
+    measured.motion.start_s = 1.0;
+    measured.motion.end_s = 1.01;
+    measured.now_s = 1.02;
+    let mut trace = ProbeObjectPoseTrace {
+        object_id: "object".into(),
+        clock_domain: "sim:1".into(),
+        start_s: 1.0,
+        start_position_world_m: [0.0; 3],
+        start_orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
+        start_wrench_sequence: None,
+        samples: vec![
+            sealed_pose_sample(10, Some(1), 1.0, [0.0; 3]),
+            sealed_pose_sample(11, Some(2), 1.008, [0.0; 3]),
+            sealed_pose_sample(12, None, 1.01, [0.0; 3]),
+        ],
+        digest: String::new(),
+    };
+    trace.digest = trace.digest();
+    measured.motion_trace = Some(trace);
+
+    let inference = infer_support_friction(&measured);
+    assert!(
+        matches!(inference, FrictionInferenceResult::Updated { .. }),
+        "a time-aligned boundary pose should keep inference valid: {inference:?}"
+    );
+}
+
+#[test]
+fn pose_trace_rejects_a_boundary_pose_that_disagrees_with_its_origin() {
+    let mut trace = sealed_motion_trace();
+    trace.samples[0].capture_s = trace.start_s;
+    trace.samples[0].position_world_m = [0.0001, 0.0, 0.0];
+    trace.samples[0].digest = trace.samples[0].digest();
+    trace.digest = trace.digest();
+
+    assert_eq!(trace.validate(), Err("start_pose_mismatch"));
+}
+
+#[test]
+fn pose_trace_pairs_a_bootstrap_wrench_with_its_sealed_start_pose() {
+    let mut measured = measurement();
+    measured.precontact_baseline = Some(sample(0, 0.995, [0.0; 6]));
+    measured.samples = vec![
+        sample(1, 1.0, [-3.1, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        sample(2, 1.008, [-3.1, 0.0, 0.0, 0.0, 0.0, 0.0]),
+    ];
+    measured.motion.start_s = 1.0;
+    measured.motion.end_s = 1.01;
+    measured.now_s = 1.02;
+    let mut trace = ProbeObjectPoseTrace {
+        object_id: "object".into(),
+        clock_domain: "sim:1".into(),
+        start_s: 1.0,
+        start_position_world_m: [0.0; 3],
+        start_orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
+        start_wrench_sequence: Some(1),
+        samples: vec![
+            sealed_pose_sample(11, Some(2), 1.008, [0.0; 3]),
+            sealed_pose_sample(12, None, 1.01, [0.0; 3]),
+        ],
+        digest: String::new(),
+    };
+    trace.digest = trace.digest();
+    measured.motion_trace = Some(trace);
+
+    let inference = infer_support_friction(&measured);
+    assert!(
+        matches!(inference, FrictionInferenceResult::Updated { .. }),
+        "the start pose must be explicitly pairable with a bootstrap wrench: {inference:?}"
+    );
+}
+
+#[test]
+fn bootstrap_wrench_sequence_is_sealed_into_trace_digest() {
+    let mut measured = measurement();
+    measured.precontact_baseline = Some(sample(0, 0.995, [0.0; 6]));
+    measured.samples = vec![
+        sample(1, 1.0, [-3.1, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        sample(2, 1.008, [-3.1, 0.0, 0.0, 0.0, 0.0, 0.0]),
+    ];
+    measured.motion.start_s = 1.0;
+    measured.motion.end_s = 1.01;
+    measured.now_s = 1.02;
+    let mut trace = ProbeObjectPoseTrace {
+        object_id: "object".into(),
+        clock_domain: "sim:1".into(),
+        start_s: 1.0,
+        start_position_world_m: [0.0; 3],
+        start_orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
+        start_wrench_sequence: Some(1),
+        samples: vec![
+            sealed_pose_sample(11, Some(2), 1.008, [0.0; 3]),
+            sealed_pose_sample(12, None, 1.01, [0.0; 3]),
+        ],
+        digest: String::new(),
+    };
+    trace.digest = trace.digest();
+    let v2_digest = trace.digest.clone();
+    trace.start_wrench_sequence = Some(99);
+    trace.digest = trace.digest();
+    assert_ne!(
+        trace.digest, v2_digest,
+        "the bootstrap sequence is digest-sealed"
+    );
     measured.motion_trace = Some(trace);
 
     assert_eq!(

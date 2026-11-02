@@ -118,18 +118,28 @@ pub struct ProbeObjectPoseTrace {
     pub start_position_world_m: [f64; 3],
     /// MuJoCo quaternion order: w, x, y, z.
     pub start_orientation_world_wxyz: [f64; 4],
+    /// Wrench sequence sampled at `start_s` before the first per-step pose
+    /// trace sample. This binds a bootstrap wrench to the sealed start pose.
+    #[serde(default)]
+    pub start_wrench_sequence: Option<u64>,
     pub samples: Vec<ProbeObjectPoseSample>,
     pub digest: String,
 }
 
 impl ProbeObjectPoseTrace {
     pub fn digest(&self) -> String {
-        let mut bytes = b"realityos.probe_object_pose_trace/1\0".to_vec();
+        let mut bytes = match self.start_wrench_sequence {
+            Some(_) => b"realityos.probe_object_pose_trace/2\0".to_vec(),
+            None => b"realityos.probe_object_pose_trace/1\0".to_vec(),
+        };
         push_string(&mut bytes, &self.object_id);
         push_string(&mut bytes, &self.clock_domain);
         push_f64(&mut bytes, self.start_s);
         push_f64s(&mut bytes, &self.start_position_world_m);
         push_f64s(&mut bytes, &self.start_orientation_world_wxyz);
+        if let Some(sequence) = self.start_wrench_sequence {
+            bytes.extend_from_slice(&sequence.to_le_bytes());
+        }
         bytes.extend_from_slice(&(self.samples.len() as u64).to_le_bytes());
         for sample in &self.samples {
             push_string(&mut bytes, &sample.digest);
@@ -169,9 +179,16 @@ impl ProbeObjectPoseTrace {
         if self.samples.is_empty() {
             return Err("empty_trace");
         }
+        if self.start_wrench_sequence.is_some_and(|sequence| {
+            self.samples
+                .iter()
+                .any(|sample| sample.wrench_sequence == Some(sequence))
+        }) {
+            return Err("duplicate_start_wrench_pair");
+        }
         let mut previous_step: Option<u64> = None;
-        let mut previous_time = self.start_s;
-        for sample in &self.samples {
+        let mut previous_time: Option<f64> = None;
+        for (index, sample) in self.samples.iter().enumerate() {
             sample.validate()?;
             if sample.object_id != self.object_id || sample.clock_domain != self.clock_domain {
                 return Err("sample_identity_mismatch");
@@ -183,11 +200,20 @@ impl ProbeObjectPoseTrace {
             } else if sample.simulator_step == 0 {
                 return Err("step_order");
             }
-            if sample.capture_s <= previous_time {
+            if sample.capture_s < self.start_s
+                || previous_time.is_some_and(|previous| sample.capture_s <= previous)
+            {
                 return Err("time_order");
             }
+            if index == 0
+                && sample.capture_s == self.start_s
+                && (sample.position_world_m != self.start_position_world_m
+                    || sample.orientation_world_wxyz != self.start_orientation_world_wxyz)
+            {
+                return Err("start_pose_mismatch");
+            }
             previous_step = Some(sample.simulator_step);
-            previous_time = sample.capture_s;
+            previous_time = Some(sample.capture_s);
         }
         if !is_sha256(&self.digest) || self.digest != self.digest() {
             return Err("digest_mismatch");
@@ -989,7 +1015,18 @@ fn validate_motion_trace(
         let mut matching_poses = trace.samples.iter().filter(|pose| {
             pose.wrench_sequence == Some(sample.sequence) && pose.capture_s == sample.capture_s
         });
-        if matching_poses.next().is_none() || matching_poses.next().is_some() {
+        let paired_start_pose = trace.start_wrench_sequence == Some(sample.sequence)
+            && sample.capture_s == trace.start_s;
+        let explicit_pose_count = matching_poses.by_ref().count();
+        if explicit_pose_count + usize::from(paired_start_pose) != 1 {
+            return Err(FrictionNoInferenceReason::InvalidMotionTrace);
+        }
+    }
+    if let Some(start_sequence) = trace.start_wrench_sequence {
+        let mut matching_samples = measurement.samples.iter().filter(|sample| {
+            sample.sequence == start_sequence && sample.capture_s == trace.start_s
+        });
+        if matching_samples.next().is_none() || matching_samples.next().is_some() {
             return Err(FrictionNoInferenceReason::InvalidMotionTrace);
         }
     }

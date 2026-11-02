@@ -1628,6 +1628,41 @@ fn ur5e_bundle() -> RobotBundle {
     RobotBundle::load(root).expect("checked-in UR5e bundle with mesh assets")
 }
 
+fn resolve_v4_ur5e_probe_trial(
+    seed: u64,
+    index: u32,
+) -> realityos_verify::manipulation_benchmark::ResolvedBenchmarkTrial {
+    let bundle = ur5e_bundle();
+    let suite = scenario_suite_v4();
+    let (worker, manifest) = load_and_normalize(&bundle, &[], seed)
+        .expect("v4 UR5e trial resolution requires the pinned MuJoCo model");
+    checkin_worker(worker);
+    resolve_benchmark_trial_with_suite(
+        seed,
+        index,
+        BenchmarkTask::PushProbeReplan,
+        EmbodimentRole::Development,
+        &bundle,
+        &manifest,
+        &suite,
+    )
+    .expect("frozen v4 UR5e probe trial resolves")
+}
+
+fn required_path_env(name: &str) -> PathBuf {
+    std::env::var_os(name)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| panic!("{name} must name a unique evidence path"))
+}
+
+fn sha256_upper(bytes: &[u8]) -> String {
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+        .to_uppercase()
+}
+
 fn iiwa14_bundle() -> RobotBundle {
     realityos_verify::menagerie::ensure_v2_holdout_model().expect("pinned IIWA-14 menagerie model");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../robots/external/iiwa14");
@@ -5717,6 +5752,250 @@ fn exploratory_v4_low_load_ur5e_probe_feasibility() {
     println!(
         "EXPLORATORY_SIMULATION_RESULT={}",
         String::from_utf8_lossy(&serialized)
+    );
+}
+
+#[test]
+#[ignore = "freeze-only: exports a resolved v4 trial input; does not run simulation"]
+fn export_v4_ur5e_probe_trace_trial_input() {
+    let seed = std::env::var("REALITYOS_PROBE_TRACE_SEED")
+        .expect("REALITYOS_PROBE_TRACE_SEED is required")
+        .parse::<u64>()
+        .expect("seed is an unsigned integer");
+    let index = std::env::var("REALITYOS_PROBE_TRACE_INDEX")
+        .expect("REALITYOS_PROBE_TRACE_INDEX is required")
+        .parse::<u32>()
+        .expect("index is an unsigned integer");
+    let trial = resolve_v4_ur5e_probe_trial(seed, index);
+    let bytes = serde_json::to_vec_pretty(&serde_json::json!({ "trial": trial }))
+        .expect("resolved v4 trial serializes");
+    let output_path = required_path_env("REALITYOS_PROBE_TRACE_TRIAL_EXPORT");
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&output_path)
+        .expect("trial export path must be new");
+    std::io::Write::write_all(&mut output, &bytes).expect("write frozen v4 trial input");
+    println!(
+        "FROZEN_TRIAL_INPUT path={} sha256={} trial_id={} expectation={:?}",
+        output_path.display(),
+        sha256_upper(&bytes),
+        trial.trial_id,
+        trial.expectation
+    );
+}
+
+#[test]
+#[ignore = "SIMULATION_ONLY; run once with frozen input, freeze, sidecar, and result paths"]
+fn probe_pose_trace_replays_frozen_v4_ur5e_trial() {
+    let _mujoco_guard = lock_mujoco_test();
+    let freeze_path = required_path_env("REALITYOS_PROBE_TRACE_FREEZE");
+    let input_path = required_path_env("REALITYOS_PROBE_TRACE_TRIAL_INPUT");
+    let sidecar_path = required_path_env("REALITYOS_PROBE_TRACE_SIDECAR_OUTPUT");
+    let result_path = required_path_env("REALITYOS_PROBE_TRACE_RESULT_OUTPUT");
+    let paths = [&freeze_path, &input_path, &sidecar_path, &result_path];
+    for (index, path) in paths.iter().enumerate() {
+        assert!(
+            !path.exists() || index < 2,
+            "sidecar and result paths must be new: {}",
+            path.display()
+        );
+    }
+    assert_ne!(sidecar_path, result_path);
+
+    let freeze_bytes = std::fs::read(&freeze_path).expect("frozen experiment protocol");
+    let freeze: Value = serde_json::from_slice(&freeze_bytes).expect("freeze JSON");
+    assert_eq!(
+        freeze["status"], "FROZEN_BEFORE_SIMULATION",
+        "only a pre-run freeze may authorize this one-trial execution"
+    );
+    let input_bytes = std::fs::read(&input_path).expect("frozen resolved trial input");
+    let input_sha256 = sha256_upper(&input_bytes);
+    assert_eq!(
+        input_sha256,
+        freeze["trial_input"]["sha256"]
+            .as_str()
+            .expect("frozen trial input digest")
+    );
+    let input: Value = serde_json::from_slice(&input_bytes).expect("trial input JSON");
+    let trial: realityos_verify::manipulation_benchmark::ResolvedBenchmarkTrial =
+        serde_json::from_value(input["trial"].clone()).expect("resolved v4 UR5e trial");
+    let seed = freeze["trial"]["seed"].as_u64().expect("frozen seed");
+    let index = freeze["trial"]["index"].as_u64().expect("frozen index") as u32;
+    let suite_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../robots/benchmarks/manipulation/scenario_suite_v4.json");
+    let suite_bytes = std::fs::read(&suite_path).expect("checked-in v4 suite");
+    assert_eq!(
+        sha256_upper(&suite_bytes),
+        freeze["suite"]["sha256"]
+            .as_str()
+            .expect("frozen suite digest")
+    );
+    let test_source_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/manipulation_benchmark.rs");
+    let test_source_bytes = std::fs::read(&test_source_path).expect("trace replay test source");
+    assert_eq!(
+        sha256_upper(&test_source_bytes),
+        freeze["runner"]["test_source_sha256"]
+            .as_str()
+            .expect("frozen runner test source digest")
+    );
+    let semantics_source_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../semantics/src/push_probe.rs");
+    let semantics_source_bytes =
+        std::fs::read(&semantics_source_path).expect("probe inference source");
+    assert_eq!(
+        sha256_upper(&semantics_source_bytes),
+        freeze["runner"]["semantics_source_sha256"]
+            .as_str()
+            .expect("frozen probe inference source digest")
+    );
+    let execution_source_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/manipulation_benchmark/execution.rs");
+    let execution_source_bytes =
+        std::fs::read(&execution_source_path).expect("probe execution source");
+    assert_eq!(
+        sha256_upper(&execution_source_bytes),
+        freeze["runner"]["execution_source_sha256"]
+            .as_str()
+            .expect("frozen probe execution source digest")
+    );
+    assert_eq!(trial.robot_id, "menagerie_ur5e");
+    assert_eq!(trial.task, BenchmarkTask::PushProbeReplan);
+    assert_eq!(trial.seed, seed);
+    assert_eq!(trial.index, index);
+    assert_eq!(trial.scenario_suite_version, Some(4));
+    assert_eq!(
+        trial.trial_id,
+        freeze["trial"]["trial_id"]
+            .as_str()
+            .expect("frozen trial identity")
+    );
+    assert_eq!(
+        serde_json::to_value(trial.expectation).expect("expectation serializes"),
+        freeze["trial"]["expectation"]
+    );
+    assert_eq!(
+        trial.scenario.expected_refusal,
+        freeze["trial"]["scenario_expected_refusal"]
+            .as_str()
+            .map(str::to_owned)
+    );
+
+    let bundle = ur5e_bundle();
+    let episode = run_test_benchmark_trial_with_probe_measurement_sidecar(
+        &bundle,
+        &trial,
+        simulation_admission(120.0),
+        &sidecar_path,
+    )
+    .expect("one frozen v4 UR5e simulation episode with full probe measurement sidecar");
+    let sidecar_bytes = std::fs::read(&sidecar_path).expect("trace-enabled probe sidecar");
+    let sidecar: realityos_verify::manipulation_benchmark::ProbeMeasurementSidecarV1 =
+        serde_json::from_slice(&sidecar_bytes).expect("measurement sidecar JSON");
+    let sidecar_verification = sidecar.verify();
+    let measurement_count = sidecar.measurements.len();
+    let record = sidecar.measurements.first().expect("one probe measurement");
+    let motion_trace = record
+        .measurement
+        .motion_trace
+        .as_ref()
+        .expect("trace-enabled sidecar retains per-step target poses");
+    let trace_validation = motion_trace.validate();
+    let has_xy_threshold_bracket = motion_trace
+        .first_xy_motion_bracket(record.measurement.motion.pose_resolution_m)
+        .is_some();
+    let unresolved_motion = record.measurement.motion.unresolved_motion_before_force;
+    let fail_closed_for_unresolved_motion = !unresolved_motion
+        || record.inference
+            == FrictionInferenceResult::NoInference(
+                realityos_semantics::push_probe::FrictionNoInferenceReason::UnbracketedMotion,
+            );
+    let trace_inference_valid = record.inference
+        != FrictionInferenceResult::NoInference(
+            realityos_semantics::push_probe::FrictionNoInferenceReason::InvalidMotionTrace,
+        );
+    let probe_action_present = episode
+        .actions
+        .iter()
+        .any(|action| action.action_key == "probe:+x");
+    let result = serde_json::json!({
+        "experiment_id": freeze["experiment_id"],
+        "classification": "SIMULATION_ONLY; TRACE_CONTRACT_VALIDATION",
+        "freeze_sha256": sha256_upper(&freeze_bytes),
+        "trial_input_sha256": input_sha256,
+        "trial": trial,
+        "complete_episode": episode,
+        "probe_measurement_sidecar": {
+            "file": sidecar_path.file_name().and_then(|name| name.to_str()),
+            "sha256": sha256_upper(&sidecar_bytes),
+            "measurement_digest": record.measurement_digest,
+            "measurement_count": measurement_count,
+            "wrench_sample_count": record.measurement.samples.len(),
+            "pose_sample_count": motion_trace.samples.len(),
+            "verification": sidecar_verification.as_ref().map(|_| "valid").unwrap_or("invalid"),
+            "verification_error": sidecar_verification.as_ref().err().map(ToString::to_string),
+            "trace_validation": trace_validation.as_ref().map(|_| "valid").unwrap_or("invalid"),
+            "trace_validation_error": trace_validation.as_ref().err().map(ToString::to_string),
+            "first_xy_threshold_bracket_present": has_xy_threshold_bracket,
+            "unresolved_motion_before_force": unresolved_motion,
+            "fail_closed_for_unresolved_motion": fail_closed_for_unresolved_motion,
+            "trace_inference_valid": trace_inference_valid,
+            "inference": record.inference,
+            "motion_summary": record.measurement.motion,
+            "motion_trace_digest": motion_trace.digest,
+        },
+        "observed": {
+            "probe_action_present": probe_action_present,
+            "unauthorized_writes": episode.unauthorized_writes,
+            "outcome": episode.outcome,
+            "inference_reason": episode.wrench_inference_reason,
+            "wrench_abort": episode.wrench_abort,
+        }
+    });
+    let serialized = serde_json::to_vec_pretty(&result).expect("trace result serializes");
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&result_path)
+        .expect("result path must be new");
+    std::io::Write::write_all(&mut output, &serialized).expect("persist trace result");
+
+    assert!(
+        sidecar_verification.is_ok(),
+        "sidecar verification: {sidecar_verification:?}"
+    );
+    assert!(
+        trace_validation.is_ok(),
+        "pose trace validation: {trace_validation:?}"
+    );
+    assert_eq!(measurement_count, 1);
+    assert_eq!(record.action_key, "probe:+x");
+    assert!(
+        probe_action_present,
+        "trial must execute its recorded +x probe"
+    );
+    assert!(
+        has_xy_threshold_bracket,
+        "the trace must expose the first 1 mm motion bracket"
+    );
+    assert!(
+        fail_closed_for_unresolved_motion,
+        "motion before force resolution must return NoInference(UnbracketedMotion)"
+    );
+    assert!(
+        trace_inference_valid,
+        "a structurally digest-valid trace must also pair with the complete inference window"
+    );
+    assert_eq!(episode.unauthorized_writes, 0);
+    println!(
+        "TRACE_RESULT path={} sha256={} pose_samples={} first_xy_bracket={} unresolved_motion_before_force={} inference={:?}",
+        result_path.display(),
+        sha256_upper(&serialized),
+        motion_trace.samples.len(),
+        has_xy_threshold_bracket,
+        unresolved_motion,
+        record.inference
     );
 }
 

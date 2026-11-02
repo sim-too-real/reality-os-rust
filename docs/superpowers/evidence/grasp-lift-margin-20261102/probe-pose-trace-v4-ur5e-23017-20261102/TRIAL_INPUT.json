@@ -1,0 +1,122 @@
+{
+  "trial": {
+    "expectation": "expected_success",
+    "fault_injection": null,
+    "goal_xyz": [
+      0.6753585122161516,
+      -0.032034667225910946,
+      0.4575227892973408
+    ],
+    "index": 17,
+    "initial_qpos": [
+      0.023715480499436073,
+      0.05971988514629549,
+      -0.04837329277999319,
+      -0.05951083402753639,
+      -0.03750585138577868,
+      0.059660805983633505
+    ],
+    "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+    "paired_trial_key": "195c5df515a4f7ec80598e750042bf496480e5284f7b6a38d2d9a40179660359",
+    "robot_id": "menagerie_ur5e",
+    "role": "development",
+    "scenario": {
+      "crash_controller": false,
+      "expected_refusal": null,
+      "immovable": false,
+      "move_object_after_obs": false,
+      "neg": null,
+      "object_id": "obj0",
+      "objects": [
+        {
+          "friction": 0.8,
+          "mass": 1.0,
+          "movable": false,
+          "name": "benchmark_obstacle_0",
+          "pos": [
+            0.6458084584104629,
+            0.12107681631625142,
+            0.47842287275861095
+          ],
+          "size": [
+            0.06130387124131841,
+            0.06130387124131841,
+            0.06130387124131841
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.6574052480104731,
+          "mass": 1.226606694509408,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.6266680743595779,
+            -0.032034667225910946,
+            0.4575227892973408
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.058422872758610994,
+            0.058422872758610994,
+            0.037522789297340806
+          ],
+          "solref": [
+            0.005,
+            1.0
+          ],
+          "type": "box"
+        },
+        {
+          "friction": 0.6574052480104731,
+          "mass": 20.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.9,
+            0.0,
+            0.4
+          ],
+          "size": [
+            0.4,
+            0.25,
+            0.02
+          ],
+          "solref": [
+            0.005,
+            1.0
+          ],
+          "type": "box"
+        }
+      ],
+      "planar": false,
+      "polarity": "positive",
+      "push_dir": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "push_dist": 0.04869043785657369,
+      "replay": false,
+      "required_opening": 0.8,
+      "restart_replay": false,
+      "seed": 23017,
+      "skill": "PUSH",
+      "stale": false,
+      "world_construction": "fixed_world"
+    },
+    "scenario_suite_id": "force_observable_public_probe",
+    "scenario_suite_version": 4,
+    "schema_version": 7,
+    "seed": 23017,
+    "source_hash": "5caf8ee29d5954a1640432b0652a6bd766feb0aaccb5a647e31dfb396541587b",
+    "stratum": "expected_success",
+    "task": "push_probe_replan",
+    "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23017:17"
+  }
+}

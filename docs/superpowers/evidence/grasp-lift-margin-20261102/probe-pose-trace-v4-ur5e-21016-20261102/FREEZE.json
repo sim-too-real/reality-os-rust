@@ -1,0 +1,82 @@
+{
+  "experiment_id": "probe_pose_trace_v4_ur5e_21016_20261102",
+  "status": "FROZEN_BEFORE_SIMULATION",
+  "created_at_utc": "2026-11-02T15:19:00Z",
+  "repository": "reality-os-rust",
+  "branch": "main",
+  "source_head_before_harness_change": "ac1c053d3cdb0b5b8ce8e285882c5ee89e614f01",
+  "hypothesis": "A trace-enabled replay of this previously unexecuted v4 pilot member will retain a verifiable per-step UR5e target pose trace, permit independent reconstruction of the first 1 mm XY crossing and compact motion endpoint, and fail closed with NoInference(UnbracketedMotion) if motion precedes decisive force evidence.",
+  "selection": {
+    "current_suite": "scenario_suite_v4",
+    "current_v4_audit_covered_indices": "0 through 13",
+    "selected_seed": 21016,
+    "selected_index": 16,
+    "reason": "This is an expected-success UR5e pilot member that executes probe:+x. It was not included in the first-14 v4 audit. The v4 public seeds remain untouched. A v3 run of the same seed exists as a matched historical baseline, so this is a new v4 trace-contract replay, not a claim of a never-before-run scenario."
+  },
+  "baseline": {
+    "suite_version": 3,
+    "campaign_report": "docs/superpowers/evidence/force-aware-probe-4e5e6fc/manipulation_benchmark.json",
+    "campaign_report_sha256": "27707A8848CFE55D3BEDA14E01281F73B25CA6A9A5D82612E13DE9E22064F273",
+    "trial_record": "docs/superpowers/evidence/force-aware-probe-4e5e6fc/trials/v7_development_menagerie_ur5e_push_probe_replan_21016_16.json",
+    "trial_record_sha256": "45580190F54E24B0B4361275F40BF47628E683CF14EFECCE5A059C1CC760662C",
+    "outcome": "success",
+    "probe_action": "probe:+x",
+    "probe_displacement_m": 0.0035985904416799257,
+    "wrench_inference_reason": "updated:Sticking",
+    "unauthorized_writes": 0,
+    "pose_trace": "absent_legacy"
+  },
+  "trial_input": {
+    "path": "docs/superpowers/evidence/grasp-lift-margin-20261102/probe-pose-trace-v4-ur5e-21016-20261102/TRIAL_INPUT.json",
+    "sha256": "742689ADDFDC501F5815620B53B48E5D549825A5DAFF5578D814CB07D5978B79",
+    "serialization": "serde_json pretty encoding of {trial: ResolvedBenchmarkTrial}"
+  },
+  "suite": {
+    "path": "robots/benchmarks/manipulation/scenario_suite_v4.json",
+    "sha256": "027207A6F8BF85FF3DB24036842F85804A8654455AAA9A9046FE928B6D208CCF",
+    "suite_id": "force_observable_public_probe",
+    "suite_version": 4
+  },
+  "trial": {
+    "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:21016:16",
+    "seed": 21016,
+    "index": 16,
+    "task": "push_probe_replan",
+    "robot_id": "menagerie_ur5e",
+    "expectation": "expected_success",
+    "scenario_expected_refusal": null,
+    "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+    "source_hash": "5caf8ee29d5954a1640432b0652a6bd766feb0aaccb5a647e31dfb396541587b"
+  },
+  "runner": {
+    "ignored_test": "probe_pose_trace_replays_frozen_v4_ur5e_trial",
+    "test_source_sha256": "51E19BEE81567DBB873BC78A2260F9C0DA67E0A8F8F78F29D39CF3FCDD143649",
+    "simulation_only": true,
+    "evaluator_expectation_override": false,
+    "probe_stroke_m": 0.008,
+    "admission_expires_at_s": 120.0,
+    "wrench_limits_changed": false,
+    "authorization_limits_changed": false
+  },
+  "acceptance": [
+    "The frozen trial, v4 suite, and runner test-source hashes match before execution.",
+    "Exactly one probe measurement and a nonempty per-step pose trace are present.",
+    "The trace digest, ordering, and pairing validate, and the offline sidecar verifier independently reproduces the measurement digest and compact motion endpoint.",
+    "A first 1 mm XY threshold-crossing bracket is independently computable from the trace.",
+    "If motion precedes decisive force evidence, inference is NoInference(UnbracketedMotion).",
+    "Unauthorized writes remain zero. Report the episode outcome without treating this trace check as a benchmark win or physical result."
+  ],
+  "stopping_condition": "Run this v4 UR5e seed/index once with the trace-enabled test. Preserve artifacts on failure. Do not rerun seed 21003, consume a v4 public seed, or expand to another trial in this experiment.",
+  "command": "cargo test -p realityos-verify --test manipulation_benchmark probe_pose_trace_replays_frozen_v4_ur5e_trial -- --ignored --exact --nocapture",
+  "environment_paths": {
+    "REALITYOS_PROBE_TRACE_FREEZE": "<experiment-dir>/FREEZE.json",
+    "REALITYOS_PROBE_TRACE_TRIAL_INPUT": "<experiment-dir>/TRIAL_INPUT.json",
+    "REALITYOS_PROBE_TRACE_SIDECAR_OUTPUT": "<experiment-dir>/PROBE_MEASUREMENT_SIDECAR.json",
+    "REALITYOS_PROBE_TRACE_RESULT_OUTPUT": "<experiment-dir>/RESULT.json"
+  },
+  "outputs": {
+    "sidecar": "PROBE_MEASUREMENT_SIDECAR.json",
+    "result": "RESULT.json",
+    "summary": "RESULTS.md"
+  }
+}

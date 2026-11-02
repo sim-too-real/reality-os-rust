@@ -1,0 +1,75 @@
+{
+  "experiment_id": "probe_pose_trace_v4_ur5e_23017_20261102",
+  "status": "FROZEN_BEFORE_SIMULATION",
+  "created_at_utc": "2026-11-02T15:43:25Z",
+  "repository": "reality-os-rust",
+  "branch": "main",
+  "source_head_before_followup": "ac1c053d3cdb0b5b8ce8e285882c5ee89e614f01",
+  "hypothesis": "An explicit digest-sealed bootstrap wrench sequence will bind the pre-physics-step wrench sample to the trace's recorded start pose, allowing inference to pair every wrench sample with exactly one pose without inventing an observation.",
+  "selection": {
+    "current_suite": "scenario_suite_v4",
+    "selected_seed": 23017,
+    "selected_index": 17,
+    "reason": "This expected-success UR5e input is a new exploratory case outside the v4 pilot seeds (21000-21019) and public seeds (22000-22099). It is selected only to exercise the corrected trace contract after the two preserved negative pilot results; no historical exact-seed baseline exists, and this run is not benchmark evidence."
+  },
+  "baseline": {
+    "available": false,
+    "reason": "No historical exact-seed 23017:17 replay was found. The run tests trace-contract correctness only and will not be compared as a performance result."
+  },
+  "trial_input": {
+    "path": "docs/superpowers/evidence/grasp-lift-margin-20261102/probe-pose-trace-v4-ur5e-23017-20261102/TRIAL_INPUT.json",
+    "sha256": "5731488A544C5D373DA14477920077C72A0A32A29E63008675196FD81FE3520C",
+    "serialization": "serde_json pretty encoding of {trial: ResolvedBenchmarkTrial}"
+  },
+  "suite": {
+    "path": "robots/benchmarks/manipulation/scenario_suite_v4.json",
+    "sha256": "027207A6F8BF85FF3DB24036842F85804A8654455AAA9A9046FE928B6D208CCF",
+    "suite_id": "force_observable_public_probe",
+    "suite_version": 4
+  },
+  "trial": {
+    "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23017:17",
+    "seed": 23017,
+    "index": 17,
+    "task": "push_probe_replan",
+    "robot_id": "menagerie_ur5e",
+    "expectation": "expected_success",
+    "scenario_expected_refusal": null,
+    "model_hash": "7e4015dadabd81b42746cf933aa93b7936ba89c0eb25b68e89254d751d0df764",
+    "source_hash": "5caf8ee29d5954a1640432b0652a6bd766feb0aaccb5a647e31dfb396541587b"
+  },
+  "runner": {
+    "ignored_test": "probe_pose_trace_replays_frozen_v4_ur5e_trial",
+    "test_source_sha256": "42ABEE9D9865C0BD8367CAC32C7C04B5CCF9E0CBA8C01246EB074E26F4E49A5E",
+    "semantics_source_sha256": "F737298A02FE59A66B9B717AC0B930B50B7CB28E3C95BC9F7423D7D5821B1090",
+    "execution_source_sha256": "445154A684EBEE525793B25AD902BF627FB47CB05994B35A584EFFD45E063D62",
+    "simulation_only": true,
+    "evaluator_expectation_override": false,
+    "probe_stroke_m": 0.008,
+    "admission_expires_at_s": 120.0,
+    "wrench_limits_changed": false,
+    "authorization_limits_changed": false
+  },
+  "acceptance": [
+    "The frozen input, v4 suite, semantics inference source, execution source, and runner test-source hashes match before execution.",
+    "Exactly one probe measurement and a nonempty per-step pose trace are present.",
+    "The trace digest, ordering, start-pose binding, explicit bootstrap pair, and one-to-one wrench pairing validate.",
+    "The offline sidecar verifier reports motion_trace_status verified and independently reproduces the measurement digest, inference, motion endpoint, and first 1 mm XY crossing bracket.",
+    "If motion precedes decisive force evidence, inference is NoInference(UnbracketedMotion).",
+    "Unauthorized writes remain zero. Report the episode outcome without treating this exploratory trace-contract check as benchmark success or physical evidence."
+  ],
+  "stopping_condition": "Run this v4 UR5e seed/index once with the trace-enabled test. Preserve artifacts on failure. Do not rerun seeds 21003, 21016, or 21017, consume a v4 pilot/public seed, alter the probe stroke, wrench limits, or authorization limits, or expand this experiment to another trial.",
+  "command": "cargo test -p realityos-verify --test manipulation_benchmark probe_pose_trace_replays_frozen_v4_ur5e_trial -- --ignored --exact --nocapture",
+  "environment_paths": {
+    "REALITYOS_PROBE_TRACE_FREEZE": "<experiment-dir>/FREEZE.json",
+    "REALITYOS_PROBE_TRACE_TRIAL_INPUT": "<experiment-dir>/TRIAL_INPUT.json",
+    "REALITYOS_PROBE_TRACE_SIDECAR_OUTPUT": "<experiment-dir>/PROBE_MEASUREMENT_SIDECAR.json",
+    "REALITYOS_PROBE_TRACE_RESULT_OUTPUT": "<experiment-dir>/RESULT.json"
+  },
+  "outputs": {
+    "sidecar": "PROBE_MEASUREMENT_SIDECAR.json",
+    "result": "RESULT.json",
+    "offline_verification": "OFFLINE_VERIFICATION.json",
+    "summary": "RESULTS.md"
+  }
+}

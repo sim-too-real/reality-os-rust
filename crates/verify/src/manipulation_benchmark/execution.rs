@@ -2347,7 +2347,7 @@ fn push_probe_measurement(
             .iter()
             .filter(|sample| {
                 sample.object_id == request.scene.object_id
-                    && sample.capture_s > start_s
+                    && sample.capture_s >= start_s
                     && sample.capture_s <= end_s
             })
             .cloned()
@@ -2356,12 +2356,29 @@ fn push_probe_measurement(
             .first()
             .map(|sample| sample.clock_domain.clone())
             .ok_or_else(|| BenchmarkError::Simulation("probe_object_pose_trace_missing".into()))?;
+        let bootstrap_wrench_sequences = aligned_samples
+            .iter()
+            .filter(|(sample, _, _, _)| {
+                sample.capture_s == start_s
+                    && !samples.iter().any(|pose| {
+                        pose.wrench_sequence == Some(sample.sequence)
+                            && pose.capture_s == sample.capture_s
+                    })
+            })
+            .map(|(sample, _, _, _)| sample.sequence)
+            .collect::<Vec<_>>();
+        if bootstrap_wrench_sequences.len() > 1 {
+            return Err(BenchmarkError::Simulation(
+                "probe_object_pose_trace_ambiguous_start_wrench".into(),
+            ));
+        }
         let mut trace = ProbeObjectPoseTrace {
             object_id: request.scene.object_id.clone(),
             clock_domain,
             start_s,
             start_position_world_m: audit.motion.start_position,
             start_orientation_world_wxyz: audit.motion.start_orientation_world_wxyz,
+            start_wrench_sequence: bootstrap_wrench_sequences.first().copied(),
             samples,
             digest: String::new(),
         };
