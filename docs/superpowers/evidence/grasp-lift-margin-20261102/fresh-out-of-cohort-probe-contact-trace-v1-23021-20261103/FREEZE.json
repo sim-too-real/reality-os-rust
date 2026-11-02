@@ -1,0 +1,94 @@
+{
+  "schema": "realityos.probe_pose_trace_freeze",
+  "schema_version": 1,
+  "status": "FROZEN_BEFORE_SIMULATION",
+  "experiment_id": "fresh_out_of_cohort_probe_contact_trace_v1_20261103_23021_17",
+  "frozen_at_local": "2026-11-03T00:41:58.694+05:30",
+  "classification": "SIMULATION_ONLY exploratory single-trial contact-trace evidence contract validation",
+  "source_revision": {
+    "repository": "reality-os-rust",
+    "branch": "main",
+    "commit": "a22d944e0ef51017a535f303c86e51a72beb571b"
+  },
+  "trial_input": {
+    "path": "TRIAL_INPUT.json",
+    "sha256": "46AC4D7C2B3A093D9564BD8755583667747493EF139FAFFAE6E9E53F717E67C6"
+  },
+  "preflight": {
+    "path": "PREFLIGHT.json",
+    "sha256": "033E7A98919540A3FEA4FC57A2C32E0F5BBC56018079AB1B22068BED085BDEAD",
+    "trial_digest": "841fd733ad63bf22930d9953993a603327c8ed115a512b3cee9a8251aa819fee",
+    "initial_observation_sha256": "be7158a85ee476085462baf3c77ab6d2204a8c2f6ceecae12b64100f319866e8",
+    "selected_action": "probe:+x",
+    "control_writes_before": 0,
+    "control_writes_after": 0,
+    "simulation_time_before_s": 0.0,
+    "simulation_time_after_s": 0.0,
+    "simulator_steps": 0
+  },
+  "trial": {
+    "seed": 23021,
+    "index": 17,
+    "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23021:17",
+    "robot_id": "menagerie_ur5e",
+    "task": "push_probe_replan",
+    "scenario_suite_version": 4,
+    "expectation": "expected_success",
+    "scenario_expected_refusal": null,
+    "cohort": "outside frozen, pilot, public, and historical cohorts",
+    "cohort_exclusion": {
+      "suite_path": "robots/benchmarks/manipulation/scenario_suite_v4.json",
+      "pilot_seeds_excluded": true,
+      "public_seeds_excluded": true,
+      "historical_seed_ranges_excluded": true,
+      "preexisting_freeze_trial_id_match": false,
+      "preexisting_archive_exact_trial_id_match": false
+    },
+    "baseline": "unavailable; exploratory single-trial result"
+  },
+  "suite": {
+    "path": "robots/benchmarks/manipulation/scenario_suite_v4.json",
+    "sha256": "027207A6F8BF85FF3DB24036842F85804A8654455AAA9A9046FE928B6D208CCF"
+  },
+  "runner": {
+    "test_source_sha256": "D7C756AAD703D4D0CBA5ECF050F068FB0ADAB7997D3893F63480E286AE091487",
+    "execution_source_sha256": "90A2768D0C559B8D720751D2CB77A126BC7FCF5CEB50D57BBEF6DDA5B1776448",
+    "semantics_source_sha256": "6444CAB400E6407DDF4FF7A6CD019FBC3719B43F29C73A24FE92C95D0ABBD80C",
+    "wrench_sensor_source_sha256": "A7E8EA01103997D8CB790EEF602F7B9BA6CB8598431D9D873B0A07DCDE548678",
+    "worker_source_sha256": "DD32CF275FD8A17C984FAA5DEA74750444766CE5C479359F0FA4411D45C140AF",
+    "scenario_source_sha256": "62C8074D1E4F9AC2CAEF5CD2897B172DE90FF06728EE5881145209F769FEB4A2",
+    "bridge_source_sha256": "EF3CE6DB6B1396FFE1AC09844B4DFDCD4FA9DB1638C06B9A6D3E38E4F1349E84",
+    "reasoner_source_sha256": "0CCECC88F33A0AE99F22B783730F772812079528D9963D1472C1F0BA7C661357"
+  },
+  "hypothesis": "A complete start-to-end per-step contact trace lets the independent verifier recompute whether the authorized tool contacted the target; inferred friction will be refused as NoIntendedContact exactly when that pair is absent.",
+  "acceptance": {
+    "preflight_selected_action": "probe:+x",
+    "replay_first_action_must_match_preflight": true,
+    "replay_initial_observation_evidence_required": true,
+    "observation_json_sha256_over_exact_utf8_bytes": true,
+    "observation_time_must_match_preflight": true,
+    "sidecar_must_verify": true,
+    "pose_trace_must_validate": true,
+    "complete_start_and_per_step_contact_trace_required": true,
+    "absent_intended_contact_must_return": "NoInference(NoIntendedContact)",
+    "observed_intended_contact_must_not_return": "NoInference(NoIntendedContact)",
+    "first_xy_motion_bracket_required": false,
+    "motion_threshold_m_diagnostic": 0.001,
+    "unauthorized_control_writes_must_equal": 0
+  },
+  "scope": {
+    "simulation_runs_allowed": 1,
+    "trial_runs_allowed": 1,
+    "rerun_allowed": false,
+    "reseed_allowed": false,
+    "physical_actuation_allowed": false,
+    "purchase_or_external_action_allowed": false,
+    "stop": "Stop after this single replay regardless of result; preserve outputs and update the research record."
+  },
+  "outputs": {
+    "sidecar": "PROBE_MEASUREMENT_SIDECAR.json",
+    "result": "RESULT.json"
+  },
+  "command": "$env:REALITYOS_PROBE_TRACE_FREEZE=\"C:\\projects\\reality-os-rust\\docs\\superpowers\\evidence\\grasp-lift-margin-20261102\\fresh-out-of-cohort-probe-contact-trace-v1-23021-20261103\\FREEZE.json\"; $env:REALITYOS_PROBE_TRACE_TRIAL_INPUT=\"C:\\projects\\reality-os-rust\\docs\\superpowers\\evidence\\grasp-lift-margin-20261102\\fresh-out-of-cohort-probe-contact-trace-v1-23021-20261103\\TRIAL_INPUT.json\"; $env:REALITYOS_PROBE_TRACE_PREFLIGHT=\"C:\\projects\\reality-os-rust\\docs\\superpowers\\evidence\\grasp-lift-margin-20261102\\fresh-out-of-cohort-probe-contact-trace-v1-23021-20261103\\PREFLIGHT.json\"; $env:REALITYOS_PROBE_TRACE_SIDECAR_OUTPUT=\"C:\\projects\\reality-os-rust\\docs\\superpowers\\evidence\\grasp-lift-margin-20261102\\fresh-out-of-cohort-probe-contact-trace-v1-23021-20261103\\PROBE_MEASUREMENT_SIDECAR.json\"; $env:REALITYOS_PROBE_TRACE_RESULT_OUTPUT=\"C:\\projects\\reality-os-rust\\docs\\superpowers\\evidence\\grasp-lift-margin-20261102\\fresh-out-of-cohort-probe-contact-trace-v1-23021-20261103\\RESULT.json\"; cargo test -p realityos-verify --test manipulation_benchmark probe_pose_trace_replays_frozen_v4_ur5e_trial -- --ignored --exact --nocapture",
+  "authority": "Simulation only. This record is not a physical validation, admission, deployment authorization, or product performance claim."
+}

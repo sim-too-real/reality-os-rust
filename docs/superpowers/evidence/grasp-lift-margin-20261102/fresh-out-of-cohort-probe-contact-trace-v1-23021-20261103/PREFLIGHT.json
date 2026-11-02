@@ -1,0 +1,429 @@
+{
+  "format": "realityos.first_action_preflight",
+  "schema_version": 1,
+  "evidence_status": "SIMULATION_ONLY",
+  "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23021:17",
+  "trial_digest": "841fd733ad63bf22930d9953993a603327c8ed115a512b3cee9a8251aa819fee",
+  "paired_trial_key": "7a13ed931a480d1159bda3203bf61d17e695d9b3061cdd6b0307b678cbbdfafc",
+  "initial_observation": {
+    "actuator_force": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "contact_forces": [
+      2.8963874092810777,
+      2.8963874092810777,
+      2.8963874092810777,
+      2.8963874092810777
+    ],
+    "contacts": [
+      {
+        "body1": "obj0",
+        "body2": "table",
+        "dim": 3,
+        "dist": -3.8163916471489756e-17,
+        "force_available": true,
+        "force_local": [
+          2.8963874092810777,
+          0.0,
+          0.0
+        ],
+        "frame": [
+          0.0,
+          0.0,
+          -1.0,
+          0.0,
+          1.0,
+          0.0,
+          1.0,
+          -0.0,
+          0.0
+        ],
+        "friction": [
+          0.7914195405871964,
+          0.7914195405871964,
+          0.7914195405871964,
+          0.01,
+          0.01
+        ],
+        "geom1": 29,
+        "geom1_name": "geom_29",
+        "geom2": 30,
+        "geom2_name": "geom_30",
+        "group1": 0,
+        "group2": 0,
+        "normal_force": 2.8963874092810777,
+        "pos": [
+          0.6461487895545054,
+          -0.052376338277473615,
+          0.42
+        ],
+        "tangential_force": 0.0
+      },
+      {
+        "body1": "obj0",
+        "body2": "table",
+        "dim": 3,
+        "dist": -3.8163916471489756e-17,
+        "force_available": true,
+        "force_local": [
+          2.8963874092810777,
+          0.0,
+          0.0
+        ],
+        "frame": [
+          0.0,
+          0.0,
+          -1.0,
+          0.0,
+          1.0,
+          0.0,
+          1.0,
+          -0.0,
+          0.0
+        ],
+        "friction": [
+          0.7914195405871964,
+          0.7914195405871964,
+          0.7914195405871964,
+          0.01,
+          0.01
+        ],
+        "geom1": 29,
+        "geom1_name": "geom_29",
+        "geom2": 30,
+        "geom2_name": "geom_30",
+        "group1": 0,
+        "group2": 0,
+        "normal_force": 2.8963874092810777,
+        "pos": [
+          0.6461487895545054,
+          0.05068013890322625,
+          0.42
+        ],
+        "tangential_force": 0.0
+      },
+      {
+        "body1": "obj0",
+        "body2": "table",
+        "dim": 3,
+        "dist": -3.8163916471489756e-17,
+        "force_available": true,
+        "force_local": [
+          2.8963874092810777,
+          0.0,
+          0.0
+        ],
+        "frame": [
+          0.0,
+          0.0,
+          -1.0,
+          0.0,
+          1.0,
+          0.0,
+          1.0,
+          -0.0,
+          0.0
+        ],
+        "friction": [
+          0.7914195405871964,
+          0.7914195405871964,
+          0.7914195405871964,
+          0.01,
+          0.01
+        ],
+        "geom1": 29,
+        "geom1_name": "geom_29",
+        "geom2": 30,
+        "geom2_name": "geom_30",
+        "group1": 0,
+        "group2": 0,
+        "normal_force": 2.8963874092810777,
+        "pos": [
+          0.5430923123738055,
+          -0.052376338277473615,
+          0.42
+        ],
+        "tangential_force": 0.0
+      },
+      {
+        "body1": "obj0",
+        "body2": "table",
+        "dim": 3,
+        "dist": -3.8163916471489756e-17,
+        "force_available": true,
+        "force_local": [
+          2.8963874092810777,
+          0.0,
+          0.0
+        ],
+        "frame": [
+          0.0,
+          0.0,
+          -1.0,
+          0.0,
+          1.0,
+          0.0,
+          1.0,
+          -0.0,
+          0.0
+        ],
+        "friction": [
+          0.7914195405871964,
+          0.7914195405871964,
+          0.7914195405871964,
+          0.01,
+          0.01
+        ],
+        "geom1": 29,
+        "geom1_name": "geom_29",
+        "geom2": 30,
+        "geom2_name": "geom_30",
+        "group1": 0,
+        "group2": 0,
+        "normal_force": 2.8963874092810777,
+        "pos": [
+          0.5430923123738055,
+          0.05068013890322625,
+          0.42
+        ],
+        "tangential_force": 0.0
+      }
+    ],
+    "ctrl": [
+      0.04770354948906265,
+      0.02939638896647631,
+      0.0685626590666709,
+      -0.06592014905796574,
+      -0.01902173819017288,
+      0.0060786771998708605
+    ],
+    "ctrl_write_count": 0,
+    "energy": [
+      0.0,
+      0.0
+    ],
+    "evidence_status": "SIMULATION_ONLY",
+    "interval_max_force": 0.0,
+    "interval_max_speed": 0.0,
+    "kinetic_energy": 0.0,
+    "last_ctrl": [
+      0.04770354948906265,
+      0.02939638896647631,
+      0.0685626590666709,
+      -0.06592014905796574,
+      -0.01902173819017288,
+      0.0060786771998708605
+    ],
+    "metal": false,
+    "nan": false,
+    "ncon": 4,
+    "qacc": [
+      -0.11112575592898227,
+      22.395187759166753,
+      -18.352199845296145,
+      -1.0961636219239725,
+      0.09145633916321766,
+      -0.0038878257934732183,
+      -3.1105064437741173e-19,
+      7.465215464859444e-18,
+      -0.13685522365026925,
+      -1.9975311004315545e-16,
+      -8.323046252019387e-18,
+      -5.051635350396093e-35
+    ],
+    "qpos": [
+      0.04770354948906265,
+      0.02939638896647631,
+      0.0685626590666709,
+      -0.06592014905796574,
+      -0.01902173819017288,
+      0.0060786771998708605,
+      0.5946205509641554,
+      -0.0008480996871236823,
+      0.45906054769483523,
+      1.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "qvel": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "safe_write_count": 0,
+    "sensordata": [
+      0.12305132979762491,
+      -0.24429903178885828,
+      -0.014617414537245273,
+      -0.005583790556062941,
+      -0.002829502231803966,
+      0.0003887825793473816
+    ],
+    "site_xquat": {
+      "attachment_site": [
+        0.7063508142750592,
+        0.7068190364146654,
+        0.010109524672044077,
+        0.037056368490574886
+      ]
+    },
+    "sites": {
+      "attachment_site": [
+        -0.797753850303129,
+        -0.2723329733021805,
+        0.012282021461600666
+      ]
+    },
+    "subtree_com": [
+      -0.2500321320043616,
+      -0.08540635630154224,
+      0.11295524046175545
+    ],
+    "time": 0.0,
+    "xpos": {
+      "base": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "forearm_link": [
+        -0.4239993131222108,
+        -0.027249600949167035,
+        0.1505083339780227
+      ],
+      "obj0": [
+        0.5946205509641554,
+        -0.0008480996871236823,
+        0.45906054769483523
+      ],
+      "shoulder_link": [
+        0.0,
+        0.0,
+        0.163
+      ],
+      "table": [
+        0.9,
+        0.0,
+        0.4
+      ],
+      "upper_arm_link": [
+        0.006580593335609686,
+        -0.13784301139829808,
+        0.163
+      ],
+      "world": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "wrist_1_link": [
+        -0.8136762048022017,
+        -0.045852685214504744,
+        0.11216977184487309
+      ],
+      "wrist_2_link": [
+        -0.8076201515150827,
+        -0.17270821019699642,
+        0.11216977184487309
+      ],
+      "wrist_3_link": [
+        -0.8044204538338424,
+        -0.1725554573731605,
+        0.01222109200705096
+      ]
+    },
+    "xquat": {
+      "base": [
+        0.0,
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "forearm_link": [
+        0.01601826013838857,
+        0.7406679502901299,
+        0.01766959602446171,
+        -0.6714478297913316
+      ],
+      "obj0": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "shoulder_link": [
+        0.02384951323462937,
+        0.0,
+        0.0,
+        -0.9997155599061521
+      ],
+      "table": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "upper_arm_link": [
+        0.016614467260274584,
+        0.7172191568228838,
+        0.017110194598134332,
+        -0.6964394315407068
+      ],
+      "world": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "wrist_1_link": [
+        -0.000382039732061352,
+        0.999587287765275,
+        0.023846453136093165,
+        0.016014207958322146
+      ],
+      "wrist_2_link": [
+        -0.0002297157138416348,
+        0.9993152813819669,
+        0.03335217512532904,
+        0.016017117143233863
+      ],
+      "wrist_3_link": [
+        -0.0003310830500175291,
+        0.9992619843910853,
+        0.0333513228960081,
+        0.019054295995657944
+      ]
+    }
+  },
+  "initial_observation_sha256": "be7158a85ee476085462baf3c77ab6d2204a8c2f6ceecae12b64100f319866e8",
+  "reasoning_request_audit": "ReasoningRequest { scene: TableScene { object_id: \"obj0\", object_center: [0.5946205509641554, -0.0008480996871236823, 0.45906054769483523], object_half: [0.05152823859034993, 0.05152823859034993, 0.039060547694835246], object_quat: [1.0, 0.0, 0.0, 0.0], support_origin: [0.9, 0.0, 0.42000000000000004], support_normal: [0.0, 0.0, 1.0], support_half_extents: Some([0.4, 0.25, 0.02]), obstacles: [], arm_q: [0.04770354948906265, 0.02939638896647631, 0.0685626590666709, -0.06592014905796574, -0.01902173819017288, 0.0060786771998708605], joint_names: [\"shoulder_pan_joint\", \"shoulder_lift_joint\", \"elbow_joint\", \"wrist_1_joint\", \"wrist_2_joint\", \"wrist_3_joint\"], ee: \"tool0\", tool_radius_m: 0.0647213595499958, tool_contact_extents_m: [0.039911013812960014, 0.04257765522524538, 0.042577759154575665, 0.002666752782967636], observation_epoch: \"v7:development:menagerie_ur5e:push_probe_replan:23021:17:0:4621819117588971520\", held: false, finger_names: [], finger_q: [] }, belief: PhysicalParameterBelief { parameters: [ParameterBelief { parameter: SupportFriction, status: DerivedConstraint, declared: Provenanced { value: Some(0.5), provenance: ModelDeclared, source: \"benchmark_prior\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.05, 0.8]), lineage: [BeliefLineage { belief_before: \"SupportFriction status=DeclaredFact declared=Some(0.5) interval=None\", observation: \"benchmark_uncertain_support\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.05, 0.8])\" }], evidence: [] }, ParameterBelief { parameter: ToolObjectFriction, status: Unknown, declared: Provenanced { value: None, provenance: Unknown, source: \"unmeasured_tool_object_pair\", as_of_s: 0.0, uncertainty: None }, empirical_interval: None, lineage: [], evidence: [] }] }, objective: PlanarTranslation { target_xy: [0.6526783659598119, -0.0008480996871236823] }, mu_required: 0.3, goal_stroke_m: 0.025, probe_stroke_m: 0.008, grants: [], now_s: 10.0, evidence_fresh: true, safety_faults: [], mass_kg: Some(1.1977024954128968), gripper_force_n: None, gripper_resource: None, linear_execution_bound_m: None, linear_wrench_limit: None, gravity_m_s2: [0.0, 0.0, -9.81] }",
+  "decision_audit": "decision=Refuse { reason: \"SCOPED_GRANT_DOES_NOT_COVER_PROBE\" };pregrant_action_source=authority_request;pregrant_action_key=probe:+x;support_friction_interval=Some([0.05, 0.8]);candidates=planar_push:push:+x:MECHANICS_UNKNOWN|planar_push:push:-x:MECHANICS_UNKNOWN|planar_push:push:+y:MECHANICS_UNKNOWN|planar_push:push:-y:MECHANICS_UNKNOWN|planar_push:probe:+x:PROVED|pinch_grasp:grasp:y:GRIPPER_RESOURCE_UNKNOWN",
+  "pregrant_action_source": "authority_request",
+  "pregrant_action_key": "probe:+x",
+  "authorized_action_key": "probe:+x",
+  "authorized_grant_id": "sim-scope:5e50e5b2fd0ef00a7f1addf8a33bd54b8082358b951a26365ef3af12b358ca7e",
+  "authorized_witness_digest": "9574bb73a58449ea91e8f485f151c88e68e788e4eb843c4828c4ffb90e81053f",
+  "authorized_observation_epoch": "v7:development:menagerie_ur5e:push_probe_replan:23021:17:0:4621819117588971520",
+  "refusal_code": null,
+  "control_writes_before": 0,
+  "control_writes_after": 0,
+  "simulation_time_before_s": 0.0,
+  "simulation_time_after_s": 0.0,
+  "simulation_timestep_s": 0.002,
+  "simulator_steps": 0
+}
