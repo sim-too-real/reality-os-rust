@@ -5756,6 +5756,23 @@ fn exploratory_v4_low_load_ur5e_probe_feasibility() {
 }
 
 #[test]
+fn empty_probe_measurement_sidecar_reports_absent_records() {
+    let sidecar = realityos_verify::manipulation_benchmark::ProbeMeasurementSidecarV1 {
+        format: "realityos.probe_measurement_sidecar".into(),
+        schema_version: 1,
+        trial_id: "trial:empty-probe".into(),
+        trial_digest: "a".repeat(64),
+        paired_trial_key: None,
+        measurements: Vec::new(),
+    };
+
+    assert_eq!(
+        sidecar.verify(),
+        Err("probe measurement sidecar has no measurement records".into())
+    );
+}
+
+#[test]
 #[ignore = "freeze-only: exports a resolved v4 trial input; does not run simulation"]
 fn export_v4_ur5e_probe_trace_trial_input() {
     let seed = std::env::var("REALITYOS_PROBE_TRACE_SEED")

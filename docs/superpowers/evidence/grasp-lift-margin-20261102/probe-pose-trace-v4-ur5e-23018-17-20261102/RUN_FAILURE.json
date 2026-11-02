@@ -1,0 +1,27 @@
+{
+  "status": "FAILED_BEFORE_TRACE_RESULT_PERSISTENCE",
+  "classification": "EXPECTED_SUCCESS_INPUT_DID_NOT_PRODUCE_A_PROBE_SIDECAR; SIMULATION_ONLY; NO_TRACE_RESULT",
+  "freeze": "FREEZE.json",
+  "freeze_sha256": "E628DD7A1B08379789A3A3D2D6232CF8A1B0531C85ED4699137E0BF115417860",
+  "trial_input": "TRIAL_INPUT.json",
+  "trial_input_sha256": "A720AC3CA06E27CCE11C67551BFBEFAA632610EEE1E48BA0AA9E8F23DBB60BC5",
+  "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23018:17",
+  "simulation_started": true,
+  "simulation_runs": 1,
+  "test_exit_code": 1,
+  "elapsed_seconds": 53.15,
+  "error": "InvalidTrial(\"invalid probe measurement sidecar identity or empty records\")",
+  "diagnosis": {
+    "verified": "The requested sidecar contained zero probe measurement records, so sidecar verification rejected it before a sidecar or RESULT.json was written.",
+    "code_path_evidence": "The runner appends a record only in the action_key.starts_with(\"probe:\") branch. The run returned through finalization with an empty record vector, indicating no probe action reached the measurement-record path.",
+    "episode_outcome": "unavailable; the runner returned an error before returning or persisting the complete episode"
+  },
+  "artifacts": {
+    "freeze_and_input_preserved": true,
+    "sidecar_written": false,
+    "result_written": false,
+    "partial_output_files": false
+  },
+  "rerun": false,
+  "next_selection_rule": "Expected-success label alone is insufficient to select a trace-measurement replay; first establish that the case will exercise probe:+x without changing its label or action gates."
+}

@@ -1,0 +1,20 @@
+{
+  "status": "RESOLVED_NOT_ELIGIBLE_FOR_EXPECTED_SUCCESS_REPLAY",
+  "selection_source": "first-principles mission_state.json latest_probe_pose_trace_cycle.next_experiment",
+  "trial_input": "TRIAL_INPUT.json",
+  "trial_input_sha256": "3C41201B2F1F05468C44285428F0F90988AA153BA8AED968580836E1B2777DAC",
+  "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23018:18",
+  "seed": 23018,
+  "index": 18,
+  "expectation": "expected_refusal",
+  "stratum": "expected_refusal",
+  "expected_refusal": "UNIDENTIFIABLE_FRICTION",
+  "simulation_started": false,
+  "reason": "The persisted next-experiment checkpoint requires an expected-success probe to exercise repeatability of the verified bootstrap trace pairing. This input is an expected refusal, so the frozen replay was not started and no labels or gates were changed.",
+  "selection_cohort_check": {
+    "pilot_seeds": "21000-21019",
+    "public_seeds": "22000-22099",
+    "seed_in_either_cohort": false
+  },
+  "next_action": "Resolve a new seed/index outside both configured cohorts with the freeze-only exporter; proceed to a pre-run freeze and one simulation only if it resolves to expected_success and includes the +x probe."
+}

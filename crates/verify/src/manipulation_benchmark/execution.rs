@@ -290,9 +290,11 @@ impl ProbeMeasurementSidecarV1 {
                 .trial_digest
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit())
-            || self.measurements.is_empty()
         {
-            return Err("invalid probe measurement sidecar identity or empty records".into());
+            return Err("invalid probe measurement sidecar identity".into());
+        }
+        if self.measurements.is_empty() {
+            return Err("probe measurement sidecar has no measurement records".into());
         }
         for (index, record) in self.measurements.iter().enumerate() {
             if record.action_key.trim().is_empty() {
