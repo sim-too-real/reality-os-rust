@@ -1181,6 +1181,7 @@ struct PushMotionAudit {
     end_position: [f64; 3],
     max_speed_m_s: f64,
     first_motion_s: Option<f64>,
+    unresolved_motion_before_force: bool,
 }
 
 impl Default for PushMotionAudit {
@@ -1193,6 +1194,7 @@ impl Default for PushMotionAudit {
             end_position: [0.0; 3],
             max_speed_m_s: 0.0,
             first_motion_s: None,
+            unresolved_motion_before_force: false,
         }
     }
 }
@@ -1596,13 +1598,12 @@ fn execute_push_witness(
                 if is_probe && audit.motion.first_motion_s.is_none() {
                     let force_lower_bound =
                         latest_probe_tangential_force_lower_bound(&audit, profile, time_s);
-                    if probe_slip_onset_resolved(start_delta, force_lower_bound) {
-                        audit.motion.first_motion_s = Some(time_s);
-                    } else {
-                        // Ignore support settling or contact compliance until
-                        // the declared sensor resolves a meaningful planar load.
-                        audit.motion.start_position = current_position;
-                    }
+                    observe_probe_motion_sample(
+                        &mut audit.motion,
+                        current_position,
+                        time_s,
+                        force_lower_bound,
+                    );
                 } else if !is_probe
                     && audit.motion.first_motion_s.is_none()
                     && start_delta[0].hypot(start_delta[1]) > OBJECT_MOTION_RESOLUTION_M
@@ -2139,6 +2140,29 @@ fn probe_slip_onset_resolved(displacement: [f64; 3], force_lower_bound: Option<f
             .is_some_and(|force| force.is_finite() && force >= MIN_PROBE_CONTACT_FORCE_N)
 }
 
+fn observe_probe_motion_sample(
+    motion: &mut PushMotionAudit,
+    current_position: [f64; 3],
+    time_s: f64,
+    force_lower_bound: Option<f64>,
+) {
+    if motion.first_motion_s.is_none() && !motion.unresolved_motion_before_force {
+        let displacement = sub3(current_position, motion.start_position);
+        if displacement[0].hypot(displacement[1]) > PROBE_SLIP_DISPLACEMENT_M {
+            if probe_slip_onset_resolved(displacement, force_lower_bound) {
+                motion.first_motion_s = Some(time_s);
+            } else {
+                // Keep the original motion origin and mark the evidence
+                // unresolved. Repeated small steps must not erase cumulative
+                // object motion when the force lower bound is too weak.
+                motion.unresolved_motion_before_force = true;
+            }
+        }
+    }
+    motion.end_s = time_s;
+    motion.end_position = current_position;
+}
+
 fn probe_sample_tangential_force_lower_bound(
     sample: &WrenchSample,
     free_space_wrench: [f64; 6],
@@ -2338,6 +2362,7 @@ fn push_probe_measurement(
             max_quasi_static_speed_m_s: 0.02,
             pose_resolution_m: PROBE_SLIP_DISPLACEMENT_M,
             first_motion_s: audit.motion.first_motion_s,
+            unresolved_motion_before_force: audit.motion.unresolved_motion_before_force,
         },
         prior_support_friction: request
             .belief
@@ -4053,9 +4078,9 @@ mod witness_tests {
     use super::{
         declared_ee_contact_extent, declared_ee_observation_key, declared_ee_push_contact_extents,
         declared_ee_radius, decode_push_witness, injected_safety_fault_alerts,
-        joint_control_ramp_steps, observed_frame_quaternion,
+        joint_control_ramp_steps, observe_probe_motion_sample, observed_frame_quaternion,
         probe_sample_tangential_force_lower_bound, probe_slip_onset_resolved,
-        sample_is_after_precontact_baseline,
+        sample_is_after_precontact_baseline, PushMotionAudit,
     };
     use crate::bundle::RobotBundle;
     use crate::manipulation_scenarios::{push_scenario, NegKind};
@@ -4394,6 +4419,32 @@ mod witness_tests {
         assert!(!probe_slip_onset_resolved([0.0011, 0.0, 0.0], Some(0.49)));
         assert!(probe_slip_onset_resolved([0.0011, 0.0, 0.0], Some(0.5)));
         assert!(!probe_slip_onset_resolved([0.01, 0.0, 0.0], Some(f64::NAN)));
+    }
+
+    #[test]
+    fn gradual_motion_below_force_gate_is_retained_as_unresolved() {
+        let mut motion = PushMotionAudit::default();
+        motion.started = true;
+        observe_probe_motion_sample(&mut motion, [0.0006, 0.0, 0.0], 1.002, Some(0.49));
+        observe_probe_motion_sample(&mut motion, [0.0012, 0.0, 0.0], 1.004, Some(0.49));
+        observe_probe_motion_sample(&mut motion, [0.0018, 0.0, 0.0], 1.006, Some(0.49));
+        observe_probe_motion_sample(&mut motion, [0.0024, 0.0, 0.0], 1.008, Some(0.8));
+
+        assert!(motion.unresolved_motion_before_force);
+        assert_eq!(motion.start_position, [0.0; 3]);
+        assert_eq!(motion.end_position, [0.0024, 0.0, 0.0]);
+        assert_eq!(motion.first_motion_s, None);
+    }
+
+    #[test]
+    fn force_resolved_motion_records_onset_without_unresolved_flag() {
+        let mut motion = PushMotionAudit::default();
+        motion.started = true;
+        observe_probe_motion_sample(&mut motion, [0.0011, 0.0, 0.0], 2.0, Some(0.5));
+
+        assert_eq!(motion.first_motion_s, Some(2.0));
+        assert!(!motion.unresolved_motion_before_force);
+        assert_eq!(motion.start_position, [0.0; 3]);
     }
 
     fn witness(include_retract: bool) -> String {

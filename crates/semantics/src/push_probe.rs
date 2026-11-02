@@ -32,6 +32,10 @@ pub struct ProbeMotionWindow {
     pub max_quasi_static_speed_m_s: f64,
     pub pose_resolution_m: f64,
     pub first_motion_s: Option<f64>,
+    /// True when motion exceeded pose resolution before the force lower bound
+    /// could resolve a slip onset. Inference must then fail closed.
+    #[serde(default)]
+    pub unresolved_motion_before_force: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -124,7 +128,13 @@ pub struct PushProbeMeasurement {
 impl PushProbeMeasurement {
     /// Digest all inputs in fixed order so a belief reference identifies the exact evidence.
     pub fn digest(&self) -> String {
-        let mut bytes = b"realityos.push_probe_measurement/5\0".to_vec();
+        let mut bytes = if self.motion.unresolved_motion_before_force {
+            b"realityos.push_probe_measurement/6\0".to_vec()
+        } else {
+            // Preserve the v5 digest for existing records with the new field's
+            // default value so historical sidecars remain independently verifiable.
+            b"realityos.push_probe_measurement/5\0".to_vec()
+        };
         bytes.extend_from_slice(&(self.samples.len() as u64).to_le_bytes());
         for sample in &self.samples {
             push_string(&mut bytes, &sample.digest);
@@ -170,6 +180,9 @@ impl PushProbeMeasurement {
         push_f64(&mut bytes, self.motion.max_quasi_static_speed_m_s);
         push_f64(&mut bytes, self.motion.pose_resolution_m);
         push_opt_f64(&mut bytes, self.motion.first_motion_s);
+        if self.motion.unresolved_motion_before_force {
+            bytes.push(1);
+        }
         push_f64s(&mut bytes, &self.prior_support_friction);
         push_string(&mut bytes, &self.current_observation_epoch);
         push_string(&mut bytes, &self.current_collision_model_digest);
@@ -424,6 +437,9 @@ pub fn infer_support_friction(measurement: &PushProbeMeasurement) -> FrictionInf
         || measurement.now_s < measurement.motion.end_s
     {
         return fail(FrictionNoInferenceReason::InvalidMeasurement);
+    }
+    if measurement.motion.unresolved_motion_before_force {
+        return fail(FrictionNoInferenceReason::UnbracketedMotion);
     }
     if measurement.motion.max_speed_m_s > measurement.motion.max_quasi_static_speed_m_s {
         return fail(FrictionNoInferenceReason::DynamicMotion);

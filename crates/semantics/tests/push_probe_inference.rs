@@ -66,6 +66,7 @@ fn measurement() -> PushProbeMeasurement {
             max_quasi_static_speed_m_s: 0.01,
             pose_resolution_m: 0.001,
             first_motion_s: None,
+            unresolved_motion_before_force: false,
         },
         prior_support_friction: [0.1, 0.8],
         current_observation_epoch: epoch.clone(),
@@ -269,6 +270,24 @@ fn unknown_mass_or_dynamic_sliding_returns_no_inference() {
         infer_support_friction(&unbracketed_slide),
         FrictionInferenceResult::NoInference(FrictionNoInferenceReason::UnbracketedMotion)
     ));
+}
+
+#[test]
+fn cumulative_motion_before_resolved_force_returns_no_inference() {
+    let mut measurement = measurement();
+    // The runner may reset its local motion origin while the force lower bound
+    // is unresolved, leaving a zero endpoint displacement despite path motion.
+    measurement.motion.displacement_m = [0.0; 3];
+    let legacy_digest = measurement.digest();
+    measurement.motion.unresolved_motion_before_force = true;
+    let unresolved_digest = measurement.digest();
+    assert_ne!(unresolved_digest, legacy_digest);
+    assert_eq!(
+        infer_support_friction(&measurement),
+        FrictionInferenceResult::NoInference(FrictionNoInferenceReason::UnbracketedMotion)
+    );
+    measurement.motion.unresolved_motion_before_force = false;
+    assert_eq!(measurement.digest(), legacy_digest);
 }
 
 #[test]

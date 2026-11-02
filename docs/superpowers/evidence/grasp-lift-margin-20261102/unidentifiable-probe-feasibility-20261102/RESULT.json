@@ -625,6 +625,14 @@
     "sha256": "22768e93f0dec9a5a532230840aaa4a931ccbc78c5cdb99ddd1903a705947f0c",
     "verification": "digest and friction interval recomputed from structured measurement"
   },
+  "implementation_validation_replays": {
+    "invocation_count": 2,
+    "same_frozen_trial_id": "v7:development:menagerie_ur5e:push_probe_replan:21003:3",
+    "intervention_or_seed_changed": false,
+    "first_invocation": "simulation and sidecar completed; RESULT.json write failed because the configured relative output path was unresolved",
+    "second_invocation": "same input rerun with an absolute RESULT.json output path; completed successfully",
+    "sidecar_sha256_matched": "22768e93f0dec9a5a532230840aaa4a931ccbc78c5cdb99ddd1903a705947f0c"
+  },
   "scenario_expected_refusal": "UNIDENTIFIABLE_FRICTION",
   "source_sha256": "A375E62223D6AEEFCD409AF3E831A1F5E0D14D7C51DC4099740626D98D928191"
 }

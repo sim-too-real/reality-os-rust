@@ -103,7 +103,15 @@ The command checks each sample digest, recomputes the complete measurement diges
 
 The sidecar writer never overwrites an existing artifact. For another explicit exploratory replay, set `REALITYOS_EXPLORATORY_SIDECAR_OUTPUT` to a new output path before running the frozen test.
 
-Next selection: inspect the inference calculation and decision threshold offline against the preserved measurement and audit trail. The measured lower bound (`0.09195`) remains below the `0.3` action requirement, explaining why this probe did not justify a push. Do not expand this frozen single-case experiment into another embodiment or seed, and do not relax the probe, force, or authorization limits.
+## Offline calculation and motion-tracking follow-up
+
+The interval's lower bound comes from the final sample. Its capture time matches the motion-window end, so the rise-rate time-skew allowance is zero. The sensor error (`0.05 N` per force axis) plus precontact residual bound (`0.05 N`) gives `0.10 N` per sensor-force axis; the same-state free-space model error is zero. Applying the saved per-sample transform yields a conservative tangential-force lower bound of `0.1859044 N` and normal-load upper bound of `2.0217637 N`. Their ratio is `0.09195159957`; intersecting with `[0.05, 0.8]` reduces interval width by 5.59% and leaves the upper bound unchanged. The lower bound remains well below the required `0.3`, so the probe justifies no follow-up action.
+
+This audit also found a motion-summary limitation in the original replay. The complete episode reports `3.8388 mm` net object displacement, while its stored probe window reports zero displacement and no `first_motion_s`. The runner had been resetting the motion origin whenever the force lower bound was below `0.5 N`; a sequence of gradual movements could therefore be reported as `Sticking`. The current runner now preserves the original origin and flags motion that crosses the pose threshold before force evidence resolves; inference fails closed with `UnbracketedMotion`. Focused unit tests cover cumulative drift and a later force rise. The frozen simulation was not rerun after this code fix, so the historical sidecar still reproduces the original stored `Sticking` calculation and should not be read as proof that the object remained motionless.
+
+During sidecar integration, the frozen trial was invoked twice with the same saved input and unchanged intervention: the first invocation completed simulation and wrote the sidecar, then failed while writing `RESULT.json` because its output path was relative; the second used an absolute output path and completed. Both produced the same sidecar digest. No other seed or embodiment was run.
+
+Next selection: define any later probe around a frozen motion trace that records time-aligned object poses and can bracket slip onset. Keep the prior frozen case closed; do not relax the probe, force, or authorization limits.
 
 ## Replay
 
