@@ -5773,6 +5773,67 @@ fn empty_probe_measurement_sidecar_reports_absent_records() {
 }
 
 #[test]
+fn first_action_preflight_verifier_binds_frozen_trial_and_replay() {
+    let evidence_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/superpowers/evidence/grasp-lift-margin-20261102")
+        .join("probe-action-selection-preflight-v1-ur5e-23019-20261102");
+    let input: Value = serde_json::from_slice(
+        &std::fs::read(evidence_dir.join("TRIAL_INPUT.json")).expect("frozen trial input"),
+    )
+    .expect("trial input JSON");
+    let trial: realityos_verify::manipulation_benchmark::ResolvedBenchmarkTrial =
+        serde_json::from_value(input["trial"].clone()).expect("resolved frozen trial");
+    let preflight: FirstActionPreflightV1 = serde_json::from_slice(
+        &std::fs::read(evidence_dir.join("PREFLIGHT.json")).expect("frozen preflight"),
+    )
+    .expect("preflight JSON");
+    let result: Value = serde_json::from_slice(
+        &std::fs::read(evidence_dir.join("RESULT.json")).expect("frozen replay result"),
+    )
+    .expect("replay result JSON");
+    let episode: realityos_verify::manipulation_benchmark::BenchmarkEpisode =
+        serde_json::from_value(result["complete_episode"].clone()).expect("frozen episode");
+
+    preflight
+        .verify_for_trial(&trial)
+        .expect("preflight binds to the resolved trial");
+    preflight
+        .verify_matches_episode(&episode)
+        .expect("preflight binds to replay request and authority fields");
+
+    let mut nonzero_but_unchanged = preflight.clone();
+    nonzero_but_unchanged.control_writes_before = 1;
+    nonzero_but_unchanged.control_writes_after = 1;
+    assert!(
+        nonzero_but_unchanged.verify().is_err(),
+        "a preflight with preexisting control writes must not verify"
+    );
+
+    let mut wrong_trial = trial.clone();
+    wrong_trial.seed += 1;
+    assert!(
+        preflight.verify_for_trial(&wrong_trial).is_err(),
+        "a receipt must reject a different resolved trial"
+    );
+
+    let mut wrong_authority = preflight.clone();
+    wrong_authority.authorized_witness_digest = Some("0".repeat(64));
+    assert!(
+        wrong_authority.verify_matches_episode(&episode).is_err(),
+        "a receipt must reject replay authority fields that do not match"
+    );
+
+    let mut wrong_request = preflight;
+    wrong_request
+        .reasoning_request_audit
+        .push_str(";tampered=true");
+    assert!(
+        wrong_request.verify_matches_episode(&episode).is_err(),
+        "a receipt must reject a replay request that does not match"
+    );
+}
+
+#[test]
 #[ignore = "SIMULATION_ONLY preflight initializes MuJoCo but performs no control writes or physics steps"]
 fn first_action_preflight_selects_without_control_write_or_simulation_step() {
     let _mujoco_guard = lock_mujoco_test();

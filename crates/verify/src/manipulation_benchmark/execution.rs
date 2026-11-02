@@ -370,7 +370,12 @@ impl FirstActionPreflightV1 {
         if !self.simulation_timestep_s.is_finite() || self.simulation_timestep_s <= 0.0 {
             return Err("first-action preflight has an invalid simulator timestep".into());
         }
-        if self.control_writes_before != self.control_writes_after
+        if self.control_writes_before != 0
+            || self.control_writes_after != 0
+            || !self.simulation_time_before_s.is_finite()
+            || !self.simulation_time_after_s.is_finite()
+            || self.simulation_time_before_s < 0.0
+            || self.simulation_time_after_s < 0.0
             || self.simulation_time_before_s.to_bits() != self.simulation_time_after_s.to_bits()
             || self.simulator_steps != 0
         {
@@ -379,12 +384,98 @@ impl FirstActionPreflightV1 {
         if self.authorized_action_key.is_some() == self.refusal_code.is_some() {
             return Err("first-action preflight must contain one action or one refusal".into());
         }
+        if self
+            .authorized_action_key
+            .as_deref()
+            .map_or(false, |action| action.trim().is_empty())
+            || self
+                .refusal_code
+                .as_deref()
+                .map_or(false, |refusal| refusal.trim().is_empty())
+        {
+            return Err("first-action preflight action or refusal is empty".into());
+        }
         if self.authorized_action_key.is_some()
             && (self.authorized_grant_id.is_none()
                 || self.authorized_witness_digest.is_none()
-                || self.authorized_observation_epoch.is_none())
+                || self.authorized_observation_epoch.is_none()
+                || self
+                    .authorized_grant_id
+                    .as_deref()
+                    .map_or(true, |value| value.trim().is_empty())
+                || self
+                    .authorized_witness_digest
+                    .as_deref()
+                    .map_or(true, |value| value.trim().is_empty())
+                || self
+                    .authorized_observation_epoch
+                    .as_deref()
+                    .map_or(true, |value| value.trim().is_empty()))
         {
             return Err("authorized first action is missing its authority binding".into());
+        }
+        Ok(())
+    }
+
+    /// Verify that the receipt was generated for this resolved trial.
+    pub fn verify_for_trial(&self, trial: &ResolvedBenchmarkTrial) -> Result<(), String> {
+        self.verify()?;
+        let expected_digest = trial_digest(trial).map_err(|error| error.to_string())?;
+        if self.trial_id != trial.trial_id
+            || self.trial_digest != expected_digest
+            || self.paired_trial_key != trial.paired_trial_key
+        {
+            return Err("first-action preflight does not match the resolved trial".into());
+        }
+        Ok(())
+    }
+
+    /// Verify that a later episode used the same initial request and authority.
+    pub fn verify_matches_episode(&self, episode: &BenchmarkEpisode) -> Result<(), String> {
+        self.verify()?;
+        if self.trial_id != episode.trial_id
+            || self.trial_digest != episode.trial_digest
+            || self.paired_trial_key != episode.paired_trial_key
+        {
+            return Err("first-action preflight does not match the replay trial".into());
+        }
+        if episode.reasoning_request_audits.first() != Some(&self.reasoning_request_audit) {
+            return Err("first-action preflight request does not match the replay".into());
+        }
+        let decision_audit = episode
+            .decision_audits
+            .first()
+            .ok_or_else(|| "replay is missing its first decision audit".to_owned())?;
+        if !decision_audit.starts_with(&self.decision_audit) {
+            return Err("first-action preflight decision does not match the replay".into());
+        }
+        match (
+            self.authorized_action_key.as_deref(),
+            episode.actions.first(),
+        ) {
+            (Some(action_key), Some(action)) => {
+                if action.action_key != action_key
+                    || self.authorized_grant_id.as_deref() != Some(action.grant_id.as_str())
+                    || self.authorized_witness_digest.as_deref()
+                        != Some(action.witness_digest.as_str())
+                    || self.authorized_observation_epoch.as_deref()
+                        != Some(action.observation_epoch.as_str())
+                    || !decision_audit.contains(&format!(";authorized_action_key={action_key}"))
+                {
+                    return Err("first-action preflight authority does not match the replay".into());
+                }
+            }
+            (Some(_), None) => {
+                return Err("replay is missing the preflight-authorized first action".into());
+            }
+            (None, Some(_)) => {
+                return Err("replay acted after a preflight refusal".into());
+            }
+            (None, None) => {
+                if episode.refusal_code.as_deref() != self.refusal_code.as_deref() {
+                    return Err("first-action preflight refusal does not match the replay".into());
+                }
+            }
         }
         Ok(())
     }
