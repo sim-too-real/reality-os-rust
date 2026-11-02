@@ -1,0 +1,74 @@
+{
+  "schema": "realityos.probe_replay_offline_verification/v1",
+  "status": "PASS_FOR_ARTIFACT_INTEGRITY; PREDECLARED_MOTION_GATE_FAILED",
+  "verification_method": "A separate offline process deserialized the preserved input, preflight, episode, and measurement sidecar; ran verify_for_trial, verify_matches_episode, ProbeMeasurementSidecarV1::verify, and pose trace validation. The repository sidecar verifier CLI independently recomputed the measurement digest and inference. No simulator was launched during offline verification.",
+  "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23020:17",
+  "source_revision": "cf17d77c344c1b94e6c064566a7edd93b3d33a71",
+  "artifact_sha256": {
+    "FREEZE.json": "304ABB8879E4C66B8B818AADF245D80AA9D07E8EB40584C675F675E373F698A2",
+    "TRIAL_INPUT.json": "195D300ED82D41D6CB07935CE532179086DE257472B1C003321146F8B304203B",
+    "PREFLIGHT.json": "A46B905EF3BE5156104D0ABB675EDC2FED23BF5771401E9C25182959E79316B9",
+    "PROBE_MEASUREMENT_SIDECAR.json": "F432B9690BD1123320A009016DF71FDE1D57FFD73F2ACB516F741BF79F967EAD",
+    "RESULT.json": "41388A1C4B712BC261320DFA44CE54F6134C656B78E3B1BA374556A60C0D810B"
+  },
+  "checks": {
+    "freeze_matches_trial_input_hash": true,
+    "preflight_matches_frozen_hash": true,
+    "preflight_verifies_for_resolved_trial": true,
+    "preflight_matches_replay_initial_observation_and_request": true,
+    "sidecar_file_hash_matches_result": true,
+    "sidecar_verifier_cli": "PASS",
+    "motion_trace_validation": "verified",
+    "runtime_first_action_matches_preflight": true
+  },
+  "initial_observation": {
+    "evidence_present": true,
+    "observation_json_utf8_byte_count": 3281,
+    "sha256": "0d5138ff8a2513017a365b21449f7810bf68ff13d52befafc0f56e5fc18dd0a2",
+    "simulator_time_s": 0.0,
+    "hash_and_time_match_preflight": true
+  },
+  "preflight": {
+    "selected_action": "probe:+x",
+    "control_writes_before": 0,
+    "control_writes_after": 0,
+    "simulation_time_before_s": 0.0,
+    "simulation_time_after_s": 0.0,
+    "simulator_steps": 0
+  },
+  "replay": {
+    "simulation_runs": 1,
+    "first_action": "probe:+x",
+    "outcome": "unexpected_refusal",
+    "refusal_code": "NO_JUSTIFIED_CURRENT_ACTION",
+    "failure_cause": "bridge_refusal",
+    "unauthorized_writes": 0,
+    "sidecar_measurement_count": 1,
+    "wrench_sample_count": 7251,
+    "pose_sample_count": 7250,
+    "inference": {
+      "NoInference": "unidentifiable"
+    },
+    "prior_support_friction_interval": [0.05, 0.8],
+    "posterior_support_friction_interval": [0.05, 0.8],
+    "end_displacement_m": [0.0002441192417589333, -0.00024411924177587785, 3.723603658745134e-8],
+    "maximum_xy_displacement_from_trace_start_mm": 0.345236742543702,
+    "maximum_absolute_yaw_from_trace_start_rad": 3.32339394060273e-8,
+    "first_xy_motion_bracket_s": null,
+    "rotated_sweep_classification_exercised": false
+  },
+  "acceptance": {
+    "artifact_binding_and_trace_validation": "passed",
+    "predeclared_first_1_mm_xy_bracket": "failed; the one permitted replay ended without a bracket",
+    "rerun": false
+  },
+  "limits": {
+    "evidence_status": "SIMULATION_ONLY",
+    "benchmark_gain": false,
+    "physical_claim": false,
+    "admission_status": "NOT_ADMITTED",
+    "metal": false,
+    "shop_release": false,
+    "viewport_admits": false
+  }
+}

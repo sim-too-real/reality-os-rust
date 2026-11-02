@@ -222,3 +222,26 @@ Verification:
 That full library run also rewrote `external_holdout_postfix_score.json` with a different random sample. The file was restored to `HEAD` and is not part of this change.
 
 Next: prepare a separate out-of-cohort freeze for one replay using this record format, only after choosing and verifying a new input. Keep all listed frozen, pilot, and public inputs untouched.
+
+## Fresh out-of-cohort replay with observation binding: 23020:17
+
+**Classification:** Foundational verification evidence; no benchmark gain. **Status:** `SIMULATION_ONLY`; the predeclared 1 mm motion-bracket gate failed. The rotated-sweep classifier was not exercised.
+
+Seed/index `23020:17` resolved to `v7:development:menagerie_ur5e:push_probe_replan:23020:17`. It is outside the v4 pilot (`21000..=21019`), v4 public (`22000..=22099`), and manifest historical seed ranges. No exact trial ID or frozen-trial manifest matched before this input was created. The input, zero-step preflight, and freeze were committed and pushed before the single replay; the freeze binds runner source commit `cf17d77c344c1b94e6c064566a7edd93b3d33a71`.
+
+Preflight selected and authorized `probe:+x` with zero control writes, zero simulator-time advance, and zero steps. The one replay's first action matched. The episode then ended `unexpected_refusal` with `NO_JUSTIFIED_CURRENT_ACTION` (`bridge_refusal`) and zero unauthorized writes. It did not produce a justified follow-on action.
+
+The sidecar contains 7,251 wrench samples and 7,250 pose samples. Offline verification passed for the preflight-to-trial and preflight-to-replay observation bindings, exact UTF-8 observation digest, observation time, sidecar measurement digest/inference, and pose trace. The recorded friction interval stayed `[0.05, 0.8]`; inference was `NoInference(Unidentifiable)`. Maximum planar object displacement from the trace start was 0.3452 mm, below the unchanged 1 mm motion threshold; no first motion bracket was present. Peak absolute yaw in the trace was `3.3234e-8 rad`, and no rotated-sweep decision was reached.
+
+The replay test exited at its predeclared first-1-mm-bracket assertion after it had written `RESULT.json` and `PROBE_MEASUREMENT_SIDECAR.json`. This is the one allowed run; do not rerun it. `OFFLINE_VERIFY.json` records the preserved artifact hashes and offline checks. Admission remains `NOT_ADMITTED`; `metal`, `shop_release`, and `viewport_admits` remain false. There were no physical actions, loads, purchases, fabrication, or external contacts.
+
+Verification:
+
+- The parameterized zero-step preflight test failed against the prior hardcoded seed as expected, then passed for `23020:17`; it recorded `probe:+x`, zero writes, zero time advance, and zero steps.
+- `cargo fmt --all -- --check` and `git diff --check` passed for the preflight-test change.
+- The single frozen replay ran once and failed only the predeclared 1 mm motion-bracket assertion. No retry or second simulation occurred.
+- `cargo run --quiet -p realityos-verify --bin realityos-verify -- verify-probe-measurement-sidecar <sidecar>` returned `PASS`; it recomputed `NoInference(Unidentifiable)`, verified the trace, and reported no XY bracket.
+- A separate offline evidence consumer passed `verify_for_trial`, `verify_matches_episode`, sidecar verification, and pose-trace validation on the saved artifacts; it launched no simulator.
+- Code review of `c6f1ad5d18adabdc8b34305fbfe9f778a6ce6a69..cf17d77c344c1b94e6c064566a7edd93b3d33a71` found no blocking issues. The code commit and pre-run freeze commit are pushed on canonical `main`.
+
+Next experiment: prepare one new out-of-cohort candidate at seed/index `23021:17`. Before any replay, verify cohort exclusion, resolve and hash its input, require a fresh zero-step preflight selecting `probe:+x`, and commit/push its freeze. Run at most one replay; preserve a no-motion or refusal outcome and never rerun `23020:17` or any frozen, pilot, or public input.
