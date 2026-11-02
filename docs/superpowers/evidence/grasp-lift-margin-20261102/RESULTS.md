@@ -329,4 +329,40 @@ Artifact SHA-256 values (raw files):
 - `PROBE_MEASUREMENT_SIDECAR.json`: `2BB3A8FA881AD41AEECE6BC7D573BCD3C640A91E30B438BBE08D33CC70D39E62`
 - `OFFLINE_VERIFY.json`: `02AE04942CB3540F450F97E57072160F37100CB035BB0684E33C5B1CF7424836`
 
-Next: screen one new out-of-cohort input only after exact-ID and cohort checks; require a zero-step `probe:+x` preflight and push a source-bound freeze before at most one replay. Preserve refusals and contact absence as results. Never rerun `23023:17`, `23022:17`, or any frozen, pilot, or public input.
+## Fresh out-of-cohort per-step contact trace replay: 23024:17
+
+**Classification:** Foundational verification evidence for the no-intended-contact branch; no benchmark gain. **Status:** SIMULATION_ONLY; admission and release flags remain unchanged.
+
+The exact trial ID v7:development:menagerie_ur5e:push_probe_replan:23024:17 was absent from the repository archive and Git history before export. Seed 23024 is outside the v4 pilot, public, and historical ranges; index 17 resolves to expected_success. The freeze and selection audit preserve the cohort checks.
+
+The candidate export contains 2,600 bytes with SHA-256 530C92DF9EECC96820DFB24F1FE90BFE5ACF74B90BDDA114B8F0FA385CCD6A60. The preflight test wrote the same serialized trial plus a final LF to TRIAL_INPUT.json; the frozen on-disk file SHA-256 is 48344027D8EB2AF1AF738800EF3795B761D23D7BC59C51CBCEEC3193148DC191. Zero-step preflight selected probe:+x, bound trial digest 78173999d1cecf77d1e26dc661b4b0433a3d4c2cd5a360afa2c92cd166c8feae and initial-observation SHA-256 45049b8e39f839c88c6759a24da36cb8bf65e4b9d0f93321d3540c34d5c7e8e1, and recorded zero control writes, zero simulator-time advance, and zero steps.
+
+The source-bound freeze (EFDAA928AD0D5E011812E517FBD305F23916CB6BFE92C0800A4E812522084294) and candidate audit (42356BBA89F7F6F11C6A36C368A14F51ACA3584E137A3EC1FC82127F7E8B0BB1) were pushed to RealityOS main in commit 52b425ccf5eda717871650b6d71117c287f8cab4 before replay.
+
+The frozen replay test passed once in 40.83 seconds. The actual first action matched preflight (probe:+x), and unauthorized writes were zero. The episode ended unexpected_refusal with bridge_refusal; the later decision audit was NO_JUSTIFIED_GOAL_ACTION_OR_SAFE_OBSERVABLE_PROBE. The sidecar contains 7,893 wrench samples and 7,892 pose samples with a complete start and per-step contact trace. The four start pairs and every observed per-step pair were object-table contacts; the intended wrist_3_link/obj0 pair appeared in zero pose samples. No first 1 mm XY-motion bracket was present.
+
+The offline sidecar verifier returned PASS, validated the trace, and recomputed NoInference(NoIntendedContact). The support-friction interval remained [0.05, 0.8]. This is a single model-conditioned negative observation; it does not establish a physical friction measurement, benchmark gain, or broader performance claim. No physical actuation, load, purchase, fabrication, or external contact occurred.
+
+A read-only contrast with 23023:17 found both zero-step preflights selected probe:+x. In 23023, the intended wrist_3_link/obj0 pair appeared in 1,535 samples and the runtime then selected push:+x; in 23024, the pair appeared in none and the runtime refused a follow-on action. Source review confirms finish_probe proves a bounded candidate using joint margin, sweep clearance, a feasible domain, and future recoverability; the measurement gate separately requires observed tool-target contact in the complete trace before inference. The contrast is consistent with that separation. Two different seeds do not estimate a contact success rate or establish a causal reliability claim.
+
+Verification:
+
+- Exact-ID archive and Git-history checks — no prior 23024:17 match.
+- Freeze-only input export — 1 passed.
+- Zero-step preflight — 1 passed; selected probe:+x, with zero writes, zero time advance, and zero steps.
+- Frozen replay — 1 passed; exactly one simulation, first action matched preflight, complete per-step contact trace validated.
+- Offline verify-probe-measurement-sidecar — PASS; trace verified and no-contact inference recomputed.
+- Admission remains NOT_ADMITTED; metal, shop_release, and viewport_admits remain false.
+
+Artifact SHA-256 values (raw files):
+
+- CANDIDATE_EXPORT.json: 530C92DF9EECC96820DFB24F1FE90BFE5ACF74B90BDDA114B8F0FA385CCD6A60
+- CANDIDATE_SELECTION.json: 42356BBA89F7F6F11C6A36C368A14F51ACA3584E137A3EC1FC82127F7E8B0BB1
+- FREEZE.json: EFDAA928AD0D5E011812E517FBD305F23916CB6BFE92C0800A4E812522084294
+- TRIAL_INPUT.json: 48344027D8EB2AF1AF738800EF3795B761D23D7BC59C51CBCEEC3193148DC191
+- PREFLIGHT.json: C1EA4FF0BD9A73939DA7748F98F74077286B34F4F1E8C2143F177F0050EF31E7
+- RESULT.json: 0BAF96A6D9683FD77A79C486F107A373D69290D45E388F74A3213961F157CC46
+- PROBE_MEASUREMENT_SIDECAR.json: 7A1AE0F8300ED5690A2E58185238C3F0B4D0D0ECD803D1DA521194D3C50D2462
+- OFFLINE_VERIFY.json: B8583E3FF1102220BD8949BD3891B7A5CEED12D963717F4EA3DB5AD88BEDA2B3
+
+Next: select a distinct bottleneck for the next cycle; do not run another seed under the same probe setup. Any follow-up replay must test a new falsifiable intervention chosen from this contrast and be frozen before one run. Never rerun 23024:17, 23023:17, 23022:17, or any frozen, pilot, or public input.
