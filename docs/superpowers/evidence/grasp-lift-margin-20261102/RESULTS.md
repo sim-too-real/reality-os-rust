@@ -187,3 +187,9 @@ Verification:
 - cargo fmt --all -- --check and git diff --check — passed before commit.
 
 Next action: add an offline regression for the retained slightly rotated object axis, then make the sweep checker either conservatively validate rotated swept bounds or return a distinct unsupported-direction refusal. Preserve fail-closed collision handling. Validate the chosen rule offline before freezing any new out-of-cohort trial. Do not rerun 23019:17 or any frozen/pilot/public input; do not loosen probe, wrench, authorization, or evaluator-label gates.
+
+## Receipt verifier hardening after the frozen replay
+
+A read-only review identified two gaps in the reusable receipt API: equal nonzero control-write counters could pass, and the self-only verifier could not bind the receipt to a resolved trial or later episode. Follow-up code commit f96ffc70 strengthens the contract: verification requires both control-write counts to be zero and simulator times finite, nonnegative, and bitwise equal; verify_for_trial binds trial ID, trial digest, and paired key; verify_matches_episode binds the initial request and decision audit plus the first action, grant, witness, and observation epoch.
+
+The focused offline regression reads the already frozen TRIAL_INPUT.json, PREFLIGHT.json, and RESULT.json. It confirms the archived artifacts cross-bind, then rejects a nonzero-but-equal write count, a different resolved trial, a modified request, and mismatched replay authority. The test passed (1/1); formatting and diff checks passed. This hardening was committed after the frozen replay and changed no frozen artifacts. The replay remains bound to its original runner commit 22aa6cb1f489e064741a8bd2a2eeeaa9d574fd99; no replay or simulation was repeated.
