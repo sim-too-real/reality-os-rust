@@ -1,0 +1,81 @@
+{
+  "schema": "realityos-grasp-lift-time-scale-freeze/v1",
+  "experiment_id": "grasp_lift_waypoint_dwell_2x_20261102",
+  "frozen_date": "2026-11-02",
+  "classification": "BOUNDED_SIMULATION_EXPERIMENT; SIMULATION_ONLY; NOT_ADMITTED",
+  "baseline": {
+    "repository": "reality-os-rust",
+    "branch": "main",
+    "head": "32b038de19bdf7d886b8bfb8d0322ebb86a2b5c1",
+    "lift_target_m": 0.025,
+    "lift_steps_per_waypoint": 50,
+    "fresh_success": "3/7",
+    "historical_success": "6/6",
+    "known_case_21010_25": "runtime_divergence at waypoint 4; relative pose error 0.020099 m",
+    "known_case_21006_21": "hold_not_verified; object-follow residual 0.007362 m"
+  },
+  "approaches": {
+    "considered": [
+      {
+        "name": "rank alternate IK branches",
+        "disposition": "rejected",
+        "reason": "Prepared witnesses use the same arm-joint branch at 24.5 mm and 25 mm; only lift_z changes."
+      },
+      {
+        "name": "double lift waypoint dwell",
+        "disposition": "selected",
+        "reason": "Failures occur during lift despite an unchanged IK branch; time scaling tests execution dynamics while preserving the endpoint and verifier limits."
+      }
+    ]
+  },
+  "hypothesis": "At the fixed 25 mm endpoint, doubling each lift waypoint hold from 50 to 100 simulation steps reduces dynamic contact disturbance enough to remove the 21010:25 runtime divergence without losing fresh successes or introducing guard failures.",
+  "intervention": {
+    "only_change": "LIFT_STEPS_PER_WAYPOINT",
+    "baseline_steps": 50,
+    "candidate_steps": 100,
+    "lift_target_m": 0.025,
+    "ik_selection": "unchanged",
+    "trajectory_endpoints": "unchanged",
+    "collision_checks": "unchanged"
+  },
+  "fixed_guards": {
+    "per_finger_force_ceiling_n": 1.95,
+    "object_tool_relative_pose_stop_m": 0.02,
+    "grasp_verifier_lift_window_m": [0.02, 0.025],
+    "unauthorized_writes_allowed": 0,
+    "admission_status": "NOT_ADMITTED",
+    "metal": false,
+    "shop_release": false,
+    "viewport_admits": false
+  },
+  "decision_rule": {
+    "retain_candidate_only_if": [
+      "fresh success remains at least 3/7",
+      "historical selected successes remain 6/6",
+      "21010:25 completes without runtime divergence",
+      "no new runtime-divergence case appears in the 13-input cohort",
+      "all replay safety gates pass and unauthorized writes remain zero"
+    ],
+    "otherwise": "reject the timing intervention, restore the 50-step production behavior, and preserve the negative result"
+  },
+  "cohort": {
+    "historical_cases": 6,
+    "fresh_expected_success_cases": 7,
+    "paired_trial_keys_required_to_match_baseline": true,
+    "inputs": [
+      {"trial_id":"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21000:15","paired_trial_key":"31af2b213f097c1e264c6e66cefb04556068d1f48dafdbfdf3e173c7ea270d4e","path":"docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-24_5mm/fresh_21000_15/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21000_15.json","sha256":"2de027bb776029008c6af0c37be5d3c55f1be69e93a3866c387df0e816310360"},
+      {"trial_id":"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21005:20","paired_trial_key":"2da381d63a0ef77b9f87b165f1f55beec6f07c8dac6f314ece5c59e7bfd175a8","path":"docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-24_5mm/fresh_21005_20/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21005_20.json","sha256":"62742fe4c05e6d85cc9afa8683b90585a76765fb627e8b2e5549b6691c211eba"},
+      {"trial_id":"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21006:21","paired_trial_key":"3b3f41d7e5db79f1d8de6974add2d459193c04054d55ad62185b482787c6f890","path":"docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-24_5mm/fresh_21006_21/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21006_21.json","sha256":"aead6ef979e11e73608fd57ab58d1f0a657bfd5f3aa58abd6089efba226097db"},
+      {"trial_id":"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25","paired_trial_key":"4a03287aebe64e2a6e82420253d68914d7bfe986c8460111369199f36d9cb720","path":"docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-24_5mm/fresh_21010_25/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21010_25.json","sha256":"1d44926a79448e645e9a708c90c84013a757effb6148ad25eb1f2dbc5f2728d6"},
+      {"trial_id":"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21011:26","paired_trial_key":"1fabf8d30f323155b3ea303305782035d078835bc9a56b4f71a9a45676f2fc74","path":"docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-24_5mm/fresh_21011_26/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21011_26.json","sha256":"2b5e4370a58036c118d947d98ceb007a71a2d8eb6911beea7984ef2c4bfd70e0"},
+      {"trial_id":"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21015:30","paired_trial_key":"5672c88fcc0e6451274a462aff5b2d251062bb56c3a6e8471f6856d24c1b3edf","path":"docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-24_5mm/fresh_21015_30/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21015_30.json","sha256":"c88b95b703ac9031a9aa4ab82f1b77c63c8177223589fa6343609073ca09ac37"},
+      {"trial_id":"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21016:31","paired_trial_key":"b9611c0ac52de928444fe2193191d5bc176ae2333599dc6e1bb248921b2ee18b","path":"docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-24_5mm/fresh_21016_31/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21016_31.json","sha256":"1105d1b6b1d00fb9a4fdd5cb7c380ccc0aae6b31013b88c86561d6a27e4b7f7f"},
+      {"trial_id":"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:0:15","paired_trial_key":"fd4d9c15ff6059bca9ce3984b1dad401b644dcd36324312ade350bf733e67694","path":"docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-24_5mm/historical_0_15/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_0_15.json","sha256":"d286b0f97bb06ee39246dd8a9b1141c2307a0770df4ffbecafe7f17eeded336b"},
+      {"trial_id":"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:6:21","paired_trial_key":"a92e903b712f706898aeeb256799a68185e3d85917e702108844fc2f60c585f1","path":"docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-24_5mm/historical_6_21/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_6_21.json","sha256":"b9e26df58a817e8fc1fe8528edcbc53886cf01ca68d1f8b8ed35c9b3e82fe88c"},
+      {"trial_id":"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21:36","paired_trial_key":"59987bded726ec8438176ed6f61cf2b56dc6bf47827a62195425ddac33d246ec","path":"docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-24_5mm/historical_21_36/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21_36.json","sha256":"dcb68c212abd5d9705a35188bc81e6a8ad10a715db91c0e410b0fff6e59960c7"},
+      {"trial_id":"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:26:41","paired_trial_key":"09d366cf5eb22002d12ee7df41fc5e0062d086538cdfa0c4fb4a8653fa43c1d6","path":"docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-24_5mm/historical_26_41/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_26_41.json","sha256":"0df346d7765efa7aec59426f92413a4ffa61c2429c2962057d678ceac626853e"},
+      {"trial_id":"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:30:45","paired_trial_key":"d7ce2e4f7ae1b5ade889b8143c7cd0cd46f775de6250376075a03e23b03f8ec7","path":"docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-24_5mm/historical_30_45/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_30_45.json","sha256":"00951a98870f7bcd2c244383288eb3495bb8dad5b2de0eea82755df71aff3d70"},
+      {"trial_id":"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:50:65","paired_trial_key":"47acefedd4993c8c78f8ba88d691783e20e92bf9ebac777f8a3aea250e5c2e32","path":"docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-24_5mm/historical_50_65/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_50_65.json","sha256":"b41393ad0590ab54afac98eb47fca4bd82ad92c301c49917afc8bb75846ce918"}
+    ]
+  }
+}

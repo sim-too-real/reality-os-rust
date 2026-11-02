@@ -1,0 +1,31 @@
+{
+  "experiment_id": "suite-v4-refusal-label-audit-20261102",
+  "question": "Does explicit v4 refusal labeling remove the two v3 evaluation-label mismatches, and what outcome does the unchanged policy produce?",
+  "hypothesis": "The v3 fixture set an expected_refusal stratum for unidentifiable_friction while leaving scenario.expected_refusal null. V4 adds UNIDENTIFIABLE_FRICTION; the same low-load cases will no longer be classified as evaluation-label mismatches, while policy decisions and action attempts remain otherwise unchanged.",
+  "baseline_head": "32b038de19bdf7d886b8bfb8d0322ebb86a2b5c1",
+  "baseline_suite": "robots/benchmarks/manipulation/scenario_suite_v3.json",
+  "baseline_suite_sha256": "1ECFB8D15BB7F422B21B5E46F5868F82D04F14CE98A725CCAC20C50C92474565",
+  "candidate_suite": "robots/benchmarks/manipulation/scenario_suite_v4.json",
+  "candidate_suite_sha256": "027207A6F8BF85FF3DB24036842F85804A8654455AAA9A9046FE928B6D208CCF",
+  "targeted_suite": "scenario_suite_v4_targeted.json",
+  "targeted_suite_sha256": "EFD64DE0028B216BDB108E7EAB322DFE628C42A13420C40073580E15083EE522",
+  "targeted_pilot_seeds": [
+    21003,
+    21013
+  ],
+  "baseline_trial_ids": [
+    "v7:development:menagerie_ur5e:push_probe_replan:21003:3",
+    "v7:development:menagerie_iiwa14:push_probe_replan:21013:13"
+  ],
+  "baseline_trial_sha256": [
+    "286CC0A47EE315DE8FE81CF3CE1D102D4D56C615B6C19A16A4E7556770E69D69",
+    "81ACC458A1508B5C632E44CF8C6D24D9B89D18E3B340309E8DAB19F0F33B8145"
+  ],
+  "acceptance": [
+    "All scheduled targeted v4 trials complete and validate; zero unauthorized writes.",
+    "Report whether the two named v3 mismatches persist under v4 and record their actual outcome buckets.",
+    "Do not change scoring rules, thresholds, or manifests in response to results.",
+    "SIMULATION_ONLY; this does not establish physical capability."
+  ],
+  "stopping_condition": "Stop after this two-seed pilot subset; do not expand to the full 20-seed pilot unless the label change reveals a distinct, falsifiable policy hypothesis."
+}

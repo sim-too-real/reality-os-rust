@@ -1,0 +1,51 @@
+{
+  "experiment_id": "suite-v4-refusal-label-audit-followup-20261102",
+  "related_experiment": "suite-v4-refusal-label-audit-20261102",
+  "question": "Does explicit v4 refusal labeling remove the two v3 evaluation-label mismatches, and what outcome does the unchanged policy produce?",
+  "hypothesis": "The v3 unidentifiable_friction stratum has expected_refusal=null; v4 marks it UNIDENTIFIABLE_FRICTION. Same seed/index scenarios should retain physical randomization, with only that label reason changed. The unchanged policy produces the same action and decision; scoring should move out of evaluation_label_mismatch.",
+  "candidate_head": "32b038de19bdf7d886b8bfb8d0322ebb86a2b5c1",
+  "candidate_suite": "robots/benchmarks/manipulation/scenario_suite_v4.json",
+  "candidate_suite_sha256": "027207A6F8BF85FF3DB24036842F85804A8654455AAA9A9046FE928B6D208CCF",
+  "pilot_selection": "first 14 seeds of official v4 pilot",
+  "exact_seeds": [
+    21000,
+    21001,
+    21002,
+    21003,
+    21004,
+    21005,
+    21006,
+    21007,
+    21008,
+    21009,
+    21010,
+    21011,
+    21012,
+    21013
+  ],
+  "target_seed_indices": [
+    {
+      "seed": 21003,
+      "index": 3,
+      "robot": "menagerie_ur5e"
+    },
+    {
+      "seed": 21013,
+      "index": 13,
+      "robot": "menagerie_iiwa14"
+    }
+  ],
+  "v3_baseline_report": "docs\\superpowers\\evidence\\grasp-lift-margin-20261102\\suite-v3-candidate-25mm\\manipulation_benchmark.json",
+  "v3_baseline_report_sha256": "A1B13AAFAB72174545A24130FDD127FAD003856F7ABEDF56E8CE8E5514EBD478",
+  "v3_baseline_target_trial_sha256": [
+    "286CC0A47EE315DE8FE81CF3CE1D102D4D56C615B6C19A16A4E7556770E69D69",
+    "81ACC458A1508B5C632E44CF8C6D24D9B89D18E3B340309E8DAB19F0F33B8145"
+  ],
+  "acceptance": [
+    "42 scheduled records for seeds 21000-21013 complete, valid, and accounted for.",
+    "Hard safety gate passes and unauthorized writes remain zero.",
+    "For the two target records, report whether evaluation_label_mismatch disappears and the resulting outcome; do not relabel or tune scoring.",
+    "Preserve all results as SIMULATION_ONLY."
+  ],
+  "stopping_condition": "Stop after this 14-seed v4 audit; choose a new hypothesis based on outcome categories, with no default-suite promotion based on this screen alone."
+}

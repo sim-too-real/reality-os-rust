@@ -1,0 +1,39 @@
+{
+  "schema": "realityos-grasp-lift-time-scale-result/v1",
+  "experiment_id": "grasp_lift_waypoint_dwell_2x_20261102",
+  "classification": "NEGATIVE_SINGLE_CASE_STOP; SIMULATION_ONLY; NOT_ADMITTED",
+  "baseline_head": "32b038de19bdf7d886b8bfb8d0322ebb86a2b5c1",
+  "input_trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25",
+  "paired_trial_key": "4a03287aebe64e2a6e82420253d68914d7bfe986c8460111369199f36d9cb720",
+  "baseline": {
+    "steps_per_waypoint": 50,
+    "outcome": "unexpected_refusal",
+    "failure_cause": "runtime_divergence",
+    "guard": "object_tool_relative_pose_exceeded_20mm",
+    "relative_pose_error_m": 0.020099,
+    "waypoint": 4,
+    "unauthorized_writes": 0
+  },
+  "candidate": {
+    "steps_per_waypoint": 100,
+    "execution_source_sha256": "433c62ac7bf8bafa6154acd0b9d1d56107d0f5d6b1a75e16f95b3c488e41135b",
+    "test_source_sha256": "0016a3e63d50b4527deae7cd0e03126116db10afd97e2f4d51bfcabab52dd4fb",
+    "test_command": "cargo test -p realityos-verify --test manipulation_benchmark fresh_grasp_21010_lift_dwell_avoids_runtime_divergence -- --nocapture",
+    "test_result": "failed at the expected runtime-divergence assertion",
+    "outcome": "unexpected_refusal",
+    "failure_cause": "runtime_divergence",
+    "guard": "object_tool_relative_pose_exceeded_20mm",
+    "relative_pose_error_m": 0.022896,
+    "waypoint": 4,
+    "unauthorized_writes": 0
+  },
+  "relative_pose_change_m": 0.002797,
+  "full_cohort_run": false,
+  "stop_reason": "The frozen primary-case gate required 21010:25 to complete without runtime divergence. The doubled-dwell candidate increased relative-pose error, so the 13-case campaign was not started.",
+  "production_disposition": "Candidate rejected; the 50-step production behavior and test file were restored to baseline.",
+  "guard_changes": false,
+  "admission_status": "NOT_ADMITTED",
+  "metal": false,
+  "shop_release": false,
+  "viewport_admits": false
+}

@@ -1,0 +1,8 @@
+{
+  "timestamp_utc": "2026-11-02",
+  "command": "suite v4 targeted --pilot",
+  "exit_code": 2,
+  "result": "No simulation started. Manifest validation rejected a two-entry pilot seed list; the suite requires exactly 20 pilot and 100 public seeds.",
+  "preserved": "The invalid targeted manifest and original FREEZE.json remain unchanged.",
+  "recovery": "Use the official v4 suite and --seeds 14 so targets retain indices 3 and 13; this includes seeds 21000-21013 across registered task and embodiment specs."
+}

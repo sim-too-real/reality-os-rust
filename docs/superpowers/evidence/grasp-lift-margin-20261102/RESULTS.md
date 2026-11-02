@@ -63,11 +63,29 @@ The full suite-v3 candidate report and all 60 raw trial records are in `suite-v3
 
 The 13 saved 24.5 mm replays are in `suite-v3-candidate-24_5mm/`. Structured 24.3, 24.5, and 25 mm guard-diagnostic replays are in `suite-v3-lift-guard-diagnostics-20261102/`.
 
+## Trajectory branch and dwell follow-up
+
+The saved 24.5 mm and 25 mm lift witnesses for 21006:21 and 21010:25 use the same contact configuration and arm-joint coordinates at lift, to numerical precision. Only the lift-z target differs by 0.5 mm. This rules out an IK branch switch or arm-joint path discontinuity for those pairs, so the proposed branch-ranking change was not run.
+
+A bounded timing check doubled the lift waypoint dwell from 50 to 100 simulation steps on 21010:25 at the fixed 25 mm target. The unchanged 50-step baseline diverged at waypoint 4 with 20.099 mm relative-pose error; the 100-step candidate diverged at the same waypoint with 22.896 mm error, 2.797 mm worse. The 20 mm guard and all safety checks remained fixed; unauthorized writes were zero. Since the primary case failed, the 13-case cohort was not started. Production code was restored to 50 steps. The frozen inputs and negative result are in `suite-v3-lift-time-scale-20261102/FREEZE.json` and `suite-v3-lift-time-scale-20261102/RESULT.json`.
+
+## Suite v3/v4 refusal-label audit
+
+The full 25 mm v3 report had two evaluation-label mismatches on the low-load `unidentifiable_friction` refusal stratum. In v3, the scenario generator made the case positive with `expected_refusal = None`; the trial still inherited the suite-level expected-refusal label. The v3 scenario test explicitly preserves that legacy shape. Suite v4 adds the scenario reason `UNIDENTIFIABLE_FRICTION` while preserving the physical randomization. A targeted v4 audit covered the first 14 official pilot seeds so the target cases retained indices 3 and 13. The attempted two-seed manifest was rejected before simulation because the manifest contract requires exactly 20 pilot and 100 public seeds; `SETUP_ATTEMPT.json` records that setup failure.
+
+The follow-up campaign completed and parsed 42/42 trial records with no infrastructure, invalid, or unaccounted trials. Its hard safety gate failed: task success was 13/23, correct refusal 17/19, false refusals 6, false acceptances 2, evaluation-label mismatches 0, unauthorized writes 0, and friction narrowings 10/15. The runner returned exit code 1 because the hard gate failed, not because the campaign was incomplete.
+
+For both target records—UR5e 21003:3 and iiwa14 21013:13—the expectation, object randomization, initial joint state, and goal matched the v3 records. The scenario reason changed from absent to `UNIDENTIFIABLE_FRICTION`; the paired keys changed accordingly. Both outcomes changed from `evaluation_label_mismatch` to `false_acceptance`. The decision audit remained `Refuse { reason: "SCOPED_GRANT_DOES_NOT_COVER_PROBE" }`, the probe candidate was marked `PROVED`, and unauthorized writes remained zero. Thus v4 fixes the attribution error but reveals no capability gain and does not pass the benchmark gate.
+
+A behavior-preserving audit trace now records the pre-grant source and key plus the action key issued by the bridge. Replays of both exact target records show `pregrant_action_source=authority_request`, `pregrant_action_key=probe:+x`, and `authorized_action_key=probe:+x`; each remains `false_acceptance` with zero control writes before or after and zero unauthorized writes. Three focused audit-metadata tests passed, the release binary built, and formatting and diff checks passed. The full result, campaign report, traced replay reports, target trial hashes, and freeze are in `suite-v4-refusal-label-audit-20261102/`.
+
+The v4 audit is only a 14-seed screen, not a full pilot or holdout. The CLI still defaults to suite v3; this result alone is not sufficient to promote v4 as the default. The unit test `v4_names_the_unidentifiable_friction_refusal_and_preserves_v3` passed. All results remain `SIMULATION_ONLY`.
+
 ## Limits and next experiment
 
-The selected six-trial screen is on one simulated gripper fixture. The four recovery cases were selected because their saved verifier evidence isolated the lift threshold while object-follow passed; several other archived grasp failures have different causes and were not expected to improve from this change. The fresh seven-input control did not show higher success at any tested target and exposed force or relative-pose stops. These results do not establish performance on randomized mass, friction, and object dimensions, another embodiment, or physical hardware.
+The lift-target screen remains limited to one simulated gripper fixture; the target change did not improve fresh success above 3/7. The v4 label audit covered 14/20 pilot seeds and failed its hard safety gate. No physical claims are supported by either experiment.
 
-Next: compare the prepared joint-space lift witnesses and deterministic IK branches for 21006:21 and 21010:25, then test one path-continuity candidate-selection change against the same 13 inputs. Keep collision checking, the 1.95 N per-finger limit, the 20–25 mm verifier window, and the 20 mm relative-pose stop fixed. If the branch traces do not support a deterministic candidate-ranking hypothesis, pivot away from the arm-gripper lift fixture before expanding the cohort. Keep all results `SIMULATION_ONLY` until there is independent physical evidence.
+Next: implement a separately named, one-shot SIMULATION_ONLY probe-feasibility experiment using the exact v4 low-load UR5e 21003:3 physical input. Keep the official expected-refusal record, scoring, physical inputs, collision proof, registered 20 N wrench caps, and abort-and-reobserve behavior unchanged. The exploratory harness may authorize only the planned 8 mm probe under a simulation-scoped grant and must stop after the first measurement or any guard abort. Record whether wrench evidence narrows the support-friction interval and the object-motion residual. Keep benchmark labels out of the reasoning request, do not count this as benchmark success, and do not reclassify the v4 refusal from this single screen.
 
 ## Replay
 

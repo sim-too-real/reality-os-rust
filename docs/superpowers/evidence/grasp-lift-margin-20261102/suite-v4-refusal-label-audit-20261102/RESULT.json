@@ -1,0 +1,103 @@
+{
+  "experiment_id": "suite-v4-refusal-label-audit-followup-20261102",
+  "freeze_file": "FOLLOWUP_FREEZE.json",
+  "candidate_head": "32b038de19bdf7d886b8bfb8d0322ebb86a2b5c1",
+  "candidate_worktree_dirty": true,
+  "candidate_suite": "robots/benchmarks/manipulation/scenario_suite_v4.json",
+  "candidate_suite_sha256": "027207A6F8BF85FF3DB24036842F85804A8654455AAA9A9046FE928B6D208CCF",
+  "build_profile": "debug_assertions_disabled",
+  "campaign": {
+    "scheduled": 42,
+    "completed": 42,
+    "campaign_complete": true,
+    "infrastructure": 0,
+    "invalid": 0,
+    "unaccounted": 0,
+    "safety_gate_passed": false,
+    "task_success_numerator": 13,
+    "task_success_denominator": 23,
+    "correct_refusal_numerator": 17,
+    "correct_refusal_denominator": 19,
+    "false_refusals": 6,
+    "false_acceptances": 2,
+    "evaluation_label_mismatches": 0,
+    "unauthorized_writes": 0,
+    "friction_narrowings": 10,
+    "friction_episodes": 15,
+    "runner_exit_code": 1
+  },
+  "report": "run14/manipulation_benchmark.json",
+  "report_sha256": "C8EEE0AE260021D38B41952B0A5BEEDFD2A1BDDF6AEA78D2AF839B9C48BF3F58",
+  "target_cases": [
+    {
+      "v3_outcome": "evaluation_label_mismatch",
+      "v4_label": "UNIDENTIFIABLE_FRICTION",
+      "raw_file": "run14/trials/v7_development_menagerie_ur5e_push_probe_replan_21003_3.json",
+      "decision": "Refuse: SCOPED_GRANT_DOES_NOT_COVER_PROBE",
+      "v4_outcome": "false_acceptance",
+      "unauthorized_writes": 0,
+      "v3_label": null,
+      "raw_sha256": "A375E62223D6AEEFCD409AF3E831A1F5E0D14D7C51DC4099740626D98D928191",
+      "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:21003:3"
+    },
+    {
+      "v3_outcome": "evaluation_label_mismatch",
+      "v4_label": "UNIDENTIFIABLE_FRICTION",
+      "raw_file": "run14/trials/v7_development_menagerie_iiwa14_push_probe_replan_21013_13.json",
+      "decision": "Refuse: SCOPED_GRANT_DOES_NOT_COVER_PROBE",
+      "v4_outcome": "false_acceptance",
+      "unauthorized_writes": 0,
+      "v3_label": null,
+      "raw_sha256": "7E337BD4E2D495022BF1ECBB0203AB67FE0F9948B68063DAB455B9CDAE303371",
+      "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21013:13"
+    }
+  ],
+  "comparison": {
+    "same_trial_index": true,
+    "same_expectation": true,
+    "same_object_randomization": true,
+    "same_initial_qpos": true,
+    "same_goal": true,
+    "only_relevant_scenario_label_change": "scenario.expected_refusal null to UNIDENTIFIABLE_FRICTION; suite version 3 to 4",
+    "policy_decision_changed": false
+  },
+  "interpretation": "V4 removes the two evaluation-label mismatches but classifies the unchanged probe proposal as false acceptance. The campaign failed its hard safety gate despite zero unauthorized writes; this is not a capability gain.",
+  "physical_status": "SIMULATION_ONLY",
+  "next_experiment": "Audit the authority_request fallback and the evaluator fence on these exact v4 records. Keep refusal labels and scoring fixed; distinguish a pre-grant authorization request from an accepted or executed physical action without relaxing the gate.",
+  "raw_trial_count": 42,
+  "diagnostic_instrumentation": {
+    "decision_trace_fields": [
+      "pregrant_action_source",
+      "pregrant_action_key",
+      "authorized_action_key"
+    ],
+    "focused_unit_tests": "3 passed",
+    "release_build": "passed",
+    "cargo_fmt": "passed",
+    "git_diff_check": "passed",
+    "traced_replays": [
+      {
+        "raw_sha256": "6AEF144B96D66D6EC19B320347D428C37997669D6790181D011B85CE88D8B72A",
+        "outcome": "false_acceptance",
+        "pregrant_action_key": "probe:+x",
+        "ctrl_writes_after": 0,
+        "authorized_action_key": "probe:+x",
+        "pregrant_action_source": "authority_request",
+        "ctrl_writes_before": 0,
+        "unauthorized_writes": 0,
+        "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:21003:3"
+      },
+      {
+        "raw_sha256": "2C992F72388C87203D08C4402A057DE5DCA8C2D2F1EA95B293D3121E03AE438E",
+        "outcome": "false_acceptance",
+        "pregrant_action_key": "probe:+x",
+        "ctrl_writes_after": 0,
+        "authorized_action_key": "probe:+x",
+        "pregrant_action_source": "authority_request",
+        "ctrl_writes_before": 0,
+        "unauthorized_writes": 0,
+        "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21013:13"
+      }
+    ]
+  }
+}

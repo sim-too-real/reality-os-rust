@@ -563,9 +563,21 @@ pub fn run_benchmark_trial(
             ));
         }
         let preview = reasoner.consider_excluding(&request, &blocked_action_keys);
+        let (pregrant_action_source, pregrant_action_key) = pregrant_action_metadata(
+            preview
+                .executable
+                .as_ref()
+                .map(|step| step.action_key.as_str()),
+            preview
+                .authority_request
+                .as_ref()
+                .map(|step| step.action_key.as_str()),
+        );
         episode.decision_audits.push(format!(
-            "decision={:?};support_friction_interval={:?};candidates={}",
+            "decision={:?};pregrant_action_source={};pregrant_action_key={};support_friction_interval={:?};candidates={}",
             preview.decision,
+            pregrant_action_source,
+            pregrant_action_key.unwrap_or("none"),
             belief
                 .entry(PhysicalParameter::SupportFriction)
                 .and_then(|entry| entry.empirical_interval),
@@ -610,6 +622,9 @@ pub fn run_benchmark_trial(
             ));
         };
         let action_key = frozen.action_key.clone();
+        if let Some(audit) = episode.decision_audits.last_mut() {
+            audit.push_str(&format!(";authorized_action_key={action_key}"));
+        }
         if trial.expectation == TrialExpectation::ExpectedRefusal {
             // The evaluator fence keeps the action out of the simulator.
             // A probe on an unlabeled positive scenario is a label mismatch.
@@ -3527,6 +3542,19 @@ fn ensure_robot_prefix(
     Ok(())
 }
 
+fn pregrant_action_metadata<'a>(
+    executable_action_key: Option<&'a str>,
+    authority_request_action_key: Option<&'a str>,
+) -> (&'static str, Option<&'a str>) {
+    if let Some(action_key) = executable_action_key {
+        ("executable", Some(action_key))
+    } else if let Some(action_key) = authority_request_action_key {
+        ("authority_request", Some(action_key))
+    } else {
+        ("none", None)
+    }
+}
+
 /// Probe authorization on a positive scenario that the stratum still marked
 /// `ExpectedRefusal`. This is an evaluation-label mismatch, not a physical
 /// write and not a proved goal push.
@@ -4515,5 +4543,31 @@ mod audit_summary_tests {
         assert!(episode.wrench_minimum_margin.expect("episode margin") <= first_margin);
         assert!(episode.wrench_max_sample_age_s.expect("episode age") >= first_age);
         assert!(episode.wrench_max_inter_sample_gap_s.expect("episode gap") >= first_gap);
+    }
+}
+
+#[cfg(test)]
+mod pregrant_action_audit_tests {
+    use super::pregrant_action_metadata;
+
+    #[test]
+    fn executable_step_is_recorded_before_a_pending_authority_request() {
+        assert_eq!(
+            pregrant_action_metadata(Some("push:+x"), Some("probe:+x")),
+            ("executable", Some("push:+x"))
+        );
+    }
+
+    #[test]
+    fn pending_probe_is_recorded_as_an_authority_request() {
+        assert_eq!(
+            pregrant_action_metadata(None, Some("probe:+x")),
+            ("authority_request", Some("probe:+x"))
+        );
+    }
+
+    #[test]
+    fn missing_pregrant_action_is_recorded_explicitly() {
+        assert_eq!(pregrant_action_metadata(None, None), ("none", None));
     }
 }
