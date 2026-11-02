@@ -68,9 +68,19 @@ The command does not start MuJoCo or step a simulator. It validates every
 sample, recomputes the measurement digest, reruns `infer_support_friction` from
 the saved measurement, and rejects a mismatch with the stored inference. Use
 the source revision and semantics-source hash in `FREEZE.json` when selecting
-the implementation for a later replay. This is an offline recomputation using
-the repository's verifier implementation; a separately implemented estimator
-is a stronger cross-implementation check and should be reported as such.
+the implementation for a later replay.
+
+For an independent implementation, run the standard-library Python reference
+described in
+[`2026-11-03-independent-probe-interval-reference.md`](2026-11-03-independent-probe-interval-reference.md):
+
+```powershell
+python crates/verify/probe_interval_reference.py "<path-to-PROBE_MEASUREMENT_SIDECAR.json>"
+```
+
+It recomputes the archived slip-onset update and no-intended-contact refusal
+without importing or invoking the Rust verifier. Other record branches fail
+closed until separately implemented and tested.
 
 ## Archived examples
 

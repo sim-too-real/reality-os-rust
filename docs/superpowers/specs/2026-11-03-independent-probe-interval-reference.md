@@ -33,6 +33,19 @@ The checked records are the already frozen `23023:17` and `23024:17` sidecars.
 No simulator replay, new trial, physical actuation, purchase, or external
 contact is in scope.
 
+Run the independent reference with Python 3.10 or later and no installed
+packages:
+
+```powershell
+python crates/verify/probe_interval_reference.py "<path-to-PROBE_MEASUREMENT_SIDECAR.json>"
+```
+
+It emits JSON with its own format identity. The Rust CLI remains useful for its
+broader branch coverage; the Python reference currently supports simulation
+records with complete pose/contact traces, a valid slip-onset update, or the
+no-intended-contact refusal. Other origins, modes, and refusal reasons are
+explicitly unsupported and return a failure status.
+
 ## Acceptance
 
 - A standard-library Python command consumes the existing sidecar directly and
@@ -46,6 +59,8 @@ contact is in scope.
   interval, and an incomplete or altered contact trace.
 - Unknown schema versions, modes, or unsupported no-inference reasons are
   rejected; no input mutation or simulator invocation occurs.
+- The Python module imports no Rust verifier and launches no simulator or
+  subprocess.
 
 ## Maintenance
 

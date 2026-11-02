@@ -377,5 +377,9 @@ sidecars: it recomputed the recorded `SlipOnset` interval for the former and
 `NoInference(NoIntendedContact)` for the latter. No simulator was started.
 Both freeze records' `push_probe.rs` SHA-256 matched the source file used for
 this replay (`6444cab400e6407ddf4ff7a6cd019fbc3719b43f29c73a24fe92c95d0abbd80c`).
+The independent standard-library Python reference also replayed both sidecars
+and matched their frozen inference results; its implementation, tamper tests,
+source hashes, and machine-readable outputs are recorded in
+[`probe-interval-reference-replay-20261103/RESULTS.json`](../probe-interval-reference-replay-20261103/RESULTS.json).
 
 Next: select a distinct bottleneck for the next cycle; do not run another seed under the same probe setup. Any follow-up replay must test a new falsifiable intervention chosen from this contrast and be frozen before one run. Never rerun 23024:17, 23023:17, 23022:17, or any frozen, pilot, or public input.

@@ -39,11 +39,11 @@
 - `verify_sidecar(sidecar: dict) -> dict` returns a summary for supported records or raises `ReplayError`.
 - CLI: `python crates/verify/probe_interval_reference.py SIDECAR.json` prints JSON; invalid/unsupported evidence exits nonzero.
 
-- [ ] Write tests for both archived sidecars, raw sample tampering, stored interval tampering, and incomplete contact trace.
-- [ ] Run `python -m unittest discover -s crates/verify/tests -p test_probe_interval_reference.py` and confirm the missing implementation fails.
-- [ ] Implement independent digest packing, trace/contact validation, common gate checks, and slip-onset force/normal interval arithmetic.
-- [ ] Re-run `python -m unittest discover -s crates/verify/tests -p test_probe_interval_reference.py` and the CLI for `23023:17` and `23024:17`; compare with frozen Rust outputs and literal acceptance values.
-- [ ] Run `git diff --check`; inspect that the Python implementation neither imports nor calls the Rust verifier or simulator.
+- [x] Write tests for both archived sidecars, raw sample tampering, stored interval tampering, and incomplete contact trace.
+- [x] Run `python -m unittest discover -s crates/verify/tests -p test_probe_interval_reference.py` and confirm the missing implementation fails.
+- [x] Implement independent digest packing, trace/contact validation, common gate checks, and slip-onset force/normal interval arithmetic.
+- [x] Re-run `python -m unittest discover -s crates/verify/tests -p test_probe_interval_reference.py` and the CLI for `23023:17` and `23024:17`; compare with frozen Rust outputs and literal acceptance values.
+- [x] Run `git diff --check`; inspect that the Python implementation neither imports nor calls the Rust verifier or simulator.
 
 ### Task 2: Evidence and mission checkpoint
 
@@ -54,6 +54,12 @@
 - Update: `docs/superpowers/evidence/probe-interval-reference-replay-20261103/RESULTS.json`
 
 - [ ] Record exact inputs, independent outputs, artifact hashes, verification commands, and limitations.
-- [ ] Confirm all safety and release flags remain false.
+- [x] Confirm all safety and release flags remain false in the freeze.
 - [ ] Commit and push the finished Reality OS implementation, then commit and push the First Principles mission-state update.
 - [ ] Fetch both canonical repos and confirm local `main` equals `origin/main` with clean worktrees.
+
+## Review ledger
+
+- Read-only self-review found and fixed malformed-field exception leakage, invalid pose-array exception leakage, and start-pose validation drift from the Rust trace contract. Regression tests cover each case. No blocking issue remains within the frozen v1 scope.
+- Final focused suite: 11 tests expected after the last start-pose regression was added; rerun after commit before recording the result artifact.
+- The one final fresh reviewer checkpoint is covered by a read-only self-review because this run has no subagent reviewer available.
