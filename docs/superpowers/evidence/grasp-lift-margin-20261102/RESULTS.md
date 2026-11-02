@@ -365,4 +365,17 @@ Artifact SHA-256 values (raw files):
 - PROBE_MEASUREMENT_SIDECAR.json: 7A1AE0F8300ED5690A2E58185238C3F0B4D0D0ECD803D1DA521194D3C50D2462
 - OFFLINE_VERIFY.json: B8583E3FF1102220BD8949BD3891B7A5CEED12D963717F4EA3DB5AD88BEDA2B3
 
+## Reusable probe interval replay format
+
+Use the versioned `realityos.probe_measurement_sidecar` JSON together with the
+frozen source and offline verification records to recompute future friction
+intervals from the exact typed measurement inputs. The field contract, replay
+command, versioning rule, and limits are documented in
+[`2026-11-03-probe-interval-replay-evidence-contract.md`](../../specs/2026-11-03-probe-interval-replay-evidence-contract.md).
+The offline CLI was rerun against the preserved `23023:17` and `23024:17`
+sidecars: it recomputed the recorded `SlipOnset` interval for the former and
+`NoInference(NoIntendedContact)` for the latter. No simulator was started.
+Both freeze records' `push_probe.rs` SHA-256 matched the source file used for
+this replay (`6444cab400e6407ddf4ff7a6cd019fbc3719b43f29c73a24fe92c95d0abbd80c`).
+
 Next: select a distinct bottleneck for the next cycle; do not run another seed under the same probe setup. Any follow-up replay must test a new falsifiable intervention chosen from this contrast and be frozen before one run. Never rerun 23024:17, 23023:17, 23022:17, or any frozen, pilot, or public input.
