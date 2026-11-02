@@ -1,0 +1,49 @@
+{
+  "experiment_id": "unidentifiable-probe-feasibility-20261102",
+  "candidate_head": "f5fb0a92a8d2e7b3f2350a6a66b2135093fad726",
+  "question": "Does the already-proved 8 mm +x probe on the exact v4 low-load UR5e case yield strict wrench evidence that narrows the support-friction interval?",
+  "hypothesis": "The registered simulation probe on the 0.17568 kg, friction 0.38857 case will produce an evidence-derived support-friction interval narrower than the prior [0.05, 0.8], without a wrench abort or unauthorized write.",
+  "official_reference": {
+    "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:21003:3",
+    "suite_version": 4,
+    "stratum": "expected_refusal",
+    "scenario_expected_refusal": "UNIDENTIFIABLE_FRICTION",
+    "raw_trial": "suite-v4-refusal-label-audit-20261102/run14/trials/v7_development_menagerie_ur5e_push_probe_replan_21003_3.json",
+    "raw_trial_sha256": "A375E62223D6AEEFCD409AF3E831A1F5E0D14D7C51DC4099740626D98D928191"
+  },
+  "counterfactual": {
+    "single_case_only": true,
+    "evaluator_expectation": "expected_success for this exploratory runner only",
+    "official_label_preserved": "expected_refusal",
+    "scenario_expected_refusal_preserved": "UNIDENTIFIABLE_FRICTION",
+    "reasoning_request_must_not_receive_evaluator_labels": true,
+    "max_existing_episode_actions": 6
+  },
+  "probe": {
+    "action_key": "probe:+x",
+    "probe_stroke_m": 0.008,
+    "support_friction_prior": [
+      0.05,
+      0.8
+    ],
+    "wrench_caps": [
+      20,
+      20,
+      30,
+      2,
+      2,
+      2
+    ],
+    "abort_contract": "abort-and-reobserve",
+    "simulation_only": true
+  },
+  "acceptance": [
+    "Record whether strict wrench evidence produces an inference interval and posterior narrower than [0.05, 0.8].",
+    "No unauthorized writes.",
+    "Any force-monitor or geometry stop remains a stop; do not alter limits, grants, labels, or scoring.",
+    "Do not treat counterfactual task outcome as official benchmark success."
+  ],
+  "stopping_condition": "Run only UR5e seed 21003 index 3 once. Preserve the complete episode and stop; do not expand to other embodiments or seeds.",
+  "command": "cargo test -p realityos-verify --test manipulation_benchmark exploratory_v4_low_load_ur5e_probe_feasibility -- --ignored --exact --nocapture",
+  "result_file": "RESULT.json"
+}

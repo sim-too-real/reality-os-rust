@@ -28,6 +28,7 @@ use realityos_verify::normalize::{DerivedInterface, JointRecord, RobotManifest};
 use realityos_verify::runner::load_and_normalize;
 use realityos_verify::semantics_map::embodiment_from_manifest;
 use serde_json::Value;
+use sha2::Digest;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
@@ -5517,6 +5518,101 @@ fn iiwa_expected_success_probe_tracks_retract_under_wrench_monitor() {
             assert!(abort.triggering_sensor_orientation.is_some());
         }
     }
+}
+
+#[test]
+#[ignore = "SIMULATION_ONLY exploratory counterfactual; run explicitly"]
+fn exploratory_v4_low_load_ur5e_probe_feasibility() {
+    let _mujoco_guard = lock_mujoco_test();
+    let evidence_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/superpowers/evidence/grasp-lift-margin-20261102");
+    let experiment_dir = evidence_root.join("unidentifiable-probe-feasibility-20261102");
+    let official_trial_path = evidence_root.join(
+        "suite-v4-refusal-label-audit-20261102/run14/trials/v7_development_menagerie_ur5e_push_probe_replan_21003_3.json",
+    );
+    let raw_trial = std::fs::read(&official_trial_path).expect("frozen official v4 source trial");
+    let official_record: Value =
+        serde_json::from_slice(&raw_trial).expect("official source trial JSON");
+    let freeze: Value = serde_json::from_slice(
+        &std::fs::read(experiment_dir.join("FREEZE.json")).expect("experiment freeze record"),
+    )
+    .expect("experiment freeze JSON");
+    let source_sha256 = sha2::Sha256::digest(&raw_trial)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+        .to_uppercase();
+    assert_eq!(
+        source_sha256,
+        freeze["official_reference"]["raw_trial_sha256"]
+            .as_str()
+            .expect("frozen raw input hash")
+    );
+
+    let mut trial: realityos_verify::manipulation_benchmark::ResolvedBenchmarkTrial =
+        serde_json::from_value(official_record["trial"].clone()).expect("frozen v4 resolved trial");
+    assert_eq!(
+        trial.trial_id,
+        "v7:development:menagerie_ur5e:push_probe_replan:21003:3"
+    );
+    assert_eq!(trial.seed, 21003);
+    assert_eq!(trial.index, 3);
+    assert_eq!(trial.expectation, TrialExpectation::ExpectedRefusal);
+    assert_eq!(
+        trial.scenario.expected_refusal.as_deref(),
+        Some("UNIDENTIFIABLE_FRICTION")
+    );
+    let official_expectation = trial.expectation;
+    let scenario_refusal_reason = trial.scenario.expected_refusal.clone();
+
+    // The sole intervention is a local evaluator expectation override. The v4
+    // scenario refusal reason and every physical/randomized input stay frozen.
+    trial.expectation = TrialExpectation::ExpectedSuccess;
+    trial.paired_trial_key = Some(paired_trial_key(&trial).expect("counterfactual paired key"));
+    let bundle = ur5e_bundle();
+    let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+        .expect("one exploratory simulation episode");
+    assert_eq!(episode.unauthorized_writes, 0);
+    assert!(episode.reasoning_request_audits.iter().all(|audit| {
+        !audit.contains("ExpectedSuccess")
+            && !audit.contains("ExpectedRefusal")
+            && !audit.contains("expected_success")
+            && !audit.contains("expected_refusal")
+    }));
+
+    let result = serde_json::json!({
+        "experiment_id": "unidentifiable-probe-feasibility-20261102",
+        "classification": "exploratory_simulation_only_not_benchmark_scored",
+        "source_sha256": source_sha256,
+        "official_source_record": official_record,
+        "official_expectation": official_expectation,
+        "scenario_expected_refusal": scenario_refusal_reason,
+        "counterfactual_expectation": trial.expectation,
+        "counterfactual_trial": trial,
+        "complete_episode": episode,
+        "observed": {
+            "inference_interval": episode.wrench_inference_interval,
+            "inference_reason": episode.wrench_inference_reason,
+            "prior_support_friction_interval": episode.prior_support_friction_interval,
+            "posterior_support_friction_interval": episode.posterior_support_friction_interval,
+            "wrench_abort": episode.wrench_abort,
+            "wrench_abort_result": episode.wrench_abort_result,
+            "actions": episode.actions,
+            "ctrl_writes_before": episode.ctrl_writes_before,
+            "ctrl_writes_after": episode.ctrl_writes_after,
+            "unauthorized_writes": episode.unauthorized_writes,
+            "outcome": episode.outcome,
+            "failure_cause": episode.failure_cause,
+        }
+    });
+    let serialized = serde_json::to_vec_pretty(&result).expect("exploratory result serializes");
+    if let Some(output_path) = std::env::var_os("REALITYOS_EXPLORATORY_OUTPUT") {
+        std::fs::write(output_path, &serialized).expect("persist complete exploratory result");
+    }
+    println!(
+        "EXPLORATORY_SIMULATION_RESULT={}",
+        String::from_utf8_lossy(&serialized)
+    );
 }
 
 #[test]
