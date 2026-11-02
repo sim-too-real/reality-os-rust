@@ -1,0 +1,87 @@
+{
+  "schema": "realityos.independent_probe_interval_reference_freeze/v1",
+  "experiment_id": "independent_probe_interval_reference_20261103_v1",
+  "frozen_at_local": "2026-11-03T01:30:06+05:30",
+  "classification": "OFFLINE_SIMULATION_EVIDENCE_RECOMPUTATION_ONLY",
+  "baseline": {
+    "repository": "reality-os-rust",
+    "branch": "main",
+    "commit": "c484da795ceb529656314cf98a43d65230a51fba",
+    "rust_cli": "verify-probe-measurement-sidecar",
+    "23023_17": {
+      "sidecar_sha256": "2BB3A8FA881AD41AEECE6BC7D573BCD3C640A91E30B438BBE08D33CC70D39E62",
+      "stored_inference": "Updated(SlipOnset)",
+      "stored_interval": [0.47116960533439084, 0.5484442443281078]
+    },
+    "23024_17": {
+      "sidecar_sha256": "7A1AE0F8300ED5690A2E58185238C3F0B4D0D0ECD803D1DA521194D3C50D2462",
+      "stored_inference": "NoInference(NoIntendedContact)",
+      "stored_interval": [0.05, 0.8]
+    },
+    "semantics_source_sha256": "6444CAB400E6407DDF4FF7A6CD019FBC3719B43F29C73A24FE92C95D0ABBD80C",
+    "observation_source_sha256": "B61BA5750F7D044D77FA78D6CB9CB784B975C0A0CD9858CE13241705DF4D08A9"
+  },
+  "hypothesis": "A separately implemented Python replay of saved sidecars will match the Rust friction inference on the frozen positive and no-contact records, while detecting tampered evidence and outputs.",
+  "approaches_ranked": [
+    {
+      "rank": 1,
+      "approach": "independent Python reference replay",
+      "potential_capability_gain": "medium",
+      "generality": "high for supported friction-inference paths",
+      "technical_risk": "medium: arithmetic and digest implementation can drift",
+      "cost": "low",
+      "practical_usefulness": "high for auditability; does not improve physical performance",
+      "executable_now": true,
+      "reason": "Usable raw evidence already exists; no simulator or external dependency is needed."
+    },
+    {
+      "rank": 2,
+      "approach": "source-to-design causal experiment",
+      "potential_capability_gain": "high",
+      "generality": "medium",
+      "technical_risk": "medium",
+      "cost": "medium: authoritative data and review are prerequisites",
+      "practical_usefulness": "high if a sourced constraint changes a decision",
+      "executable_now": false,
+      "reason": "No authoritative sourced constraint currently changes the selected design."
+    },
+    {
+      "rank": 3,
+      "approach": "new architecture-search cohort",
+      "potential_capability_gain": "very high",
+      "generality": "high",
+      "technical_risk": "high",
+      "cost": "medium",
+      "practical_usefulness": "high if it yields a new feasible architecture",
+      "executable_now": false,
+      "reason": "The next search remains gated on applicable frame evidence and prior neighborhoods have low yield."
+    }
+  ],
+  "acceptance": {
+    "23023_17_inference": "Updated(SlipOnset)",
+    "23023_17_interval_abs_tolerance": 1e-12,
+    "23023_17_expected_interval": [0.47116960533439084, 0.5484442443281078],
+    "23024_17_inference": "NoInference(NoIntendedContact)",
+    "23024_17_expected_interval": [0.05, 0.8],
+    "reject_raw_sample_mutation_with_stale_digest": true,
+    "reject_output_interval_mutation": true,
+    "reject_incomplete_or_mutated_contact_trace": true,
+    "unsupported_schema_or_inference_fails_closed": true
+  },
+  "resource_limits": {
+    "simulation_runs": 0,
+    "external_network_requests": 0,
+    "physical_actions": 0,
+    "purchases": 0,
+    "fabrication": 0,
+    "external_contacts": 0,
+    "per_test_timeout_s": 30,
+    "stop": "Stop after frozen archived-record and tamper acceptance checks; do not add another trial."
+  },
+  "authority": {
+    "admission_status": "NOT_ADMITTED",
+    "metal": false,
+    "shop_release": false,
+    "viewport_admits": false
+  }
+}
