@@ -1,0 +1,115 @@
+{
+  "schema": "realityos.independent_probe_interval_reference_results/v1",
+  "experiment_id": "independent_probe_interval_reference_20261103_v1",
+  "status": "PASS; OFFLINE_REFERENCE_REPLAY_ONLY; NOT_ADMITTED",
+  "classification": "OFFLINE_SIMULATION_EVIDENCE_RECOMPUTATION_ONLY",
+  "repository": "reality-os-rust",
+  "branch": "main",
+  "implementation_commit": "ab8039b6aba387ac52111ddffbb436e292ede6e3",
+  "baseline_commit": "c484da795ceb529656314cf98a43d65230a51fba",
+  "freeze": {
+    "path": "docs/superpowers/evidence/probe-interval-reference-replay-20261103/FREEZE.json",
+    "sha256": "3FCE8681B6E0926D0880E858038C2A0FE25C3750E775BCF2C50E6AF171DE9598"
+  },
+  "implementation": {
+    "path": "crates/verify/probe_interval_reference.py",
+    "sha256": "86B09AF3F8A2DE96118D957429482428BBDE300E4C7629AE9A41F4CEFA9C6A0C",
+    "tests_path": "crates/verify/tests/test_probe_interval_reference.py",
+    "tests_sha256": "CB189EA6326F6451D9D53223B0249930354022BA2C5952C18F04241F8493E9D3",
+    "dependencies": "Python 3.10.11 standard library only",
+    "rust_or_simulator_import_or_subprocess": false
+  },
+  "inputs": {
+    "23023:17": {
+      "path": "docs/superpowers/evidence/grasp-lift-margin-20261102/fresh-out-of-cohort-per-step-contact-trace-v1-23023-20261103/PROBE_MEASUREMENT_SIDECAR.json",
+      "sha256": "2BB3A8FA881AD41AEECE6BC7D573BCD3C640A91E30B438BBE08D33CC70D39E62",
+      "trial_digest": "4bc50dc3a8307acd662e4ae881d261939a4e0804d498a91176f6d420f5f32cab",
+      "measurement_digest": "7761f9674953bf72a3c408a60d761924e3d5d96f46cd822b22ac52a9daf0e9cf"
+    },
+    "23024:17": {
+      "path": "docs/superpowers/evidence/grasp-lift-margin-20261102/fresh-out-of-cohort-per-step-contact-trace-v1-23024-20261103/PROBE_MEASUREMENT_SIDECAR.json",
+      "sha256": "7A1AE0F8300ED5690A2E58185238C3F0B4D0D0ECD803D1DA521194D3C50D2462",
+      "trial_digest": "78173999d1cecf77d1e26dc661b4b0433a3d4c2cd5a360afa2c92cd166c8feae",
+      "measurement_digest": "c1b7291677cb68aca57a1c8559cb59c689e4d7b64e353283a2c40ddb83189bd4"
+    }
+  },
+  "verification": {
+    "unit_command": "python -m unittest discover -s crates/verify/tests -p test_probe_interval_reference.py -v",
+    "unit_result": "PASS; 11 tests; 19.698 s",
+    "syntax_command": "python -m py_compile crates/verify/probe_interval_reference.py crates/verify/tests/test_probe_interval_reference.py",
+    "syntax_result": "PASS",
+    "diff_check": "PASS",
+    "cli_exit_codes": {
+      "23023:17": 0,
+      "23024:17": 0
+    },
+    "expected_red_checks": [
+      "Initial test-first run failed because the reference module did not yet exist.",
+      "Malformed missing capture timestamp and non-object pose sample regressions first raised uncaught TypeError and AttributeError, then passed after conversion to ReplayError."
+    ]
+  },
+  "results": {
+    "23023:17": {
+      "status": "PASS",
+      "inference": "Updated(SlipOnset)",
+      "prior_interval": [
+        0.05,
+        0.8
+      ],
+      "recomputed_interval": [
+        0.47116960533439084,
+        0.5484442443281078
+      ],
+      "absolute_tolerance": 1e-12,
+      "first_xy_motion_bracket_s": [
+        22.71199999999829,
+        22.71399999999829
+      ],
+      "wrench_samples": 5232,
+      "pose_samples": 5231,
+      "rust_verifier_match": true
+    },
+    "23024:17": {
+      "status": "PASS",
+      "inference": "NoInference(NoIntendedContact)",
+      "prior_interval": [
+        0.05,
+        0.8
+      ],
+      "recomputed_interval": [
+        0.05,
+        0.8
+      ],
+      "first_xy_motion_bracket_s": null,
+      "wrench_samples": 7893,
+      "pose_samples": 7892,
+      "rust_verifier_match": true
+    }
+  },
+  "source_hashes_at_freeze": {
+    "crates/semantics/src/push_probe.rs": "6444CAB400E6407DDF4FF7A6CD019FBC3719B43F29C73A24FE92C95D0ABBD80C",
+    "crates/semantics/src/observation.rs": "B61BA5750F7D044D77FA78D6CB9CB784B975C0A0CD9858CE13241705DF4D08A9"
+  },
+  "limitations": [
+    "Only the supported simulation-origin v1 complete-trace slip-onset update and no-intended-contact refusal branches are implemented.",
+    "Other origins, modes, incomplete evidence, and inference reasons fail closed as unsupported or invalid.",
+    "This is a cross-implementation software check over archived sidecars, not physical validation, evidence authenticity, benchmark improvement, admission, or release evidence."
+  ],
+  "resources_and_authority": {
+    "simulator_runs": 0,
+    "external_network_requests": 0,
+    "physical_actions": 0,
+    "purchases": 0,
+    "fabrication": 0,
+    "external_contacts": 0,
+    "admission_status": "NOT_ADMITTED",
+    "metal": false,
+    "shop_release": false,
+    "viewport_admits": false
+  },
+  "review": {
+    "type": "read-only self-review",
+    "result": "No blocking issue found within the frozen supported v1 scope.",
+    "reviewer_note": "A separate fresh reviewer was unavailable in this run; the implementation and failure paths were reviewed locally and exercised by the focused suite."
+  }
+}

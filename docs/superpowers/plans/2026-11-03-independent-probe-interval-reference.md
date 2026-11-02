@@ -53,7 +53,7 @@
 - Modify: `C:/projects/first-principles/docs/research/mission_state.json`
 - Update: `docs/superpowers/evidence/probe-interval-reference-replay-20261103/RESULTS.json`
 
-- [ ] Record exact inputs, independent outputs, artifact hashes, verification commands, and limitations.
+- [x] Record exact inputs, independent outputs, artifact hashes, verification commands, and limitations.
 - [x] Confirm all safety and release flags remain false in the freeze.
 - [ ] Commit and push the finished Reality OS implementation, then commit and push the First Principles mission-state update.
 - [ ] Fetch both canonical repos and confirm local `main` equals `origin/main` with clean worktrees.
@@ -61,5 +61,5 @@
 ## Review ledger
 
 - Read-only self-review found and fixed malformed-field exception leakage, invalid pose-array exception leakage, and start-pose validation drift from the Rust trace contract. Regression tests cover each case. No blocking issue remains within the frozen v1 scope.
-- Final focused suite: 11 tests expected after the last start-pose regression was added; rerun after commit before recording the result artifact.
+- Final focused suite on implementation commit `ab8039b6aba387ac52111ddffbb436e292ede6e3`: 11 passed; syntax compilation and both CLI replays passed.
 - The one final fresh reviewer checkpoint is covered by a read-only self-review because this run has no subagent reviewer available.
