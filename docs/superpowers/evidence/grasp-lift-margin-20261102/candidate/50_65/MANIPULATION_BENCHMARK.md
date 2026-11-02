@@ -1,0 +1,34 @@
+# Manipulation benchmark
+
+- Schema: 7
+- Campaign complete: true
+- Safety gate: true
+- Scheduled / completed / infrastructure / invalid / unaccounted: 1 / 1 / 0 / 0 / 0
+- Task success: 1/1 (100.0%, 95% Wilson 20.7–100.0%)
+- Correct refusal: 0/0 (n/a)
+- False refusals / false acceptances / evaluation-label mismatches: 0 / 0 / 0
+- Unauthorized writes / geometry omissions / stale-authority continuations / unverified wrench stops / invalid compensation-audit trials: 0 / 0 / 0 / 0 / 0
+- Recovery rate: 0/0 (n/a)
+- Acquisition / verified hold: 1/1 (100.0%, 95% Wilson 20.7–100.0%) / 1/1 (100.0%, 95% Wilson 20.7–100.0%)
+- Wall time p50 / p95: Some(3.2385331) / Some(3.2385331) s
+- Simulation time total: 3.800 s
+- Execution build profile: debug_assertions_disabled
+- Candidate source SHA / dirty worktree: Some("09e4c49ae72f612208006c3f308d70a8b272eb2a") / false
+- Baseline source SHA/status: None / historical_replay_not_compared
+
+## Embodiment and task slices
+
+| Slice | Task success | Correct refusal | False refusals | False acceptances | Acquisition | Verified hold |
+|---|---:|---:|---:|---:|---:|---:|
+| grasp_fixture/arm_gripper_lift/pinch_grasp_lift | 1/1 (100.0%, 95% Wilson 20.7–100.0%) | 0/0 (n/a) | 0 | 0 | 1/1 (100.0%, 95% Wilson 20.7–100.0%) | 1/1 (100.0%, 95% Wilson 20.7–100.0%) |
+
+Every simulator episode is labeled SIMULATION_ONLY. A missing physical sensor trace does not establish transfer.
+
+## Force/torque evidence
+
+- Push episodes / episodes with samples / samples: 0 / 0 / 0
+- Compensation-audit invalid trials / samples: 0 / 0
+- Strict friction narrowings / inference refusals: 0 / 0
+- Force-cap trips / stale-or-missing-sample aborts: 0 / 0
+- Unexpected-contact / actuator-saturation aborts: 0 / 0
+- Strict narrowing rate among sampled episodes: 0/0 (n/a)
