@@ -5900,12 +5900,34 @@ fn first_action_preflight_verifier_rejects_legacy_and_binds_replay_observation()
 #[ignore = "SIMULATION_ONLY preflight initializes MuJoCo but performs no control writes or physics steps"]
 fn first_action_preflight_selects_without_control_write_or_simulation_step() {
     let _mujoco_guard = lock_mujoco_test();
-    let seed = 23019;
-    let index = 17;
+    let seed = std::env::var("REALITYOS_PROBE_TRACE_SEED")
+        .expect("REALITYOS_PROBE_TRACE_SEED is required")
+        .parse::<u64>()
+        .expect("seed is an unsigned integer");
+    let index = std::env::var("REALITYOS_PROBE_TRACE_INDEX")
+        .expect("REALITYOS_PROBE_TRACE_INDEX is required")
+        .parse::<u32>()
+        .expect("index is an unsigned integer");
     let trial = resolve_v4_ur5e_probe_trial(seed, index);
+    let suite = scenario_suite_v4();
+    assert!(
+        !suite.pilot_seeds.contains(&seed),
+        "seed is in the pilot cohort"
+    );
+    assert!(
+        !suite.public_seeds.contains(&seed),
+        "seed is in the public cohort"
+    );
+    assert!(
+        !suite
+            .historical_seed_ranges
+            .iter()
+            .any(|range| { seed >= range.start_inclusive && seed < range.end_exclusive }),
+        "seed is in a historical public or pilot cohort"
+    );
     assert_eq!(trial.expectation, TrialExpectation::ExpectedSuccess);
-    assert!(!(21_000..=21_019).contains(&seed));
-    assert!(!(22_000..=22_099).contains(&seed));
+    assert_eq!(trial.seed, seed);
+    assert_eq!(trial.index, index);
     let evidence_dir = required_path_env("REALITYOS_FIRST_ACTION_PREFLIGHT_EVIDENCE_DIR");
     assert!(
         evidence_dir.is_dir(),
