@@ -1803,7 +1803,7 @@ fn prove_arm_path_with_ik_mode(
             };
 
             let (finger_q, lift_states, maximum_lift_m, lift_trajectory_digest) = if grasp {
-                const BOUNDED_GRASP_LIFT_M: f64 = 0.023;
+                const BOUNDED_GRASP_LIFT_M: f64 = 0.025;
                 const MAXIMUM_GRASP_LIFT_M: f64 = 0.025;
                 let finger_q = close_fingers(model, request)?;
                 let lift_target = add3(candidate.target_xyz, [0.0, 0.0, BOUNDED_GRASP_LIFT_M]);

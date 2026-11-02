@@ -4133,6 +4133,132 @@ fn historical_v5_trial_upgrades_for_current_execution_without_changing_inputs() 
 }
 
 #[test]
+fn historical_grasp_failure_reaches_verified_hold_within_frozen_limits() {
+    let _mujoco_guard = lock_mujoco_test();
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let trial_dir = repo_root
+        .join("docs/superpowers/evidence/manipulation-reliability-generality-8f090bc/trials");
+    let fixtures = [
+        (
+            "v5_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_6_21.json",
+            false,
+        ),
+        (
+            "v5_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_26_41.json",
+            false,
+        ),
+        (
+            "v5_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_30_45.json",
+            false,
+        ),
+        (
+            "v5_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_50_65.json",
+            false,
+        ),
+        (
+            "v5_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_0_15.json",
+            true,
+        ),
+        (
+            "v5_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21_36.json",
+            true,
+        ),
+    ];
+    let bundle = grasp_fixture_bundle();
+    for (file, was_historical_success) in fixtures {
+        let record: BenchmarkTrialRecord = serde_json::from_slice(
+            &std::fs::read(trial_dir.join(file)).expect("frozen historical grasp trial exists"),
+        )
+        .expect("historical trial record parses");
+        let legacy = record
+            .trial
+            .expect("historical record contains its resolved input");
+        let historical_episode = record
+            .episode
+            .as_ref()
+            .expect("frozen historical trial has its original outcome");
+        assert_eq!(
+            legacy.expectation,
+            TrialExpectation::ExpectedSuccess,
+            "{file}"
+        );
+        if was_historical_success {
+            assert_eq!(historical_episode.outcome, TrialOutcome::Success, "{file}");
+        } else {
+            assert_eq!(
+                historical_episode.outcome,
+                TrialOutcome::ActionFailed,
+                "{file}"
+            );
+            assert_eq!(
+                historical_episode.failure_cause,
+                Some(FailureCause::HoldNotVerified),
+                "{file}"
+            );
+            assert!(
+                historical_episode
+                    .grasp_verifier_evidence
+                    .iter()
+                    .any(|item| item == "bounded_vertical_lift_not_verified"),
+                "{file}: {:?}",
+                historical_episode.grasp_verifier_evidence
+            );
+            assert!(
+                historical_episode
+                    .grasp_verifier_evidence
+                    .iter()
+                    .any(|item| item == "object_follows_ee"),
+                "{file}: {:?}",
+                historical_episode.grasp_verifier_evidence
+            );
+        }
+
+        let trial = upgrade_trial_for_current_execution(legacy)
+            .expect("historical scenario upgrades without resampling");
+        let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+            .unwrap_or_else(|error| panic!("current runner executes {file}: {error}"));
+
+        assert_eq!(episode.unauthorized_writes, 0, "{file}");
+        assert_eq!(
+            episode.expectation,
+            TrialExpectation::ExpectedSuccess,
+            "{file}"
+        );
+        assert_eq!(episode.acquisition_verified, Some(true), "{file}");
+        assert_eq!(
+            episode.hold_verified,
+            Some(true),
+            "{file}: {:?}",
+            episode.grasp_verifier_evidence
+        );
+        assert_eq!(episode.outcome, TrialOutcome::Success, "{file}");
+        let ee_lift = episode
+            .grasp_ee_lift_m
+            .expect("hold verifier measures the end effector lift");
+        assert!(
+            (0.02..=0.025).contains(&ee_lift[2]),
+            "{file}: ee_lift={ee_lift:?}"
+        );
+        assert!(
+            episode
+                .grasp_object_follow_residual_m
+                .is_some_and(|residual| residual <= 0.005),
+            "{file}: follow_residual={:?}",
+            episode.grasp_object_follow_residual_m
+        );
+        assert!(
+            episode.grasp_contact_audits.iter().all(|audit| {
+                audit.force_available
+                    && audit
+                        .normal_force_n
+                        .is_some_and(|force| force <= 1.95 + 1e-6)
+            }),
+            "{file}"
+        );
+    }
+}
+
+#[test]
 fn schema_v6_scoring_and_execution_require_persisted_pair_keys() {
     let mut trial = synthetic_trial(9076, 15, TrialExpectation::ExpectedSuccess);
     trial.paired_trial_key = None;
