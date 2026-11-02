@@ -1245,15 +1245,25 @@ fn finish_probe(
     error_before: f64,
 ) -> ProvedAction {
     let margin = joint_margin(model, &request.scene.joint_names, &solved.q_contact);
-    let gap = sweep_gap(
+    let gap = match sweep_gap(
         request.scene.object_center,
         request.scene.object_half,
         candidate.direction,
         candidate.stroke_m,
         &request.scene.obstacles,
-    );
-    let Some(gap) = gap else {
-        return rejected(PUSH_FAMILY, candidate, "PROBE_SWEEP_BLOCKED", mechanics);
+    ) {
+        SweepGapStatus::Clear(gap) => gap,
+        SweepGapStatus::UnsupportedDirection => {
+            return rejected(
+                PUSH_FAMILY,
+                candidate,
+                "PROBE_SWEEP_DIRECTION_UNSUPPORTED",
+                mechanics,
+            );
+        }
+        SweepGapStatus::Blocked => {
+            return rejected(PUSH_FAMILY, candidate, "PROBE_SWEEP_BLOCKED", mechanics);
+        }
     };
     if margin <= 0.0 {
         return rejected(
@@ -3269,15 +3279,22 @@ fn aabb_separated(a_c: [f64; 3], a_h: [f64; 3], b_c: [f64; 3], b_h: [f64; 3]) ->
     (0..3).any(|axis| (a_c[axis] - b_c[axis]).abs() > a_h[axis] + b_h[axis] + 1e-9)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SweepGapStatus {
+    Clear(f64),
+    UnsupportedDirection,
+    Blocked,
+}
+
 fn sweep_gap(
     center: [f64; 3],
     half: [f64; 3],
     direction: [f64; 3],
     distance: f64,
     obstacles: &[NamedBox],
-) -> Option<f64> {
+) -> SweepGapStatus {
     if direction.iter().filter(|value| value.abs() > 1e-6).count() != 1 {
-        return None;
+        return SweepGapStatus::UnsupportedDirection;
     }
     let mut swept_center = center;
     let mut swept_half = half;
@@ -3294,7 +3311,7 @@ fn sweep_gap(
             obstacle.center,
             obstacle.half_extents,
         ) {
-            return None;
+            return SweepGapStatus::Blocked;
         }
         for axis in 0..3 {
             let separation = (swept_center[axis] - obstacle.center[axis]).abs()
@@ -3306,9 +3323,9 @@ fn sweep_gap(
         }
     }
     if gap.is_finite() {
-        Some(gap)
+        SweepGapStatus::Clear(gap)
     } else {
-        Some(distance.max(0.0))
+        SweepGapStatus::Clear(distance.max(0.0))
     }
 }
 
@@ -3878,6 +3895,40 @@ mod tests {
                 .unwrap()
                 .empirical_interval,
             Some([0.2, 0.7])
+        );
+    }
+
+    #[test]
+    fn rotated_probe_sweep_is_distinct_from_an_obstacle_collision() {
+        let yaw = -7.523292422447527e-5_f64;
+        let (model, mut rotated_request) = benchmark_scene();
+        rotated_request.scene.object_quat = [(yaw * 0.5).cos(), 0.0, 0.0, (yaw * 0.5).sin()];
+        let rotated_report = PhysicalReasoner::new(model.clone()).consider(&rotated_request);
+        let rotated_probe = rotated_report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.action_key == "probe:+x")
+            .expect("rotated probe candidate");
+        assert_eq!(
+            rotated_probe.status, "PROBE_SWEEP_DIRECTION_UNSUPPORTED",
+            "the saved slight yaw is unsupported geometry, not a proven collision"
+        );
+
+        let blocked = sweep_gap(
+            [0.20, 0.0, 0.0],
+            [0.02, 0.02, 0.02],
+            [1.0, 0.0, 0.0],
+            0.008,
+            &[NamedBox::aabb(
+                "probe-wall",
+                [0.233, 0.0, 0.0],
+                [0.006, 0.05, 0.02],
+            )],
+        );
+        assert_eq!(
+            blocked,
+            SweepGapStatus::Blocked,
+            "an actual swept-volume intersection must remain blocked"
         );
     }
 

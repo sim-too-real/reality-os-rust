@@ -1890,6 +1890,7 @@ fn synthetic_episode(
         simulation_time_s: 1.0,
         decision_audits: Vec::new(),
         reasoning_request_audits: Vec::new(),
+        initial_observation_evidence: None,
         wrench_sensor_profile_digest: None,
         wrench_compensation_digest: None,
         wrench_inference_compensation_digest: None,
@@ -5773,7 +5774,7 @@ fn empty_probe_measurement_sidecar_reports_absent_records() {
 }
 
 #[test]
-fn first_action_preflight_verifier_binds_frozen_trial_and_replay() {
+fn first_action_preflight_verifier_rejects_legacy_and_binds_replay_observation() {
     let evidence_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../docs/superpowers/evidence/grasp-lift-margin-20261102")
         .join("probe-action-selection-preflight-v1-ur5e-23019-20261102");
@@ -5797,9 +5798,70 @@ fn first_action_preflight_verifier_binds_frozen_trial_and_replay() {
     preflight
         .verify_for_trial(&trial)
         .expect("preflight binds to the resolved trial");
+    assert!(
+        preflight.verify_matches_episode(&episode).is_err(),
+        "legacy frozen replay lacks a replay-side initial-observation record"
+    );
+
+    // This synthetic replay record exercises the replay observation-binding
+    // contract. The archived result above remains unchanged and is not
+    // upgraded or represented as if it contained this evidence.
+    let hash_observation_json = |observation_json: &str| {
+        let digest = sha2::Sha256::digest(observation_json.as_bytes());
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let observation_json = serde_json::to_string(&preflight.initial_observation)
+        .expect("serialize initial observation JSON");
+    assert_eq!(
+        hash_observation_json(&observation_json),
+        preflight.initial_observation_sha256,
+        "the sidecar hashes the exact compact observation JSON bytes"
+    );
+    let observation_time = preflight.initial_observation["time"]
+        .as_f64()
+        .expect("initial observation time");
+    let mut replay_json = result["complete_episode"].clone();
+    replay_json["initial_observation_evidence"] = serde_json::json!({
+        "format": "realityos.replay_initial_observation_evidence",
+        "schema_version": 1,
+        "observation_json": observation_json,
+        "observation_sha256": preflight.initial_observation_sha256,
+        "simulator_time_s": observation_time,
+    });
+    let episode: realityos_verify::manipulation_benchmark::BenchmarkEpisode =
+        serde_json::from_value(replay_json.clone()).expect("synthetic replay episode");
     preflight
         .verify_matches_episode(&episode)
-        .expect("preflight binds to replay request and authority fields");
+        .expect("synthetic replay record binds the same observation and time");
+
+    let mut changed_observation = preflight.initial_observation.clone();
+    let changed_time = observation_time + 0.01;
+    changed_observation["time"] = serde_json::json!(changed_time);
+    let changed_observation_json =
+        serde_json::to_string(&changed_observation).expect("serialize changed observation JSON");
+    replay_json["initial_observation_evidence"]["observation_json"] =
+        serde_json::json!(changed_observation_json);
+    replay_json["initial_observation_evidence"]["observation_sha256"] =
+        serde_json::json!(hash_observation_json(&changed_observation_json));
+    replay_json["initial_observation_evidence"]["simulator_time_s"] =
+        serde_json::json!(changed_time);
+    let changed_episode: realityos_verify::manipulation_benchmark::BenchmarkEpisode =
+        serde_json::from_value(replay_json).expect("changed replay episode");
+    assert!(
+        preflight.verify_matches_episode(&changed_episode).is_err(),
+        "a self-consistent replay observation at a different time must not match preflight"
+    );
+
+    let mut wrong_preflight_time = preflight.clone();
+    wrong_preflight_time.simulation_time_before_s += 0.01;
+    wrong_preflight_time.simulation_time_after_s += 0.01;
+    assert!(
+        wrong_preflight_time.verify().is_err(),
+        "preflight simulator time must equal the time in its initial observation"
+    );
 
     let mut nonzero_but_unchanged = preflight.clone();
     nonzero_but_unchanged.control_writes_before = 1;

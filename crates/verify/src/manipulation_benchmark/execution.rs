@@ -199,6 +199,10 @@ pub struct BenchmarkEpisode {
     /// Debug-only serialized request payloads for auditing the label boundary.
     /// The request type has no expectation, verifier truth, or outcome fields.
     pub reasoning_request_audits: Vec<String>,
+    /// Raw initial replay observation and its recomputable digest. Legacy episodes
+    /// deserialize without this optional field but cannot satisfy preflight binding.
+    #[serde(default)]
+    pub initial_observation_evidence: Option<ReplayInitialObservationEvidenceV1>,
     #[serde(default)]
     pub wrench_sensor_profile_digest: Option<String>,
     #[serde(default)]
@@ -278,6 +282,73 @@ pub struct ProbeMeasurementRecordV1 {
     pub inference: FrictionInferenceResult,
     pub posterior_support_friction_interval: Option<[f64; 2]>,
     pub measurement: PushProbeMeasurement,
+}
+
+/// Replay-side record for independently checking which observation preceded
+/// the first request and at what simulator time it was captured.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayInitialObservationEvidenceV1 {
+    pub format: String,
+    pub schema_version: u32,
+    /// JSON text; the digest is computed over these exact UTF-8 bytes.
+    pub observation_json: String,
+    pub observation_sha256: String,
+    pub simulator_time_s: f64,
+}
+
+impl ReplayInitialObservationEvidenceV1 {
+    fn capture(observation: &Value) -> Result<Self, BenchmarkError> {
+        let simulator_time_s = observation
+            .get("time")
+            .and_then(Value::as_f64)
+            .filter(|time| time.is_finite() && *time >= 0.0)
+            .ok_or_else(|| {
+                BenchmarkError::InvalidTrial(
+                    "initial replay observation is missing a valid simulator time".into(),
+                )
+            })?;
+        let observation_json = serde_json::to_string(observation)?;
+        Ok(Self {
+            format: "realityos.replay_initial_observation_evidence".into(),
+            schema_version: 1,
+            observation_sha256: sha256_hex(observation_json.as_bytes()),
+            observation_json,
+            simulator_time_s,
+        })
+    }
+
+    fn parsed_observation(&self) -> Result<Value, String> {
+        serde_json::from_str(&self.observation_json)
+            .map_err(|error| format!("replay initial-observation JSON is invalid: {error}"))
+    }
+
+    /// Recompute the stored-byte digest and verify its simulator-time field.
+    pub fn verify(&self) -> Result<(), String> {
+        if self.format != "realityos.replay_initial_observation_evidence"
+            || self.schema_version != 1
+        {
+            return Err("invalid replay initial-observation evidence identity".into());
+        }
+        let observation = self.parsed_observation()?;
+        if !observation.is_object() {
+            return Err("replay initial observation is not an object".into());
+        }
+        if self.observation_sha256 != sha256_hex(self.observation_json.as_bytes()) {
+            return Err("replay initial-observation digest mismatch".into());
+        }
+        let observation_time_s = observation
+            .get("time")
+            .and_then(Value::as_f64)
+            .filter(|time| time.is_finite() && *time >= 0.0)
+            .ok_or_else(|| "replay initial observation has no valid simulator time".to_owned())?;
+        if !self.simulator_time_s.is_finite()
+            || self.simulator_time_s < 0.0
+            || self.simulator_time_s.to_bits() != observation_time_s.to_bits()
+        {
+            return Err("replay initial-observation simulator time mismatch".into());
+        }
+        Ok(())
+    }
 }
 
 /// Evidence for the first action selected by the normal benchmark runtime,
@@ -364,6 +435,22 @@ impl FirstActionPreflightV1 {
         {
             return Err("first-action preflight observation digest mismatch".into());
         }
+        let observation_time_s = self
+            .initial_observation
+            .get("time")
+            .and_then(Value::as_f64)
+            .filter(|time| time.is_finite() && *time >= 0.0)
+            .ok_or_else(|| {
+                "first-action preflight observation has no valid simulator time".to_owned()
+            })?;
+        if !self.simulation_time_before_s.is_finite()
+            || self.simulation_time_before_s < 0.0
+            || self.simulation_time_before_s.to_bits() != observation_time_s.to_bits()
+        {
+            return Err(
+                "first-action preflight simulator time does not match its observation".into(),
+            );
+        }
         if self.reasoning_request_audit.is_empty() || self.decision_audit.is_empty() {
             return Err("first-action preflight is missing its request or decision audit".into());
         }
@@ -430,7 +517,7 @@ impl FirstActionPreflightV1 {
         Ok(())
     }
 
-    /// Verify that a later episode used the same initial request and authority.
+    /// Verify a later episode's initial observation, request, decision, and authority.
     pub fn verify_matches_episode(&self, episode: &BenchmarkEpisode) -> Result<(), String> {
         self.verify()?;
         if self.trial_id != episode.trial_id
@@ -438,6 +525,20 @@ impl FirstActionPreflightV1 {
             || self.paired_trial_key != episode.paired_trial_key
         {
             return Err("first-action preflight does not match the replay trial".into());
+        }
+        let replay_observation = episode
+            .initial_observation_evidence
+            .as_ref()
+            .ok_or_else(|| "replay is missing its initial-observation evidence".to_owned())?;
+        replay_observation.verify()?;
+        if replay_observation.parsed_observation()? != self.initial_observation
+            || replay_observation.observation_sha256 != self.initial_observation_sha256
+            || replay_observation.simulator_time_s.to_bits()
+                != self.simulation_time_before_s.to_bits()
+        {
+            return Err(
+                "first-action preflight initial observation does not match the replay".into(),
+            );
         }
         if episode.reasoning_request_audits.first() != Some(&self.reasoning_request_audit) {
             return Err("first-action preflight request does not match the replay".into());
@@ -482,8 +583,13 @@ impl FirstActionPreflightV1 {
 }
 
 fn json_sha256(value: &Value) -> Result<String, serde_json::Error> {
-    let digest = Sha256::digest(serde_json::to_vec(value)?);
-    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+    let bytes = serde_json::to_vec(value)?;
+    Ok(sha256_hex(&bytes))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 impl ProbeMeasurementSidecarV1 {
@@ -727,6 +833,7 @@ fn run_benchmark_trial_inner(
         .map_err(|error| BenchmarkError::Simulation(format!("control_snapshot:{error}")))?
         .1;
     let initial_state = state_payload(&mut worker)?;
+    let initial_observation_evidence = ReplayInitialObservationEvidenceV1::capture(&initial_state)?;
     let object_start_xyz = body_position(&initial_state, &trial.scenario.object_id)?;
     let goal_error_start_m = xy_distance(object_start_xyz, trial.goal_xyz);
     let friction_oracle_input = (trial.task == BenchmarkTask::PinchGraspLift)
@@ -784,6 +891,7 @@ fn run_benchmark_trial_inner(
         simulation_time_s: 0.0,
         decision_audits: Vec::new(),
         reasoning_request_audits: Vec::new(),
+        initial_observation_evidence: Some(initial_observation_evidence),
         wrench_sensor_profile_digest: wrench_profile
             .map(SimulationWrenchSensorProfile::digest)
             .transpose()
@@ -5117,5 +5225,35 @@ mod pregrant_action_audit_tests {
     #[test]
     fn missing_pregrant_action_is_recorded_explicitly() {
         assert_eq!(pregrant_action_metadata(None, None), ("none", None));
+    }
+}
+
+#[cfg(test)]
+mod replay_initial_observation_evidence_tests {
+    use super::ReplayInitialObservationEvidenceV1;
+    use serde_json::json;
+
+    #[test]
+    fn replay_observation_record_hashes_exact_json_bytes_and_binds_time() {
+        let observation = json!({
+            "time": 0.125,
+            "nan": false,
+            "qpos": [0.1, -0.2],
+        });
+        let evidence = ReplayInitialObservationEvidenceV1::capture(&observation)
+            .expect("capture valid observation");
+        evidence.verify().expect("evidence verifies");
+        assert_eq!(
+            evidence.observation_json,
+            serde_json::to_string(&observation).expect("compact JSON")
+        );
+
+        let mut wrong_time = evidence.clone();
+        wrong_time.simulator_time_s = 0.25;
+        assert!(wrong_time.verify().is_err());
+
+        let mut changed_json_bytes = evidence;
+        changed_json_bytes.observation_json.push(' ');
+        assert!(changed_json_bytes.verify().is_err());
     }
 }

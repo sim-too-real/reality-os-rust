@@ -197,3 +197,28 @@ The focused offline regression reads the already frozen TRIAL_INPUT.json, PREFLI
 ## Remaining observation-to-request verification limit
 
 The post-run review found one boundary that the current receipt API does not independently close. The verifier hashes the embedded preflight observation and matches the request audit, decision, and authority fields against the saved replay, but the episode does not contain a separate digest of its initial raw observation. The source path constructs the request and receipt from the same current observation, and the frozen source hashes preserve that implementation; however, this is source-backed linkage rather than a replay-side observation-to-request recomputation. No stronger claim is made. Add a replay-side initial-observation digest or an equivalent explicit binding, with an offline observation/time mutation test, before treating this receipt format as fully portable proof of that relationship.
+
+## Offline follow-up: rotated sweep classification and replay observation binding
+
+**Classification:** Foundational verification improvement; no benchmark gain or new task result. **Status:** `SIMULATION_ONLY`; admission and release flags remain unchanged.
+
+The saved `-7.5232924e-5 rad` yaw produces a non-axis-aligned probe direction. `sweep_gap` now distinguishes `UnsupportedDirection` from an actual `Blocked` intersection. `finish_probe` reports `PROBE_SWEEP_DIRECTION_UNSUPPORTED` for the saved direction and retains `PROBE_SWEEP_BLOCKED` for a swept-volume intersection. The regression uses the saved yaw and directly verifies an intersecting AABB remains blocked; it does not claim rotated geometry is collision-checked.
+
+New episodes record `initial_observation_evidence` v1: compact observation JSON in `observation_json`, lowercase SHA-256 of those exact UTF-8 bytes, and `simulator_time_s`. The verifier parses the JSON, recomputes the digest, checks the time against the embedded observation, then matches the parsed observation, digest, and time to preflight before checking the first request and authority. Preflight verification also requires its simulator time to match its observation. This is hash consistency and record binding, not a signature or an authenticity claim.
+
+The existing raw wrench/pose measurement sidecar remains unchanged and continues to carry the samples used to recompute friction intervals. The new record binds the episode’s first request to its replay-side starting observation.
+
+The archived 23019:17 `RESULT.json` has no replay-side observation record. It remains unchanged and the new strict `verify_matches_episode` rejects it for this missing evidence. A synthetic contract fixture exercises a matching record and a self-consistent altered-time record; it is not presented as evidence from the archived run. No frozen, pilot, or public trial was rerun, and no new benchmark experiment was executed.
+
+Verification:
+
+- Red-green rotated sweep regression: failed before the change with `PROBE_SWEEP_BLOCKED`; passed after the change (1/1), including the actual-collision block assertion.
+- `cargo test -p realityos-verify --lib manipulation_benchmark::execution::replay_initial_observation_evidence_tests::replay_observation_record_hashes_exact_json_bytes_and_binds_time -- --exact --nocapture` — 1 passed.
+- `cargo test -p realityos-verify --test manipulation_benchmark first_action_preflight_verifier_rejects_legacy_and_binds_replay_observation -- --exact --nocapture` — 1 passed after an expected RED against the legacy verifier.
+- `cargo test -p realityos-semantics --lib` — 366 passed.
+- `cargo check -p realityos-verify`, `cargo fmt --all -- --check`, and `git diff --check` — passed.
+- The parallel `cargo test -p realityos-verify --lib` run was not clean: it reported failures in `authority_restart_replay_has_zero_write_delta`, `command_lease_expires_to_safe_state`, `command_replay_and_wrong_identity_refuse`, `geometry_cross_exam_against_mujoco_or_skip`, `mode_b_select_on_arm_gripper_is_precise_or_distinct_refusal`, `mesh_bundle_loads_from_unrelated_cwd`, `body_backed_ee_fk_matches_mujoco`, `hinge_slide_free_ball_topology`, `evidence_serialization_roundtrip`, and `matrix_never_drops_jobs`, followed by a stack overflow in `mode_b_v2_without_maneuver_does_not_invent_xyz_targets`. Isolated reruns of the geometry cross-exam, IK residual, serialization, and stack-overflow test all passed; causes for the remaining parallel-run failures are unclassified. A serial full-library rerun was stopped during a simulation-backed goal-directed case and has no final suite result.
+
+That full library run also rewrote `external_holdout_postfix_score.json` with a different random sample. The file was restored to `HEAD` and is not part of this change.
+
+Next: prepare a separate out-of-cohort freeze for one replay using this record format, only after choosing and verifying a new input. Keep all listed frozen, pilot, and public inputs untouched.
