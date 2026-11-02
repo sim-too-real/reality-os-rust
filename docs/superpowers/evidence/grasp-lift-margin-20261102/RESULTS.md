@@ -89,6 +89,20 @@ Exactly one `probe:+x` action ran. It produced a simulation wrench measurement (
 
 The lift-target screen remains limited to one simulated gripper fixture; the target change did not improve fresh success above 3/7. The v4 label audit covered 14/20 pilot seeds and failed its hard safety gate. These experiments support no physical claims.
 
+## Probe measurement sidecar
+
+The selected UR5e probe audit now retains the full inference input in `unidentifiable-probe-feasibility-20261102/PROBE_MEASUREMENT_SIDECAR.json`, separate from the compact episode. It contains the 3,889 samples used by the friction inference plus their sample digests, per-sample sensor transforms and free-space model wrenches with bounds, compensation, motion window, timing limits, contact identity, and friction prior. Its measurement digest matches the episode's `wrench_inference_measurement_digest` (`4b341f3c93252ba3aa2a38c4e22da7d6da7b2929d1fefb8920654642fb355352`); the sidecar SHA-256 is `22768e93f0dec9a5a532230840aaa4a931ccbc78c5cdb99ddd1903a705947f0c`.
+
+Verify the sidecar offline without starting MuJoCo:
+
+```powershell
+cargo run --release -p realityos-verify --bin realityos-verify -- verify-probe-measurement-sidecar "docs/superpowers/evidence/grasp-lift-margin-20261102/unidentifiable-probe-feasibility-20261102/PROBE_MEASUREMENT_SIDECAR.json"
+```
+
+The command checks each sample digest, recomputes the complete measurement digest, reruns support-friction inference, and prints the interval and sample count. This remains simulation-only evidence and does not change the official expected-refusal label or admission state.
+
+The sidecar writer never overwrites an existing artifact. For another explicit exploratory replay, set `REALITYOS_EXPLORATORY_SIDECAR_OUTPUT` to a new output path before running the frozen test.
+
 Next selection: inspect the inference calculation and decision threshold offline against the preserved measurement and audit trail. The measured lower bound (`0.09195`) remains below the `0.3` action requirement, explaining why this probe did not justify a push. Do not expand this frozen single-case experiment into another embodiment or seed, and do not relax the probe, force, or authorization limits.
 
 ## Replay

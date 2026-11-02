@@ -5,7 +5,9 @@ use realityos_reasoner_bridge::SimulationAdmission;
 use realityos_semantics::observation::{
     wrench_sample_digest, JointStateSample, ObservationFrame, SensorObservation, WrenchSample,
 };
-use realityos_semantics::push_probe::WrenchCompensation;
+use realityos_semantics::push_probe::{
+    infer_support_friction, FrictionInferenceResult, WrenchCompensation,
+};
 use realityos_semantics::sensor::{SensorClass, WrenchSampleOrigin};
 use realityos_verify::bundle::RobotBundle;
 use realityos_verify::manipulation_benchmark::wrench_sensor::{
@@ -29,7 +31,7 @@ use realityos_verify::runner::load_and_normalize;
 use realityos_verify::semantics_map::embodiment_from_manifest;
 use serde_json::Value;
 use sha2::Digest;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 // Full Menagerie mesh compilation is memory-heavy; serialize MuJoCo cases so
@@ -134,7 +136,31 @@ fn free_space_model_profile(sensor_frame: &str) -> SimulationWrenchSensorProfile
 fn run_test_benchmark_trial(
     bundle: &RobotBundle,
     trial: &realityos_verify::manipulation_benchmark::ResolvedBenchmarkTrial,
+    admission: SimulationAdmission,
+) -> Result<
+    realityos_verify::manipulation_benchmark::BenchmarkEpisode,
+    realityos_verify::manipulation_benchmark::BenchmarkError,
+> {
+    run_test_benchmark_trial_with_sidecar(bundle, trial, admission, None)
+}
+
+fn run_test_benchmark_trial_with_probe_measurement_sidecar(
+    bundle: &RobotBundle,
+    trial: &realityos_verify::manipulation_benchmark::ResolvedBenchmarkTrial,
+    admission: SimulationAdmission,
+    sidecar_path: &Path,
+) -> Result<
+    realityos_verify::manipulation_benchmark::BenchmarkEpisode,
+    realityos_verify::manipulation_benchmark::BenchmarkError,
+> {
+    run_test_benchmark_trial_with_sidecar(bundle, trial, admission, Some(sidecar_path))
+}
+
+fn run_test_benchmark_trial_with_sidecar(
+    bundle: &RobotBundle,
+    trial: &realityos_verify::manipulation_benchmark::ResolvedBenchmarkTrial,
     mut admission: SimulationAdmission,
+    sidecar_path: Option<&Path>,
 ) -> Result<
     realityos_verify::manipulation_benchmark::BenchmarkEpisode,
     realityos_verify::manipulation_benchmark::BenchmarkError,
@@ -166,12 +192,22 @@ fn run_test_benchmark_trial(
     } else {
         None
     };
-    realityos_verify::manipulation_benchmark::run_benchmark_trial(
-        bundle,
-        &resolved_trial,
-        admission,
-        profile.as_ref(),
-    )
+    match sidecar_path {
+        Some(path) => realityos_verify::manipulation_benchmark::
+            run_benchmark_trial_with_probe_measurement_sidecar(
+                bundle,
+                &resolved_trial,
+                admission,
+                profile.as_ref(),
+                path,
+            ),
+        None => realityos_verify::manipulation_benchmark::run_benchmark_trial(
+            bundle,
+            &resolved_trial,
+            admission,
+            profile.as_ref(),
+        ),
+    }
 }
 
 fn monitor_sample(profile: &SimulationWrenchSensorProfile, wrench: [f64; 6]) -> WrenchSample {
@@ -5570,8 +5606,16 @@ fn exploratory_v4_low_load_ur5e_probe_feasibility() {
     trial.expectation = TrialExpectation::ExpectedSuccess;
     trial.paired_trial_key = Some(paired_trial_key(&trial).expect("counterfactual paired key"));
     let bundle = ur5e_bundle();
-    let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
-        .expect("one exploratory simulation episode");
+    let sidecar_path = std::env::var_os("REALITYOS_EXPLORATORY_SIDECAR_OUTPUT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| experiment_dir.join("PROBE_MEASUREMENT_SIDECAR.json"));
+    let episode = run_test_benchmark_trial_with_probe_measurement_sidecar(
+        &bundle,
+        &trial,
+        simulation_admission(120.0),
+        &sidecar_path,
+    )
+    .expect("one exploratory simulation episode with full probe measurement sidecar");
     assert_eq!(episode.unauthorized_writes, 0);
     assert!(episode.reasoning_request_audits.iter().all(|audit| {
         !audit.contains("ExpectedSuccess")
@@ -5579,6 +5623,49 @@ fn exploratory_v4_low_load_ur5e_probe_feasibility() {
             && !audit.contains("expected_success")
             && !audit.contains("expected_refusal")
     }));
+
+    let sidecar_bytes = std::fs::read(&sidecar_path).expect("full probe measurement sidecar");
+    let sidecar: realityos_verify::manipulation_benchmark::ProbeMeasurementSidecarV1 =
+        serde_json::from_slice(&sidecar_bytes).expect("measurement sidecar JSON");
+    assert!(
+        sidecar.verify().is_ok(),
+        "sidecar verification: {:?}",
+        sidecar.verify()
+    );
+    assert_eq!(sidecar.trial_id, trial.trial_id);
+    assert_eq!(
+        sidecar.trial_digest,
+        trial_digest(&trial).expect("counterfactual trial digest")
+    );
+    assert_eq!(sidecar.measurements.len(), 1);
+    let record = &sidecar.measurements[0];
+    assert_eq!(record.action_key, "probe:+x");
+    assert_eq!(
+        record.measurement_digest,
+        episode
+            .wrench_inference_measurement_digest
+            .as_deref()
+            .expect("episode binds probe measurement digest")
+    );
+    assert_eq!(record.measurement.digest(), record.measurement_digest);
+    assert_eq!(
+        infer_support_friction(&record.measurement),
+        record.inference
+    );
+    assert!(!record.measurement.samples.is_empty());
+    assert_eq!(
+        record.inference,
+        FrictionInferenceResult::Updated {
+            interval: episode
+                .wrench_inference_interval
+                .expect("inference interval"),
+            mode: realityos_semantics::push_probe::FrictionInferenceMode::Sticking,
+        }
+    );
+    let sidecar_sha256 = sha2::Sha256::digest(&sidecar_bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
 
     let result = serde_json::json!({
         "experiment_id": "unidentifiable-probe-feasibility-20261102",
@@ -5590,6 +5677,13 @@ fn exploratory_v4_low_load_ur5e_probe_feasibility() {
         "counterfactual_expectation": trial.expectation,
         "counterfactual_trial": trial,
         "complete_episode": episode,
+        "probe_measurement_sidecar": {
+            "file": sidecar_path.file_name().and_then(|name| name.to_str()),
+            "sha256": sidecar_sha256,
+            "measurement_digest": record.measurement_digest,
+            "sample_count": record.measurement.samples.len(),
+            "verification": "digest and friction interval recomputed from structured measurement"
+        },
         "observed": {
             "inference_interval": episode.wrench_inference_interval,
             "inference_reason": episode.wrench_inference_reason,

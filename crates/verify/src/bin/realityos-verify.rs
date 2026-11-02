@@ -28,12 +28,16 @@ fn main() {
     let mut args = env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() {
         eprintln!(
-            "usage: realityos-verify [inspect <id>|qualify <id>|episode <id> <family> <seed>|matrix|milestone|foundation-reach]"
+            "usage: realityos-verify [inspect <id>|qualify <id>|episode <id> <family> <seed>|matrix|milestone|foundation-reach|verify-probe-measurement-sidecar <SIDECAR.json>]"
         );
         std::process::exit(2);
     }
     let cmd = args.remove(0);
-    if cmd != "manipulation-benchmark" && require_mujoco_env() {
+    if !matches!(
+        cmd.as_str(),
+        "manipulation-benchmark" | "verify-probe-measurement-sidecar"
+    ) && require_mujoco_env()
+    {
         let _ = ensure_mujoco_or_skip();
     }
     match cmd.as_str() {
@@ -43,11 +47,60 @@ fn main() {
         "matrix" | "milestone" => milestone(),
         "foundation-reach" => foundation_reach(),
         "manipulation-benchmark" => manipulation_benchmark(&args),
+        "verify-probe-measurement-sidecar" => verify_probe_measurement_sidecar(&args),
         other => {
             eprintln!("unknown {other}");
             std::process::exit(2);
         }
     }
+}
+
+fn verify_probe_measurement_sidecar(args: &[String]) {
+    if args.len() != 1 {
+        eprintln!("usage: realityos-verify verify-probe-measurement-sidecar <SIDECAR.json>");
+        std::process::exit(2);
+    }
+    let path = PathBuf::from(&args[0]);
+    let bytes = fs::read(&path).unwrap_or_else(|error| {
+        eprintln!("cannot read sidecar {}: {error}", path.display());
+        std::process::exit(2);
+    });
+    let sidecar: realityos_verify::manipulation_benchmark::ProbeMeasurementSidecarV1 =
+        serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+            eprintln!("invalid sidecar JSON {}: {error}", path.display());
+            std::process::exit(2);
+        });
+    sidecar.verify().unwrap_or_else(|error| {
+        eprintln!("probe measurement sidecar verification failed: {error}");
+        std::process::exit(1);
+    });
+    let measurements = sidecar
+        .measurements
+        .iter()
+        .map(|record| {
+            serde_json::json!({
+                "action_key": record.action_key,
+                "measurement_digest": record.measurement_digest,
+                "sample_count": record.measurement.samples.len(),
+                "recomputed_inference": record.inference,
+                "prior_support_friction_interval": record.prior_support_friction_interval,
+                "posterior_support_friction_interval": record.posterior_support_friction_interval
+            })
+        })
+        .collect::<Vec<_>>();
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "status": "PASS",
+            "format": sidecar.format,
+            "schema_version": sidecar.schema_version,
+            "trial_id": sidecar.trial_id,
+            "trial_digest": sidecar.trial_digest,
+            "measurement_count": measurements.len(),
+            "measurements": measurements
+        }))
+        .expect("verification summary serializes")
+    );
 }
 
 #[derive(Clone)]

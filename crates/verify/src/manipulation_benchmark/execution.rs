@@ -52,6 +52,9 @@ use realityos_session::grant_covers;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::fs::{self, OpenOptions};
+use std::io::{BufWriter, Write};
+use std::path::Path;
 use std::time::Instant;
 
 const MU_REQUIRED: f64 = 0.3;
@@ -254,13 +257,101 @@ pub struct BenchmarkEpisode {
     pub posterior_support_friction_interval: Option<[f64; 2]>,
 }
 
+/// Complete, opt-in audit data for probe measurements. This is written to a
+/// separate file so the default benchmark episode remains compact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProbeMeasurementSidecarV1 {
+    pub format: String,
+    pub schema_version: u32,
+    pub trial_id: String,
+    pub trial_digest: String,
+    pub paired_trial_key: Option<String>,
+    pub measurements: Vec<ProbeMeasurementRecordV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProbeMeasurementRecordV1 {
+    pub action_key: String,
+    pub measurement_digest: String,
+    pub prior_support_friction_interval: [f64; 2],
+    pub inference: FrictionInferenceResult,
+    pub posterior_support_friction_interval: Option<[f64; 2]>,
+    pub measurement: PushProbeMeasurement,
+}
+
+impl ProbeMeasurementSidecarV1 {
+    /// Check each sample, the full measurement binding, and the inferred interval.
+    pub fn verify(&self) -> Result<(), String> {
+        if self.format != "realityos.probe_measurement_sidecar"
+            || self.schema_version != 1
+            || self.trial_id.trim().is_empty()
+            || self.trial_digest.len() != 64
+            || !self
+                .trial_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || self.measurements.is_empty()
+        {
+            return Err("invalid probe measurement sidecar identity or empty records".into());
+        }
+        for (index, record) in self.measurements.iter().enumerate() {
+            if record.action_key.trim().is_empty() {
+                return Err(format!("measurement record {index} has no action key"));
+            }
+            if record.prior_support_friction_interval != record.measurement.prior_support_friction {
+                return Err(format!(
+                    "measurement record {index} prior interval mismatch"
+                ));
+            }
+            if record.measurement.samples.is_empty() {
+                return Err(format!("measurement record {index} has no samples"));
+            }
+            for (sample_index, sample) in record.measurement.samples.iter().enumerate() {
+                sample.validate().map_err(|error| {
+                    format!("measurement record {index} sample {sample_index}: {error}")
+                })?;
+            }
+            if record.measurement.digest() != record.measurement_digest {
+                return Err(format!("measurement record {index} digest mismatch"));
+            }
+            if infer_support_friction(&record.measurement) != record.inference {
+                return Err(format!("measurement record {index} inference mismatch"));
+            }
+        }
+        Ok(())
+    }
+}
+
 pub fn run_benchmark_trial(
     bundle: &RobotBundle,
     trial: &ResolvedBenchmarkTrial,
     admission: SimulationAdmission,
     wrench_profile: Option<&SimulationWrenchSensorProfile>,
 ) -> Result<BenchmarkEpisode, BenchmarkError> {
+    run_benchmark_trial_inner(bundle, trial, admission, wrench_profile, None)
+}
+
+/// Run a benchmark trial and write complete probe measurement data to a new,
+/// separately named JSON sidecar. The regular `BenchmarkEpisode` stays compact.
+pub fn run_benchmark_trial_with_probe_measurement_sidecar(
+    bundle: &RobotBundle,
+    trial: &ResolvedBenchmarkTrial,
+    admission: SimulationAdmission,
+    wrench_profile: Option<&SimulationWrenchSensorProfile>,
+    sidecar_path: &Path,
+) -> Result<BenchmarkEpisode, BenchmarkError> {
+    run_benchmark_trial_inner(bundle, trial, admission, wrench_profile, Some(sidecar_path))
+}
+
+fn run_benchmark_trial_inner(
+    bundle: &RobotBundle,
+    trial: &ResolvedBenchmarkTrial,
+    admission: SimulationAdmission,
+    wrench_profile: Option<&SimulationWrenchSensorProfile>,
+    sidecar_path: Option<&Path>,
+) -> Result<BenchmarkEpisode, BenchmarkError> {
     let wall = Instant::now();
+    let mut probe_measurement_records = sidecar_path.map(|_| Vec::new());
     if trial.schema_version != BENCHMARK_SCHEMA_VERSION {
         return Err(BenchmarkError::InvalidTrial(format!(
             "schema-v{} trial cannot be executed by schema-v{}",
@@ -967,8 +1058,10 @@ pub fn run_benchmark_trial(
             episode.wrench_precontact_baseline = measurement.precontact_baseline.clone();
             episode.wrench_inference_compensation_digest =
                 Some(inference_compensation_digest(&measurement));
-            episode.wrench_inference_measurement_digest = Some(measurement.digest());
-            match infer_support_friction(&measurement) {
+            let measurement_digest = measurement.digest();
+            episode.wrench_inference_measurement_digest = Some(measurement_digest.clone());
+            let inference = infer_support_friction(&measurement);
+            match inference {
                 FrictionInferenceResult::Updated { interval, mode } => {
                     episode.wrench_inference_interval = Some(interval);
                     episode.wrench_inference_reason = Some(format!("updated:{mode:?}"));
@@ -998,6 +1091,17 @@ pub fn run_benchmark_trial(
                     }
                 }
             }
+            if let Some(records) = probe_measurement_records.as_mut() {
+                records.push(ProbeMeasurementRecordV1 {
+                    action_key: action_key.clone(),
+                    measurement_digest,
+                    prior_support_friction_interval: prior,
+                    inference,
+                    posterior_support_friction_interval: episode
+                        .posterior_support_friction_interval,
+                    measurement,
+                });
+            }
         }
         previous_action_was_probe = is_probe;
         episode.object_end_xyz = object_after;
@@ -1019,7 +1123,44 @@ pub fn run_benchmark_trial(
         episode.outcome = TrialOutcome::ActionFailed;
     }
     episode.unauthorized_writes = 0;
-    finalize(worker, episode, wall)
+    let episode = finalize(worker, episode, wall)?;
+    if let Some(path) = sidecar_path {
+        let sidecar = ProbeMeasurementSidecarV1 {
+            format: "realityos.probe_measurement_sidecar".into(),
+            schema_version: 1,
+            trial_id: trial.trial_id.clone(),
+            trial_digest: trial_digest(trial)?,
+            paired_trial_key: trial.paired_trial_key.clone(),
+            measurements: probe_measurement_records.unwrap_or_default(),
+        };
+        sidecar.verify().map_err(BenchmarkError::InvalidTrial)?;
+        write_probe_measurement_sidecar(path, &sidecar)?;
+    }
+    Ok(episode)
+}
+
+fn write_probe_measurement_sidecar(
+    path: &Path,
+    sidecar: &ProbeMeasurementSidecarV1,
+) -> Result<(), BenchmarkError> {
+    if sidecar.measurements.is_empty() {
+        return Err(BenchmarkError::InvalidTrial(
+            "probe measurement sidecar requested but no probe measurement was produced".into(),
+        ));
+    }
+    let file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    let mut writer = BufWriter::new(file);
+    let result = (|| {
+        serde_json::to_writer_pretty(&mut writer, sidecar)?;
+        writer.write_all(b"\n")?;
+        writer.flush()?;
+        Ok::<(), BenchmarkError>(())
+    })();
+    if result.is_err() {
+        drop(writer);
+        let _ = fs::remove_file(path);
+    }
+    result
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -88,7 +88,7 @@
     "trial_digest": "c78b4e47a3225b6ed63e03333d1a2518a641316278d53af33c6c546bdd8cd844",
     "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:21003:3",
     "unauthorized_writes": 0,
-    "wall_time_s": 59.9564063,
+    "wall_time_s": 61.3863825,
     "wrench_abort": null,
     "wrench_abort_axis": null,
     "wrench_abort_result": null,
@@ -617,6 +617,13 @@
       "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:21003:3"
     },
     "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:21003:3"
+  },
+  "probe_measurement_sidecar": {
+    "file": "PROBE_MEASUREMENT_SIDECAR.json",
+    "measurement_digest": "4b341f3c93252ba3aa2a38c4e22da7d6da7b2929d1fefb8920654642fb355352",
+    "sample_count": 3889,
+    "sha256": "22768e93f0dec9a5a532230840aaa4a931ccbc78c5cdb99ddd1903a705947f0c",
+    "verification": "digest and friction interval recomputed from structured measurement"
   },
   "scenario_expected_refusal": "UNIDENTIFIABLE_FRICTION",
   "source_sha256": "A375E62223D6AEEFCD409AF3E831A1F5E0D14D7C51DC4099740626D98D928191"
