@@ -1,0 +1,83 @@
+{
+  "format": "realityos.probe_contact_trace_offline_verification",
+  "schema_version": 1,
+  "verified_at_local": "2026-11-03T00:46:37.583+05:30",
+  "status": "PASS",
+  "classification": "SIMULATION_ONLY; one exploratory trial; no cohort or physical claim",
+  "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23021:17",
+  "trial_digest": "841fd733ad63bf22930d9953993a603327c8ed115a512b3cee9a8251aa819fee",
+  "source_commit": "a22d944e0ef51017a535f303c86e51a72beb571b",
+  "freeze_commit": "edd865e088aa275e063a877da5869e1490285afc",
+  "artifacts": {
+    "freeze_sha256": "6424E2F72D599418EEB292460A20E1B0FDB964BE73F16C24284A39E009BF82F3",
+    "trial_input_sha256": "46AC4D7C2B3A093D9564BD8755583667747493EF139FAFFAE6E9E53F717E67C6",
+    "preflight_sha256": "033E7A98919540A3FEA4FC57A2C32E0F5BBC56018079AB1B22068BED085BDEAD",
+    "result_sha256": "997090CC4CFCA8A26687B1D41561D64D3441CE5F3DB7ACC5C98317C608003E27",
+    "sidecar_sha256": "BD45EB08908C91E9B0EF1DED67AF152302AFD55F56B4D58FCCE9320BC88B5E5F"
+  },
+  "preflight": {
+    "selected_action": "probe:+x",
+    "trial_digest_matches": true,
+    "control_writes_before": 0,
+    "control_writes_after": 0,
+    "simulation_time_before_s": 0.0,
+    "simulation_time_after_s": 0.0,
+    "simulator_steps": 0
+  },
+  "sidecar_verification": {
+    "command": "cargo run -p realityos-verify --bin realityos-verify -- verify-probe-measurement-sidecar <sidecar>",
+    "status": "PASS",
+    "measurement_count": 1,
+    "action_key": "probe:+x",
+    "wrench_sample_count": 5124,
+    "pose_sample_count": 5123,
+    "trace_status": "verified",
+    "contact_trace_complete": true,
+    "start_contact_pair_count": 4,
+    "per_step_contact_evidence_count": 5123,
+    "intended_contact": {
+      "tool_body_id": "wrist_3_link",
+      "target_body_id": "obj0",
+      "observed_pair_occurrences": 1281,
+      "first_observation": {
+        "capture_s": 21.90399999999874,
+        "simulator_step": 10952,
+        "body1": "wrist_3_link",
+        "geom1_name": "geom_28",
+        "body2": "obj0",
+        "geom2_name": "geom_29"
+      }
+    },
+    "first_xy_motion_bracket_s": [
+      23.555999999997823,
+      23.557999999997822
+    ],
+    "prior_support_friction_interval": [
+      0.05,
+      0.8
+    ],
+    "recomputed_inference": {
+      "Updated": {
+        "interval": [
+          0.47885574015040633,
+          0.721137085017195
+        ],
+        "mode": "slip_onset"
+      }
+    }
+  },
+  "episode": {
+    "outcome": "success",
+    "first_action": "probe:+x",
+    "unauthorized_writes": 0,
+    "motion_bracket_present": true
+  },
+  "review": {
+    "benchmark_gain": false,
+    "physical_claim": false,
+    "admission_status": "NOT_ADMITTED",
+    "metal": false,
+    "shop_release": false,
+    "viewport_admits": false
+  }
+}

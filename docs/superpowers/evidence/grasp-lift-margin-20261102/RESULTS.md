@@ -262,4 +262,34 @@ Verification before the next replay:
 - `cargo fmt --all -- --check`, `git diff --check`, and `python -m py_compile crates/verify/mujoco_worker.py` — passed.
 - The unchanged 23020:17 sidecar verifier returned `PASS`, recomputing its historical `NoInference(Unidentifiable)` result.
 
-Next experiment: prepare one new out-of-cohort candidate at seed/index `23021:17`. Verify exact-ID absence and cohort exclusion; export and hash the resolved input; require a fresh zero-step preflight selecting `probe:+x`; and commit/push a freeze binding the input, preflight, and all evidence-producing source hashes. Run at most one simulation. Require a complete start-to-end contact trace and exact agreement between observed intended contact and the inference gate. Record the 1 mm motion bracket as a diagnostic, not as an acceptance condition for this contact-contract experiment. Never rerun `23020:17` or any frozen, pilot, or public input.
+That selected experiment was executed once as `23021:17` and is reported below. Do not rerun it or any frozen, pilot, or public input.
+
+## Fresh out-of-cohort per-step contact trace replay: 23021:17
+
+**Classification:** Foundational verification improvement; no benchmark gain. **Status:** `SIMULATION_ONLY`; admission and all release flags remain unchanged.
+
+The exact trial ID `v7:development:menagerie_ur5e:push_probe_replan:23021:17` was absent from the prior repository archive at candidate audit, and the suite preflight confirmed exclusion from pilot, public, and historical seed ranges. The resolved input SHA-256 is `46AC4D7C2B3A093D9564BD8755583667747493EF139FAFFAE6E9E53F717E67C6`. The zero-step preflight selected `probe:+x` with zero control writes, zero time advance, and zero simulator steps. Source code is frozen at `a22d944e0ef51017a535f303c86e51a72beb571b`; the freeze and preflight artifacts were committed and pushed as `edd865e` before the only simulation.
+
+The replay test passed in one run (166.09 seconds). Its first action matched preflight, the episode outcome was `success`, and unauthorized writes were zero. The sidecar contains 5,124 wrench samples and 5,123 pose samples with complete start and per-step contact evidence. The authorized tool-target pair (`wrist_3_link/geom_28` with `obj0/geom_29`) appeared in 1,281 pose samples, first at simulator step 10,952 and time 21.904 s. The trace independently brackets the 1 mm motion threshold at `[23.556, 23.558]` s.
+
+The offline sidecar verifier returned `PASS`, validated the trace, and recomputed `Updated(SlipOnset)` with friction interval `[0.4788557402, 0.7211370850]` from prior `[0.05, 0.8]`. This is one model-conditioned simulation result. It establishes no physical friction measurement, held-out performance, broader reliability, or product claim. `OFFLINE_VERIFY.json` records the exact artifact hashes and contact summary; no artifact from `23020:17` was changed.
+
+Verification:
+
+- Export test for the resolved 23021:17 input — 1 passed.
+- Zero-step preflight for 23021:17 — 1 passed; `probe:+x`, zero writes, zero time advance, zero steps.
+- Frozen simulation replay — 1 passed; exactly one simulation, first action matched, sidecar and complete contact trace valid.
+- `cargo run -p realityos-verify --bin realityos-verify -- verify-probe-measurement-sidecar <sidecar>` — `PASS`; independently recomputed the SlipOnset interval and first motion bracket.
+- The offline regression suite covers absent intended contact, observed intended contact, partial-trace rejection, digest binding, and legacy trace compatibility.
+- Code verification: semantics probe tests 32/32; verify probe tests 14/14; replay integration target compiled; rustfmt, diff check, and Python syntax check passed.
+
+Artifact SHA-256 values (raw files):
+
+- `FREEZE.json`: `6424E2F72D599418EEB292460A20E1B0FDB964BE73F16C24284A39E009BF82F3`
+- `TRIAL_INPUT.json`: `46AC4D7C2B3A093D9564BD8755583667747493EF139FAFFAE6E9E53F717E67C6`
+- `PREFLIGHT.json`: `033E7A98919540A3FEA4FC57A2C32E0F5BBC56018079AB1B22068BED085BDEAD`
+- `RESULT.json`: `997090CC4CFCA8A26687B1D41561D64D3441CE5F3DB7ACC5C98317C608003E27`
+- `PROBE_MEASUREMENT_SIDECAR.json`: `BD45EB08908C91E9B0EF1DED67AF152302AFD55F56B4D58FCCE9320BC88B5E5F`
+- `OFFLINE_VERIFY.json`: `085F511F95ECD60C6A7D9087B29271A69ECF79C952A43A30E05681515299CA9F`
+
+Next: export and audit a new out-of-cohort candidate at `23022:17`. Require a fresh zero-step preflight selecting `probe:+x`, bind all source hashes, and push a new freeze before at most one replay. Preserve an absent-contact result if it occurs; never reuse this trial or any frozen, pilot, or public input.
