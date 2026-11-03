@@ -6040,6 +6040,219 @@ fn export_v4_ur5e_probe_trace_trial_input() {
 }
 
 #[test]
+#[ignore = "freeze-only: exports seven out-of-archive expected-success grasp inputs; does not run simulation"]
+fn export_grasp_time_profile_trial_inputs() {
+    const POSITIVE_INDICES: [u32; 8] = [15, 16, 20, 21, 25, 26, 30, 31];
+    let bundle = grasp_fixture_bundle();
+    let (worker, manifest) =
+        load_and_normalize(&bundle, &[], 22000).expect("grasp fixture resolves inputs");
+    checkin_worker(worker);
+    let output_dir = required_path_env("REALITYOS_GRASP_TIME_PROFILE_INPUT_DIR");
+    std::fs::create_dir_all(&output_dir).expect("create frozen input directory");
+    let mut selection_audit = Vec::new();
+    let mut selected = 0usize;
+    for seed in 22000..=22100 {
+        for index in POSITIVE_INDICES {
+            if selected == 7 {
+                break;
+            }
+            let trial = resolve_benchmark_trial(
+                seed,
+                index,
+                BenchmarkTask::PinchGraspLift,
+                EmbodimentRole::GraspFixture,
+                &bundle,
+                &manifest,
+            )
+            .expect("candidate grasp trial resolves");
+            let accepted = trial.expectation == TrialExpectation::ExpectedSuccess;
+            selection_audit.push(serde_json::json!({
+                "seed": seed,
+                "index": index,
+                "trial_id": trial.trial_id,
+                "expectation": trial.expectation,
+                "selection": if accepted { "selected_expected_success" } else { "skipped_expected_refusal" },
+                "expected_refusal": trial.scenario.expected_refusal,
+            }));
+            println!(
+                "GRASP_TIME_PROFILE_CANDIDATE seed={seed} index={index} expectation={:?} refusal={:?}",
+                trial.expectation,
+                trial.scenario.expected_refusal
+            );
+            if !accepted {
+                continue;
+            }
+            let bytes = serde_json::to_vec_pretty(&serde_json::json!({ "trial": trial }))
+                .expect("resolved trial serializes");
+            let path = output_dir.join(format!("trial_{seed}_{index}.json"));
+            let mut output = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .expect("frozen trial input path must be new");
+            std::io::Write::write_all(&mut output, &bytes).expect("write frozen trial input");
+            let saved_trial: Value = serde_json::from_slice(&bytes).expect("trial JSON parses");
+            selection_audit
+                .last_mut()
+                .expect("selection audit entry exists")["input_path"] =
+                serde_json::json!(path.file_name().unwrap().to_string_lossy());
+            selection_audit
+                .last_mut()
+                .expect("selection audit entry exists")["input_sha256"] =
+                serde_json::json!(sha256_upper(&bytes));
+            selection_audit
+                .last_mut()
+                .expect("selection audit entry exists")["trial_digest"] =
+                serde_json::json!(trial_digest(
+                    &serde_json::from_value(saved_trial["trial"].clone())
+                        .expect("resolved trial deserializes")
+                )
+                .expect("resolved trial hashes"));
+            println!(
+                "GRASP_TIME_PROFILE_INPUT path={} sha256={} trial_id={} paired_key={}",
+                path.display(),
+                sha256_upper(&bytes),
+                saved_trial["trial"]["trial_id"],
+                saved_trial["trial"]["paired_trial_key"]
+            );
+            selected += 1;
+        }
+        if selected == 7 {
+            break;
+        }
+    }
+    assert_eq!(
+        selected, 7,
+        "fixed candidate pool must yield seven positives"
+    );
+    let audit = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema": "realityos.grasp_time_profile_candidate_selection/v1",
+        "rule": "first seven ExpectedSuccess labels in ascending seed order and the fixed positive index order",
+        "seed_range_inclusive": [22000, 22100],
+        "positive_indices_in_order": POSITIVE_INDICES,
+        "simulation_started": false,
+        "candidates": selection_audit,
+    }))
+    .expect("selection audit serializes");
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output_dir.join("SELECTION.json"))
+        .expect("selection audit path must be new");
+    std::io::Write::write_all(&mut output, &audit).expect("persist selection audit");
+}
+
+#[test]
+#[ignore = "SIMULATION_ONLY: replays only the frozen grasp time-profile inputs named by a committed freeze"]
+fn replay_grasp_time_profile_frozen_inputs() {
+    let _mujoco_guard = lock_mujoco_test();
+    let stage = std::env::var("REALITYOS_GRASP_TIME_PROFILE_STAGE")
+        .expect("REALITYOS_GRASP_TIME_PROFILE_STAGE is required");
+    let freeze_path = required_path_env("REALITYOS_GRASP_TIME_PROFILE_FREEZE");
+    let result_path = required_path_env("REALITYOS_GRASP_TIME_PROFILE_RESULT_OUTPUT");
+    assert!(
+        !result_path.exists(),
+        "result path must be new: {}",
+        result_path.display()
+    );
+
+    let freeze_bytes = std::fs::read(&freeze_path).expect("committed pre-run freeze");
+    let freeze: Value = serde_json::from_slice(&freeze_bytes).expect("freeze JSON");
+    assert_eq!(freeze["status"], "FROZEN_BEFORE_SIMULATION");
+    let source_key = match stage.as_str() {
+        "baseline" => "baseline_source",
+        "candidate_primary" | "candidate_cohort" => "candidate_source",
+        _ => panic!("unsupported replay stage {stage}"),
+    };
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source = &freeze[source_key];
+    for (relative_path, key) in [
+        (
+            "crates/verify/tests/manipulation_benchmark.rs",
+            "integration_test_sha256",
+        ),
+        (
+            "crates/verify/src/manipulation_benchmark/execution.rs",
+            "execution_sha256",
+        ),
+        (
+            "crates/semantics/src/physical_reasoner.rs",
+            "reasoner_sha256",
+        ),
+    ] {
+        let bytes = std::fs::read(repo_root.join(relative_path)).expect("frozen source file");
+        assert_eq!(
+            sha256_upper(&bytes),
+            source[key].as_str().expect("frozen source digest"),
+            "source changed after freeze: {relative_path}"
+        );
+    }
+    let inputs_key = match stage.as_str() {
+        "baseline" | "candidate_cohort" => "cohort_inputs",
+        "candidate_primary" => "primary_control_inputs",
+        _ => unreachable!(),
+    };
+    let entries = freeze[inputs_key].as_array().expect("frozen input list");
+    assert_eq!(
+        entries.len(),
+        if inputs_key == "cohort_inputs" { 7 } else { 2 }
+    );
+
+    let bundle = grasp_fixture_bundle();
+    let mut records = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let relative_path = entry["path"].as_str().expect("frozen input path");
+        let path = repo_root.join(relative_path);
+        let input_bytes = std::fs::read(&path).expect("frozen trial input");
+        assert_eq!(
+            sha256_upper(&input_bytes),
+            entry["sha256"].as_str().expect("frozen input digest")
+        );
+        let input: Value = serde_json::from_slice(&input_bytes).expect("trial input JSON");
+        let trial: realityos_verify::manipulation_benchmark::ResolvedBenchmarkTrial =
+            serde_json::from_value(input["trial"].clone()).expect("resolved trial input");
+        assert_eq!(
+            trial.trial_id,
+            entry["trial_id"].as_str().expect("frozen trial id")
+        );
+        assert_eq!(
+            trial_digest(&trial).expect("resolved trial digest"),
+            entry["trial_digest"].as_str().expect("frozen trial digest")
+        );
+        let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+            .expect("frozen grasp trial executes under simulation admission");
+        assert_eq!(episode.unauthorized_writes, 0, "{}", trial.trial_id);
+        println!(
+            "GRASP_TIME_PROFILE_RESULT stage={stage} trial={} outcome={:?} cause={:?} hold={:?} follow={:?}",
+            trial.trial_id,
+            episode.outcome,
+            episode.failure_cause,
+            episode.hold_verified,
+            episode.grasp_object_follow_residual_m
+        );
+        records.push(BenchmarkTrialRecord::completed(trial, episode));
+    }
+    let result = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema": "realityos.grasp_lift_time_profile_replay/v1",
+        "stage": stage,
+        "freeze_sha256": sha256_upper(&freeze_bytes),
+        "records": records,
+    }))
+    .expect("replay result serializes");
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&result_path)
+        .expect("result path must be new");
+    std::io::Write::write_all(&mut output, &result).expect("persist replay result");
+    println!(
+        "GRASP_TIME_PROFILE_RESULT_FILE path={} sha256={}",
+        result_path.display(),
+        sha256_upper(&result)
+    );
+}
+
+#[test]
 #[ignore = "SIMULATION_ONLY; run once with frozen input, freeze, sidecar, and result paths"]
 fn probe_pose_trace_replays_frozen_v4_ur5e_trial() {
     let _mujoco_guard = lock_mujoco_test();
