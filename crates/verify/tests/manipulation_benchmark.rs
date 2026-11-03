@@ -31,6 +31,7 @@ use realityos_verify::runner::load_and_normalize;
 use realityos_verify::semantics_map::embodiment_from_manifest;
 use serde_json::Value;
 use sha2::Digest;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
@@ -208,6 +209,23 @@ fn run_test_benchmark_trial_with_sidecar(
             profile.as_ref(),
         ),
     }
+}
+
+fn json_artifact_bytes(value: &impl serde::Serialize) -> Vec<u8> {
+    let mut bytes = serde_json::to_vec_pretty(value).expect("diagnostic evidence serializes");
+    bytes.push(b'\n');
+    bytes
+}
+
+fn write_new_json_artifact(path: &Path, value: &impl serde::Serialize) {
+    let bytes = json_artifact_bytes(value);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .expect("diagnostic evidence path is new");
+    file.write_all(&bytes)
+        .expect("diagnostic evidence writes completely");
 }
 
 fn monitor_sample(profile: &SimulationWrenchSensorProfile, wrench: [f64; 6]) -> WrenchSample {
@@ -5590,6 +5608,121 @@ fn iiwa_expected_success_probe_tracks_retract_under_wrench_monitor() {
             assert!(abort.triggering_sensor_orientation.is_some());
         }
     }
+}
+
+#[test]
+#[ignore = "SIMULATION_ONLY single-case diagnostic capture; run explicitly after freezing evidence"]
+fn iiwa_rotated_probe_unbracketed_motion_diagnostic_capture() {
+    let _mujoco_guard = lock_mujoco_test();
+    let evidence_dir = PathBuf::from(
+        std::env::var_os("REALITYOS_ROTATED_PROBE_DIAGNOSTIC_DIR")
+            .expect("REALITYOS_ROTATED_PROBE_DIAGNOSTIC_DIR is required"),
+    );
+    assert!(
+        evidence_dir.is_dir(),
+        "precreated evidence directory required"
+    );
+    let prepare_only = std::env::var_os("REALITYOS_ROTATED_PROBE_PREPARE_ONLY").is_some();
+
+    let bundle = iiwa14_bundle();
+    let suite = scenario_suite_v3();
+    let (worker, manifest) = load_and_normalize(&bundle, &[], 21000)
+        .expect("strict benchmark requires MuJoCo and complete model inspection");
+    checkin_worker(worker);
+    let mut trial = resolve_benchmark_trial_with_suite(
+        21000,
+        0,
+        BenchmarkTask::PushProbeReplan,
+        EmbodimentRole::Development,
+        &bundle,
+        &manifest,
+        &suite,
+    )
+    .expect("frozen positive IIWA suite trial");
+    trial.paired_trial_key = Some(paired_trial_key(&trial).expect("paired trial key"));
+    assert_eq!(trial.seed, 21000);
+    assert_eq!(trial.index, 0);
+    assert_eq!(trial.expectation, TrialExpectation::ExpectedSuccess);
+
+    let registry_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../robots/benchmarks/manipulation/embodiments.json");
+    let profile = EmbodimentRegistry::load(&registry_path)
+        .expect("checked-in manipulation registry")
+        .registrations
+        .into_iter()
+        .find(|entry| entry.robot_id == trial.robot_id)
+        .and_then(|entry| entry.simulation_wrench_profile)
+        .expect("registered IIWA push profile");
+    let mut admission = simulation_admission(120.0);
+    admission.wrench_limit_policy = profile.limit_policy.clone();
+    let preflight =
+        preflight_benchmark_trial_first_action(&bundle, &trial, admission.clone(), Some(&profile))
+            .expect("capture the normal runtime's first-action preflight");
+    preflight.verify().expect("preflight evidence is valid");
+    assert_eq!(preflight.authorized_action_key.as_deref(), Some("probe:+x"));
+    assert_eq!(
+        preflight.control_writes_before,
+        preflight.control_writes_after
+    );
+    assert_eq!(
+        preflight.simulation_time_before_s,
+        preflight.simulation_time_after_s
+    );
+    assert_eq!(preflight.simulator_steps, 0);
+
+    let trial_bytes = json_artifact_bytes(&trial);
+    let preflight_bytes = json_artifact_bytes(&preflight);
+    if prepare_only {
+        write_new_json_artifact(&evidence_dir.join("TRIAL_INPUT.json"), &trial);
+        write_new_json_artifact(&evidence_dir.join("PREFLIGHT.json"), &preflight);
+        return;
+    }
+
+    let freeze: Value = serde_json::from_slice(
+        &std::fs::read(evidence_dir.join("FREEZE.json")).expect("frozen diagnostic input"),
+    )
+    .expect("freeze JSON");
+    assert_eq!(freeze["trial_id"], trial.trial_id);
+    assert_eq!(
+        freeze["trial_digest"],
+        trial_digest(&trial).expect("trial digest")
+    );
+    assert_eq!(freeze["trial_input_sha256"], sha256_upper(&trial_bytes));
+    assert_eq!(freeze["preflight_sha256"], sha256_upper(&preflight_bytes));
+    assert_eq!(
+        std::fs::read(evidence_dir.join("TRIAL_INPUT.json")).expect("frozen trial file"),
+        trial_bytes,
+        "resolved trial bytes must match the freeze"
+    );
+    assert_eq!(
+        std::fs::read(evidence_dir.join("PREFLIGHT.json")).expect("frozen preflight file"),
+        preflight_bytes,
+        "preflight bytes must match the freeze"
+    );
+
+    let episode = run_test_benchmark_trial_with_probe_measurement_sidecar(
+        &bundle,
+        &trial,
+        admission,
+        &evidence_dir.join("PROBE_MEASUREMENT_SIDECAR.json"),
+    )
+    .expect("the single diagnostic simulation completes and writes its sidecar");
+    write_new_json_artifact(&evidence_dir.join("EPISODE.json"), &episode);
+    assert_eq!(episode.outcome, TrialOutcome::UnexpectedRefusal);
+    assert_eq!(
+        episode.refusal_code.as_deref(),
+        Some("NO_JUSTIFIED_CURRENT_ACTION")
+    );
+    assert_eq!(
+        episode.wrench_inference_reason.as_deref(),
+        Some("no_inference:UnbracketedMotion")
+    );
+    assert_eq!(episode.actions.len(), 2);
+    assert!(episode
+        .actions
+        .iter()
+        .all(|action| action.action_key == "probe:+x"));
+    assert_eq!(episode.unauthorized_writes, 0);
 }
 
 #[test]
