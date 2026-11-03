@@ -9,11 +9,6 @@
     "branch": "main",
     "git_head": "77b5b9d1e545fa4fab601649d473e886ae2a1d2a",
     "worktree_engine_changes": "none",
-    "source_sha256": {
-      "crates/verify/tests/manipulation_benchmark.rs": "31568B50C7FAD83666F95AA2BE0FD9BDDD5D0BBF7D69EB06BC65AB444CD492A3",
-      "crates/verify/src/manipulation_benchmark/execution.rs": "90A2768D0C559B8D720751D2CB77A126BC7FCF5CEB50D57BBEF6DDA5B1776448",
-      "crates/semantics/src/physical_reasoner.rs": "0CCECC88F33A0AE99F22B783730F772812079528D9963D1472C1F0BA7C661357"
-    },
     "model_bundle_files": [
       {
         "path": "robots/bundles/arm_gripper_lift/LICENSE",
@@ -27,7 +22,10 @@
         "path": "robots/bundles/arm_gripper_lift/robot.yaml",
         "sha256": "67EA84E5648743E39A5834EFECAE97FE2ABF688A52C1380D86F9DBCCED6679CD"
       }
-    ]
+    ],
+    "integration_test_sha256": "31568B50C7FAD83666F95AA2BE0FD9BDDD5D0BBF7D69EB06BC65AB444CD492A3",
+    "execution_sha256": "90A2768D0C559B8D720751D2CB77A126BC7FCF5CEB50D57BBEF6DDA5B1776448",
+    "reasoner_sha256": "0CCECC88F33A0AE99F22B783730F772812079528D9963D1472C1F0BA7C661357"
   },
   "selection": {
     "rule": "first seven ExpectedSuccess labels in ascending seed order and the fixed positive index order",
