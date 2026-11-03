@@ -34,6 +34,49 @@
       "failed_assertion": "episode.wrench_inference_reason expected updated:SlipOnset; observed no_inference:EmptyIntersection",
       "expected_episode_outcome": "success",
       "expected_wrench_inference_reason": "updated:SlipOnset"
+    },
+    "runtime_contact_friction_preflight": {
+      "status": "MATCHES_FROZEN_SCENARIO",
+      "simulator_time_s": 0.0,
+      "simulator_steps": 0,
+      "contact_pair_count": 4,
+      "body_pair": [
+        "obj0",
+        "table"
+      ],
+      "friction_vectors": [
+        [
+          0.5136990717140287,
+          0.5136990717140287,
+          0.01,
+          0.01,
+          0.01
+        ],
+        [
+          0.5136990717140287,
+          0.5136990717140287,
+          0.01,
+          0.01,
+          0.01
+        ],
+        [
+          0.5136990717140287,
+          0.5136990717140287,
+          0.01,
+          0.01,
+          0.01
+        ],
+        [
+          0.5136990717140287,
+          0.5136990717140287,
+          0.01,
+          0.01,
+          0.01
+        ]
+      ],
+      "trial_object_mu": 0.5136990717140287,
+      "trial_support_mu": 0.5136990717140287,
+      "interpretation": "The declared object/table friction reaches MuJoCo contact state; the friction-field mapping is not the observed discrepancy."
     }
   },
   "episode": {
@@ -204,5 +247,5 @@
     "support_mu": 0.5136990717140287,
     "interpretation": "Both per-probe inferred intervals fall below this declared simulator coefficient; the force-to-normal discrepancy remains unexplained."
   },
-  "interpretation": "The time-aligned trace contains a force-supported 1 mm crossing during the second probe, while the first 100-step endpoint has a 0 N lower bound. This reproduces the cadence-miss boundary and shows the per-pose observer can see it. However, the second probe’s independently recomputed friction bounds do not overlap the prior interval; both probe estimates also lie below the scenario’s declared object/table coefficient. The runtime correctly fails closed with EmptyIntersection. The held-out task did not succeed, and the cause of the friction-bound discrepancy is unresolved."
+  "interpretation": "The time-aligned trace contains a force-supported 1 mm crossing during the second probe, while the first 100-step endpoint has a 0 N lower bound. This reproduces the cadence-miss boundary and shows the per-pose observer can see it. Zero-step preflight contact data confirms the scenario friction value reaches MuJoCo. However, the second probe’s independently recomputed friction bounds do not overlap the prior interval, and both probe estimates lie below the declared coefficient. The runtime correctly fails closed with EmptyIntersection. The held-out task did not succeed; the mismatch between the tool-wrench-derived friction bounds and the simulated support response remains unresolved."
 }
