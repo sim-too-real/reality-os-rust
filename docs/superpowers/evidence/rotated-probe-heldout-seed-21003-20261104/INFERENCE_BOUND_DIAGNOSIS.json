@@ -1,0 +1,108 @@
+{
+  "format": "realityos.rotated_probe_inference_bound_diagnosis",
+  "measurements": [
+    {
+      "action_key": "probe:+x",
+      "after_sample": {
+        "capture_s": 48.15800000001289,
+        "force_interval_n": [
+          5.589634553946034,
+          5.901706449672518
+        ],
+        "normal_interval_n": [
+          17.50962164436558,
+          17.79227565469749
+        ],
+        "sequence": 24078
+      },
+      "before_sample": {
+        "capture_s": 48.15600000001289,
+        "force_interval_n": [
+          4.784618526912598,
+          6.685622344425635
+        ],
+        "normal_interval_n": [
+          16.774281367932822,
+          18.47019899095875
+        ],
+        "sequence": 24077
+      },
+      "diagnosis": "updated",
+      "inference": {
+        "Updated": {
+          "interval": [
+            0.2590453156056787,
+            0.33705505290410587
+          ],
+          "mode": "slip_onset"
+        }
+      },
+      "measurement_digest": "eda39be7504634d34b13904d0b1a8f6daa7edf0fdfcf443d0808a320efeccfc4",
+      "motion_first_motion_s": 48.15800000001289,
+      "motion_unresolved_before_force": false,
+      "prior_intersection": [
+        0.2590453156056787,
+        0.33705505290410587
+      ],
+      "prior_support_friction_interval": [
+        0.05,
+        0.8
+      ],
+      "single_measurement_friction_bounds": [
+        0.2590453156056787,
+        0.33705505290410587
+      ]
+    },
+    {
+      "action_key": "probe:+x",
+      "after_sample": {
+        "capture_s": 65.92800000002775,
+        "force_interval_n": [
+          9.525626239831478,
+          9.835720671215872
+        ],
+        "normal_interval_n": [
+          20.01806999344722,
+          20.301776504553985
+        ],
+        "sequence": 32963
+      },
+      "before_sample": {
+        "capture_s": 65.92600000002776,
+        "force_interval_n": [
+          8.773744403724528,
+          10.653692586887193
+        ],
+        "normal_interval_n": [
+          19.321747910925346,
+          21.023980951257528
+        ],
+        "sequence": 32962
+      },
+      "diagnosis": "measurement_bounds_do_not_overlap_prior",
+      "inference": {
+        "NoInference": "empty_intersection"
+      },
+      "measurement_digest": "e689e94c8dd85a5d6d48f71a52c6b2de6d41afe48b85d77871809bfe71f61136",
+      "motion_first_motion_s": 65.92800000002775,
+      "motion_unresolved_before_force": false,
+      "prior_intersection": [
+        0.4173207930536931,
+        0.33705505290410587
+      ],
+      "prior_support_friction_interval": [
+        0.2590453156056787,
+        0.33705505290410587
+      ],
+      "single_measurement_friction_bounds": [
+        0.4173207930536931,
+        0.491342106128889
+      ]
+    }
+  ],
+  "method": "Independently recompute before/after wrench force and normal intervals at each recorded slip onset using the repository offline reference functions; derive the single-measurement friction bounds and intersect them with the frozen prior. No simulator or control code is executed.",
+  "schema_version": 1,
+  "status": "OFFLINE_RECOMPUTATION_ONLY",
+  "trial_digest": "73d9d43556bd3e6a0f91201dc0345853d22e160895e29511824b7053a5f2c28e",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21003:0"
+}

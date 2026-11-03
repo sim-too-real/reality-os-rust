@@ -1,0 +1,208 @@
+{
+  "schema": "realityos.rotated_probe_diagnostic.result/v1",
+  "experiment_id": "rotated_probe_heldout_seed_21003_iiwa14_20261104_v1",
+  "completed_at_utc": "2026-11-03T20:03:44Z",
+  "classification": "HELD_OUT_SIMULATOR_CASE_FAILED_EXPECTED_INFERENCE; SECOND_PROBE_CADENCE_MISS_BOUNDARY_REPRODUCED; SIMULATION_ONLY; NOT_ADMITTED",
+  "repository": "reality-os-rust",
+  "branch": "main",
+  "implementation_commit": "c49bd4006c19054609747e66e5f00dbe7b735af9",
+  "source_commit": "71fb680b0c91fcfb01591c6b12aadcfbd2521925",
+  "freeze_commit": "39ef531",
+  "run_head": "39ef531",
+  "freeze_sha256": "A40E69BBBAF6E70A5C3494021C2FACB5A6A8C0AB9A40C146E519904D3BD08636",
+  "frozen_source_hashes_match_current_source": true,
+  "frozen_model_hashes_match_current_model": true,
+  "freeze_verification_status": "PASS",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21003:0",
+  "trial_digest": "73d9d43556bd3e6a0f91201dc0345853d22e160895e29511824b7053a5f2c28e",
+  "trial_seed": 21003,
+  "trial_index": 0,
+  "simulation_runs": 1,
+  "verification": {
+    "preflight_zero_step": true,
+    "preflight_authorized_action": "probe:+x",
+    "preflight_control_writes_before": 0,
+    "preflight_control_writes_after": 0,
+    "freeze_source_hashes_verified": 13,
+    "freeze_model_hashes_verified": 20,
+    "offline_sidecar_verifier_command": "target/debug/realityos-verify.exe verify-probe-measurement-sidecar PROBE_MEASUREMENT_SIDECAR.json",
+    "offline_sidecar_verifier_status": "PASS",
+    "offline_measurement_count": 2,
+    "targeted_replay": {
+      "command": "$env:REALITYOS_ROTATED_PROBE_DIAGNOSTIC_DIR='C:\\\\projects\\\\reality-os-rust\\\\docs\\\\superpowers\\\\evidence\\\\rotated-probe-heldout-seed-21003-20261104'; $env:REALITYOS_ROTATED_PROBE_TRIAL_SEED='21003'; $env:REALITYOS_ROTATED_PROBE_TRIAL_INDEX='0'; cargo test -p realityos-verify --test manipulation_benchmark iiwa_rotated_probe_unbracketed_motion_diagnostic_capture -- --ignored --exact --nocapture",
+      "result": "0 passed; 1 failed; exit code 101; 393.05 seconds; one simulator replay",
+      "failed_assertion": "episode.wrench_inference_reason expected updated:SlipOnset; observed no_inference:EmptyIntersection",
+      "expected_episode_outcome": "success",
+      "expected_wrench_inference_reason": "updated:SlipOnset"
+    }
+  },
+  "episode": {
+    "sha256": "DA297A0F4D3E6A0EFACAEBF91C39A9F67B3499D6CC0E6E27D2ABC28841CA2C7B",
+    "outcome": "unexpected_refusal",
+    "refusal_code": "NO_JUSTIFIED_CURRENT_ACTION",
+    "friction_inference": "no_inference:EmptyIntersection",
+    "friction_interval": [
+      0.2590453156056787,
+      0.33705505290410587
+    ],
+    "actions": [
+      {
+        "action_key": "probe:+x",
+        "displacement_m": 0.005127848870107987,
+        "writes_before": 0,
+        "writes_after": 26146
+      },
+      {
+        "action_key": "probe:+x",
+        "displacement_m": 0.005139094069209147,
+        "writes_before": 26146,
+        "writes_after": 32967
+      }
+    ],
+    "wrench_sample_count": 36969,
+    "simulation_time_s": 73.93800000000908,
+    "unauthorized_writes": 0
+  },
+  "sidecar": {
+    "path": "PROBE_MEASUREMENT_SIDECAR.json",
+    "sha256": "4DB1EBB80459B35BA05C2B513110B82DBC0CE6141ADDF9303A9A697B56AFC0A1",
+    "size_bytes": 38919151,
+    "measurement_count": 2,
+    "trial_digest": "73d9d43556bd3e6a0f91201dc0345853d22e160895e29511824b7053a5f2c28e",
+    "measurements": [
+      {
+        "action_key": "probe:+x",
+        "measurement_digest": "eda39be7504634d34b13904d0b1a8f6daa7edf0fdfcf443d0808a320efeccfc4",
+        "sample_count": 5876,
+        "pose_sample_count": 5875,
+        "motion_trace_status": "verified",
+        "recomputed_inference": {
+          "Updated": {
+            "interval": [
+              0.2590453156056787,
+              0.33705505290410587
+            ],
+            "mode": "slip_onset"
+          }
+        },
+        "prior_support_friction_interval": [
+          0.05,
+          0.8
+        ],
+        "single_measurement_friction_bounds": [
+          0.2590453156056787,
+          0.33705505290410587
+        ],
+        "prior_intersection": [
+          0.2590453156056787,
+          0.33705505290410587
+        ],
+        "first_motion_crossing": {
+          "time_s": 48.15800000001289,
+          "simulator_step": 24079,
+          "wrench_sequence": 24078,
+          "planar_displacement_m": 0.001000508685078515,
+          "tangential_force_lower_bound_n": 5.589634553946033,
+          "matched_sample_index": 2682,
+          "sample_age_s": 0.0
+        },
+        "first_100_step_endpoint_crossing": {
+          "time_s": 48.194000000012934,
+          "simulator_step": 24097,
+          "wrench_sequence": 24096,
+          "planar_displacement_m": 0.0010227352704823068,
+          "tangential_force_lower_bound_n": 6.341078735827177,
+          "matched_sample_index": 2700,
+          "sample_age_s": 0.0,
+          "control_batch_index": 27,
+          "nominal_batch_end_s": 48.194000000012934
+        },
+        "runtime_batch_endpoint_would_resolve_motion": true,
+        "motion_unresolved_before_force": false,
+        "diagnosis": "updated"
+      },
+      {
+        "action_key": "probe:+x",
+        "measurement_digest": "e689e94c8dd85a5d6d48f71a52c6b2de6d41afe48b85d77871809bfe71f61136",
+        "sample_count": 5145,
+        "pose_sample_count": 5144,
+        "motion_trace_status": "verified",
+        "recomputed_inference": {
+          "NoInference": "empty_intersection"
+        },
+        "prior_support_friction_interval": [
+          0.2590453156056787,
+          0.33705505290410587
+        ],
+        "single_measurement_friction_bounds": [
+          0.4173207930536931,
+          0.491342106128889
+        ],
+        "prior_intersection": [
+          0.4173207930536931,
+          0.33705505290410587
+        ],
+        "first_motion_crossing": {
+          "time_s": 65.92800000002775,
+          "simulator_step": 32964,
+          "wrench_sequence": 32963,
+          "planar_displacement_m": 0.0010010518817843395,
+          "tangential_force_lower_bound_n": 9.525626239831478,
+          "matched_sample_index": 2018,
+          "sample_age_s": 0.0
+        },
+        "first_100_step_endpoint_crossing": {
+          "time_s": 66.09000000002737,
+          "simulator_step": 33045,
+          "wrench_sequence": 33044,
+          "planar_displacement_m": 0.0013804168719270353,
+          "tangential_force_lower_bound_n": 0.0,
+          "matched_sample_index": 2099,
+          "sample_age_s": 0.0,
+          "control_batch_index": 21,
+          "nominal_batch_end_s": 66.09200000001988
+        },
+        "runtime_batch_endpoint_would_resolve_motion": false,
+        "motion_unresolved_before_force": false,
+        "diagnosis": "measurement_bounds_do_not_overlap_prior"
+      }
+    ]
+  },
+  "offline_analysis": {
+    "path": "OFFLINE_ANALYSIS.json",
+    "sha256": "35DA35AF39B49D52DD759D8EDB36660F9CB51CC80D4C6145E0E7C26498308E6E",
+    "script_path": "analyze_motion_onset.py",
+    "script_sha256": "0AB1C748D2CE6827F13F86C8F60C6BDF153534DD821F0BE11F0145E9A8E53867",
+    "status": "OFFLINE_RECOMPUTATION_ONLY",
+    "thresholds": {
+      "planar_motion_m": 0.001,
+      "tangential_force_lower_bound_n": 0.5
+    },
+    "scope": "Offline recomputation from frozen simulator traces; no physical performance claim."
+  },
+  "inference_bound_diagnosis": {
+    "path": "INFERENCE_BOUND_DIAGNOSIS.json",
+    "sha256": "653946C0AF0C47470EA75A54DF02E37007E293124543450FEB5CE56B60B7D333",
+    "script_path": "diagnose_inference_bounds.py",
+    "script_sha256": "B60237806EC6589D4FF754C47F6242873AF7E675196DFFAF190675670CC3D911",
+    "status": "OFFLINE_RECOMPUTATION_ONLY",
+    "finding": "The second measurement has a valid per-pose force-supported slip onset, but its friction bounds [0.4173, 0.4913] do not overlap the prior [0.2590, 0.3371]. Fail-closed EmptyIntersection is therefore consistent with the recorded evidence."
+  },
+  "scope_limits": {
+    "full_lift_replay": false,
+    "physical_test": false,
+    "physical_actions": 0,
+    "purchases": 0,
+    "fabrication": 0,
+    "external_contact": false,
+    "admission_status": "NOT_ADMITTED",
+    "metal": false,
+    "shop_release": false
+  },
+  "scenario_friction": {
+    "object_mu": 0.5136990717140287,
+    "support_mu": 0.5136990717140287,
+    "interpretation": "Both per-probe inferred intervals fall below this declared simulator coefficient; the force-to-normal discrepancy remains unexplained."
+  },
+  "interpretation": "The time-aligned trace contains a force-supported 1 mm crossing during the second probe, while the first 100-step endpoint has a 0 N lower bound. This reproduces the cadence-miss boundary and shows the per-pose observer can see it. However, the second probe’s independently recomputed friction bounds do not overlap the prior interval; both probe estimates also lie below the scenario’s declared object/table coefficient. The runtime correctly fails closed with EmptyIntersection. The held-out task did not succeed, and the cause of the friction-bound discrepancy is unresolved."
+}
