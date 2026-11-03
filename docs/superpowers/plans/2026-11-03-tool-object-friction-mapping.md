@@ -49,7 +49,7 @@
 
 - [x] Review the diff for control-path changes, unrelated files, and changed safety logic.
 - [x] Run formatting checks and `git diff --check`.
-- [ ] Commit and push directly to the existing `main` branch.
+- [x] Commit and push directly to the existing `main` branch.
 
 ## Checkpoint
 
