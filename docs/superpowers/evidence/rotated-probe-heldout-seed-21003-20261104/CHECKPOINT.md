@@ -6,7 +6,7 @@ The frozen trial `v7:development:menagerie_iiwa14:push_probe_replan:21003:0` ran
 
 Both sidecar measurements passed the independent verifier. For the second probe, per-pose recomputation found the 1 mm crossing at 65.928 s with a tangential force lower bound of 9.5256 N. The first 100-step endpoint after that crossing was at 66.090 s with a 0 N lower bound, so endpoint-only observation would miss force support at this boundary. The time-aligned observer records the force-supported crossing.
 
-The first probe narrowed the interval to `[0.2590453, 0.3370551]`. The second probe’s recomputed single-measurement bounds were `[0.4173208, 0.4913421]`, which do not intersect that prior interval. Both probe estimates are below the trial’s declared object and table friction coefficient, `0.5558751`. `EmptyIntersection` is the fail-closed result for those recorded bounds; why the inferred bounds sit low and vary between probes remains unresolved.
+The first probe narrowed the interval to `[0.2590453, 0.3370551]`. The second probe’s recomputed single-measurement bounds were `[0.4173208, 0.4913421]`, which do not intersect that prior interval. Both probe estimates are below the trial’s declared object and table friction coefficient, `0.5136991`. `EmptyIntersection` is the fail-closed result for those recorded bounds; why the inferred bounds sit low and vary between probes remains unresolved.
 
 No threshold changed: planar motion remained 1 mm and tangential force lower bound remained 0.5 N. This is one simulator case; it does not establish physical performance or broad reliability. No full-lift replay, physical test, purchase, fabrication, or external contact occurred.
 
