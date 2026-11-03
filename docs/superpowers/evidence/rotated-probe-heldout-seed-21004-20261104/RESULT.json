@@ -198,7 +198,8 @@
     ],
     "purpose": "Record partial probe measurement/pose contact-force trace after a wrench monitor abort.",
     "fail_closed_guard": "UnexpectedContact is carried as runtime_contact_ambiguous, so infer_support_friction returns NoInference and does not narrow the belief.",
-    "verification": "cargo check -p realityos-verify --tests passed; the single-run budget prevents replaying seed 21004 with this post-run patch."
+    "verification": "cargo check -p realityos-verify --tests passed; the single-run budget prevents replaying seed 21004 with this post-run patch.",
+    "commit": "3258af0"
   },
   "post_budget_retry": {
     "same_seed_runner_invocation_observed": true,

@@ -19,6 +19,45 @@ from mujoco_worker import (
 
 
 class MonitoredWrenchGateTests(unittest.TestCase):
+    def test_probe_pose_trace_captures_motion_and_abort_steps_not_clear_transit(self):
+        capture = mujoco_worker._should_capture_probe_pose_trace
+        self.assertFalse(capture(True, False, False))
+        self.assertTrue(capture(True, False, True))
+        self.assertTrue(capture(True, True, False))
+        self.assertTrue(capture(False, True, False))
+        self.assertFalse(capture(False, False, True))
+
+    def test_probe_pose_trace_capture_is_independent_of_expected_contact_allowance(self):
+        model = mujoco.MjModel.from_xml_string(
+            """
+            <mujoco><option gravity="0 0 -9.81"/><worldbody>
+              <geom name="table_geom" type="plane" size="1 1 .1"/>
+              <body name="obj0" pos="0 0 .04"><freejoint/>
+                <geom name="obj_geom" type="box" size=".05 .05 .05"
+                  mass=".1" friction=".37 .37 .01" condim="4"/>
+              </body>
+            </worldbody></mujoco>
+            """
+        )
+        data = mujoco.MjData(model)
+        mujoco.mj_forward(model, data)
+        self.assertGreater(data.ncon, 0)
+        time_before = float(data.time)
+        qpos_before = data.qpos.copy()
+
+        with patch.object(
+            mujoco_worker, "INST", SimpleNamespace(model=model, data=data)
+        ):
+            record = mujoco_worker._probe_object_pose_trace_record("obj0", 7, None)
+
+        self.assertEqual(record["simulator_step"], 7)
+        self.assertIsNone(record["wrench_sequence"])
+        self.assertEqual(record["object_id"], "obj0")
+        self.assertEqual(len(record["contact_pairs"]), len(record["contact_force_samples"]))
+        self.assertGreater(len(record["contact_force_samples"]), 0)
+        self.assertEqual(float(data.time), time_before)
+        self.assertEqual(data.qpos.tolist(), qpos_before.tolist())
+
     def test_probe_contact_force_capture_is_per_contact_and_does_not_advance_physics(self):
         model = mujoco.MjModel.from_xml_string(
             """

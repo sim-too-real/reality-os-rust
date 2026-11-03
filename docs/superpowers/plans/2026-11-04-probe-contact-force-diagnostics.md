@@ -83,18 +83,33 @@
 
 ### Task 5: Preserve diagnostics when the monitor aborts
 
-**Reason:** Seed 21004 stopped on `unexpected_contact` before a finalized measurement existed. The episode was retained, but the sidecar writer had no records to seal, so there was no time-aligned support-contact trace to inspect.
+**Reason:** Seed 21004 stopped on `unexpected_contact` before a finalized measurement existed. The first abort-preservation patch was insufficient: seed 21005 stopped during probe transit, before the formal motion phase where pose/contact-force capture was enabled.
 
 **Files:**
 - Modify: `crates/verify/src/manipulation_benchmark/execution.rs`
 - Modify: `crates/verify/tests/manipulation_benchmark.rs`
 - Evidence: `docs/superpowers/evidence/rotated-probe-heldout-seed-21005-20261104/`
 
-- [x] Record a probe measurement after `WrenchAborted` when the audit has pose and wrench samples; preserve `UnexpectedContact` as ambiguous so friction inference remains fail-closed.
-- [x] Extend the diagnostic test to accept a preserved sealed sidecar and require at least one nonempty contact-force sample when the freeze is marked `CONTACT_FORCE`.
-- [ ] Commit/push the abort-preservation change, then freeze seed 21005 and its zero-step preflight against that source and model, with a one-run budget.
-- [ ] Run seed 21005 once and preserve its episode and sidecar.
-- [ ] Verify the sidecar, run the offline analyzer at slip onset, and report whether the contact trace explains the inference mismatch.
-- [ ] Record the result and next justified step; synchronize all four canonical `main` branches.
+- [x] Record a probe measurement after `WrenchAborted` when pose and wrench samples are available; keep `UnexpectedContact` ambiguous so inference remains fail-closed. Commit/push: `3258af0`.
+- [x] Freeze seed 21005 and its zero-step preflight; `FREEZE_VERIFY.json` passed. The freeze files were not committed before replay.
+- [x] Run seed 21005 once and preserve its episode. It aborted during probe transit with 0.252 mm displacement and no measurement records or contact-force trace; see `RESULT.json` and `CHECKPOINT.md`. Do not replay seed 21005.
+- [x] Record the root cause: contact-force pose capture was tied to the formal motion phase, so the transit abort had no trace to seal.
 
-Do not replay seed 21004. Seed 21005 has a separate one-run budget and must be frozen before its only simulator trial.
+### Task 6: Capture contact evidence independently of the contact gate
+
+**Files:**
+- Modify: `crates/verify/mujoco_worker.py`
+- Modify: `crates/verify/src/mujoco_exec.rs`
+- Modify: `crates/verify/src/manipulation_benchmark/execution.rs`
+- Test: `crates/verify/tests/test_mujoco_wrench_gates.py`
+- Evidence: `docs/superpowers/evidence/rotated-probe-heldout-seed-21006-20261104/`
+
+- [x] Add a read-only per-step probe trace request that records contact forces during transit without changing `expected_contact_body` or the unexpected-contact stop.
+- [x] Preserve a trace origin before the probe action so an abort before the formal motion phase can still produce a time-aligned trace; a trace-capture error cannot bypass the stop gate.
+- [x] Run the worker wrench-gate suite (8 passed), `cargo check -p realityos-verify --tests`, formatting, and diff checks.
+- [x] Freeze and run seed 21006 once. Its freeze verified before the reservation; the working-tree freeze was not committed before replay and changed the expected-contact gate for probe transit.
+- [x] Verify and analyze the seed 21006 sidecar: 6,130 pose samples, 25,912 force samples, onset bracket 23.978–23.980 s, and simulated μ=0.631634 inside inferred [0.335121, 0.8].
+- [x] Record that the seed 21006 run does not validate the final source change: the final code restores the original transit gate and decouples evidence capture. Do not replay seed 21006; its one-run budget is consumed.
+- [ ] Commit/push the final source and evidence, then confirm all four canonical repositories are on `main` and synchronized.
+
+Do not replay seeds 21004, 21005, or 21006. Any further simulator evidence needs a new seed frozen against a committed source snapshot.

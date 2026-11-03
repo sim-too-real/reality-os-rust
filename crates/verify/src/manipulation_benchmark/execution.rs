@@ -1553,29 +1553,41 @@ fn run_benchmark_trial_inner(
             if action_key.starts_with("probe:") {
                 if let (Some(profile), Some(audit)) = (wrench_profile, push_witness_audit.as_ref())
                 {
-                    if audit.motion.started && !audit.samples.is_empty() {
+                    if !audit.samples.is_empty() {
                         let prior = belief
                             .entry(PhysicalParameter::SupportFriction)
                             .and_then(|entry| entry.empirical_interval)
                             .unwrap_or([0.05, 0.8]);
-                        if let Ok(measurement) = push_probe_measurement(
+                        match push_probe_measurement_with_options(
                             &manifest,
                             &request,
                             profile,
                             audit,
                             &geometry.digest,
                             &after_state,
+                            /*require_pose_trace=*/ false,
                         ) {
-                            record_probe_measurement(
-                                &mut episode,
-                                &mut belief,
-                                &mut blocked_action_keys,
-                                probe_measurement_records.as_mut(),
-                                &action_key,
-                                prior,
-                                measurement,
-                            );
+                            Ok(measurement) => {
+                                record_probe_measurement(
+                                    &mut episode,
+                                    &mut belief,
+                                    &mut blocked_action_keys,
+                                    probe_measurement_records.as_mut(),
+                                    &action_key,
+                                    prior,
+                                    measurement,
+                                );
+                            }
+                            Err(error) => {
+                                episode
+                                    .decision_audits
+                                    .push(format!("probe_abort_measurement_seal_failed={error:?}"));
+                            }
                         }
+                    } else {
+                        episode
+                            .decision_audits
+                            .push("probe_abort_measurement_seal_failed=no_wrench_samples".into());
                     }
                 }
             }
@@ -1837,6 +1849,13 @@ impl Default for PushMotionAudit {
     }
 }
 
+struct ProbeTraceOrigin {
+    start_s: f64,
+    start_position_world_m: [f64; 3],
+    start_orientation_world_wxyz: [f64; 4],
+    start_contact_pairs: Vec<ProbeContactPair>,
+}
+
 struct PushWitnessAudit {
     execution: WitnessExecution,
     samples: Vec<WrenchSample>,
@@ -1845,6 +1864,7 @@ struct PushWitnessAudit {
     sensor_positions: Vec<[f64; 3]>,
     sensor_orientations: Vec<[f64; 4]>,
     object_pose_trace: Vec<ProbeObjectPoseSample>,
+    probe_trace_origin: Option<ProbeTraceOrigin>,
     precontact_baseline: Option<WrenchSample>,
     precontact_baseline_status: Option<String>,
     precontact_baseline_position: Option<[f64; 3]>,
@@ -1943,6 +1963,7 @@ fn execute_push_witness(
         sensor_positions: Vec::new(),
         sensor_orientations: Vec::new(),
         object_pose_trace: Vec::new(),
+        probe_trace_origin: None,
         precontact_baseline: None,
         precontact_baseline_status: None,
         precontact_baseline_position: None,
@@ -1983,6 +2004,23 @@ fn execute_push_witness(
         return Ok(audit);
     }
 
+    if is_probe {
+        let state = state_payload(worker)?;
+        let orientation = value_quaternion(&state["xquat"][request.scene.object_id.as_str()])
+            .ok_or_else(|| {
+                BenchmarkError::Simulation(format!(
+                    "observed body {} has no finite orientation",
+                    request.scene.object_id
+                ))
+            })?;
+        audit.probe_trace_origin = Some(ProbeTraceOrigin {
+            start_s: state["time"].as_f64().unwrap_or(0.0),
+            start_position_world_m: body_position(&state, &request.scene.object_id)?,
+            start_orientation_world_wxyz: orientation,
+            start_contact_pairs: probe_contact_pairs_from_state(&state)?,
+        });
+    }
+
     if is_probe && audit.monitor_gravity_reference.is_none() {
         let mut settle_remaining = PROBE_PRECONTACT_SETTLE_STEPS;
         while settle_remaining > 0 {
@@ -2010,6 +2048,7 @@ fn execute_push_witness(
                     true,
                     authorized.action.frozen().witness_contents.as_str(),
                     false,
+                    is_probe.then_some(request.scene.object_id.as_str()),
                     None,
                 )
                 .map_err(|error| {
@@ -2182,6 +2221,7 @@ fn execute_push_witness(
                     false,
                     authorized.action.frozen().witness_contents.as_str(),
                     target_index >= transit_count,
+                    is_probe.then_some(request.scene.object_id.as_str()),
                     Some(control_ramp),
                 )
                 .map_err(|error| {
@@ -2391,6 +2431,7 @@ fn execute_push_witness(
                         false,
                         authorized.action.frozen().witness_contents.as_str(),
                         false,
+                        is_probe.then_some(request.scene.object_id.as_str()),
                         None,
                     )
                     .map_err(|error| {
@@ -2469,6 +2510,7 @@ fn execute_push_witness(
                         false,
                         authorized.action.frozen().witness_contents.as_str(),
                         false,
+                        is_probe.then_some(request.scene.object_id.as_str()),
                         None,
                     )
                     .map_err(|error| {
@@ -2522,6 +2564,7 @@ fn execute_push_witness(
                         true,
                         authorized.action.frozen().witness_contents.as_str(),
                         false,
+                        is_probe.then_some(request.scene.object_id.as_str()),
                         None,
                     )
                     .map_err(|error| {
@@ -3009,6 +3052,26 @@ fn push_probe_measurement(
     geometry_digest: &str,
     state: &Value,
 ) -> Result<PushProbeMeasurement, BenchmarkError> {
+    push_probe_measurement_with_options(
+        manifest,
+        request,
+        profile,
+        audit,
+        geometry_digest,
+        state,
+        /*require_pose_trace=*/ true,
+    )
+}
+
+fn push_probe_measurement_with_options(
+    manifest: &RobotManifest,
+    request: &ReasoningRequest,
+    profile: &SimulationWrenchSensorProfile,
+    audit: &PushWitnessAudit,
+    geometry_digest: &str,
+    state: &Value,
+    require_pose_trace: bool,
+) -> Result<PushProbeMeasurement, BenchmarkError> {
     let frame = profile.sensor_frame.as_str();
     let site = manifest.site_records.iter().find(|site| site.name == frame);
     let body_id = site
@@ -3050,8 +3113,30 @@ fn push_probe_measurement(
         sensor_position[1] - request.scene.support_origin[1],
         sensor_position[2] - request.scene.support_origin[2],
     ];
-    let start_s = audit.motion.start_s;
-    let end_s = audit.motion.end_s.max(start_s + f64::EPSILON);
+    let (start_s, end_s) = if audit.motion.started {
+        let start_s = audit.motion.start_s;
+        (start_s, audit.motion.end_s.max(start_s + f64::EPSILON))
+    } else if !require_pose_trace {
+        // Abort before the formal motion window: keep the full wrench audit so
+        // contact-force diagnostics can still seal attributable samples.
+        let start_s = audit
+            .probe_trace_origin
+            .as_ref()
+            .map(|origin| origin.start_s)
+            .or_else(|| audit.samples.first().map(|sample| sample.capture_s))
+            .unwrap_or(0.0);
+        let end_s = audit
+            .object_pose_trace
+            .last()
+            .map(|sample| sample.capture_s)
+            .or_else(|| audit.samples.last().map(|sample| sample.capture_s))
+            .unwrap_or(start_s)
+            .max(start_s + f64::EPSILON);
+        (start_s, end_s)
+    } else {
+        let start_s = audit.motion.start_s;
+        (start_s, audit.motion.end_s.max(start_s + f64::EPSILON))
+    };
     if audit.samples.len() != audit.sample_free_space_wrenches.len()
         || audit.samples.len() != audit.sensor_positions.len()
         || audit.samples.len() != audit.sensor_orientations.len()
@@ -3107,7 +3192,7 @@ fn push_probe_measurement(
         .iter()
         .map(|(_, _, _, model_error_bound)| *model_error_bound)
         .collect::<Vec<_>>();
-    let motion_trace = if audit.motion.started {
+    let motion_trace = if audit.motion.started || !require_pose_trace {
         let samples = audit
             .object_pose_trace
             .iter()
@@ -3118,44 +3203,77 @@ fn push_probe_measurement(
             })
             .cloned()
             .collect::<Vec<_>>();
-        let clock_domain = samples
-            .first()
-            .map(|sample| sample.clock_domain.clone())
-            .ok_or_else(|| BenchmarkError::Simulation("probe_object_pose_trace_missing".into()))?;
-        let bootstrap_wrench_sequences = aligned_samples
-            .iter()
-            .filter(|(sample, _, _, _)| {
-                sample.capture_s == start_s
-                    && !samples.iter().any(|pose| {
-                        pose.wrench_sequence == Some(sample.sequence)
-                            && pose.capture_s == sample.capture_s
-                    })
-            })
-            .map(|(sample, _, _, _)| sample.sequence)
-            .collect::<Vec<_>>();
-        if bootstrap_wrench_sequences.len() > 1 {
-            return Err(BenchmarkError::Simulation(
-                "probe_object_pose_trace_ambiguous_start_wrench".into(),
-            ));
+        if samples.is_empty() {
+            if require_pose_trace {
+                return Err(BenchmarkError::Simulation(
+                    "probe_object_pose_trace_missing".into(),
+                ));
+            }
+            None
+        } else {
+            let clock_domain = samples[0].clock_domain.clone();
+            let (start_position_world_m, start_orientation_world_wxyz, start_contact_pairs) =
+                if audit.motion.started {
+                    (
+                        audit.motion.start_position,
+                        audit.motion.start_orientation_world_wxyz,
+                        audit.motion.start_contact_pairs.clone(),
+                    )
+                } else if let Some(origin) = audit.probe_trace_origin.as_ref() {
+                    (
+                        origin.start_position_world_m,
+                        origin.start_orientation_world_wxyz,
+                        Some(origin.start_contact_pairs.clone()),
+                    )
+                } else {
+                    (
+                        samples[0].position_world_m,
+                        samples[0].orientation_world_wxyz,
+                        samples[0].contact_pairs.clone(),
+                    )
+                };
+            let bootstrap_wrench_sequences = aligned_samples
+                .iter()
+                .filter(|(sample, _, _, _)| {
+                    sample.capture_s == start_s
+                        && !samples.iter().any(|pose| {
+                            pose.wrench_sequence == Some(sample.sequence)
+                                && pose.capture_s == sample.capture_s
+                        })
+                })
+                .map(|(sample, _, _, _)| sample.sequence)
+                .collect::<Vec<_>>();
+            if bootstrap_wrench_sequences.len() > 1 {
+                return Err(BenchmarkError::Simulation(
+                    "probe_object_pose_trace_ambiguous_start_wrench".into(),
+                ));
+            }
+            let mut trace = ProbeObjectPoseTrace {
+                object_id: request.scene.object_id.clone(),
+                clock_domain,
+                start_s,
+                start_position_world_m,
+                start_orientation_world_wxyz,
+                start_wrench_sequence: bootstrap_wrench_sequences.first().copied(),
+                start_contact_pairs,
+                samples,
+                digest: String::new(),
+            };
+            trace.digest = trace.digest();
+            match trace.validate() {
+                Ok(()) => Some(trace),
+                Err(error) if require_pose_trace => {
+                    return Err(BenchmarkError::Simulation(format!(
+                        "probe_object_pose_trace_invalid:{error}"
+                    )));
+                }
+                Err(_) => None,
+            }
         }
-        let mut trace = ProbeObjectPoseTrace {
-            object_id: request.scene.object_id.clone(),
-            clock_domain,
-            start_s,
-            start_position_world_m: audit.motion.start_position,
-            start_orientation_world_wxyz: audit.motion.start_orientation_world_wxyz,
-            start_wrench_sequence: bootstrap_wrench_sequences.first().copied(),
-            start_contact_pairs: audit.motion.start_contact_pairs.clone(),
-            samples,
-            digest: String::new(),
-        };
-        trace.digest = trace.digest();
-        trace.validate().map_err(|error| {
-            BenchmarkError::Simulation(format!("probe_object_pose_trace_invalid:{error}"))
-        })?;
-        Some(trace)
     } else {
-        None
+        return Err(BenchmarkError::Simulation(
+            "probe_object_pose_trace_missing_motion_window".into(),
+        ));
     };
     let evidence_ready_s = samples
         .iter()
@@ -3173,6 +3291,49 @@ fn push_probe_measurement(
         .map(|baseline| baseline.error_bounds)
         .unwrap_or(profile.error_bounds);
     compensation.digest = compensation.digest();
+    let motion_start_position = motion_trace
+        .as_ref()
+        .map(|trace| trace.start_position_world_m)
+        .or_else(|| {
+            audit
+                .probe_trace_origin
+                .as_ref()
+                .map(|origin| origin.start_position_world_m)
+        })
+        .unwrap_or(audit.motion.start_position);
+    let motion_end_position = motion_trace
+        .as_ref()
+        .and_then(|trace| trace.samples.last())
+        .map(|sample| sample.position_world_m)
+        .unwrap_or(body_position(state, &request.scene.object_id)?);
+    let mut trace_max_speed_m_s = 0.0_f64;
+    if let Some(trace) = motion_trace.as_ref() {
+        let mut previous_s = trace.start_s;
+        let mut previous_position = trace.start_position_world_m;
+        for sample in &trace.samples {
+            let elapsed_s = sample.capture_s - previous_s;
+            if elapsed_s > 0.0 {
+                let dx = sample.position_world_m[0] - previous_position[0];
+                let dy = sample.position_world_m[1] - previous_position[1];
+                trace_max_speed_m_s = trace_max_speed_m_s.max(dx.hypot(dy) / elapsed_s);
+            }
+            previous_s = sample.capture_s;
+            previous_position = sample.position_world_m;
+        }
+    }
+    let first_motion_s = if audit.motion.started {
+        audit.motion.first_motion_s
+    } else {
+        motion_trace
+            .as_ref()
+            .and_then(|trace| trace.first_xy_motion_bracket(PROBE_SLIP_DISPLACEMENT_M))
+            .map(|bracket| bracket[1])
+    };
+    let max_speed_m_s = if audit.motion.started {
+        audit.motion.max_speed_m_s
+    } else {
+        trace_max_speed_m_s
+    };
     Ok(PushProbeMeasurement {
         samples,
         precontact_baseline: audit.precontact_baseline.clone(),
@@ -3189,12 +3350,13 @@ fn push_probe_measurement(
         motion: ProbeMotionWindow {
             start_s,
             end_s,
-            displacement_m: sub3(audit.motion.end_position, audit.motion.start_position),
-            max_speed_m_s: audit.motion.max_speed_m_s,
+            displacement_m: sub3(motion_end_position, motion_start_position),
+            max_speed_m_s,
             max_quasi_static_speed_m_s: 0.02,
             pose_resolution_m: PROBE_SLIP_DISPLACEMENT_M,
-            first_motion_s: audit.motion.first_motion_s,
-            unresolved_motion_before_force: audit.motion.unresolved_motion_before_force,
+            first_motion_s,
+            unresolved_motion_before_force: audit.motion.started
+                && audit.motion.unresolved_motion_before_force,
         },
         motion_trace,
         prior_support_friction: request
@@ -5672,6 +5834,7 @@ mod audit_summary_tests {
             sensor_positions: vec![[0.0; 3]; count],
             sensor_orientations: vec![[1.0, 0.0, 0.0, 0.0]; count],
             object_pose_trace: Vec::new(),
+            probe_trace_origin: None,
             precontact_baseline: None,
             precontact_baseline_status: None,
             precontact_baseline_position: None,

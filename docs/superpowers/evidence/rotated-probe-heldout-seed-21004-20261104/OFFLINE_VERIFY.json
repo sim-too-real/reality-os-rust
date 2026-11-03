@@ -24,5 +24,6 @@
     "crates/verify/src/manipulation_benchmark/execution.rs",
     "crates/verify/tests/manipulation_benchmark.rs"
   ],
-  "post_run_compile_check": "PASS: cargo check -p realityos-verify --tests"
+  "post_run_compile_check": "PASS: cargo check -p realityos-verify --tests",
+  "post_run_patch_commit": "3258af0"
 }

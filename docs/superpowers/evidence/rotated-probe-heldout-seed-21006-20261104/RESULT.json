@@ -1,0 +1,307 @@
+{
+  "schema": "realityos.rotated_probe_diagnostic.result/v1",
+  "experiment_id": "rotated_probe_heldout_seed_21006_iiwa14_20261104_v1",
+  "recorded_at_utc": "2026-11-03T21:05:53.180582+00:00",
+  "status": "PASS_WITH_SOURCE_SNAPSHOT_CAVEAT",
+  "evidence_status": "SIMULATION_ONLY",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21006:0",
+  "trial_seed": 21006,
+  "trial_digest": "6a10b93e73ef060c7da8dfde6c657d8b0fd67ffb18785878f57d69e566c63883",
+  "model_hash": "a3bfa259186a25f148f39caee1e211d7a0e87daa6096215e6e21d57cc1eb664d",
+  "freeze": {
+    "verification_status": "PASS",
+    "source_commit_at_freeze": "3258af049b11b6ebfdf6e5413ad1fee8938b2ade",
+    "tracked_source_changes_at_freeze": true,
+    "tracked_source_change_paths": [
+      "crates/verify/src/manipulation_benchmark/execution.rs",
+      "crates/verify/tests/manipulation_benchmark.rs",
+      "crates/verify/mujoco_worker.py"
+    ],
+    "freeze_commit_before_replay": false,
+    "source_hashes_sha256": {
+      "crates/verify/tests/manipulation_benchmark.rs": "17B63DD47678A6A26626394E73B0803507735E9E7F2AB070D095203E0995E18D",
+      "crates/verify/src/manipulation_benchmark/execution.rs": "52314E590B1EABA7B3EC81FD1C2A912C56385B0F37D0509D78D5CF54991259BC",
+      "crates/verify/src/manipulation_benchmark/scenario.rs": "62C8074D1E4F9AC2CAEF5CD2897B172DE90FF06728EE5881145209F769FEB4A2",
+      "crates/verify/src/manipulation_benchmark/wrench_sensor.rs": "235D49F50534E164501E2CDFB29A46AC686DFFBD3445796A7523A0F84F338F3E",
+      "crates/verify/mujoco_worker.py": "25E4821837A67B058A81308E8F6C22855EF8B346DA797C071B98938898357518",
+      "crates/semantics/src/physical_reasoner.rs": "C8A04C76C714D09A82C1E96E404157DFC4EC3044DB929CF8B48DF590077A23E2",
+      "crates/semantics/src/contact_collision.rs": "33A173430A20E74DDD1215F101220279DA6448E1A0B17B10E1DB0ACE1E75CE19",
+      "crates/semantics/src/future_interaction.rs": "3917BF7A0D1DF15CBC5BCDB422FA386A6A9C377745ED7AE83A5B76E2A2115140",
+      "crates/semantics/src/push_probe.rs": "788888E71C28621E1ECCFD952A2A578B8645B3B1191C2D4B7590A8D3A95E79E2",
+      "crates/semantics/src/observation.rs": "B61BA5750F7D044D77FA78D6CB9CB784B975C0A0CD9858CE13241705DF4D08A9",
+      "robots/benchmarks/manipulation/scenario_suite_v3.json": "1ECFB8D15BB7F422B21B5E46F5868F82D04F14CE98A725CCAC20C50C92474565",
+      "robots/benchmarks/manipulation/embodiments.json": "2DD9AC224DF20A5BB83467E5FE6037F9054EABC14F78DB8521A3877CD859AB96",
+      "robots/external/iiwa14/robot.yaml": "201CCE2F5EC2AB317397D53B76BBF933FA33297270FE6865E360F0E64005B615",
+      "Cargo.lock": "5B00D2A3094ABEA8F147A8027EFF0C01FEE5048064ADE64E0C3B6685179C46B1"
+    },
+    "current_source_hash_matches": {
+      "crates/verify/tests/manipulation_benchmark.rs": {
+        "frozen_sha256": "17B63DD47678A6A26626394E73B0803507735E9E7F2AB070D095203E0995E18D",
+        "current_sha256": "17B63DD47678A6A26626394E73B0803507735E9E7F2AB070D095203E0995E18D",
+        "matches": true
+      },
+      "crates/verify/src/manipulation_benchmark/execution.rs": {
+        "frozen_sha256": "52314E590B1EABA7B3EC81FD1C2A912C56385B0F37D0509D78D5CF54991259BC",
+        "current_sha256": "CF90A6213BAEF8519EEC92A37508F4888C6BB076B4778888EC78B0242E3A4F85",
+        "matches": false
+      },
+      "crates/verify/src/manipulation_benchmark/scenario.rs": {
+        "frozen_sha256": "62C8074D1E4F9AC2CAEF5CD2897B172DE90FF06728EE5881145209F769FEB4A2",
+        "current_sha256": "62C8074D1E4F9AC2CAEF5CD2897B172DE90FF06728EE5881145209F769FEB4A2",
+        "matches": true
+      },
+      "crates/verify/src/manipulation_benchmark/wrench_sensor.rs": {
+        "frozen_sha256": "235D49F50534E164501E2CDFB29A46AC686DFFBD3445796A7523A0F84F338F3E",
+        "current_sha256": "235D49F50534E164501E2CDFB29A46AC686DFFBD3445796A7523A0F84F338F3E",
+        "matches": true
+      },
+      "crates/verify/mujoco_worker.py": {
+        "frozen_sha256": "25E4821837A67B058A81308E8F6C22855EF8B346DA797C071B98938898357518",
+        "current_sha256": "3337AE4DE5F2F1C4953195168C93D14D4C385B7802ABBA998A81F667929A05CD",
+        "matches": false
+      },
+      "crates/semantics/src/physical_reasoner.rs": {
+        "frozen_sha256": "C8A04C76C714D09A82C1E96E404157DFC4EC3044DB929CF8B48DF590077A23E2",
+        "current_sha256": "C8A04C76C714D09A82C1E96E404157DFC4EC3044DB929CF8B48DF590077A23E2",
+        "matches": true
+      },
+      "crates/semantics/src/contact_collision.rs": {
+        "frozen_sha256": "33A173430A20E74DDD1215F101220279DA6448E1A0B17B10E1DB0ACE1E75CE19",
+        "current_sha256": "33A173430A20E74DDD1215F101220279DA6448E1A0B17B10E1DB0ACE1E75CE19",
+        "matches": true
+      },
+      "crates/semantics/src/future_interaction.rs": {
+        "frozen_sha256": "3917BF7A0D1DF15CBC5BCDB422FA386A6A9C377745ED7AE83A5B76E2A2115140",
+        "current_sha256": "3917BF7A0D1DF15CBC5BCDB422FA386A6A9C377745ED7AE83A5B76E2A2115140",
+        "matches": true
+      },
+      "crates/semantics/src/push_probe.rs": {
+        "frozen_sha256": "788888E71C28621E1ECCFD952A2A578B8645B3B1191C2D4B7590A8D3A95E79E2",
+        "current_sha256": "788888E71C28621E1ECCFD952A2A578B8645B3B1191C2D4B7590A8D3A95E79E2",
+        "matches": true
+      },
+      "crates/semantics/src/observation.rs": {
+        "frozen_sha256": "B61BA5750F7D044D77FA78D6CB9CB784B975C0A0CD9858CE13241705DF4D08A9",
+        "current_sha256": "B61BA5750F7D044D77FA78D6CB9CB784B975C0A0CD9858CE13241705DF4D08A9",
+        "matches": true
+      },
+      "robots/benchmarks/manipulation/scenario_suite_v3.json": {
+        "frozen_sha256": "1ECFB8D15BB7F422B21B5E46F5868F82D04F14CE98A725CCAC20C50C92474565",
+        "current_sha256": "1ECFB8D15BB7F422B21B5E46F5868F82D04F14CE98A725CCAC20C50C92474565",
+        "matches": true
+      },
+      "robots/benchmarks/manipulation/embodiments.json": {
+        "frozen_sha256": "2DD9AC224DF20A5BB83467E5FE6037F9054EABC14F78DB8521A3877CD859AB96",
+        "current_sha256": "2DD9AC224DF20A5BB83467E5FE6037F9054EABC14F78DB8521A3877CD859AB96",
+        "matches": true
+      },
+      "robots/external/iiwa14/robot.yaml": {
+        "frozen_sha256": "201CCE2F5EC2AB317397D53B76BBF933FA33297270FE6865E360F0E64005B615",
+        "current_sha256": "201CCE2F5EC2AB317397D53B76BBF933FA33297270FE6865E360F0E64005B615",
+        "matches": true
+      },
+      "Cargo.lock": {
+        "frozen_sha256": "5B00D2A3094ABEA8F147A8027EFF0C01FEE5048064ADE64E0C3B6685179C46B1",
+        "current_sha256": "5B00D2A3094ABEA8F147A8027EFF0C01FEE5048064ADE64E0C3B6685179C46B1",
+        "matches": true
+      }
+    }
+  },
+  "run": {
+    "attempts": 1,
+    "exit_status": 0,
+    "test_duration_seconds": 320.48,
+    "episode_outcome": "success",
+    "simulation_time_s": 59.168000000026346,
+    "control_writes": 27583,
+    "unauthorized_writes": 0,
+    "wrench_sample_count": 29584,
+    "actions": [
+      {
+        "action_key": "probe:+x",
+        "displacement_m": 0.004985457205300367
+      },
+      {
+        "action_key": "push:+x",
+        "displacement_m": 0.02521812099043889
+      }
+    ],
+    "inference_reason": "updated:SlipOnset",
+    "inferred_support_friction_interval": [
+      0.33512073810703824,
+      0.8
+    ]
+  },
+  "contact_force_evidence": {
+    "sidecar_status": "PASS",
+    "measurement_count": 1,
+    "pose_sample_count": 6130,
+    "contact_force_sample_count": 25912,
+    "sidecar_sha256": "779A782185B482F2D23F18A0B2AE4A2322931921FF531C36A2E364740815F8C1"
+  },
+  "slip_onset_analysis": {
+    "status": "bracketed",
+    "time_bracket_s": [
+      23.97799999999759,
+      23.979999999997588
+    ],
+    "displacement_threshold_m": 0.001,
+    "simulator_sliding_friction_coefficients": [
+      0.6316342792910594,
+      0.6316342792910594
+    ],
+    "inferred_interval": [
+      0.33512073810703824,
+      0.8
+    ],
+    "friction_overlap_status": "overlap",
+    "tool_wrench_interval": {
+      "left": {
+        "capture_s": 23.97799999999759,
+        "error_bounds": [
+          0.05,
+          0.05,
+          0.05,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "sequence": 11988,
+        "wrench": [
+          24.193,
+          -0.41400000000000003,
+          1.919,
+          -0.0091,
+          -0.4561,
+          -0.005200000000000001
+        ]
+      },
+      "right": {
+        "capture_s": 23.979999999997588,
+        "error_bounds": [
+          0.05,
+          0.05,
+          0.05,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "sequence": 11989,
+        "wrench": [
+          22.143,
+          -0.781,
+          -4.691,
+          -0.0152,
+          -0.2987,
+          -0.0063
+        ]
+      },
+      "target_time_bracket_s": [
+        23.97799999999759,
+        23.979999999997588
+      ]
+    },
+    "support_contacts_at_onset": [
+      {
+        "normal_force_n": 10.12758427593741,
+        "tangential_force_n": 6.396929395091192,
+        "friction": [
+          0.6316342792910594,
+          0.6316342792910594
+        ]
+      },
+      {
+        "normal_force_n": 0.0,
+        "tangential_force_n": 0.0,
+        "friction": [
+          0.6316342792910594,
+          0.6316342792910594
+        ]
+      },
+      {
+        "normal_force_n": 10.187321192352822,
+        "tangential_force_n": 6.434661279238311,
+        "friction": [
+          0.6316342792910594,
+          0.6316342792910594
+        ]
+      },
+      {
+        "normal_force_n": 0.0,
+        "tangential_force_n": 0.0,
+        "friction": [
+          0.6316342792910594,
+          0.6316342792910594
+        ]
+      }
+    ]
+  },
+  "interpretation": "The verified 1 mm slip-onset trace contains obj0/table contact-force snapshots and the paired tool-wrench interval. The simulator friction coefficients lie inside the inferred interval. The run used a frozen working-tree source snapshot with a probe-transit expected-contact allowance change; the final code restores the prior gate, captures a transit pose only on the unexpected-contact step, and records full per-step force evidence during the formal motion phase. The final code has not been simulator-replayed because the one-run budget is consumed.",
+  "scope": {
+    "physical_test": false,
+    "physical_actions": 0,
+    "full_lift": false,
+    "metal": false,
+    "shop_release": false,
+    "viewport_admits": false
+  },
+  "artifacts": {
+    "TRIAL_INPUT.json": {
+      "bytes": 3165,
+      "sha256": "077A5F031D36804B602E1FD2BAC0FE374D7DC5F29694105560344D75EED59B6C"
+    },
+    "PREFLIGHT.json": {
+      "bytes": 14979,
+      "sha256": "06EFA6A64C8DFD5EA52225C25FDC70594DFF3776A96845AF805DF21EC558D61F"
+    },
+    "FREEZE.json": {
+      "bytes": 7957,
+      "sha256": "E3CA4B32458F5342C19FCE8472EB3DDD485B14BD1E18A92491DD287FD4471627"
+    },
+    "FREEZE_VERIFY.json": {
+      "bytes": 953,
+      "sha256": "1E11E6C055472F97B7C6BAE1A06A89196424B608008D0C9C2AEF2ABF02751452"
+    },
+    "PREPARE_LOG.txt": {
+      "bytes": 1610,
+      "sha256": "E6256B37770D48D278769513A8569AD23FE307ED8D3C7C076559921ACC4F0207"
+    },
+    "RUN_LOG.txt": {
+      "bytes": 3302,
+      "sha256": "806D551E4D3229E75D15159EDCB93D8C606EDAF8DF595DD7015A151CC84E9009"
+    },
+    "EPISODE.json": {
+      "bytes": 30271,
+      "sha256": "5B76A36DDC73B4BC4397660C12B1F386226372F6B27A9B84F3BFDECB9B856642"
+    },
+    "PROBE_MEASUREMENT_SIDECAR.json": {
+      "bytes": 57513465,
+      "sha256": "779A782185B482F2D23F18A0B2AE4A2322931921FF531C36A2E364740815F8C1"
+    },
+    "OFFLINE_VERIFY.json": {
+      "bytes": 1062,
+      "sha256": "434318565DE6A0DBAE3C795F2199A826C82BF7B2852B3CE6F6BFE7556C9B4FC5"
+    },
+    "OFFLINE_ANALYSIS.json": {
+      "bytes": 13916,
+      "sha256": "5DF067BBA65F85D87B3C2820366682DD73EEAFB64302256EFDE986324C078C55"
+    },
+    "CHECKPOINT.md": {
+      "bytes": 1069,
+      "sha256": "36DAC49EB53EBD8F4BC484CE6A5CE005AB93BC3D7703676AF05F928DB75B51EA"
+    }
+  },
+  "final_source_validation": {
+    "cargo_check_realityos_verify_tests": "PASS",
+    "python_mujoco_wrench_gate_tests": "PASS (8 tests)",
+    "cargo_fmt_check": "PASS",
+    "git_diff_check": "PASS",
+    "simulator_replay_of_final_capture_change": "NOT_RUN; seed 21006 one-run budget consumed",
+    "source_hashes_sha256": {
+      "crates/verify/src/manipulation_benchmark/execution.rs": "CF90A6213BAEF8519EEC92A37508F4888C6BB076B4778888EC78B0242E3A4F85",
+      "crates/verify/src/mujoco_exec.rs": "6706753D2FB8AD603BC87861FF692F549B4A32B6768CABE7CEA3054887C45831",
+      "crates/verify/mujoco_worker.py": "3337AE4DE5F2F1C4953195168C93D14D4C385B7802ABBA998A81F667929A05CD",
+      "crates/verify/tests/test_mujoco_wrench_gates.py": "AD1C089E580207EC27F5467AA4D4215774DFC155DB29FC90E5A2657542CA568C"
+    }
+  }
+}

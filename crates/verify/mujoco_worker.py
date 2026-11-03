@@ -591,6 +591,41 @@ def _probe_contact_force_evidence() -> list[dict[str, Any]]:
     return samples
 
 
+def _probe_object_pose_trace_record(
+    object_id: str, simulator_step: int, wrench_sequence: int | None
+) -> dict[str, Any]:
+    """Capture one probe pose and its contacts without authorizing contact."""
+    m, d = INST.model, INST.data
+    if m is None or d is None:
+        raise ValueError("probe_contact_model_missing")
+    if not isinstance(object_id, str) or not object_id.strip():
+        raise ValueError("probe_trace_object_id_invalid")
+    body_id = int(mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, object_id))
+    if body_id <= 0:
+        raise ValueError("probe_trace_object_id_unknown")
+    contact_force_samples = _probe_contact_force_evidence()
+    return {
+        "object_id": object_id,
+        "simulator_step": simulator_step,
+        "wrench_sequence": wrench_sequence,
+        "capture_s": float(d.time),
+        "clock_domain": "mujoco_simulation_clock",
+        "position_world_m": [float(value) for value in d.xpos[body_id]],
+        "orientation_world_wxyz": [float(value) for value in d.xquat[body_id]],
+        "contact_pairs": [sample["contact_pair"] for sample in contact_force_samples],
+        "contact_force_samples": contact_force_samples,
+    }
+
+
+def _should_capture_probe_pose_trace(
+    probe_trace_requested: bool,
+    expected_contact_allowed: bool,
+    unexpected_contact: bool,
+) -> bool:
+    """Capture expected-contact motion samples and the aborting transit step."""
+    return expected_contact_allowed or (probe_trace_requested and unexpected_contact)
+
+
 def _end_effector_chains(m, joints, bodies, sites) -> list[dict[str, Any]]:
     name_to_id = {m.body(i).name or f"body_{i}": i for i in range(m.nbody)}
     chains = []
@@ -2080,6 +2115,7 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
         validated = False
         samples: list[dict[str, Any]] = []
         object_pose_trace: list[dict[str, Any]] = []
+        probe_trace_errors: list[str] = []
         control_correction_max_rad = 0.0
         precontact_baseline_record = None
         precontact_baseline_status = None
@@ -2108,6 +2144,18 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                 )
                 if expected_contact_body_id <= 0 or expected_contact_body_id in sensor_subtree_body_ids:
                     raise ValueError("wrench_expected_contact_body_unknown_or_instrumented")
+            probe_trace_object_name = msg.get("probe_trace_object_id")
+            probe_trace_body_id = None
+            if probe_trace_object_name is not None:
+                if not isinstance(probe_trace_object_name, str) or not probe_trace_object_name.strip():
+                    raise ValueError("probe_trace_object_id_invalid")
+                probe_trace_body_id = int(
+                    mujoco.mj_name2id(
+                        INST.model, mujoco.mjtObj.mjOBJ_BODY, probe_trace_object_name
+                    )
+                )
+                if probe_trace_body_id <= 0 or probe_trace_body_id in sensor_subtree_body_ids:
+                    raise ValueError("probe_trace_object_id_unknown_or_instrumented")
             _hold_target_names = _validate_wrench_abort_contract(policy)
             for actuator_name in _hold_target_names:
                 actuator_id = int(mujoco.mj_name2id(INST.model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name))
@@ -2270,13 +2318,6 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                         now_s,
                     )
                     break
-                if _has_unexpected_sensor_subtree_contact(
-                    sensor_subtree_body_ids, expected_contact_body_id
-                ):
-                    abort = _trip_wrench_monitor(
-                        {"kind": "unexpected_contact"}, policy, now_s
-                    )
-                    break
                 wrench_sequence_at_step = None
                 if not drop_wrench_samples and step_count % step_interval == 0:
                     sampled = _sample_tool_wrench(profile, profile_digest, sequence, sensor_ids)
@@ -2284,30 +2325,38 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                     pending.append(sampled)
                     wrench_sequence_at_step = sequence
                     sequence += 1
-                if expected_contact_body_id is not None:
-                    contact_force_samples = _probe_contact_force_evidence()
-                    object_pose_trace.append(
-                        {
-                            "object_id": expected_contact_name,
-                            "simulator_step": step_count,
-                            "wrench_sequence": wrench_sequence_at_step,
-                            "capture_s": now_s,
-                            "clock_domain": "mujoco_simulation_clock",
-                            "position_world_m": [
-                                float(value)
-                                for value in INST.data.xpos[expected_contact_body_id]
-                            ],
-                            "orientation_world_wxyz": [
-                                float(value)
-                                for value in INST.data.xquat[expected_contact_body_id]
-                            ],
-                            "contact_pairs": [
-                                sample["contact_pair"]
-                                for sample in contact_force_samples
-                            ],
-                            "contact_force_samples": contact_force_samples,
-                        }
+                unexpected_contact = _has_unexpected_sensor_subtree_contact(
+                    sensor_subtree_body_ids, expected_contact_body_id
+                )
+                if _should_capture_probe_pose_trace(
+                    probe_trace_body_id is not None,
+                    expected_contact_body_id is not None,
+                    unexpected_contact,
+                ):
+                    trace_object_name = (
+                        probe_trace_object_name
+                        if probe_trace_body_id is not None
+                        else expected_contact_name
                     )
+                    try:
+                        object_pose_trace.append(
+                            _probe_object_pose_trace_record(
+                                trace_object_name,
+                                step_count,
+                                wrench_sequence_at_step,
+                            )
+                        )
+                    except Exception as exc:
+                        # Diagnostic capture must never bypass the independent
+                        # unexpected-contact stop below.
+                        probe_trace_errors.append(f"{type(exc).__name__}:{exc}")
+                # Trip unexpected contact after recording this step's pose /
+                # contact-force evidence so abort diagnostics remain attributable.
+                if unexpected_contact:
+                    abort = _trip_wrench_monitor(
+                        {"kind": "unexpected_contact"}, policy, now_s
+                    )
+                    break
                 newly_available = []
                 still_pending = []
                 for candidate in pending:
@@ -2389,6 +2438,7 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                 "state": state,
                 "samples": samples,
                 "object_pose_trace": object_pose_trace,
+                "probe_trace_errors": probe_trace_errors,
                 "sensor_id": str(profile["sensor_id"]),
                 "profile_digest": profile_digest,
                 "precontact_baseline": precontact_baseline_record,
@@ -2415,6 +2465,7 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                     "state": INST.state(),
                     "samples": samples,
                     "object_pose_trace": object_pose_trace,
+                    "probe_trace_errors": probe_trace_errors,
                     "sensor_id": str(profile["sensor_id"]),
                     "profile_digest": profile_digest,
                     "precontact_baseline": precontact_baseline_record,

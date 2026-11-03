@@ -1,0 +1,92 @@
+{
+  "schema": "realityos.rotated_probe_diagnostic.result/v1",
+  "experiment_id": "rotated_probe_heldout_seed_21005_iiwa14_20261104_v1",
+  "recorded_at_utc": "2026-11-03T21:05:52.556351+00:00",
+  "status": "RUN_FAILED_NO_MEASUREMENT_RECORDS",
+  "evidence_status": "SIMULATION_ONLY",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21005:0",
+  "trial_seed": 21005,
+  "trial_digest": "f7670d63c510ee038d73550b667c594d2882ac598bf368795dc6e970ea15a7da",
+  "freeze": {
+    "verification_status": "PASS",
+    "source_commit_at_freeze": "26eddfaf8b0b869619ad88f3dfe231706dd6d58b",
+    "tracked_source_changes_at_freeze": true,
+    "freeze_commit_before_replay": false,
+    "run_budget": {
+      "simulation_runs_max": 1,
+      "simulation_runs_at_freeze": 0,
+      "prepare_only_preflight_runs": 1,
+      "full_lift_replay": false
+    }
+  },
+  "run": {
+    "attempts": 1,
+    "exit_status": 101,
+    "test_duration_seconds": 139.73,
+    "episode_outcome": "action_failed",
+    "failure_cause": "force_monitor_abort",
+    "refusal_code": "WRENCH_MONITOR_ABORTED_ACTION",
+    "wrench_abort_reason": {
+      "kind": "unexpected_contact"
+    },
+    "abort_time_s": 13.262000000001098,
+    "stop_result": "preauthorized_hold_verified",
+    "object_displacement_m": 0.00025225442720494746,
+    "control_writes": 5631,
+    "unauthorized_writes": 0,
+    "wrench_sample_count": 6630,
+    "wrench_contact_pairs": [
+      "obj0/geom_62<->table/geom_63",
+      "link7/geom_60<->obj0/geom_62"
+    ],
+    "inference_reason": null
+  },
+  "diagnosis": {
+    "finding": "unexpected_contact occurred during probe transit before the formal motion phase; the abort path had wrench samples but no probe pose/contact-force samples, so no measurement record could be sealed.",
+    "same_seed_replayed": false,
+    "offline_sidecar_verification": "UNAVAILABLE_NO_SIDECAR",
+    "offline_slip_onset_analysis": "UNAVAILABLE_NO_MEASUREMENT_TRACE"
+  },
+  "scope": {
+    "physical_test": false,
+    "physical_actions": 0,
+    "full_lift": false,
+    "metal": false,
+    "shop_release": false,
+    "viewport_admits": false
+  },
+  "artifacts": {
+    "TRIAL_INPUT.json": {
+      "bytes": 2772,
+      "sha256": "B353FA6F04BFE28C39D7EFBD85D22E6584A979C688FDFB6CE3FA9C86A055D145"
+    },
+    "PREFLIGHT.json": {
+      "bytes": 11329,
+      "sha256": "C75FE3899633E83C27F4CDCC229C9E32FB833FC0FC4D3245131BCC4AA37A1A61"
+    },
+    "FREEZE.json": {
+      "bytes": 10064,
+      "sha256": "59EE709989E3507432D354F62D9C69B0D2AB900557AA35974ADBE88252839328"
+    },
+    "FREEZE_VERIFY.json": {
+      "bytes": 953,
+      "sha256": "BE883D223DA407138E42D3795C6B061D314A0178C34FD0BBB2768D134D4B742B"
+    },
+    "PREPARE_LOG.txt": {
+      "bytes": 1444,
+      "sha256": "AA9D87E42C5E5D54F117704487930A0D97854884E997534BD8047CC4BFD8FD52"
+    },
+    "RUN_LOG.txt": {
+      "bytes": 3008,
+      "sha256": "8D899CBA9A7536438FAB373A9EFBB4DAE7DBD899523B507EA88D5FC306FFF026"
+    },
+    "EPISODE.json": {
+      "bytes": 15319,
+      "sha256": "D68A91ADEB3E8C895FA6C0ED7954E615042C846988C6FEA8B41B5FAD887A68EC"
+    },
+    "PROBE_MEASUREMENT_SIDECAR.json.episode-diagnostic.json": {
+      "bytes": 15319,
+      "sha256": "D68A91ADEB3E8C895FA6C0ED7954E615042C846988C6FEA8B41B5FAD887A68EC"
+    }
+  }
+}

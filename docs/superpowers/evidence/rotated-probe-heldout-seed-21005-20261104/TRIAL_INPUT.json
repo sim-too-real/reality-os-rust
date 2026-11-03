@@ -1,0 +1,120 @@
+{
+  "schema_version": 7,
+  "paired_trial_key": "68aa9a7ae6c2e0d996a339ba2c53718898c840ac39b7d7df45e503d0323abdc8",
+  "scenario_suite_id": "force_observable_public_probe",
+  "scenario_suite_version": 3,
+  "stratum": "expected_success",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21005:0",
+  "seed": 21005,
+  "index": 0,
+  "task": "push_probe_replan",
+  "role": "development",
+  "robot_id": "menagerie_iiwa14",
+  "model_hash": "a3bfa259186a25f148f39caee1e211d7a0e87daa6096215e6e21d57cc1eb664d",
+  "source_hash": "6447e03591ea909e12d1b2e9395b0e3a0e40555fb7db5edd51becc7179f723d2",
+  "expectation": "expected_success",
+  "scenario": {
+    "seed": 21005,
+    "polarity": "positive",
+    "skill": "PUSH",
+    "objects": [
+      {
+        "friction": 0.8,
+        "mass": 1.0,
+        "movable": false,
+        "name": "benchmark_obstacle_0",
+        "pos": [
+          0.6192192794719532,
+          0.17121947025520112,
+          0.4742067662469855
+        ],
+        "size": [
+          0.055803256318169285,
+          0.055803256318169285
+        ],
+        "type": "cylinder"
+      },
+      {
+        "friction": 0.791822407138471,
+        "mass": 1.0036978083204802,
+        "movable": true,
+        "name": "obj0",
+        "pos": [
+          0.5910676137562005,
+          0.02943475413219758,
+          0.447299197187297
+        ],
+        "rgba": [
+          0.85,
+          0.25,
+          0.2,
+          1.0
+        ],
+        "size": [
+          0.05420676624698552,
+          0.05420676624698552,
+          0.02729919718729703
+        ],
+        "solref": [
+          0.005,
+          1.0
+        ],
+        "type": "box"
+      },
+      {
+        "friction": 0.791822407138471,
+        "mass": 20.0,
+        "movable": false,
+        "name": "table",
+        "pos": [
+          0.9,
+          0.0,
+          0.4
+        ],
+        "size": [
+          0.4,
+          0.25,
+          0.02
+        ],
+        "solref": [
+          0.005,
+          1.0
+        ],
+        "type": "box"
+      }
+    ],
+    "planar": false,
+    "object_id": "obj0",
+    "expected_refusal": null,
+    "neg": null,
+    "stale": false,
+    "move_object_after_obs": false,
+    "replay": false,
+    "restart_replay": false,
+    "crash_controller": false,
+    "immovable": false,
+    "push_dir": [
+      1.0,
+      0.0,
+      0.0
+    ],
+    "push_dist": 0.041459312023538496,
+    "required_opening": 0.8,
+    "world_construction": "fixed_world"
+  },
+  "initial_qpos": [
+    -0.07125680954574673,
+    -0.07287157371235167,
+    0.011498895309892898,
+    0.016989618136582743,
+    0.014470229723788447,
+    0.048413391291883004,
+    -0.05187533527223166
+  ],
+  "goal_xyz": [
+    0.632526925779739,
+    0.02943475413219758,
+    0.447299197187297
+  ],
+  "fault_injection": null
+}

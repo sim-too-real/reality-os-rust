@@ -470,6 +470,7 @@ impl MujocoInstance {
         request_monitor_gravity_reference: bool,
         action_witness_contents: &str,
         allow_expected_target_contact: bool,
+        probe_trace_object_id: Option<&str>,
         control_ramp: Option<MonitoredControlRamp<'_>>,
     ) -> Result<MonitoredStepResult, ExecError> {
         if self.wrench_abort_latched {
@@ -556,6 +557,9 @@ impl MujocoInstance {
                 "wrench_expected_contact_body_unknown".into(),
             ));
         }
+        if probe_trace_object_id.is_some_and(|name| name.trim().is_empty()) {
+            return Err(ExecError::Msg("probe_trace_object_id_invalid".into()));
+        }
         let response = self.rpc(&json!({
             "cmd": "step_monitored",
             "n": n,
@@ -570,6 +574,7 @@ impl MujocoInstance {
             "request_precontact_baseline": request_precontact_baseline,
             "request_monitor_gravity_reference": request_monitor_gravity_reference,
             "expected_contact_body": expected_contact_body,
+            "probe_trace_object_id": probe_trace_object_id,
             "control_ramp": control_ramp,
         }))?;
         if response["ok"] != true {
