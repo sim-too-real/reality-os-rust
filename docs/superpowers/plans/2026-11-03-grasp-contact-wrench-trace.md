@@ -74,8 +74,8 @@
 
 - [x] Run focused observation and manipulation benchmark tests plus the two-case deterministic replay verifier.
 - [x] Review the final diff and confirm no unrelated files or safety behavior changed.
-- [ ] Commit and push the validated changes directly to the existing `main` branch.
+- [x] Commit and push the validated changes directly to the existing `main` branch.
 
 ## Current Checkpoint
 
-Tasks 1 through 3 are complete. The full crate run produced 192/192 library tests passing and 105/106 integration tests passing (6 ignored). The one integration failure was reproduced in isolation and traced to the existing conservative axis-aligned sweep guard rejecting a slightly rotated probe direction; its integration success expectation conflicts with an existing unit-test contract. No safety guard was changed. See `docs/superpowers/evidence/grasp-lift-wrench-trace-20261103/CHECKPOINT.md` for the replay findings and next diagnostic question. Task 4 still requires final review and synchronization.
+Tasks 1 through 4 are complete and synchronized to `main`. The full crate run produced 192/192 library tests passing and 105/106 integration tests passing (6 ignored). The one integration failure was reproduced in isolation and traced to the existing conservative axis-aligned sweep guard rejecting a slightly rotated probe direction; its integration success expectation conflicts with an existing unit-test contract. No safety guard was changed. See `docs/superpowers/evidence/grasp-lift-wrench-trace-20261103/CHECKPOINT.md` for replay findings and the next diagnostic question.
