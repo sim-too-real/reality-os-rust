@@ -104,6 +104,8 @@ class Instance:
         self.wrench_gravity_reference_by_profile: dict[str, dict[str, Any]] = {}
         self.wrench_free_space_by_profile: dict[str, tuple[Any, Any]] = {}
         self.wrench_abort_latched = False
+        self.tool_object_friction_pair_ids: set[int] = set()
+        self.tool_object_friction_target_geom_ids: set[int] = set()
 
     def inspect(self) -> dict[str, Any]:
         m, d = self.model, self.data
@@ -622,7 +624,123 @@ def _collect_assets(roots: list[str]) -> dict[str, bytes]:
     return assets
 
 
-def _add_scenario_objects(spec: Any, extras: list[dict[str, Any]]) -> None:
+def _unique_spec_name(spec: Any, attribute: str, prefix: str) -> str:
+    used = {
+        str(getattr(item, attribute, "") or "")
+        for item in getattr(spec, f"{attribute}s", []) or []
+    }
+    index = 0
+    while True:
+        name = f"{prefix}_{index}"
+        if name not in used:
+            return name
+        index += 1
+
+
+def _ensure_geom_name(spec: Any, geom: Any, used_names: set[str]) -> str:
+    name = str(getattr(geom, "name", "") or "")
+    if name:
+        used_names.add(name)
+        return name
+    index = 0
+    while True:
+        name = f"scenario_friction_geom_{index}"
+        if name not in used_names:
+            geom.name = name
+            used_names.add(name)
+            return name
+        index += 1
+
+
+def _add_tool_object_friction_pairs(
+    spec: Any,
+    target_geoms: list[Any],
+    finger_body_names: Any,
+    friction: float,
+) -> tuple[set[tuple[str, str]], set[str]]:
+    if not isinstance(finger_body_names, list) or not finger_body_names:
+        raise ValueError("scenario_tool_object_friction_finger_bodies_invalid")
+    if not math.isfinite(friction) or friction < 0.0:
+        raise ValueError("scenario_tool_object_friction_invalid")
+
+    geom_names = {
+        str(getattr(geom, "name", "") or "")
+        for geom in getattr(spec, "geoms", []) or []
+        if getattr(geom, "name", None)
+    }
+    pair_names = {
+        str(getattr(pair, "name", "") or "")
+        for pair in getattr(spec, "pairs", []) or []
+        if getattr(pair, "name", None)
+    }
+    target_named = [
+        (geom, _ensure_geom_name(spec, geom, geom_names)) for geom in target_geoms
+    ]
+    pair_friction = [friction, friction, 0.01, 0.01, 0.01]
+    friction_geom_pairs: set[tuple[str, str]] = set()
+    seen_bodies: set[str] = set()
+    for raw_body_name in finger_body_names:
+        if not isinstance(raw_body_name, str) or not raw_body_name:
+            raise ValueError("scenario_tool_object_friction_finger_body_invalid")
+        body_name = raw_body_name
+        if body_name in seen_bodies:
+            raise ValueError("scenario_tool_object_friction_finger_body_duplicate")
+        seen_bodies.add(body_name)
+        finger_body = spec.body(body_name)
+        if finger_body is None:
+            raise ValueError(f"scenario_tool_object_friction_unknown_finger_body:{body_name}")
+
+        finger_geoms = []
+        for finger_geom in finger_body.geoms:
+            for target_geom, target_name in target_named:
+                can_collide = (
+                    int(target_geom.contype) & int(finger_geom.conaffinity)
+                ) or (int(finger_geom.contype) & int(target_geom.conaffinity))
+                if can_collide:
+                    finger_geoms.append(
+                        (finger_geom, target_name, _ensure_geom_name(spec, finger_geom, geom_names))
+                    )
+        if not finger_geoms:
+            raise ValueError(f"scenario_tool_object_friction_no_collision_geom:{body_name}")
+
+        for finger_geom, target_name, finger_name in finger_geoms:
+            friction_geom_pairs.add(tuple(sorted((target_name, finger_name))))
+            pair = next(
+                (
+                    item
+                    for item in spec.pairs
+                    if {str(item.geomname1), str(item.geomname2)}
+                    == {target_name, finger_name}
+                ),
+                None,
+            )
+            if pair is None:
+                pair_name = _unique_spec_name(spec, "pair", "scenario_tool_friction_pair")
+                while pair_name in pair_names:
+                    pair_name = _unique_spec_name(spec, "pair", "scenario_tool_friction_pair")
+                pair_names.add(pair_name)
+                pair = spec.add_pair(
+                    name=pair_name,
+                    geomname1=target_name,
+                    geomname2=finger_name,
+                    condim=max(
+                        int(finger_geom.condim),
+                        max(
+                            int(target_geom.condim)
+                            for target_geom, candidate_name in target_named
+                            if candidate_name == target_name
+                        ),
+                    ),
+                )
+            pair.friction = pair_friction
+    return friction_geom_pairs, {name for _, name in target_named}
+
+
+def _add_scenario_objects(
+    spec: Any, extras: list[dict[str, Any]]
+) -> tuple[set[tuple[str, str]], set[str]]:
+    friction_geom_pairs: set[tuple[str, str]] = set()
+    friction_target_geom_names: set[str] = set()
     for obj in extras:
         kind = str(obj.get("type", "box"))
         name = str(obj["name"])
@@ -638,38 +756,65 @@ def _add_scenario_objects(spec: Any, extras: list[dict[str, Any]]) -> None:
         body = spec.worldbody.add_body(**body_kwargs)
         if movable and kind != "plane":
             body.add_freejoint()
+        finger_body_names = obj.get("tool_object_friction_bodies")
         kwargs: dict[str, Any] = {"rgba": rgba, "mass": mass}
+        friction = None
         if obj.get("friction") is not None:
             fr = float(obj["friction"])
-            kwargs["friction"] = [fr, fr, 0.01]
+            if not math.isfinite(fr) or fr < 0.0:
+                raise ValueError("scenario_friction_invalid")
+            friction = [fr, 0.01, 0.01]
+            kwargs["friction"] = friction
         if obj.get("solref") is not None:
             solref = [float(value) for value in obj["solref"]]
             if len(solref) != 2 or not all(math.isfinite(value) and value > 0.0 for value in solref):
                 raise ValueError("scenario_contact_solref_invalid")
             kwargs["solref"] = solref
+        name_kwargs = (
+            {"name": _unique_spec_name(spec, "geom", "scenario_geom")}
+            if finger_body_names is not None
+            else {}
+        )
         if kind == "sphere":
-            body.add_geom(type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[size[0], 0, 0], **kwargs)
+            body.add_geom(**name_kwargs, type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[size[0], 0, 0], **kwargs)
         elif kind == "capsule":
             body.add_geom(
+                **name_kwargs,
                 type=mujoco.mjtGeom.mjGEOM_CAPSULE,
                 size=[size[0], size[1] if len(size) > 1 else 0.1, 0],
                 **kwargs,
             )
         elif kind == "cylinder":
             body.add_geom(
+                **name_kwargs,
                 type=mujoco.mjtGeom.mjGEOM_CYLINDER,
                 size=[size[0], size[1] if len(size) > 1 else 0.04, 0],
                 **kwargs,
             )
         elif kind == "plane":
             body.add_geom(
+                **name_kwargs,
                 type=mujoco.mjtGeom.mjGEOM_PLANE,
                 size=[size[0], size[1] if len(size) > 1 else 1, 0.01],
                 rgba=rgba,
+                **({"friction": friction} if friction is not None else {}),
             )
         else:
             sx, sy, sz = (list(size) + [0.03, 0.03, 0.03])[:3]
-            body.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, size=[sx, sy, sz], **kwargs)
+            body.add_geom(**name_kwargs, type=mujoco.mjtGeom.mjGEOM_BOX, size=[sx, sy, sz], **kwargs)
+
+        if finger_body_names is not None:
+            if friction is None:
+                raise ValueError("scenario_tool_object_friction_missing_scenario_friction")
+            object_pairs, object_target_geoms = _add_tool_object_friction_pairs(
+                spec,
+                list(body.geoms),
+                finger_body_names,
+                float(obj["friction"]),
+            )
+            friction_geom_pairs.update(object_pairs)
+            friction_target_geom_names.update(object_target_geoms)
+    return friction_geom_pairs, friction_target_geom_names
 
 
 def _load_spec(path: str, assets: dict[str, bytes]) -> Any:
@@ -1594,6 +1739,8 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
     INST.wrench_gravity_reference_by_profile = {}
     INST.wrench_free_space_by_profile = {}
     INST.wrench_abort_latched = False
+    INST.tool_object_friction_pair_ids = set()
+    INST.tool_object_friction_target_geom_ids = set()
     fmt = str(msg.get("format", "mjcf")).lower()
     INST.source_format = fmt
     path = msg.get("path")
@@ -1647,7 +1794,7 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
         }
     try:
         spec = _load_spec(path, assets)
-        _add_scenario_objects(spec, extras)
+        friction_geom_pairs, friction_target_geom_names = _add_scenario_objects(spec, extras)
         if wrench_sensor_frame is not None:
             _add_wrench_sensors(spec, str(wrench_sensor_frame))
         meshdir = str(getattr(spec.compiler, "meshdir", "") or "")
@@ -1658,6 +1805,27 @@ def _load(msg: dict[str, Any]) -> dict[str, Any]:
                 asset_path = os.path.normpath(os.path.join(meshdir, mesh_file))
                 INST.mesh_asset_by_id[mesh_id] = asset_path.replace("\\", "/")
         INST.model = spec.compile()
+        INST.tool_object_friction_target_geom_ids = {
+            geom_id
+            for geom_id in range(INST.model.ngeom)
+            if INST.model.geom(geom_id).name in friction_target_geom_names
+        }
+        for pair_id in range(INST.model.npair):
+            pair_geom_names = tuple(
+                sorted(
+                    (
+                        INST.model.geom(int(INST.model.pair_geom1[pair_id])).name,
+                        INST.model.geom(int(INST.model.pair_geom2[pair_id])).name,
+                    )
+                )
+            )
+            if pair_geom_names in friction_geom_pairs and (
+                int(INST.model.pair_geom1[pair_id])
+                in INST.tool_object_friction_target_geom_ids
+                or int(INST.model.pair_geom2[pair_id])
+                in INST.tool_object_friction_target_geom_ids
+            ):
+                INST.tool_object_friction_pair_ids.add(pair_id)
     except Exception as exc:
         err = str(exc)
         if "mesh" in err.lower() or "file" in err.lower() or "asset" in err.lower():
@@ -2317,9 +2485,17 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
         if msg.get("friction") is not None and geoms:
             fr = float(msg["friction"])
             for g in geoms:
-                INST.model.geom_friction[g][0] = fr
-                INST.model.geom_friction[g][1] = fr
-                INST.model.geom_friction[g][2] = 0.01
+                INST.model.geom_friction[g][:] = [fr, 0.01, 0.01]
+            pair_friction = [fr, fr, 0.01, 0.01, 0.01]
+            if INST.tool_object_friction_target_geom_ids.intersection(geoms):
+                for pair_id in INST.tool_object_friction_pair_ids:
+                    if (
+                        int(INST.model.pair_geom1[pair_id])
+                        in INST.tool_object_friction_target_geom_ids
+                        or int(INST.model.pair_geom2[pair_id])
+                        in INST.tool_object_friction_target_geom_ids
+                    ):
+                        INST.model.pair_friction[pair_id][:] = pair_friction
         if msg.get("size") is not None and geoms:
             size = list(msg["size"])
             for g in geoms:

@@ -734,6 +734,47 @@ pub fn run_benchmark_trial_with_probe_measurement_sidecar(
     )
 }
 
+fn scenario_objects_with_grasp_friction(
+    scenario_objects: &[Value],
+    object_id: &str,
+    gripper: Option<&ControlledResource>,
+) -> Result<Vec<Value>, String> {
+    let mut objects = scenario_objects.to_vec();
+    let targets = objects
+        .iter()
+        .filter(|object| object.get("name").and_then(Value::as_str) == Some(object_id))
+        .count();
+    if targets != 1 {
+        return Err(format!(
+            "grasp friction target object must resolve exactly once: {object_id}"
+        ));
+    }
+    let target_index = objects
+        .iter()
+        .position(|object| object.get("name").and_then(Value::as_str) == Some(object_id))
+        .expect("target object was counted above");
+    let Some(friction_value) = objects[target_index].get("friction") else {
+        return Ok(objects);
+    };
+    friction_value
+        .as_f64()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .ok_or_else(|| "grasp friction target coefficient is invalid".to_string())?;
+    let gripper = gripper
+        .ok_or_else(|| "grasp friction target has no selected gripper resource".to_string())?;
+    let finger_bodies = gripper.finger_bodies.clone();
+    let mut seen_finger_bodies = std::collections::BTreeSet::new();
+    if finger_bodies.is_empty()
+        || finger_bodies
+            .iter()
+            .any(|body| body.is_empty() || !seen_finger_bodies.insert(body))
+    {
+        return Err("grasp friction gripper finger-body mapping is invalid".into());
+    }
+    objects[target_index]["tool_object_friction_bodies"] = serde_json::json!(finger_bodies);
+    Ok(objects)
+}
+
 fn run_benchmark_trial_inner(
     bundle: &RobotBundle,
     trial: &ResolvedBenchmarkTrial,
@@ -830,14 +871,22 @@ fn run_benchmark_trial_inner(
         apply_grasp_fault_observation(&trial.scenario, &mut qualified_resources);
     }
 
-    let loaded = match wrench_profile {
-        Some(profile) => worker.load_bundle_with_wrench_profile(
-            bundle,
+    let worker_objects = if trial.task == BenchmarkTask::PinchGraspLift {
+        scenario_objects_with_grasp_friction(
             &trial.scenario.objects,
-            trial.seed,
-            profile,
-        ),
-        None => worker.load_bundle(bundle, &trial.scenario.objects, trial.seed),
+            &trial.scenario.object_id,
+            qualified_resources.first(),
+        )
+        .map_err(BenchmarkError::InvalidTrial)?
+    } else {
+        trial.scenario.objects.clone()
+    };
+
+    let loaded = match wrench_profile {
+        Some(profile) => {
+            worker.load_bundle_with_wrench_profile(bundle, &worker_objects, trial.seed, profile)
+        }
+        None => worker.load_bundle(bundle, &worker_objects, trial.seed),
     }
     .map_err(|error| BenchmarkError::Simulation(format!("trial_model_load:{error}")))?;
     let manifest = RobotManifest::from_inspect(bundle, &loaded["inspect"]);
@@ -5514,7 +5563,7 @@ mod grasp_lift_witness_path_tests {
 
 #[cfg(test)]
 mod grasp_contact_wrench_tests {
-    use super::{grasp_contact_audits, GraspContactAudit};
+    use super::{grasp_contact_audits, scenario_objects_with_grasp_friction, GraspContactAudit};
     use crate::observation::{ContactTruth, VerifierTruth};
     use realityos_semantics::provenance::Provenanced;
     use realityos_semantics::resource::{
@@ -5540,6 +5589,34 @@ mod grasp_contact_wrench_tests {
             qualification: QualificationStatus::Qualified,
             unsupported_detail: None,
         }
+    }
+
+    #[test]
+    fn worker_friction_mapping_marks_only_the_target_for_the_selected_gripper() {
+        let objects = vec![
+            json!({"name":"table", "friction":0.8}),
+            json!({"name":"obj0", "friction":0.4}),
+        ];
+        let prepared =
+            scenario_objects_with_grasp_friction(&objects, "obj0", Some(&fixture_resource()))
+                .expect("target friction mapping");
+
+        assert!(prepared[0].get("tool_object_friction_bodies").is_none());
+        assert_eq!(
+            prepared[1]["tool_object_friction_bodies"],
+            json!(["finger_l", "finger_r"])
+        );
+        assert_eq!(objects[1].get("tool_object_friction_bodies"), None);
+    }
+
+    #[test]
+    fn worker_friction_mapping_fails_closed_without_a_selected_gripper() {
+        let objects = vec![json!({"name":"obj0", "friction":0.4})];
+        assert_eq!(
+            scenario_objects_with_grasp_friction(&objects, "obj0", None)
+                .expect_err("friction pair needs finger bodies"),
+            "grasp friction target has no selected gripper resource"
+        );
     }
 
     fn audit_json(state: &Value) -> Vec<Value> {

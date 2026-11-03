@@ -2,9 +2,15 @@
 
 ## State
 
-Telemetry capture and its replay evidence are pushed to canonical `main` through `11f18b87f53c638c7b9bda28cd4968092d60ba94`. The offline support comparison below is the next evidence increment and is awaiting commit. No worktree or repository copy was used.
+Telemetry capture, replay evidence, and the offline support comparison are committed on canonical `main`. No worktree or repository copy was used.
 
 The MuJoCo worker emits body inertial centers and all six contact-wrench components. Verifier truth retains those plus contact position. Grasp audits retain raw per-contact data, derived force and moment on the object, `ctrl`, and raw actuator force at post-close and lift samples. Existing grasp control, thresholds, and safety logic were not changed.
+
+## Tool–Object Friction Mapping Correction
+
+The worker previously mapped scenario geom friction to `[μ, μ, 0.01]`. MuJoCo uses the second geom slot for torsional friction, so the target coefficient was not reaching the two sliding directions; default-friction finger geoms kept the target contact at `[1.0, 1.0]`. The worker now maps geom scalar friction to `[μ, 0.01, 0.01]` and adds explicit friction only to the scenario target–selected finger geom pairs. Other object pairs keep their normal mixing. Runtime `configure_body` updates change the geom triplet and only these explicit target–finger pair coefficients.
+
+Focused worker-load checks verified μ=0.4 gives target–finger `condim=3`, tangential friction `[0.4, 0.4]`, torsional friction `0.01`, while an unrelated target–support pair retains `[1.0, 1.0]`. Additional checks verified a `condim=4` finger, a runtime update to μ=0.6, and fail-closed handling of a missing finger body. Rust unit checks verified that only the target scenario object receives the selected gripper's finger-body mapping and that missing gripper metadata is rejected. The old worker failed the regression with tangential friction `[1.0, 1.0]`; the focused checks pass after the fix.
 
 ## Verification
 
@@ -26,5 +32,7 @@ The MuJoCo worker emits body inertial centers and all six contact-wrench compone
 The audit stores sample phase but not per-sample simulation time. The result contains repeated `post_close` labels, so samples in that phase cannot be ordered precisely from the audit alone. Keep this captured result immutable; add a sample timestamp under a new freeze before any later replay.
 
 The scalar screen's 21006 false pass is now decision-relevant: preserve the current cap and hold/refusal gates, and do not use scalar friction times normal load alone to authorize lift. Next, build an offline predictor using post-close measurements only, including contact direction/moment arms and actuator realization; compare its predictions against first-lift outcomes on independent frozen cases. Align samples by simulation time in any later capture; the current audit has repeated `post_close` phase labels without timestamps. Do not run another full-lift replay until the predictor is independently evaluated. Separately resolve the rotated-sweep contract with conservative geometry and collision tests; do not weaken the existing refusal based on this telemetry.
+
+The friction mapping correction validates simulator contact parameter wiring only. It does not evaluate the predictor, change the two frozen outcomes, justify another full-lift replay, or support a physical friction/capacity claim.
 
 No physical test, actuation, supplier/customer contact, purchase, or fabrication occurred. The traces and force resultants are simulation-only. The two development controls do not establish predictor accuracy, held-out performance, or hardware capacity.
