@@ -17,10 +17,13 @@ from probe_interval_reference import (  # noqa: E402
 
 
 def sidecar_path(trial_seed: int) -> Path:
-    folder = (
-        "fresh-out-of-cohort-per-step-contact-trace-v1-"
-        f"{trial_seed}-20261103"
-    )
+    if trial_seed == 23021:
+        folder = "fresh-out-of-cohort-probe-contact-trace-v1-23021-20261103"
+    else:
+        folder = (
+            "fresh-out-of-cohort-per-step-contact-trace-v1-"
+            f"{trial_seed}-20261103"
+        )
     return (
         ROOT
         / "docs/superpowers/evidence/grasp-lift-margin-20261102"
@@ -34,6 +37,30 @@ def load_sidecar(trial_seed: int) -> dict:
 
 
 class IndependentProbeIntervalReferenceTests(unittest.TestCase):
+    def test_recomputes_posthoc_archived_slip_onset_interval_23021(self):
+        report = verify_sidecar(load_sidecar(23021))
+
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(
+            report["trial_id"],
+            "v7:development:menagerie_ur5e:push_probe_replan:23021:17",
+        )
+        self.assertEqual(report["measurements"][0]["inference"], "Updated(SlipOnset)")
+        self.assertAlmostEqual(
+            report["measurements"][0]["interval"][0],
+            0.47885574015040633,
+            delta=1e-12,
+        )
+        self.assertAlmostEqual(
+            report["measurements"][0]["interval"][1],
+            0.721137085017195,
+            delta=1e-12,
+        )
+        self.assertEqual(
+            report["measurements"][0]["first_xy_motion_bracket_s"],
+            [23.555999999997823, 23.557999999997822],
+        )
+
     def test_recomputes_frozen_slip_onset_interval(self):
         report = verify_sidecar(load_sidecar(23023))
 
@@ -139,6 +166,18 @@ class IndependentProbeIntervalReferenceTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ReplayError, "incomplete contact trace"):
             verify_sidecar(mutated)
+
+    def test_rejects_archived_unidentifiable_record_without_contact_pairs(self):
+        path = (
+            ROOT
+            / "docs/superpowers/evidence/grasp-lift-margin-20261102"
+            / "fresh-out-of-cohort-probe-replay-v1-23020-20261102"
+            / "PROBE_MEASUREMENT_SIDECAR.json"
+        )
+        sidecar = json.loads(path.read_text(encoding="utf-8"))
+
+        with self.assertRaisesRegex(ReplayError, "incomplete contact trace"):
+            verify_sidecar(sidecar)
 
     def test_rejects_unpaired_pose_wrench_sequence_even_with_valid_hashes(self):
         sidecar = load_sidecar(23024)

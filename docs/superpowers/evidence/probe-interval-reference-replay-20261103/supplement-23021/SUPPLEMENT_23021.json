@@ -1,0 +1,76 @@
+{
+  "schema": "realityos.independent_probe_interval_reference_supplement/v1",
+  "experiment_id": "independent_probe_interval_reference_supplement_23021_20261103_v1",
+  "status": "PASS; POSTHOC_ARCHIVED_REPLAY; OFFLINE_ONLY; NOT_ADMITTED",
+  "classification": "SUPPLEMENTAL_SOFTWARE_VERIFICATION_ONLY",
+  "repository": "reality-os-rust",
+  "branch": "main",
+  "verification_head": "7b08f09959b8091825f830c9b0e35e432937dd59",
+  "original_freeze": "docs/superpowers/evidence/probe-interval-reference-replay-20261103/FREEZE.json",
+  "original_freeze_sha256": "3FCE8681B6E0926D0880E858038C2A0FE25C3750E775BCF2C50E6AF171DE9598",
+  "case_is_in_original_freeze": false,
+  "input": {
+    "path": "docs/superpowers/evidence/grasp-lift-margin-20261102/fresh-out-of-cohort-probe-contact-trace-v1-23021-20261103/PROBE_MEASUREMENT_SIDECAR.json",
+    "sha256": "BD45EB08908C91E9B0EF1DED67AF152302AFD55F56B4D58FCCE9320BC88B5E5F",
+    "trial_id": "v7:development:menagerie_ur5e:push_probe_replan:23021:17",
+    "trial_digest": "841fd733ad63bf22930d9953993a603327c8ed115a512b3cee9a8251aa819fee",
+    "measurement_digest": "848003ef4f7dac70717181a93483e974bed643788b986eca39680f61a0ce92e0"
+  },
+  "implementations": {
+    "independent_reference": {
+      "path": "crates/verify/probe_interval_reference.py",
+      "sha256": "86B09AF3F8A2DE96118D957429482428BBDE300E4C7629AE9A41F4CEFA9C6A0C",
+      "dependencies": "Python standard library"
+    },
+    "focused_test": {
+      "path": "crates/verify/tests/test_probe_interval_reference.py",
+      "sha256": "3730DEAFCCE1D52D32BEA214FCC925845500A4F66C7C1C3F1DA677E7F5085AD1"
+    },
+    "rust_semantics_source": {
+      "path": "crates/semantics/src/push_probe.rs",
+      "sha256": "6444CAB400E6407DDF4FF7A6CD019FBC3719B43F29C73A24FE92C95D0ABBD80C"
+    }
+  },
+  "verification": {
+    "python_command": "python crates/verify/probe_interval_reference.py <sidecar>",
+    "rust_command": "cargo run --quiet -p realityos-verify --bin realityos-verify -- verify-probe-measurement-sidecar <sidecar>",
+    "python_exit_code": 0,
+    "rust_exit_code": 0,
+    "focused_test_command": "python -m unittest discover -s crates/verify/tests -p test_probe_interval_reference.py -v",
+    "focused_test_result": "PASS; 13 tests; 20.843 s",
+    "python_interval": [
+      0.47885574015040633,
+      0.7211370850171951
+    ],
+    "rust_interval": [
+      0.47885574015040633,
+      0.721137085017195
+    ],
+    "absolute_tolerance": 1e-12,
+    "first_xy_motion_bracket_s": [
+      23.555999999997823,
+      23.557999999997822
+    ],
+    "wrench_samples": 5124,
+    "pose_samples": 5123,
+    "trace_status": "verified"
+  },
+  "interpretation": "Retrospective third archived sidecar agrees across independent Python and Rust verifiers within the existing tolerance. It expands reproducibility coverage only; it does not establish a new physical result, generalization, or performance gain.",
+  "limitations": [
+    "This case was not in the original frozen acceptance set.",
+    "The sidecar is simulation-origin evidence and does not establish physical friction.",
+    "The archive contains only one trial with this record; no population estimate is supported.",
+    "The independent reference still rejects 23020:17 because its contact-pair fields are null and cannot independently establish contact state."
+  ],
+  "resources_and_authority": {
+    "simulator_runs": 0,
+    "physical_actions": 0,
+    "external_contacts": 0,
+    "purchases": 0,
+    "fabrication": 0,
+    "admission_status": "NOT_ADMITTED",
+    "metal": false,
+    "shop_release": false,
+    "viewport_admits": false
+  }
+}

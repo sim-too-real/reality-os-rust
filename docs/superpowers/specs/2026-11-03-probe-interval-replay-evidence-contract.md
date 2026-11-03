@@ -100,3 +100,22 @@ matches the current source file used for these offline checks.
 
 The two archived verifications are single-trial simulation evidence. They do
 not estimate a success rate or establish physical friction.
+
+## Post-hoc supplemental replay
+
+After the original two-case freeze, the independent reference was also run on
+the archived `23021:17` complete-contact-trace sidecar. It independently
+recomputed `Updated(SlipOnset)` as
+`[0.47885574015040633, 0.7211370850171951]`; the Rust verifier returned
+`[0.47885574015040633, 0.721137085017195]`, within the existing `1e-12`
+absolute tolerance. This retrospective replay is documented in
+[`SUPPLEMENT_23021.md`](../evidence/probe-interval-reference-replay-20261103/supplement-23021/SUPPLEMENT_23021.md)
+and is not part of the original freeze.
+
+The reference continues to reject the archived `23020:17`
+`NoInference(Unidentifiable)` sidecar: all recorded contact-pair fields are
+null, so the reference cannot independently establish intended contact or
+no-contact. It reports `incomplete contact trace`. The Rust verifier accepts
+that historical sidecar under its broader legacy semantics; this difference
+is an explicit coverage limit for the independent reference, not a new
+inference result.
