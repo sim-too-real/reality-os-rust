@@ -1,0 +1,742 @@
+{
+  "format": "realityos.probe_contact_force_analysis",
+  "measurements": [
+    {
+      "action_key": "probe:+x",
+      "contact_force_trace_status": "verified",
+      "measurement_digest": "8e7398dae688ae6485ee4b3bc225ea8fe40ad007eb7c921e3002535cb7a72d36",
+      "measurement_inference": {
+        "Updated": {
+          "interval": [
+            0.40597758964968916,
+            0.492203371010613
+          ],
+          "mode": "slip_onset"
+        }
+      },
+      "slip_onset": {
+        "inference_vs_simulator_friction": {
+          "inferred_interval": [
+            0.40597758964968916,
+            0.492203371010613
+          ],
+          "simulator_sliding_coefficients": [
+            {
+              "coefficients": [
+                0.7517095666728832,
+                0.7517095666728832
+              ],
+              "contact_pair": {
+                "body1": "obj0",
+                "body2": "table",
+                "geom1_name": "geom_63",
+                "geom2_name": "geom_64"
+              },
+              "inside_inferred_interval": [
+                false,
+                false
+              ]
+            },
+            {
+              "coefficients": [
+                0.7517095666728832,
+                0.7517095666728832
+              ],
+              "contact_pair": {
+                "body1": "obj0",
+                "body2": "table",
+                "geom1_name": "geom_63",
+                "geom2_name": "geom_64"
+              },
+              "inside_inferred_interval": [
+                false,
+                false
+              ]
+            },
+            {
+              "coefficients": [
+                0.7517095666728832,
+                0.7517095666728832
+              ],
+              "contact_pair": {
+                "body1": "obj0",
+                "body2": "table",
+                "geom1_name": "geom_63",
+                "geom2_name": "geom_64"
+              },
+              "inside_inferred_interval": [
+                false,
+                false
+              ]
+            },
+            {
+              "coefficients": [
+                0.7517095666728832,
+                0.7517095666728832
+              ],
+              "contact_pair": {
+                "body1": "obj0",
+                "body2": "table",
+                "geom1_name": "geom_63",
+                "geom2_name": "geom_64"
+              },
+              "inside_inferred_interval": [
+                false,
+                false
+              ]
+            }
+          ],
+          "status": "disjoint"
+        },
+        "obj_table_contact_snapshots": [
+          {
+            "capture_s": 25.785999999996587,
+            "obj_table_contacts": [
+              {
+                "contact_pair": {
+                  "body1": "obj0",
+                  "body2": "table",
+                  "geom1_name": "geom_63",
+                  "geom2_name": "geom_64"
+                },
+                "force_available": true,
+                "force_local": [
+                  5.205657452248468,
+                  0.008500473259872602,
+                  2.2724081759109835
+                ],
+                "frame": [
+                  -0.0,
+                  -0.0,
+                  -1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                "friction": [
+                  0.7517095666728832,
+                  0.7517095666728832,
+                  0.01,
+                  0.01,
+                  0.01
+                ],
+                "normal_force_n": 5.205657452248468,
+                "position_world_m": [
+                  0.6735363647021929,
+                  0.08926837131217355,
+                  0.41999766774841224
+                ],
+                "tangential_force_n": 2.272424074857667,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "contact_pair": {
+                  "body1": "obj0",
+                  "body2": "table",
+                  "geom1_name": "geom_63",
+                  "geom2_name": "geom_64"
+                },
+                "force_available": true,
+                "force_local": [
+                  3.324292530692354,
+                  0.036323723494544255,
+                  1.800976398550095
+                ],
+                "frame": [
+                  -0.0,
+                  -0.0,
+                  -1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                "friction": [
+                  0.7517095666728832,
+                  0.7517095666728832,
+                  0.01,
+                  0.01,
+                  0.01
+                ],
+                "normal_force_n": 3.324292530692354,
+                "position_world_m": [
+                  0.5641718116988546,
+                  0.0892736131292055,
+                  0.41999898061180174
+                ],
+                "tangential_force_n": 1.8013426661862475,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "contact_pair": {
+                  "body1": "obj0",
+                  "body2": "table",
+                  "geom1_name": "geom_63",
+                  "geom2_name": "geom_64"
+                },
+                "force_available": true,
+                "force_local": [
+                  5.149415501649461,
+                  0.008501801867541412,
+                  2.249040435976859
+                ],
+                "frame": [
+                  -0.0,
+                  -0.0,
+                  -1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                "friction": [
+                  0.7517095666728832,
+                  0.7517095666728832,
+                  0.01,
+                  0.01,
+                  0.01
+                ],
+                "normal_force_n": 5.149415501649461,
+                "position_world_m": [
+                  0.6735311228864909,
+                  -0.02009618172267119,
+                  0.4199976954776674
+                ],
+                "tangential_force_n": 2.2490565051358704,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "contact_pair": {
+                  "body1": "obj0",
+                  "body2": "table",
+                  "geom1_name": "geom_63",
+                  "geom2_name": "geom_64"
+                },
+                "force_available": true,
+                "force_local": [
+                  3.2680540400469784,
+                  0.03632504793154069,
+                  1.777610017221529
+                ],
+                "frame": [
+                  -0.0,
+                  -0.0,
+                  -1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                "friction": [
+                  0.7517095666728832,
+                  0.7517095666728832,
+                  0.01,
+                  0.01,
+                  0.01
+                ],
+                "normal_force_n": 3.2680540400469784,
+                "position_world_m": [
+                  0.5641665698831526,
+                  -0.020090939905639246,
+                  0.41999900834105686
+                ],
+                "tangential_force_n": 1.7779811254435613,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            ],
+            "planar_displacement_m": 0.000999213162138148,
+            "relative_to_onset": "before",
+            "simulator_step": 12893,
+            "wrench_sequence": 12892
+          },
+          {
+            "capture_s": 25.787999999996586,
+            "obj_table_contacts": [
+              {
+                "contact_pair": {
+                  "body1": "obj0",
+                  "body2": "table",
+                  "geom1_name": "geom_63",
+                  "geom2_name": "geom_64"
+                },
+                "force_available": true,
+                "force_local": [
+                  5.209874752245719,
+                  0.008414718773502049,
+                  2.2769814806456354
+                ],
+                "frame": [
+                  -0.0,
+                  -0.0,
+                  -1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                "friction": [
+                  0.7517095666728832,
+                  0.7517095666728832,
+                  0.01,
+                  0.01,
+                  0.01
+                ],
+                "normal_force_n": 5.209874752245719,
+                "position_world_m": [
+                  0.6735384430912456,
+                  0.08926837736235904,
+                  0.41999766984521536
+                ],
+                "tangential_force_n": 2.2769970291362323,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "contact_pair": {
+                  "body1": "obj0",
+                  "body2": "table",
+                  "geom1_name": "geom_63",
+                  "geom2_name": "geom_64"
+                },
+                "force_available": true,
+                "force_local": [
+                  3.3218463541375463,
+                  0.03608291097087342,
+                  1.8038799475343146
+                ],
+                "frame": [
+                  -0.0,
+                  -0.0,
+                  -1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                "friction": [
+                  0.7517095666728832,
+                  0.7517095666728832,
+                  0.01,
+                  0.01,
+                  0.01
+                ],
+                "normal_force_n": 3.3218463541375463,
+                "position_world_m": [
+                  0.5641738900891029,
+                  0.08927363912624357,
+                  0.41999898765094973
+                ],
+                "tangential_force_n": 1.8042407936804148,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "contact_pair": {
+                  "body1": "obj0",
+                  "body2": "table",
+                  "geom1_name": "geom_63",
+                  "geom2_name": "geom_64"
+                },
+                "force_available": true,
+                "force_local": [
+                  5.153994125685756,
+                  0.008416045080161413,
+                  2.253755966922879
+                ],
+                "frame": [
+                  -0.0,
+                  -0.0,
+                  -1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                "friction": [
+                  0.7517095666728832,
+                  0.7517095666728832,
+                  0.01,
+                  0.01,
+                  0.01
+                ],
+                "normal_force_n": 5.153994125685756,
+                "position_world_m": [
+                  0.6735331813286873,
+                  -0.02009617567152802,
+                  0.41999769739513715
+                ],
+                "tangential_force_n": 2.2537716805957237,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "contact_pair": {
+                  "body1": "obj0",
+                  "body2": "table",
+                  "geom1_name": "geom_63",
+                  "geom2_name": "geom_64"
+                },
+                "force_available": true,
+                "force_local": [
+                  3.2659691727027877,
+                  0.036084233201567874,
+                  1.780655788181605
+                ],
+                "frame": [
+                  -0.0,
+                  -0.0,
+                  -1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                "friction": [
+                  0.7517095666728832,
+                  0.7517095666728832,
+                  0.01,
+                  0.01,
+                  0.01
+                ],
+                "normal_force_n": 3.2659691727027877,
+                "position_world_m": [
+                  0.5641686283265447,
+                  -0.02009091390764349,
+                  0.4199990152008716
+                ],
+                "tangential_force_n": 1.7810213664834003,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            ],
+            "planar_displacement_m": 0.0010012842119467894,
+            "relative_to_onset": "at",
+            "simulator_step": 12894,
+            "wrench_sequence": 12893
+          },
+          {
+            "capture_s": 25.789999999996585,
+            "obj_table_contacts": [
+              {
+                "contact_pair": {
+                  "body1": "obj0",
+                  "body2": "table",
+                  "geom1_name": "geom_63",
+                  "geom2_name": "geom_64"
+                },
+                "force_available": true,
+                "force_local": [
+                  5.214022338950484,
+                  0.008328822026192225,
+                  2.281487110718442
+                ],
+                "frame": [
+                  -0.0,
+                  -0.0,
+                  -1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                "friction": [
+                  0.7517095666728832,
+                  0.7517095666728832,
+                  0.01,
+                  0.01,
+                  0.01
+                ],
+                "normal_force_n": 5.214022338950484,
+                "position_world_m": [
+                  0.6735405289940817,
+                  0.08926838335132338,
+                  0.41999767191987675
+                ],
+                "tangential_force_n": 2.281502313312596,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "contact_pair": {
+                  "body1": "obj0",
+                  "body2": "table",
+                  "geom1_name": "geom_63",
+                  "geom2_name": "geom_64"
+                },
+                "force_available": true,
+                "force_local": [
+                  3.31939113670468,
+                  0.03584132592686205,
+                  1.8067310258592852
+                ],
+                "frame": [
+                  -0.0,
+                  -0.0,
+                  -1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                "friction": [
+                  0.7517095666728832,
+                  0.7517095666728832,
+                  0.01,
+                  0.01,
+                  0.01
+                ],
+                "normal_force_n": 3.31939113670468,
+                "position_world_m": [
+                  0.5641759759931317,
+                  0.08927366495184788,
+                  0.4199989946237416
+                ],
+                "tangential_force_n": 1.8070864950097825,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "contact_pair": {
+                  "body1": "obj0",
+                  "body2": "table",
+                  "geom1_name": "geom_63",
+                  "geom2_name": "geom_64"
+                },
+                "force_available": true,
+                "force_local": [
+                  5.158504277635744,
+                  0.008330145916520745,
+                  2.2584043443779707
+                ],
+                "frame": [
+                  -0.0,
+                  -0.0,
+                  -1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                "friction": [
+                  0.7517095666728832,
+                  0.7517095666728832,
+                  0.01,
+                  0.01,
+                  0.01
+                ],
+                "normal_force_n": 5.158504277635744,
+                "position_world_m": [
+                  0.6735352473948798,
+                  -0.020096169681607684,
+                  0.419997699289764
+                ],
+                "tangential_force_n": 2.2584197072369614,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "contact_pair": {
+                  "body1": "obj0",
+                  "body2": "table",
+                  "geom1_name": "geom_63",
+                  "geom2_name": "geom_64"
+                },
+                "force_available": true,
+                "force_local": [
+                  3.263876505396124,
+                  0.03584264583399369,
+                  1.783649609513459
+                ],
+                "frame": [
+                  -0.0,
+                  -0.0,
+                  -1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  0.0
+                ],
+                "friction": [
+                  0.7517095666728832,
+                  0.7517095666728832,
+                  0.01,
+                  0.01,
+                  0.01
+                ],
+                "normal_force_n": 3.263876505396124,
+                "position_world_m": [
+                  0.5641706943939298,
+                  -0.020090888081083183,
+                  0.4199990219936288
+                ],
+                "tangential_force_n": 1.7840097042275012,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            ],
+            "planar_displacement_m": 0.0010033628070113263,
+            "relative_to_onset": "after",
+            "simulator_step": 12895,
+            "wrench_sequence": 12894
+          }
+        ],
+        "onset_pose_sample": {
+          "capture_s": 25.787999999996586,
+          "planar_displacement_m": 0.0010012842119467894,
+          "simulator_step": 12894,
+          "wrench_sequence": 12893
+        },
+        "status": "bracketed",
+        "threshold_m": 0.001,
+        "time_bracket_s": [
+          25.785999999996587,
+          25.787999999996586
+        ],
+        "tool_wrench_at_onset": {
+          "capture_s": 25.787999999996586,
+          "error_bounds": [
+            0.05,
+            0.05,
+            0.05,
+            0.005,
+            0.005,
+            0.005
+          ],
+          "sequence": 12893,
+          "wrench": [
+            10.199,
+            -0.296,
+            0.263,
+            0.006500000000000001,
+            -0.49770000000000003,
+            -0.0119
+          ]
+        },
+        "tool_wrench_interval": {
+          "left": {
+            "capture_s": 25.785999999996587,
+            "error_bounds": [
+              0.05,
+              0.05,
+              0.05,
+              0.005,
+              0.005,
+              0.005
+            ],
+            "sequence": 12892,
+            "wrench": [
+              10.177,
+              -0.28800000000000003,
+              0.278,
+              0.006500000000000001,
+              -0.4974,
+              -0.0111
+            ]
+          },
+          "right": {
+            "capture_s": 25.787999999996586,
+            "error_bounds": [
+              0.05,
+              0.05,
+              0.05,
+              0.005,
+              0.005,
+              0.005
+            ],
+            "sequence": 12893,
+            "wrench": [
+              10.199,
+              -0.296,
+              0.263,
+              0.006500000000000001,
+              -0.49770000000000003,
+              -0.0119
+            ]
+          },
+          "target_time_bracket_s": [
+            25.785999999996587,
+            25.787999999996586
+          ]
+        }
+      },
+      "support_body": "table"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "Reads the supplied sidecar only; does not import simulation, inference, or control code.",
+  "status": "OFFLINE_RECOMPUTATION_ONLY",
+  "thresholds": {
+    "planar_motion_m": [
+      0.001
+    ],
+    "tool_contact_force_used_for_inference": false,
+    "tool_tangential_force_lower_bound_n": 0.5
+  },
+  "trial_digest": "f8cb52351ca8b85dbde7a31d861db1b386ac2cbb681f2c313eb7d1562f715f25",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21007:0"
+}

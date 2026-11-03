@@ -1,0 +1,221 @@
+{
+  "schema": "realityos.rotated_probe_diagnostic.result/v1",
+  "experiment_id": "rotated_probe_heldout_seed_21007_iiwa14_20261104_v1",
+  "recorded_at_utc": "2026-11-03T22:24:26.337569+00:00",
+  "status": "PASS",
+  "evidence_status": "SIMULATION_ONLY",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21007:0",
+  "trial_seed": 21007,
+  "trial_digest": "f8cb52351ca8b85dbde7a31d861db1b386ac2cbb681f2c313eb7d1562f715f25",
+  "model_hash": "a3bfa259186a25f148f39caee1e211d7a0e87daa6096215e6e21d57cc1eb664d",
+  "freeze": {
+    "verification_status": "PASS",
+    "source_commit_at_freeze": "7f74bb962da5ac09538282bacb2c0aece916b422",
+    "freeze_commit": "9e90accd9be03ad31c904d7cdd3295694ab989e7",
+    "freeze_commit_before_replay": true,
+    "tracked_source_changes_at_freeze": false,
+    "tracked_source_change_paths": [],
+    "source_hashes_sha256": {
+      "crates/verify/tests/manipulation_benchmark.rs": "17B63DD47678A6A26626394E73B0803507735E9E7F2AB070D095203E0995E18D",
+      "crates/verify/src/manipulation_benchmark/execution.rs": "CF90A6213BAEF8519EEC92A37508F4888C6BB076B4778888EC78B0242E3A4F85",
+      "crates/verify/src/manipulation_benchmark/scenario.rs": "62C8074D1E4F9AC2CAEF5CD2897B172DE90FF06728EE5881145209F769FEB4A2",
+      "crates/verify/src/manipulation_benchmark/wrench_sensor.rs": "235D49F50534E164501E2CDFB29A46AC686DFFBD3445796A7523A0F84F338F3E",
+      "crates/verify/mujoco_worker.py": "3337AE4DE5F2F1C4953195168C93D14D4C385B7802ABBA998A81F667929A05CD",
+      "crates/semantics/src/physical_reasoner.rs": "C8A04C76C714D09A82C1E96E404157DFC4EC3044DB929CF8B48DF590077A23E2",
+      "crates/semantics/src/contact_collision.rs": "33A173430A20E74DDD1215F101220279DA6448E1A0B17B10E1DB0ACE1E75CE19",
+      "crates/semantics/src/future_interaction.rs": "3917BF7A0D1DF15CBC5BCDB422FA386A6A9C377745ED7AE83A5B76E2A2115140",
+      "crates/semantics/src/push_probe.rs": "788888E71C28621E1ECCFD952A2A578B8645B3B1191C2D4B7590A8D3A95E79E2",
+      "crates/semantics/src/observation.rs": "B61BA5750F7D044D77FA78D6CB9CB784B975C0A0CD9858CE13241705DF4D08A9",
+      "robots/benchmarks/manipulation/scenario_suite_v3.json": "1ECFB8D15BB7F422B21B5E46F5868F82D04F14CE98A725CCAC20C50C92474565",
+      "robots/benchmarks/manipulation/embodiments.json": "2DD9AC224DF20A5BB83467E5FE6037F9054EABC14F78DB8521A3877CD859AB96",
+      "robots/external/iiwa14/robot.yaml": "201CCE2F5EC2AB317397D53B76BBF933FA33297270FE6865E360F0E64005B615",
+      "Cargo.lock": "5B00D2A3094ABEA8F147A8027EFF0C01FEE5048064ADE64E0C3B6685179C46B1"
+    },
+    "current_source_hash_matches": {
+      "crates/verify/tests/manipulation_benchmark.rs": {
+        "frozen_sha256": "17B63DD47678A6A26626394E73B0803507735E9E7F2AB070D095203E0995E18D",
+        "current_sha256": "17B63DD47678A6A26626394E73B0803507735E9E7F2AB070D095203E0995E18D",
+        "matches": true
+      },
+      "crates/verify/src/manipulation_benchmark/execution.rs": {
+        "frozen_sha256": "CF90A6213BAEF8519EEC92A37508F4888C6BB076B4778888EC78B0242E3A4F85",
+        "current_sha256": "CF90A6213BAEF8519EEC92A37508F4888C6BB076B4778888EC78B0242E3A4F85",
+        "matches": true
+      },
+      "crates/verify/src/manipulation_benchmark/scenario.rs": {
+        "frozen_sha256": "62C8074D1E4F9AC2CAEF5CD2897B172DE90FF06728EE5881145209F769FEB4A2",
+        "current_sha256": "62C8074D1E4F9AC2CAEF5CD2897B172DE90FF06728EE5881145209F769FEB4A2",
+        "matches": true
+      },
+      "crates/verify/src/manipulation_benchmark/wrench_sensor.rs": {
+        "frozen_sha256": "235D49F50534E164501E2CDFB29A46AC686DFFBD3445796A7523A0F84F338F3E",
+        "current_sha256": "235D49F50534E164501E2CDFB29A46AC686DFFBD3445796A7523A0F84F338F3E",
+        "matches": true
+      },
+      "crates/verify/mujoco_worker.py": {
+        "frozen_sha256": "3337AE4DE5F2F1C4953195168C93D14D4C385B7802ABBA998A81F667929A05CD",
+        "current_sha256": "3337AE4DE5F2F1C4953195168C93D14D4C385B7802ABBA998A81F667929A05CD",
+        "matches": true
+      },
+      "crates/semantics/src/physical_reasoner.rs": {
+        "frozen_sha256": "C8A04C76C714D09A82C1E96E404157DFC4EC3044DB929CF8B48DF590077A23E2",
+        "current_sha256": "C8A04C76C714D09A82C1E96E404157DFC4EC3044DB929CF8B48DF590077A23E2",
+        "matches": true
+      },
+      "crates/semantics/src/contact_collision.rs": {
+        "frozen_sha256": "33A173430A20E74DDD1215F101220279DA6448E1A0B17B10E1DB0ACE1E75CE19",
+        "current_sha256": "33A173430A20E74DDD1215F101220279DA6448E1A0B17B10E1DB0ACE1E75CE19",
+        "matches": true
+      },
+      "crates/semantics/src/future_interaction.rs": {
+        "frozen_sha256": "3917BF7A0D1DF15CBC5BCDB422FA386A6A9C377745ED7AE83A5B76E2A2115140",
+        "current_sha256": "3917BF7A0D1DF15CBC5BCDB422FA386A6A9C377745ED7AE83A5B76E2A2115140",
+        "matches": true
+      },
+      "crates/semantics/src/push_probe.rs": {
+        "frozen_sha256": "788888E71C28621E1ECCFD952A2A578B8645B3B1191C2D4B7590A8D3A95E79E2",
+        "current_sha256": "788888E71C28621E1ECCFD952A2A578B8645B3B1191C2D4B7590A8D3A95E79E2",
+        "matches": true
+      },
+      "crates/semantics/src/observation.rs": {
+        "frozen_sha256": "B61BA5750F7D044D77FA78D6CB9CB784B975C0A0CD9858CE13241705DF4D08A9",
+        "current_sha256": "B61BA5750F7D044D77FA78D6CB9CB784B975C0A0CD9858CE13241705DF4D08A9",
+        "matches": true
+      },
+      "robots/benchmarks/manipulation/scenario_suite_v3.json": {
+        "frozen_sha256": "1ECFB8D15BB7F422B21B5E46F5868F82D04F14CE98A725CCAC20C50C92474565",
+        "current_sha256": "1ECFB8D15BB7F422B21B5E46F5868F82D04F14CE98A725CCAC20C50C92474565",
+        "matches": true
+      },
+      "robots/benchmarks/manipulation/embodiments.json": {
+        "frozen_sha256": "2DD9AC224DF20A5BB83467E5FE6037F9054EABC14F78DB8521A3877CD859AB96",
+        "current_sha256": "2DD9AC224DF20A5BB83467E5FE6037F9054EABC14F78DB8521A3877CD859AB96",
+        "matches": true
+      },
+      "robots/external/iiwa14/robot.yaml": {
+        "frozen_sha256": "201CCE2F5EC2AB317397D53B76BBF933FA33297270FE6865E360F0E64005B615",
+        "current_sha256": "201CCE2F5EC2AB317397D53B76BBF933FA33297270FE6865E360F0E64005B615",
+        "matches": true
+      },
+      "Cargo.lock": {
+        "frozen_sha256": "5B00D2A3094ABEA8F147A8027EFF0C01FEE5048064ADE64E0C3B6685179C46B1",
+        "current_sha256": "5B00D2A3094ABEA8F147A8027EFF0C01FEE5048064ADE64E0C3B6685179C46B1",
+        "matches": true
+      }
+    },
+    "frozen_source_hashes_match_current_source": true
+  },
+  "run": {
+    "attempts": 1,
+    "exit_status": 0,
+    "test_duration_seconds": 481.95,
+    "episode_outcome": "success",
+    "simulation_time_s": 60.35000000002779,
+    "control_writes": 28174,
+    "unauthorized_writes": 0,
+    "actions": [
+      {
+        "action_key": "probe:+x",
+        "displacement_m": 0.004845502877099999
+      },
+      {
+        "action_key": "push:+x",
+        "displacement_m": 0.025390223143316973
+      }
+    ],
+    "inference_reason": "updated:SlipOnset",
+    "inferred_support_friction_interval": [
+      0.40597758964968916,
+      0.492203371010613
+    ]
+  },
+  "contact_force_evidence": {
+    "sidecar_status": "PASS",
+    "measurement_count": 1,
+    "pose_sample_count": 6451,
+    "contact_force_sample_count": 27266,
+    "sidecar_sha256": "1FFD71F371ED6DAC56E928A2DE724DF04D3EE0123F0A8D2BA3D756A68240654F"
+  },
+  "slip_onset_analysis": {
+    "status": "disjoint",
+    "time_bracket_s": [
+      25.785999999996587,
+      25.787999999996586
+    ],
+    "displacement_threshold_m": 0.001,
+    "simulator_sliding_friction_coefficients": [
+      0.7517095666728832,
+      0.7517095666728832,
+      0.7517095666728832,
+      0.7517095666728832
+    ],
+    "inferred_interval": [
+      0.40597758964968916,
+      0.492203371010613
+    ],
+    "friction_overlap_status": "disjoint",
+    "recomputed_inference": {
+      "Updated": {
+        "interval": [
+          0.40597758964968916,
+          0.492203371010613
+        ],
+        "mode": "slip_onset"
+      }
+    },
+    "contact_force_trace_status": "verified",
+    "motion_trace_status": null,
+    "pose_sample_count": 6451,
+    "contact_force_sample_count": 27266
+  },
+  "offline_verify_status": "PASS",
+  "offline_analysis_status": "OFFLINE_RECOMPUTATION_ONLY",
+  "interpretation": "Held-out seed 21007 succeeded under a freeze committed before the single simulator run (freeze_commit_before_replay=true). Sidecar offline verification is PASS with contact-force samples. All frozen source hashes match current sources at record time (True). Offline recomputation reports simulator sliding friction coefficients disjoint from the inferred slip-onset interval [0.40597758964968916, 0.492203371010613] (sim coeffs ~[0.7517095666728832]). Simulation-only; not physical; NOT_ADMITTED. 1 mm / 0.5 N thresholds unchanged.",
+  "scope": {
+    "physical_test": false,
+    "physical_actions": 0,
+    "full_lift": false,
+    "metal": false,
+    "shop_release": false,
+    "viewport_admits": false,
+    "admission_status": "NOT_ADMITTED"
+  },
+  "artifacts": {
+    "TRIAL_INPUT.json": {
+      "bytes": 3190,
+      "sha256": "7026DFFE901CDBF5422F20763D89A271117D77D837FD1C834E8F380577E3E53A"
+    },
+    "PREFLIGHT.json": {
+      "bytes": 14920,
+      "sha256": "71EA0AD6ED69685B5CAF270329EE6AE9FE085E50C52CCD7ADF71AE1DDC0DB66A"
+    },
+    "FREEZE.json": {
+      "bytes": 7734,
+      "sha256": "9257AD543F3A954289CF5EAF3D2A014A569EE46F9E20D6BAA53DCBEECDBFE7C6"
+    },
+    "FREEZE_VERIFY.json": {
+      "bytes": 1186,
+      "sha256": "735D0A182B0C7432347F26AC179F288ACFC3BB873E555FEE23726FA6DD9DC55B"
+    },
+    "RUN_LOG.txt": {
+      "bytes": 1646,
+      "sha256": "971B3F46E34EB625A98622C75406B474DEEFCE0B02521E28799FB11983450486"
+    },
+    "EPISODE.json": {
+      "bytes": 30177,
+      "sha256": "68FD7A758B74D31C78FE1B1F81BC2625218A48E573277DE70FD0A32ABD9403C2"
+    },
+    "PROBE_MEASUREMENT_SIDECAR.json": {
+      "bytes": 60446684,
+      "sha256": "1FFD71F371ED6DAC56E928A2DE724DF04D3EE0123F0A8D2BA3D756A68240654F"
+    },
+    "OFFLINE_VERIFY.json": {
+      "bytes": 1130,
+      "sha256": "3B723D294093AC24AE74517E9099CA034884FA1E8551A124B0962C8C54BEB850"
+    },
+    "OFFLINE_ANALYSIS.json": {
+      "bytes": 22320,
+      "sha256": "AC5713DE82F5A724A3DEE051D95D4FF268D6147CEE8F406511655B624708D2AA"
+    }
+  }
+}

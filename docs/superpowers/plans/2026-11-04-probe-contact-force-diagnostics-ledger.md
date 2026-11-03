@@ -23,6 +23,7 @@ Spec: `docs/superpowers/specs/2026-11-04-probe-contact-force-diagnostics-design.
 - Final source verification: `cargo check -p realityos-verify --tests` passed, the MuJoCo wrench-gate Python suite passed (8 tests), `cargo fmt --all -- --check` and `git diff --check` passed after formatting. Transit snapshots are now captured only on the unexpected-contact step; the final capture-path change has not been simulator-replayed because the seed 21006 one-run budget is consumed.
 - Final source/evidence commit: `7f239943fcf3d68dbdd54ebe601acee738b002e2`, pushed to `origin/main`. Final documentation sync follows after the cross-repository check.
 - Repository sync check after fetching `origin`: `reality-os-rust`, `engineering-data`, `first-principles`, and `society_worldview` are all on local `main` at 0 ahead / 0 behind. `first-principles` has local modified and untracked files; they were not changed as part of this task.
+- Task 7 (post-plan): seed **21007** freeze committed at `9e90acc` against source `7f74bb9` **before** the single held-out replay. Episode `success`; unauthorized writes 0; sidecar offline verify `PASS` (6,451 poses / 27,266 contact-force samples). Frozen source hashes match current sources at record time (`freeze_commit_before_replay=true`). Offline recomputation: inferred slip-onset interval `[0.406, 0.492]` is **disjoint** from simulator sliding μ≈`0.752` (VALIDATED_LEARNING; simulation-only). One-run budget consumed; do not replay 21007.
 
 ## Evidence and implementation notes
 
