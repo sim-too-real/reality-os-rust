@@ -1,0 +1,102 @@
+{
+  "trial": {
+    "expectation": "expected_success",
+    "fault_injection": null,
+    "goal_xyz": [
+      0.28532367332433367,
+      0.025524181782553716,
+      0.11499999999999999
+    ],
+    "index": 26,
+    "initial_qpos": [
+      0.8544957097988511,
+      -1.2789150068697461,
+      -1.00929275363378,
+      0.044999999999999866,
+      0.03,
+      0.03
+    ],
+    "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+    "paired_trial_key": "1cde2e809086ad83c8320809b7ec2b1424a57e80a18cc6ba2fee18603a2f8460",
+    "robot_id": "arm_gripper_lift",
+    "role": "grasp_fixture",
+    "scenario": {
+      "crash_controller": false,
+      "expected_refusal": null,
+      "immovable": false,
+      "move_object_after_obs": false,
+      "neg": null,
+      "object_id": "obj0",
+      "objects": [
+        {
+          "friction": 1.1028069244511858,
+          "mass": 0.22345007628683033,
+          "movable": true,
+          "name": "obj0",
+          "pos": [
+            0.28532367332433367,
+            0.025524181782553716,
+            0.11499999999999999
+          ],
+          "rgba": [
+            0.85,
+            0.25,
+            0.2,
+            1.0
+          ],
+          "size": [
+            0.01,
+            0.008220202312160483,
+            0.025
+          ],
+          "type": "box"
+        },
+        {
+          "mass": 10.0,
+          "movable": false,
+          "name": "table",
+          "pos": [
+            0.25,
+            0.0,
+            0.08
+          ],
+          "rgba": [
+            0.4,
+            0.4,
+            0.4,
+            1
+          ],
+          "size": [
+            0.15,
+            0.22,
+            0.01
+          ],
+          "type": "box"
+        }
+      ],
+      "planar": true,
+      "polarity": "positive",
+      "push_dir": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "push_dist": 0.0,
+      "replay": false,
+      "required_opening": 0.85,
+      "restart_replay": false,
+      "seed": 22000,
+      "skill": "GRASP",
+      "stale": false,
+      "world_construction": "fixed_world"
+    },
+    "scenario_suite_id": null,
+    "scenario_suite_version": null,
+    "schema_version": 7,
+    "seed": 22000,
+    "source_hash": "b75b518f36853782407512c054d5257c17371704097a3da0e445c98b5165d185",
+    "stratum": null,
+    "task": "pinch_grasp_lift",
+    "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:22000:26"
+  }
+}
