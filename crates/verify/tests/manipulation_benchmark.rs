@@ -5623,16 +5623,29 @@ fn iiwa_rotated_probe_unbracketed_motion_diagnostic_capture() {
         "precreated evidence directory required"
     );
     let prepare_only = std::env::var_os("REALITYOS_ROTATED_PROBE_PREPARE_ONLY").is_some();
-    let expect_success = std::env::var_os("REALITYOS_ROTATED_PROBE_EXPECT_SUCCESS").is_some();
+    let trial_seed = std::env::var("REALITYOS_ROTATED_PROBE_TRIAL_SEED")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .expect("valid rotated probe trial seed")
+        })
+        .unwrap_or(21000);
+    let trial_index = std::env::var("REALITYOS_ROTATED_PROBE_TRIAL_INDEX")
+        .map(|value| {
+            value
+                .parse::<u32>()
+                .expect("valid rotated probe trial index")
+        })
+        .unwrap_or(0);
 
     let bundle = iiwa14_bundle();
     let suite = scenario_suite_v3();
-    let (worker, manifest) = load_and_normalize(&bundle, &[], 21000)
+    let (worker, manifest) = load_and_normalize(&bundle, &[], trial_seed)
         .expect("strict benchmark requires MuJoCo and complete model inspection");
     checkin_worker(worker);
     let mut trial = resolve_benchmark_trial_with_suite(
-        21000,
-        0,
+        trial_seed,
+        trial_index,
         BenchmarkTask::PushProbeReplan,
         EmbodimentRole::Development,
         &bundle,
@@ -5641,8 +5654,8 @@ fn iiwa_rotated_probe_unbracketed_motion_diagnostic_capture() {
     )
     .expect("frozen positive IIWA suite trial");
     trial.paired_trial_key = Some(paired_trial_key(&trial).expect("paired trial key"));
-    assert_eq!(trial.seed, 21000);
-    assert_eq!(trial.index, 0);
+    assert_eq!(trial.seed, trial_seed);
+    assert_eq!(trial.index, trial_index);
     assert_eq!(trial.expectation, TrialExpectation::ExpectedSuccess);
 
     let registry_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -5684,10 +5697,18 @@ fn iiwa_rotated_probe_unbracketed_motion_diagnostic_capture() {
     )
     .expect("freeze JSON");
     assert_eq!(freeze["trial_id"], trial.trial_id);
+    assert_eq!(freeze["trial_seed"], trial.seed);
+    assert_eq!(freeze["trial_index"], trial.index);
     assert_eq!(
         freeze["trial_digest"],
         trial_digest(&trial).expect("trial digest")
     );
+    let expected_episode_outcome = freeze["expected_episode_outcome"]
+        .as_str()
+        .expect("frozen expected episode outcome");
+    let expected_wrench_inference_reason = freeze["expected_wrench_inference_reason"]
+        .as_str()
+        .expect("frozen expected wrench inference reason");
     assert_eq!(freeze["trial_input_sha256"], sha256_upper(&trial_bytes));
     assert_eq!(freeze["preflight_sha256"], sha256_upper(&preflight_bytes));
     assert_eq!(
@@ -5710,28 +5731,28 @@ fn iiwa_rotated_probe_unbracketed_motion_diagnostic_capture() {
     .expect("the single diagnostic simulation completes and writes its sidecar");
     write_new_json_artifact(&evidence_dir.join("EPISODE.json"), &episode);
     assert_eq!(episode.unauthorized_writes, 0);
-    if expect_success {
-        assert_eq!(episode.outcome, TrialOutcome::Success);
-        assert!(episode
-            .wrench_inference_reason
-            .as_deref()
-            .is_some_and(|reason| reason.starts_with("updated:")));
-        assert!(episode.wrench_inference_interval.is_some());
-    } else {
-        assert_eq!(episode.outcome, TrialOutcome::UnexpectedRefusal);
-        assert_eq!(
-            episode.refusal_code.as_deref(),
-            Some("NO_JUSTIFIED_CURRENT_ACTION")
-        );
-        assert_eq!(
-            episode.wrench_inference_reason.as_deref(),
-            Some("no_inference:UnbracketedMotion")
-        );
-        assert_eq!(episode.actions.len(), 2);
-        assert!(episode
-            .actions
-            .iter()
-            .all(|action| action.action_key == "probe:+x"));
+    assert_eq!(
+        episode.wrench_inference_reason.as_deref(),
+        Some(expected_wrench_inference_reason)
+    );
+    match expected_episode_outcome {
+        "success" => {
+            assert_eq!(episode.outcome, TrialOutcome::Success);
+            assert!(episode.wrench_inference_interval.is_some());
+        }
+        "unexpected_refusal" => {
+            assert_eq!(episode.outcome, TrialOutcome::UnexpectedRefusal);
+            assert_eq!(
+                episode.refusal_code.as_deref(),
+                Some("NO_JUSTIFIED_CURRENT_ACTION")
+            );
+            assert_eq!(episode.actions.len(), 2);
+            assert!(episode
+                .actions
+                .iter()
+                .all(|action| action.action_key == "probe:+x"));
+        }
+        other => panic!("unsupported frozen episode outcome: {other}"),
     }
 }
 
