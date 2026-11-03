@@ -34,7 +34,7 @@ manipulation verifier.
 
 ## Tasks
 
-1. [ ] Freeze current `main` identity, the existing 21006:21 and 21010:25
+1. [x] Freeze current `main` identity, the existing 21006:21 and 21010:25
    inputs, and the first seven resolved expected-success inputs absent from
    the local evidence archive in the fixed seed/index selection order. Run
    and commit their uniform-profile baseline before treatment.
