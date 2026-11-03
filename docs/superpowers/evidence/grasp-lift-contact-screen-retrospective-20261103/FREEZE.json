@@ -1,0 +1,100 @@
+{
+  "schema": "realityos.grasp_lift_prelift_contact_screen_freeze/v1",
+  "experiment_id": "grasp_lift_prelift_contact_capacity_retrospective_v1_20261103",
+  "frozen_at_utc": "2026-11-03T11:13:33Z",
+  "branch_policy": "canonical local main only; no worktree or copied repository",
+  "current_source_commit": "f522645084b1cee2aafee6b4c074e2f1841e44cb",
+  "candidate_source_commit": "0f14e9b073fcadf11ed69c6643cc7bbbfb36daf5",
+  "candidate_freeze_path": "docs/superpowers/evidence/grasp-lift-cartesian-waypoints-20261103/FREEZE-v2.json",
+  "candidate_freeze_sha256": "69649BACDFA74496A01355706226F52AB6A60812A086C626A052DD3F0248B248",
+  "hypothesis": "Using measured post-close finger normal loads with the lower frozen simulated friction interval can reject scalar-hold false positives before a full lift.",
+  "cohort": "Two frozen primary controls from the 1 mm Cartesian candidate replay. Historical post-close snapshots must match the exact trial digest and scenario mass and friction. Historical target heights differ, and their run manifests report dirty source trees.",
+  "controls": [
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25",
+      "historical_evidence_id": "historical_21010_24_5mm",
+      "historical_target_height_m": 0.0245
+    },
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21006:21",
+      "historical_evidence_id": "historical_21006_23mm",
+      "historical_target_height_m": 0.023
+    }
+  ],
+  "screen_definition": {
+    "capacity_proxy": "friction_oracle_interval.lower * sum(post-close per-finger normal_force_n)",
+    "weight": "scenario object mass * 9.81 m/s^2",
+    "decision": "REJECT_BEFORE_LIFT iff capacity_proxy < weight; otherwise PASS_TO_LIFT",
+    "scope": "diagnostic proxy only; not a full friction-cone, moment, actuator, or stability proof"
+  },
+  "current_source_files": [
+    {
+      "path": "crates/verify/src/manipulation_benchmark/execution.rs",
+      "sha256": "0C12C58D611CE7645613A2C6535079E1ADCF822453F3C5DF6BD759FDD1351056"
+    },
+    {
+      "path": "crates/verify/src/manipulation_benchmark/scenario.rs",
+      "sha256": "62C8074D1E4F9AC2CAEF5CD2897B172DE90FF06728EE5881145209F769FEB4A2"
+    },
+    {
+      "path": "crates/semantics/src/physical_reasoner.rs",
+      "sha256": "0CCECC88F33A0AE99F22B783730F772812079528D9963D1472C1F0BA7C661357"
+    },
+    {
+      "path": "crates/verify/mujoco_worker.py",
+      "sha256": "DD32CF275FD8A17C984FAA5DEA74750444766CE5C479359F0FA4411D45C140AF"
+    }
+  ],
+  "evidence_inputs": [
+    {
+      "id": "candidate_primary_v2",
+      "path": "docs/superpowers/evidence/grasp-lift-cartesian-waypoints-20261103/CANDIDATE_PRIMARY_V2.json",
+      "sha256": "CA34D4F8EB9F9ACE00ACA2F377F2C4CB325DAE8ECCF704899589EF576CD585B3"
+    },
+    {
+      "id": "cartesian_freeze_v2",
+      "path": "docs/superpowers/evidence/grasp-lift-cartesian-waypoints-20261103/FREEZE-v2.json",
+      "sha256": "69649BACDFA74496A01355706226F52AB6A60812A086C626A052DD3F0248B248"
+    },
+    {
+      "id": "historical_21010_24_5mm",
+      "path": "docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-24_5mm/fresh_21010_25/manipulation_benchmark.json",
+      "sha256": "54464B90D81EABC6D09E5C78291BD187188CBCFAF30D5C585A84A397B3B516F0"
+    },
+    {
+      "id": "historical_21010_23mm",
+      "path": "docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-control-23mm/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21010_25/manipulation_benchmark.json",
+      "sha256": "B56983059A31C03D01782F737A143887600DC130FD89FC85F035AA514F99958A"
+    },
+    {
+      "id": "historical_21006_23mm",
+      "path": "docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-control-23mm/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21006_21/manipulation_benchmark.json",
+      "sha256": "5F63E25E6A808DA8BF2774F9E7A91F13E0D5EDCF1AD5B0248504F5F335A7DEFA"
+    }
+  ],
+  "verifier_path": "docs/superpowers/evidence/grasp-lift-contact-screen-retrospective-20261103/verify_retrospective.py",
+  "verifier_sha256": "10A21CC5CC2FEAA6FFB00484F59BC29AAB5CC38F9EDB09755679B0CBE9D39982",
+  "fixed_constants": {
+    "runtime_relative_pose_stop_m": 0.02,
+    "independent_hold_limit_m": 0.005,
+    "candidate_lift_m": 0.025,
+    "candidate_cartesian_waypoint_m": 0.001
+  },
+  "authority": {
+    "admission_status": "NOT_ADMITTED",
+    "metal": false,
+    "shop_release": false,
+    "viewport_admits": false
+  },
+  "limitations": [
+    "Historical post-close observations are from runs whose manifests say candidate_worktree_dirty=true; they are exploratory only.",
+    "The proxy uses one scalar lower friction interval and sums normal loads; it ignores contact normals, moment arms, actuator force realization, dynamic inertia, and force-direction coupling.",
+    "The historical target heights differ from the 25 mm current candidate, but the observations precede lift and the exact trial digests, mass, and scenario friction match.",
+    "Saved contact friction has five coefficients; in MuJoCo the first two are tangential and the third is torsional. Do not interpret the third value as sliding friction.",
+    "Two controls cannot validate a predictor or estimate performance."
+  ],
+  "references": [
+    "https://mujoco.readthedocs.io/en/latest/modeling.html",
+    "https://mujoco.readthedocs.io/en/latest/APIreference/APItypes.html"
+  ]
+}
