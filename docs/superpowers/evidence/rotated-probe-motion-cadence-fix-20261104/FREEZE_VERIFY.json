@@ -1,0 +1,14 @@
+{
+  "status": "PASS",
+  "verified_at_utc": "2026-11-03T19:24:13Z",
+  "branch": "main",
+  "frozen_source_commit": "594362ea4faa9e925baeeb146535fdfa0f4c6e44",
+  "current_head": "a1b20f12d820393250bb3a7918820d9ddf18b2f1",
+  "source_hashes_verified": 13,
+  "model_hashes_verified": 20,
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21000:0",
+  "trial_digest": "776dee2c071f47b230131719eca5fea3babcd114e137e2d511e1a04eb9a7ba3d",
+  "trial_input_sha256_match": true,
+  "sidecar_trial_digest_match": true,
+  "zero_step_preflight": true
+}

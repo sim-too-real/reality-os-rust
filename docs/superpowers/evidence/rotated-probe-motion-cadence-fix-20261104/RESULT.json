@@ -1,0 +1,122 @@
+{
+  "schema": "realityos.rotated_probe_diagnostic.result/v1",
+  "experiment_id": "rotated_probe_cadence_fix_iiwa14_21000_0_20261104_v1",
+  "completed_at_utc": "2026-11-03T19:24:00Z",
+  "classification": "FOUNDATIONAL_RUNTIME_FIX; ONE_SIMULATOR_CASE_PASSED; SIMULATION_ONLY; NOT_ADMITTED",
+  "repository": "reality-os-rust",
+  "branch": "main",
+  "code_commit": "12ba1e487e66895af2485f22b12b1333cec9ec8b",
+  "source_commit": "594362ea4faa9e925baeeb146535fdfa0f4c6e44",
+  "freeze_commit": "a1b20f12d820393250bb3a7918820d9ddf18b2f1",
+  "run_head": "a1b20f12d820393250bb3a7918820d9ddf18b2f1",
+  "freeze_sha256": "29651624CB948793A9A0B2A20B7B3FFE4693E0CCCFDBFBBBE8D825FA2AF9956E",
+  "frozen_source_hashes_match_source_commit": true,
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21000:0",
+  "trial_digest": "776dee2c071f47b230131719eca5fea3babcd114e137e2d511e1a04eb9a7ba3d",
+  "simulation_runs": 1,
+  "verification": {
+    "cargo_fmt_all_check": "passed",
+    "git_diff_check": "passed",
+    "focused_library_tests": {
+      "probe_motion_filter": "3 passed",
+      "future_sample_selection": "1 passed",
+      "weak_force_refusal_guard": "1 passed"
+    },
+    "targeted_after_fix_replay": {
+      "command": "cargo test -p realityos-verify --test manipulation_benchmark iiwa_rotated_probe_unbracketed_motion_diagnostic_capture -- --ignored --exact --nocapture",
+      "result": "1 passed; 0 failed; 208.25 seconds; one simulator replay"
+    },
+    "offline_sidecar_verifier_status": "PASS",
+    "offline_verifier_sha256": "18B627D94DDA65F9CCE3D4BE3AEF3849F22FBFD43D35117F46BD113BA62E7112",
+    "offline_measurement": {
+      "action_key": "probe:+x",
+      "first_xy_motion_bracket_s": [
+        23.90399999999763,
+        23.90599999999763
+      ],
+      "measurement_digest": "bd742c4650f353ebc72176f92f7937b6002545a573073864a86a030bad0a484b",
+      "motion_trace_status": "verified",
+      "pose_sample_count": 6071,
+      "posterior_support_friction_interval": [
+        0.686426112440559,
+        0.7735596183986067
+      ],
+      "prior_support_friction_interval": [
+        0.05,
+        0.8
+      ],
+      "recomputed_inference": {
+        "Updated": {
+          "interval": [
+            0.686426112440559,
+            0.7735596183986067
+          ],
+          "mode": "slip_onset"
+        }
+      },
+      "sample_count": 6072
+    }
+  },
+  "episode": {
+    "outcome": "success",
+    "refusal_code": null,
+    "friction_inference": "updated:SlipOnset",
+    "friction_interval": [
+      0.686426112440559,
+      0.7735596183986067
+    ],
+    "actions": [
+      {
+        "action_key": "probe:+x",
+        "displacement_m": 0.004805247497603073,
+        "writes_before": 0,
+        "writes_after": 12966
+      },
+      {
+        "action_key": "push:+x",
+        "displacement_m": 0.025143899255160404,
+        "writes_before": 12966,
+        "writes_after": 27341
+      }
+    ],
+    "wrench_sample_count": 29342,
+    "simulation_time_s": 58.684000000025755,
+    "unauthorized_writes": 0
+  },
+  "sidecar": {
+    "path": "PROBE_MEASUREMENT_SIDECAR.json",
+    "sha256": "74A9FA389A7ED4E1BDC4CD54B89BE3BCE3EDE5EF293C6CAE392A8ACC74873FDA",
+    "size_bytes": 21366311,
+    "measurement_count": 1,
+    "wrench_samples": 6072,
+    "pose_samples": 6071,
+    "motion_audit": {
+      "start_s": 16.00200000000201,
+      "end_s": 28.14399999999528,
+      "displacement_m": [
+        0.004566720589398998,
+        1.8330671592778347e-06,
+        2.3123254145329675e-06
+      ],
+      "max_speed_m_s": 0.002756717484765513,
+      "max_quasi_static_speed_m_s": 0.02,
+      "pose_resolution_m": 0.001,
+      "first_motion_s": 23.90599999999763,
+      "unresolved_motion_before_force": false
+    }
+  },
+  "finding": "Time-aligned per-pose evaluation records force-resolved motion at the first 1 mm crossing. The episode now reaches its expected-success outcome after one authorized probe:+x and one authorized push:+x. The 1 mm motion threshold and 0.5 N lower-bound requirement were unchanged.",
+  "interpretation": "One deterministic simulator case supports the runtime-cadence fix and resolves the prior UnbracketedMotion refusal on this seed. This is not independent held-out predictor evaluation, a broad reliability result, physical friction measurement, hardware capacity evidence, or a product claim.",
+  "scope_limits": {
+    "full_lift_replay": false,
+    "physical_test": false,
+    "physical_actions": 0,
+    "purchases": 0,
+    "fabrication": 0,
+    "external_contact": false,
+    "admission_status": "NOT_ADMITTED",
+    "metal": false,
+    "shop_release": false,
+    "viewport_admits": false
+  }
+}
