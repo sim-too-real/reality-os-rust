@@ -44,10 +44,9 @@ manipulation verifier.
 3. [x] Implement the `r = 0.25` trapezoidal progress function; bind its stable
    identifier into the witness and digest; execute only that profile in the
    verifier path.
-4. [ ] Replay the known 21010:25 and 21006:21 controls first. If the primary
-   21010:25 runtime divergence remains, stop; otherwise replay the seven
-   frozen cases once and compare outcomes, force margins, follow residuals,
-   false acceptances, and unauthorized writes against the committed baseline.
+4. [x] Replay the known 21010:25 and 21006:21 controls first. The primary
+   21010:25 divergence remained and worsened, so the seven candidate cases
+   were not replayed; the negative result is recorded in `RESULT.md`.
 5. [ ] Run focused semantics/verifier tests, formatting, and the repository's
    relevant broader test command; independently replay the saved results.
 6. [ ] Keep the change only if the spec's decision rule passes. Record a
