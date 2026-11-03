@@ -1,0 +1,90 @@
+{
+  "schema": "realityos.grasp_lift_upward_support_comparison/v1",
+  "generated_at_utc": "2026-11-03T13:02:45Z",
+  "classification": "OFFLINE_SIMULATION_TRACE_ANALYSIS; TWO_FROZEN_DEVELOPMENT_CONTROLS; NOT_ADMITTED",
+  "freeze_sha256": "30A1CC816BA4BA65358152776C04B1EC71809C8DDBA0650BDA73D9A1B7FBD3B9",
+  "result_sha256": "6A920F0544ABAFBE26D366D0CB5D1F228F03D7C70FABB45872A0AEBFE55B00C9",
+  "analysis_script_sha256": "5E101BE067E8132BC1F230CBB155290BF5FDE38DF9150394FBED33ECDC475F81",
+  "model_xml_sha256": "96638449987EB8CE6D900063F2FCF279D792C2C60F72F44282CF150C61D57904",
+  "model_xml_path": "robots/bundles/arm_gripper_lift/model.xml",
+  "method": "Compare the prior scalar lower-friction-times-post-close-normal proxy with the signed world-z resultant of object-finger contact forces at the first lift waypoint; compute weight from frozen object mass and the checked-in MuJoCo gravity setting. Sum per-contact moments about object COM at that waypoint.",
+  "decision": "Keep the 1.95 N finger-force cap and all existing hold/refusal gates unchanged. Do not treat the scalar proxy as sufficient for lift acceptance; next evaluate a direction- and moment-aware offline predictor before any additional full-lift replay.",
+  "limitations": [
+    "Only two development controls were analyzed; this does not validate predictive performance or generalize to held-out cases.",
+    "The first-lift contact resultant is simulated contact evidence, not physical force measurement or hardware capacity.",
+    "The post-close phase has no sample timestamp; where duplicate rows exist, their sequence is retained and equality is reported.",
+    "The world-z finger contact resultant excludes the table reaction and should not be interpreted as total object force balance."
+  ],
+  "trials": [
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25",
+      "outcome": "unexpected_refusal",
+      "failure_cause": "runtime_divergence",
+      "input_sha256": "71921E9971AC34CBE77D0429A4F8C1A6C4922B66E6712D57752794D1A8F01D8E",
+      "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+      "mass_kg": 0.1446630329141567,
+      "gravity_world_m_s2": [
+        0.0,
+        0.0,
+        -9.81
+      ],
+      "object_weight_n": 1.4191443528878773,
+      "simulated_friction_interval": [
+        0.40659035383213266,
+        0.4465903538321327
+      ],
+      "post_close_normal_sum_n": 1.4622184151701776,
+      "scalar_capacity_proxy_n": 0.5945239028039028,
+      "scalar_proxy_to_weight_ratio": 0.4189312395135003,
+      "post_close_realized_vertical_contact_force_n": 0.10616502147715445,
+      "first_lift_phase": "lift_waypoint_1",
+      "first_lift_object_finger_contacts": 2,
+      "first_lift_realized_vertical_contact_force_n": 0.5617318451654894,
+      "first_lift_weight_deficit_n": 0.857412507722388,
+      "first_lift_realized_force_to_weight_ratio": 0.39582431767592724,
+      "first_lift_net_moment_about_object_com_nm": [
+        -0.015938841848830727,
+        0.009997290255192602,
+        0.0002264829488792205
+      ],
+      "first_lift_grip_l_actuator_force_n": -0.731431999088959,
+      "first_lift_grip_r_actuator_force_n": -0.695379476184873,
+      "repeated_post_close_pair_matches": null
+    },
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21006:21",
+      "outcome": "action_failed",
+      "failure_cause": "hold_not_verified",
+      "input_sha256": "2E997A30E7154AB6CC771971031C52E2B0DD617069B8EA55B621E6BAE14C670A",
+      "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+      "mass_kg": 0.22344257570463133,
+      "gravity_world_m_s2": [
+        0.0,
+        0.0,
+        -9.81
+      ],
+      "object_weight_n": 2.1919716676624335,
+      "simulated_friction_interval": [
+        0.6741190656824732,
+        0.7141190656824732
+      ],
+      "post_close_normal_sum_n": 3.8977904358186057,
+      "scalar_capacity_proxy_n": 2.6275748468201185,
+      "scalar_proxy_to_weight_ratio": 1.1987266466916617,
+      "post_close_realized_vertical_contact_force_n": -0.0004051744164383015,
+      "first_lift_phase": "lift_waypoint_1",
+      "first_lift_object_finger_contacts": 4,
+      "first_lift_realized_vertical_contact_force_n": 1.2945332444700335,
+      "first_lift_weight_deficit_n": 0.8974384231924,
+      "first_lift_realized_force_to_weight_ratio": 0.5905793690529549,
+      "first_lift_net_moment_about_object_com_nm": [
+        -0.0006989882910916831,
+        0.000633737997258077,
+        0.011807279426871813
+      ],
+      "first_lift_grip_l_actuator_force_n": -1.95,
+      "first_lift_grip_r_actuator_force_n": -1.8973645419285554,
+      "repeated_post_close_pair_matches": true
+    }
+  ]
+}

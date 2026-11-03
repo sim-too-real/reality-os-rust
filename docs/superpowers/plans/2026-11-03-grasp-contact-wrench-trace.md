@@ -69,6 +69,7 @@
 - [x] Replay the two frozen primary trials from the spec without changing controls or acceptance criteria.
 - [x] Independently verify source hashes, sample phases, raw-to-derived sign conversion, finite-value behavior, and unchanged outcome/guard behavior.
 - [x] Record exact limits and the next diagnostic question; do not present solver forces as hardware capacity.
+- [x] Compare the prior scalar contact-capacity proxy with signed world-z finger-contact force and COM moment at the first lift waypoint, offline from the frozen trace; retain all existing caps and guards.
 
 ### Task 4: Verify and synchronize
 
@@ -78,4 +79,4 @@
 
 ## Current Checkpoint
 
-Tasks 1 through 4 are complete and synchronized to `main`. The full crate run produced 192/192 library tests passing and 105/106 integration tests passing (6 ignored). The one integration failure was reproduced in isolation and traced to the existing conservative axis-aligned sweep guard rejecting a slightly rotated probe direction; its integration success expectation conflicts with an existing unit-test contract. No safety guard was changed. See `docs/superpowers/evidence/grasp-lift-wrench-trace-20261103/CHECKPOINT.md` for replay findings and the next diagnostic question.
+Tasks 1 through 4 for the telemetry capture are synchronized to `main`. The offline support comparison is also complete and is being synced as a follow-up evidence increment. The full crate run produced 192/192 library tests passing and 105/106 integration tests passing (6 ignored). The one integration failure was reproduced in isolation and traced to the existing conservative axis-aligned sweep guard rejecting a slightly rotated probe direction; its integration success expectation conflicts with an existing unit-test contract. No safety guard was changed. See `docs/superpowers/evidence/grasp-lift-wrench-trace-20261103/CHECKPOINT.md` for replay findings and the next diagnostic question.
