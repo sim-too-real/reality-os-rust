@@ -1,0 +1,8 @@
+{
+  "status": "PASS",
+  "gate": "claim_separation",
+  "violations": [],
+  "analysis_path": "docs/superpowers/evidence/rotated-probe-heldout-seed-21006-20261104/OFFLINE_ANALYSIS.json",
+  "command": "py -3.10 crates/verify/probe_contact_force_analysis.py --require-claim-separation docs/superpowers/evidence/rotated-probe-heldout-seed-21006-20261104/OFFLINE_ANALYSIS.json",
+  "note": "Fail-closed offline gate only; regenerated analysis adds claim_separation to prior overlap comparison; not a new held-out simulator run; not physical evidence."
+}

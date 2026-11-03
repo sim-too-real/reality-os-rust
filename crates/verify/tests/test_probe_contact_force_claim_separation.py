@@ -60,6 +60,21 @@ class ClaimSeparationTests(unittest.TestCase):
         analysis = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(self.mod.claim_separation_gate_violations(analysis), [])
 
+    def test_seed_21006_offline_analysis_passes_claim_separation_gate(self) -> None:
+        path = (
+            Path(__file__).resolve().parents[3]
+            / "docs"
+            / "superpowers"
+            / "evidence"
+            / "rotated-probe-heldout-seed-21006-20261104"
+            / "OFFLINE_ANALYSIS.json"
+        )
+        analysis = json.loads(path.read_text(encoding="utf-8"))
+        comparison = analysis["measurements"][0]["slip_onset"]["inference_vs_simulator_friction"]
+        self.assertEqual(comparison["status"], "overlap")
+        self.assertIn("claim_separation", comparison)
+        self.assertEqual(self.mod.claim_separation_gate_violations(analysis), [])
+
     def test_claim_separation_gate_fails_when_subclaims_are_stripped(self) -> None:
         analysis = {
             "measurements": [
