@@ -56,7 +56,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 const MU_REQUIRED: f64 = 0.3;
@@ -87,6 +87,59 @@ pub enum TrialOutcome {
     /// and the authorized action was only the missing-grant probe.
     EvaluationLabelMismatch,
     ActionFailed,
+}
+
+#[cfg(test)]
+mod probe_sidecar_reservation_tests {
+    use super::ProbeSidecarReservation;
+    use std::fs;
+    use std::io::ErrorKind;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn fresh_test_dir() -> PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "realityos-probe-sidecar-reservation-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&path).expect("unique test directory");
+        path
+    }
+
+    #[test]
+    fn active_reservation_rejects_a_second_run_for_the_same_sidecar() {
+        let dir = fresh_test_dir();
+        let sidecar_path = dir.join("measurement.json");
+        let first = ProbeSidecarReservation::acquire(&sidecar_path)
+            .expect("first run reserves its sidecar before simulation");
+
+        let second = ProbeSidecarReservation::acquire(&sidecar_path);
+        assert!(matches!(second, Err(error) if error.kind() == ErrorKind::AlreadyExists));
+
+        drop(first);
+        let next = ProbeSidecarReservation::acquire(&sidecar_path)
+            .expect("reservation releases after the first run exits");
+        drop(next);
+        fs::remove_dir_all(dir).expect("remove test directory");
+    }
+
+    #[test]
+    fn existing_sidecar_is_rejected_before_another_simulation_can_start() {
+        let dir = fresh_test_dir();
+        let sidecar_path = dir.join("measurement.json");
+        fs::write(&sidecar_path, b"frozen evidence").expect("existing evidence fixture");
+
+        let result = ProbeSidecarReservation::acquire(&sidecar_path);
+        assert!(matches!(result, Err(error) if error.kind() == ErrorKind::AlreadyExists));
+
+        fs::remove_file(&sidecar_path).expect("remove evidence fixture");
+        let reservation = ProbeSidecarReservation::acquire(&sidecar_path)
+            .expect("failed reservation left no stale lock");
+        drop(reservation);
+        fs::remove_dir_all(dir).expect("remove test directory");
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -726,6 +779,7 @@ pub fn run_benchmark_trial_with_probe_measurement_sidecar(
     wrench_profile: Option<&SimulationWrenchSensorProfile>,
     sidecar_path: &Path,
 ) -> Result<BenchmarkEpisode, BenchmarkError> {
+    let _reservation = ProbeSidecarReservation::acquire(sidecar_path)?;
     run_benchmark_trial_inner(
         bundle,
         trial,
@@ -734,6 +788,42 @@ pub fn run_benchmark_trial_with_probe_measurement_sidecar(
         Some(sidecar_path),
         None,
     )
+}
+
+/// Reserve a sidecar path before running its simulator trial. This prevents
+/// concurrent or repeated runs from consuming compute before the final
+/// create-new write discovers that the evidence path is already claimed.
+#[derive(Debug)]
+struct ProbeSidecarReservation {
+    reservation_path: PathBuf,
+}
+
+impl ProbeSidecarReservation {
+    fn acquire(sidecar_path: &Path) -> Result<Self, std::io::Error> {
+        let mut reservation_path = sidecar_path.as_os_str().to_os_string();
+        reservation_path.push(".run-reservation");
+        let reservation_path = PathBuf::from(reservation_path);
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&reservation_path)?;
+
+        let reservation = Self { reservation_path };
+        match fs::symlink_metadata(sidecar_path) {
+            Ok(_) => Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "probe measurement sidecar already exists",
+            )),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(reservation),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+impl Drop for ProbeSidecarReservation {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.reservation_path);
+    }
 }
 
 fn scenario_objects_with_grasp_friction(

@@ -12,7 +12,17 @@
   "frozen_source_hashes_match_source_commit": true,
   "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21000:0",
   "trial_digest": "776dee2c071f47b230131719eca5fea3babcd114e137e2d511e1a04eb9a7ba3d",
-  "simulation_runs": 1,
+  "simulation_runs": null,
+  "simulation_runs_lower_bound": 2,
+  "run_accounting": {
+    "status": "CONTAMINATED_BY_CONCURRENT_FULL_SIMULATION",
+    "corrected_at_utc": "2026-11-03T19:16:49Z",
+    "reported_successful_invocations": 1,
+    "observed_failed_duplicate_invocations": 1,
+    "exact_total": null,
+    "reason": "A second full invocation completed simulation and failed at the final sidecar create_new write with AlreadyExists.",
+    "effect": "The one-run budget is not met; retain the episode and sidecar as diagnostic evidence only."
+  },
   "episode": {
     "outcome": "unexpected_refusal",
     "refusal_code": "NO_JUSTIFIED_CURRENT_ACTION",
