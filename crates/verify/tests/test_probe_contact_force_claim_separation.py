@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import unittest
 from pathlib import Path
 
@@ -46,6 +47,35 @@ class ClaimSeparationTests(unittest.TestCase):
         result = self.mod._compare_friction_interval(record, None)
         self.assertEqual(result["status"], "unavailable")
         self.assertEqual(result["claim_separation"]["status"], "unavailable")
+
+    def test_seed_21007_offline_analysis_passes_claim_separation_gate(self) -> None:
+        path = (
+            Path(__file__).resolve().parents[3]
+            / "docs"
+            / "superpowers"
+            / "evidence"
+            / "rotated-probe-heldout-seed-21007-20261104"
+            / "OFFLINE_ANALYSIS.json"
+        )
+        analysis = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(self.mod.claim_separation_gate_violations(analysis), [])
+
+    def test_claim_separation_gate_fails_when_subclaims_are_stripped(self) -> None:
+        analysis = {
+            "measurements": [
+                {
+                    "slip_onset": {
+                        "inference_vs_simulator_friction": {
+                            "status": "disjoint",
+                            "claim_separation": {"note": "incomplete"},
+                        }
+                    }
+                }
+            ]
+        }
+        violations = self.mod.claim_separation_gate_violations(analysis)
+        self.assertIn("measurement[0]_missing_onset_force_ratio_claim", violations)
+        self.assertIn("measurement[0]_missing_coulomb_parameter_claim", violations)
 
 
 if __name__ == "__main__":

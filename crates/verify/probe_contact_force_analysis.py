@@ -304,11 +304,73 @@ def analyze(sidecar_path: Path) -> dict[str, Any]:
     }
 
 
+def claim_separation_gate_violations(analysis: dict[str, Any]) -> list[str]:
+    """Fail-closed: friction comparisons that ran must keep onset T/N vs Coulomb claims separate."""
+    violations: list[str] = []
+    measurements = analysis.get("measurements")
+    if not isinstance(measurements, list):
+        return ["measurements_missing"]
+    for index, measurement in enumerate(measurements):
+        if not isinstance(measurement, dict):
+            violations.append(f"measurement[{index}]_not_object")
+            continue
+        slip = measurement.get("slip_onset")
+        if not isinstance(slip, dict):
+            continue
+        comparison = slip.get("inference_vs_simulator_friction")
+        if not isinstance(comparison, dict):
+            continue
+        status = comparison.get("status")
+        if status in (None, "unavailable"):
+            separation = comparison.get("claim_separation")
+            if not isinstance(separation, dict) or separation.get("status") != "unavailable":
+                violations.append(
+                    f"measurement[{index}]_unavailable_comparison_missing_claim_separation"
+                )
+            continue
+        separation = comparison.get("claim_separation")
+        if not isinstance(separation, dict):
+            violations.append(f"measurement[{index}]_missing_claim_separation")
+            continue
+        onset = separation.get("onset_force_ratio_vs_contact_tn")
+        coulomb = separation.get("coulomb_parameter_in_inferred_interval")
+        if not isinstance(onset, dict) or "status" not in onset:
+            violations.append(f"measurement[{index}]_missing_onset_force_ratio_claim")
+        if not isinstance(coulomb, dict) or "status" not in coulomb:
+            violations.append(f"measurement[{index}]_missing_coulomb_parameter_claim")
+        note = separation.get("note")
+        if not isinstance(note, str) or "Coulomb" not in note:
+            violations.append(f"measurement[{index}]_missing_claim_separation_note")
+    return violations
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("sidecar", type=Path, help="probe measurement sidecar JSON")
+    parser.add_argument("sidecar", type=Path, nargs="?", help="probe measurement sidecar JSON")
     parser.add_argument("--output", type=Path, help="write the analysis JSON to this path")
+    parser.add_argument(
+        "--require-claim-separation",
+        type=Path,
+        help="fail closed if an existing analysis JSON omits onset-vs-Coulomb claim separation",
+    )
     args = parser.parse_args()
+    if args.require_claim_separation is not None:
+        try:
+            analysis = json.loads(args.require_claim_separation.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            print(json.dumps({"status": "ERROR", "error": str(error)}), file=sys.stderr)
+            return 2
+        violations = claim_separation_gate_violations(analysis)
+        payload = {
+            "status": "PASS" if not violations else "FAIL",
+            "gate": "claim_separation",
+            "violations": violations,
+            "analysis_path": str(args.require_claim_separation),
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if not violations else 1
+    if args.sidecar is None:
+        parser.error("sidecar is required unless --require-claim-separation is set")
     try:
         result = analyze(args.sidecar)
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
