@@ -80,3 +80,11 @@
 ## Current Checkpoint
 
 Tasks 1 through 4 for the telemetry capture are synchronized to `main`. The offline support comparison is also complete and is being synced as a follow-up evidence increment. The full crate run produced 192/192 library tests passing and 105/106 integration tests passing (6 ignored). The one integration failure was reproduced in isolation and traced to the existing conservative axis-aligned sweep guard rejecting a slightly rotated probe direction; its integration success expectation conflicts with an existing unit-test contract. No safety guard was changed. See `docs/superpowers/evidence/grasp-lift-wrench-trace-20261103/CHECKPOINT.md` for replay findings and the next diagnostic question.
+
+## Follow-up: preserve sample simulation time
+
+- [x] Add a failing regression proving `sample_time_s` from `VerifierTruth.time_s` is serialized on each finger audit row; the baseline emitted JSON `null` instead of `12.5`.
+- [x] Add serde-defaulted `Option<f64>` `sample_time_s` to `GraspContactAudit`; populate it from finite verifier-truth simulation time without changing control behavior.
+- [x] Extend the legacy audit regression to prove missing sample time deserializes as `None`.
+- [x] Run the focused Rust audit tests (6 passed), formatting, and `git diff --check`. A broader `cargo test -p realityos-verify --lib` attempt was canceled after it spawned MuJoCo workers and rewrote five tracked evidence snapshots; those files were restored to their clean pre-run `HEAD` state. That canceled run has no result claim. No standalone frozen grasp-lift replay command was issued.
+- [ ] Commit and push the telemetry follow-up directly on canonical `main`; verify the push and preserve frozen replay files.

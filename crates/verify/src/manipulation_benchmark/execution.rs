@@ -141,6 +141,8 @@ pub struct WrenchGravityReference {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GraspContactAudit {
     pub phase: String,
+    #[serde(default)]
+    pub sample_time_s: Option<f64>,
     pub finger_body: String,
     pub normal_force_n: Option<f64>,
     pub tangential_force_n: Option<f64>,
@@ -3685,6 +3687,7 @@ fn grasp_contact_audits(
                 });
             GraspContactAudit {
                 phase: phase.into(),
+                sample_time_s: truth.time_s.is_finite().then_some(truth.time_s),
                 finger_body: finger_body.clone(),
                 normal_force_n: force_available.then(|| {
                     contacts
@@ -5628,6 +5631,18 @@ mod grasp_contact_wrench_tests {
     }
 
     #[test]
+    fn grasp_contact_audits_preserve_sample_time_on_each_finger_row() {
+        let audits = audit_json(&json!({
+            "time": 12.5,
+            "xipos": {"obj0": [0.0, 0.0, 0.0]}
+        }));
+
+        assert_eq!(audits.len(), 2);
+        assert_eq!(audits[0]["sample_time_s"], json!(12.5));
+        assert_eq!(audits[1]["sample_time_s"], json!(12.5));
+    }
+
+    #[test]
     fn grasp_contact_audits_keep_signed_world_wrench() {
         let object_first = audit_json(&json!({
             "xipos": {"obj0": [0.0, 0.0, 0.0]},
@@ -5748,7 +5763,9 @@ mod grasp_contact_wrench_tests {
         });
         let audit: GraspContactAudit =
             serde_json::from_value(legacy).expect("legacy audit remains readable");
+        assert_eq!(audit.sample_time_s, None);
         let audit = serde_json::to_value(audit).expect("legacy audit serializes");
+        assert!(audit["sample_time_s"].is_null());
         assert_eq!(audit["contact_wrenches"], json!([]));
         assert_eq!(audit["ctrl"], json!([]));
         assert_eq!(audit["actuator_force"], json!([]));
