@@ -75,6 +75,26 @@ class ClaimSeparationTests(unittest.TestCase):
         self.assertIn("claim_separation", comparison)
         self.assertEqual(self.mod.claim_separation_gate_violations(analysis), [])
 
+    def test_heldout_offline_analysis_portfolio_passes_claim_separation_gate(self) -> None:
+        portfolio_path = Path(__file__).resolve().parents[1] / "probe_claim_separation_portfolio.py"
+        spec = importlib.util.spec_from_file_location(
+            "probe_claim_separation_portfolio", portfolio_path
+        )
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        report = module.evaluate()
+        self.assertGreaterEqual(report["analysis_count"], 4)
+        self.assertEqual(report["status"], "PASS", report.get("failures"))
+        self.assertEqual(report["failure_count"], 0)
+
+    def test_incomplete_no_sidecar_analysis_passes_claim_separation_gate(self) -> None:
+        analysis = {
+            "status": "INCOMPLETE_NO_MEASUREMENT_SIDECAR",
+            "episode": {"outcome": "action_failed"},
+        }
+        self.assertEqual(self.mod.claim_separation_gate_violations(analysis), [])
+
     def test_claim_separation_gate_fails_when_subclaims_are_stripped(self) -> None:
         analysis = {
             "measurements": [

@@ -309,6 +309,9 @@ def claim_separation_gate_violations(analysis: dict[str, Any]) -> list[str]:
     violations: list[str] = []
     measurements = analysis.get("measurements")
     if not isinstance(measurements, list):
+        # Incomplete abort/no-sidecar analyses never ran a friction comparison.
+        if analysis.get("status") == "INCOMPLETE_NO_MEASUREMENT_SIDECAR":
+            return []
         return ["measurements_missing"]
     for index, measurement in enumerate(measurements):
         if not isinstance(measurement, dict):
