@@ -1,0 +1,122 @@
+{
+  "schema": "realityos.rotated_probe_diagnostic.result/v1",
+  "experiment_id": "rotated_probe_heldout_seed_21002_iiwa14_20261104_v1",
+  "completed_at_utc": "2026-11-03T19:45:07Z",
+  "classification": "VALIDATED_LEARNING; ONE_HELD_OUT_SIMULATOR_CASE_PASSED; SIMULATION_ONLY; NOT_ADMITTED",
+  "repository": "reality-os-rust",
+  "branch": "main",
+  "code_commit": "c49bd4006c19054609747e66e5f00dbe7b735af9",
+  "source_commit": "c49bd4006c19054609747e66e5f00dbe7b735af9",
+  "freeze_commit": "f8c8183b40554bf9ffcb8624a9da3b5ffdb14ed1",
+  "run_head": "f8c8183b40554bf9ffcb8624a9da3b5ffdb14ed1",
+  "freeze_sha256": "89E3CDB7E27870B2E6AA328B027F3C33B0C6A55BA6C712AB79E36C10FED3377B",
+  "frozen_source_hashes_match_current_source": true,
+  "freeze_verification_status": "PASS",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21002:0",
+  "trial_digest": "160d49bb60590c1c6bd76fbf7880b03cc1575dad5a3fb24994e2b9ea37896a66",
+  "trial_seed": 21002,
+  "trial_index": 0,
+  "simulation_runs": 1,
+  "verification": {
+    "cargo_fmt_all_check": "passed",
+    "git_diff_check": "passed",
+    "cargo_check_realityos_verify": "passed",
+    "sidecar_capture_unit_tests": "4 passed",
+    "targeted_after_fix_replay": {
+      "command": "cargo test -p realityos-verify --test manipulation_benchmark iiwa_rotated_probe_unbracketed_motion_diagnostic_capture -- --ignored --exact --nocapture",
+      "result": "1 passed; 0 failed; 201.11 seconds; one simulator replay"
+    },
+    "offline_sidecar_verifier_status": "PASS",
+    "offline_measurement_count": 1
+  },
+  "episode": {
+    "outcome": "success",
+    "refusal_code": null,
+    "friction_inference": "updated:SlipOnset",
+    "friction_interval": [
+      0.3975340574991189,
+      0.4889387858772281
+    ],
+    "actions": [
+      {
+        "action_key": "probe:+x",
+        "displacement_m": 0.005354404858203582,
+        "writes_before": 0,
+        "writes_after": 12854
+      },
+      {
+        "action_key": "push:+x",
+        "displacement_m": 0.025533142024815415,
+        "writes_before": 12854,
+        "writes_after": 27145
+      }
+    ],
+    "wrench_sample_count": 29146,
+    "simulation_time_s": 58.292000000025276,
+    "unauthorized_writes": 0
+  },
+  "sidecar": {
+    "path": "PROBE_MEASUREMENT_SIDECAR.json",
+    "sha256": "0AF528B0FA1FF873167972451AB3FE64CCD1BEA1DF3330A1DF13F0377B34DA23",
+    "size_bytes": 21038904,
+    "measurement_count": 1,
+    "measurement_digest": "980e56851936cc6441e62176f6dec2315dc00f7780000d843dc20a3c3fcd6d6d",
+    "pose_samples": 5977,
+    "wrench_samples": 5978,
+    "motion_trace_status": "verified",
+    "recomputed_inference": {
+      "Updated": {
+        "interval": [
+          0.3975340574991189,
+          0.4889387858772281
+        ],
+        "mode": "slip_onset"
+      }
+    }
+  },
+  "offline_analysis": {
+    "path": "OFFLINE_ANALYSIS.json",
+    "sha256": "BEE3B96314B2BE2CF71B980E267C1E73B0A3F21EC04DABEE8010FD96D3DBF936",
+    "script_path": "analyze_motion_onset.py",
+    "script_sha256": "0AB1C748D2CE6827F13F86C8F60C6BDF153534DD821F0BE11F0145E9A8E53867",
+    "status": "OFFLINE_RECOMPUTATION_ONLY",
+    "thresholds": {
+      "planar_motion_m": 0.001,
+      "tangential_force_lower_bound_n": 0.5
+    },
+    "first_pose_over_1_mm": {
+      "time_s": 21.857999999998764,
+      "simulator_step": 10929,
+      "wrench_sequence": 10928,
+      "planar_displacement_m": 0.0010020850493925643,
+      "tangential_force_lower_bound_n": 7.353590980864112,
+      "matched_sample_index": 2928,
+      "sample_age_s": 0.0
+    },
+    "first_100_step_endpoint_over_1_mm": {
+      "time_s": 22.001999999998684,
+      "simulator_step": 11001,
+      "wrench_sequence": 11000,
+      "planar_displacement_m": 0.0012028157178921133,
+      "tangential_force_lower_bound_n": 5.667578239534504,
+      "matched_sample_index": 3000,
+      "sample_age_s": 0.0,
+      "control_batch_index": 30,
+      "nominal_batch_end_s": 22.001999999998684
+    },
+    "force_supported_at_motion_crossing": true,
+    "batch_endpoint_would_resolve_motion": true
+  },
+  "interpretation": "A different frozen seed (21002) completed one authorized probe and one push, produced Updated(SlipOnset), and passed independent sidecar recomputation with the 1 mm and 0.5 N guards unchanged. On this sample the 100-step endpoint also retained force support, so this is held-out task success but does not reproduce the cadence-miss boundary. Seed 21001 remains an unclassified capture failure; its outcome is unknown.",
+  "scope_limits": {
+    "full_lift_replay": false,
+    "physical_test": false,
+    "physical_actions": 0,
+    "purchases": 0,
+    "fabrication": 0,
+    "external_contact": false,
+    "admission_status": "NOT_ADMITTED",
+    "metal": false,
+    "shop_release": false
+  }
+}

@@ -1,0 +1,163 @@
+{
+  "format": "realityos.rotated_probe_motion_onset_analysis",
+  "schema_version": 1,
+  "status": "OFFLINE_RECOMPUTATION_ONLY",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21002:0",
+  "trial_digest": "160d49bb60590c1c6bd76fbf7880b03cc1575dad5a3fb24994e2b9ea37896a66",
+  "thresholds": {
+    "planar_motion_m": 0.001,
+    "tangential_force_lower_bound_n": 0.5
+  },
+  "method": "Recompute the source tangential-force lower bound from each time-aligned pose sample, raw wrench, free-space wrench, sensor transform, uncertainty, rate bound, and sample age; compare with the simulator executor’s 100-step observation cadence.",
+  "control_batch_constant_source": "crates/verify/src/manipulation_benchmark/execution.rs",
+  "measurements": [
+    {
+      "action_key": "probe:+x",
+      "measurement_digest": "980e56851936cc6441e62176f6dec2315dc00f7780000d843dc20a3c3fcd6d6d",
+      "measurement_inference": {
+        "Updated": {
+          "interval": [
+            0.3975340574991189,
+            0.4889387858772281
+          ],
+          "mode": "slip_onset"
+        }
+      },
+      "motion_audit": {
+        "start_s": 16.00200000000201,
+        "end_s": 27.955999999995385,
+        "displacement_m": [
+          0.004827280102452147,
+          -6.551125512238576e-05,
+          -2.5432165671190887e-06
+        ],
+        "max_speed_m_s": 0.003014026690730985,
+        "max_quasi_static_speed_m_s": 0.02,
+        "pose_resolution_m": 0.001,
+        "first_motion_s": 21.857999999998764,
+        "unresolved_motion_before_force": false
+      },
+      "pose_sample_count": 5977,
+      "wrench_sample_count": 5978,
+      "inferred_timestep_s": 0.0019999999999988916,
+      "control_update_steps": 100,
+      "control_update_interval_s": 0.19999999999988916,
+      "first_force_lower_bound_at_or_above_0_5_n": {
+        "time_s": 18.05600000000087,
+        "simulator_step": 9028,
+        "wrench_sequence": 9027,
+        "planar_displacement_m": 3.0107729106813723e-05,
+        "tangential_force_lower_bound_n": 7.542971400973944,
+        "matched_sample_index": 1027,
+        "sample_age_s": 0.0
+      },
+      "first_pose_sample_over_1_mm": {
+        "time_s": 21.857999999998764,
+        "simulator_step": 10929,
+        "wrench_sequence": 10928,
+        "planar_displacement_m": 0.0010020850493925643,
+        "tangential_force_lower_bound_n": 7.353590980864112,
+        "matched_sample_index": 2928,
+        "sample_age_s": 0.0
+      },
+      "first_100_step_endpoint_over_1_mm": {
+        "time_s": 22.001999999998684,
+        "simulator_step": 11001,
+        "wrench_sequence": 11000,
+        "planar_displacement_m": 0.0012028157178921133,
+        "tangential_force_lower_bound_n": 5.667578239534504,
+        "matched_sample_index": 3000,
+        "sample_age_s": 0.0,
+        "control_batch_index": 30,
+        "nominal_batch_end_s": 22.001999999998684
+      },
+      "force_supported_before_motion_crossing": true,
+      "force_supported_at_first_motion_crossing": true,
+      "runtime_batch_endpoint_would_resolve_motion": true,
+      "motion_over_1_mm_and_force_under_0_5_n_at_batch_endpoint": false,
+      "boundary_samples": [
+        {
+          "time_s": 21.853999999998766,
+          "simulator_step": 10927,
+          "wrench_sequence": 10926,
+          "planar_displacement_m": 0.00099753671798522,
+          "tangential_force_lower_bound_n": 7.351456555295029,
+          "matched_sample_index": 2926,
+          "sample_age_s": 0.0
+        },
+        {
+          "time_s": 21.855999999998765,
+          "simulator_step": 10928,
+          "wrench_sequence": 10927,
+          "planar_displacement_m": 0.0009998115270140094,
+          "tangential_force_lower_bound_n": 7.344083411034153,
+          "matched_sample_index": 2927,
+          "sample_age_s": 0.0
+        },
+        {
+          "time_s": 21.857999999998764,
+          "simulator_step": 10929,
+          "wrench_sequence": 10928,
+          "planar_displacement_m": 0.0010020850493925643,
+          "tangential_force_lower_bound_n": 7.353590980864112,
+          "matched_sample_index": 2928,
+          "sample_age_s": 0.0
+        },
+        {
+          "time_s": 21.859999999998763,
+          "simulator_step": 10930,
+          "wrench_sequence": 10929,
+          "planar_displacement_m": 0.001004357193962184,
+          "tangential_force_lower_bound_n": 7.348677277542816,
+          "matched_sample_index": 2929,
+          "sample_age_s": 0.0
+        },
+        {
+          "time_s": 21.861999999998762,
+          "simulator_step": 10931,
+          "wrench_sequence": 10930,
+          "planar_displacement_m": 0.0010066278697795834,
+          "tangential_force_lower_bound_n": 7.338727998417768,
+          "matched_sample_index": 2930,
+          "sample_age_s": 0.0
+        }
+      ],
+      "batch_endpoint_samples": [
+        {
+          "time_s": 21.601999999998906,
+          "simulator_step": 10801,
+          "wrench_sequence": 10800,
+          "planar_displacement_m": 0.0007341928418055423,
+          "tangential_force_lower_bound_n": 5.9855879868236475,
+          "matched_sample_index": 2800,
+          "sample_age_s": 0.0,
+          "control_batch_index": 28,
+          "nominal_batch_end_s": 21.601999999998906
+        },
+        {
+          "time_s": 21.801999999998795,
+          "simulator_step": 10901,
+          "wrench_sequence": 10900,
+          "planar_displacement_m": 0.0009382438928308366,
+          "tangential_force_lower_bound_n": 7.39155187690722,
+          "matched_sample_index": 2900,
+          "sample_age_s": 0.0,
+          "control_batch_index": 29,
+          "nominal_batch_end_s": 21.801999999998795
+        },
+        {
+          "time_s": 22.001999999998684,
+          "simulator_step": 11001,
+          "wrench_sequence": 11000,
+          "planar_displacement_m": 0.0012028157178921133,
+          "tangential_force_lower_bound_n": 5.667578239534504,
+          "matched_sample_index": 3000,
+          "sample_age_s": 0.0,
+          "control_batch_index": 30,
+          "nominal_batch_end_s": 22.001999999998684
+        }
+      ]
+    }
+  ],
+  "scope": "No simulator or control code imported or executed. This analysis is limited to the frozen single-case simulation sidecar and does not establish physical performance."
+}
