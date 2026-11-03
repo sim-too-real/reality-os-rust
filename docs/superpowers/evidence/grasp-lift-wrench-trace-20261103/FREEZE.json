@@ -1,0 +1,87 @@
+{
+  "schema": "realityos.grasp_lift_time_profile_candidate_freeze/v1",
+  "experiment_id": "grasp_lift_contact_wrench_trace_v1_20261103",
+  "frozen_at_utc": "2026-11-03T12:53:36Z",
+  "status": "FROZEN_BEFORE_SIMULATION",
+  "simulation_started": false,
+  "classification": "software-only post-hoc telemetry replay; NOT_ADMITTED",
+  "candidate_source": {
+    "repository": "realityos-rust",
+    "branch": "main",
+    "git_head": "5888012c6a86fcfb71b998223bfe60048d451a78",
+    "profile_id": "posthoc_contact_wrench_trace_v1",
+    "source_commit_pushed": false,
+    "integration_test_sha256": "B5FC03870A20EE46BE5A8BAF402B713EEF190E2FBC8DB20420F19E79E4F7D2C1",
+    "execution_sha256": "51C3BCAA77CD7B7FE5FFD6F9EDF9CAB313D3AC870461300A6F38634ABB7FCB0A",
+    "reasoner_sha256": "0CCECC88F33A0AE99F22B783730F772812079528D9963D1472C1F0BA7C661357",
+    "worker_sha256": "3B43A9E6D63822149F4CFDA699BDD90C333C351E5999D9E2193053D7D9C72A58",
+    "observation_sha256": "194C4B00A0E66F4CF53BF5E6353D2F8F53338B8CEF7EA1DE2FACC370C5FBCC72"
+  },
+  "baseline_result": {
+    "path": "docs/superpowers/evidence/grasp-lift-time-profile-20261103/BASELINE.json",
+    "sha256": "6877DEDA6D344973D6C28196E5BB076EFE85F6C63AA37BAB3D9317ACEC48CDD1",
+    "expected_trials": 7,
+    "expected_successes": 4,
+    "source_head": "77b5b9d1e545fa4fab601649d473e886ae2a1d2a",
+    "freeze_path": "docs/superpowers/evidence/grasp-lift-time-profile-20261103/FREEZE.json",
+    "freeze_sha256": "AAC36CB177DEA7F7523DDB371372F770409856F3C6B0D7A327D9A41BE14BFB82"
+  },
+  "primary_control_inputs": [
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25",
+      "seed": 21010,
+      "index": 25,
+      "expectation": "expected_success",
+      "paired_trial_key": "4a03287aebe64e2a6e82420253d68914d7bfe986c8460111369199f36d9cb720",
+      "trial_digest": "e9881d267030cf649f788b83f921e57a3160d4ffe49c434c852e86ef980fe5d5",
+      "path": "docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-25mm/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21010_25.json",
+      "sha256": "71921E9971AC34CBE77D0429A4F8C1A6C4922B66E6712D57752794D1A8F01D8E",
+      "historical_outcome": "unexpected_refusal",
+      "historical_failure_cause": "runtime_divergence",
+      "historical_hold_verified": null,
+      "historical_follow_residual_m": null
+    },
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21006:21",
+      "seed": 21006,
+      "index": 21,
+      "expectation": "expected_success",
+      "paired_trial_key": "3b3f41d7e5db79f1d8de6974add2d459193c04054d55ad62185b482787c6f890",
+      "trial_digest": "3cf3cd648b018a64df8b5c12f8133d9fff2abe8725a44614c936b1b3ec8b40ff",
+      "path": "docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-25mm/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21006_21.json",
+      "sha256": "2E997A30E7154AB6CC771971031C52E2B0DD617069B8EA55B621E6BAE14C670A",
+      "historical_outcome": "action_failed",
+      "historical_failure_cause": "hold_not_verified",
+      "historical_hold_verified": false,
+      "historical_follow_residual_m": 0.007362387759005328
+    }
+  ],
+  "fixed_guards": {
+    "per_finger_force_ceiling_n": 1.95,
+    "object_tool_relative_pose_stop_m": 0.02,
+    "hold_verifier_lift_window_m": [
+      0.02,
+      0.025
+    ],
+    "object_follow_residual_max_m": 0.005,
+    "unauthorized_writes_allowed": 0,
+    "collision_proof": "unchanged; each adjacent Cartesian waypoint transition checked",
+    "authority_checks": "unchanged",
+    "admission_status": "NOT_ADMITTED",
+    "metal": false,
+    "shop_release": false,
+    "viewport_admits": false
+  },
+  "source_freeze_reference": {
+    "path": "docs/superpowers/evidence/grasp-lift-cartesian-waypoints-20261103/FREEZE-v2.json",
+    "sha256": "69649BACDFA74496A01355706226F52AB6A60812A086C626A052DD3F0248B248"
+  },
+  "run_protocol": [
+    "Validate all telemetry source hashes, baseline, and both frozen input digests before replay.",
+    "Replay exactly the two frozen primary controls once; do not change controls or acceptance criteria.",
+    "Independently verify source/result hashes, post-close/lift samples, wrench signs, and unchanged outcomes/guards."
+  ],
+  "safety_boundary": "Simulation only. Solver telemetry is not a physical capacity proof. No actuation, fabrication, purchasing, external contact, admission, or release claim.",
+  "hypothesis": "Per-contact simulator wrench and actuator telemetry at post-close and lift will identify whether the two existing grasp failures correlate with contact geometry/load distribution or actuator realization.",
+  "scope_limit": "Post-hoc simulation telemetry only; no control, trajectory, threshold, governor, admission, or release-authority changes."
+}
