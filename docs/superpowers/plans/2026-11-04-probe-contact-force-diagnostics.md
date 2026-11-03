@@ -65,9 +65,9 @@
 - Test: offline compatibility checks against the committed seed 21003 sidecar and analyzer output (no simulator replay).
 
 - [x] Before editing the CLI, verify the committed seed 21003 sidecar with `target/debug/realityos-verify.exe`; it must pass.
-- [ ] Extend CLI output with `contact_force_trace_status`; create the analyzer to report per-contact force, friction, normal/tangential magnitudes, and the paired tool-wrench interval at slip onset.
-- [ ] Re-run the verifier and analyzer on seed 21003; confirm the old sidecar still verifies and reports `absent_legacy`, then run formatting and `git diff --check`.
-- [ ] Run `cargo check -p realityos-verify`, `cargo fmt --all -- --check`, and `git diff --check`.
+- [x] Extend CLI output with `contact_force_trace_status`; create the analyzer to report per-contact force, friction, normal/tangential magnitudes, and the paired tool-wrench interval at slip onset.
+- [x] Re-run the verifier and analyzer on seed 21003; confirm the old sidecar still verifies and reports `absent_legacy`, then run formatting and `git diff --check`.
+- [x] Run `cargo check -p realityos-verify`, `cargo fmt --all -- --check`, and `git diff --check`.
 
 ### Task 4: Freeze and run one fresh held-out case
 

@@ -93,11 +93,17 @@ fn verify_probe_measurement_sidecar(args: &[String]) {
                 }
                 Some(_) => "verified",
             };
+            let contact_force_trace_status = match motion_trace {
+                None => "absent_legacy",
+                Some(trace) if trace.has_contact_force_trace() => "verified",
+                Some(_) => "absent_legacy",
+            };
             serde_json::json!({
                 "action_key": record.action_key,
                 "measurement_digest": record.measurement_digest,
                 "sample_count": record.measurement.samples.len(),
                 "motion_trace_status": motion_trace_status,
+                "contact_force_trace_status": contact_force_trace_status,
                 "pose_sample_count": motion_trace.map(|trace| trace.samples.len()),
                 "first_xy_motion_bracket_s": motion_trace.and_then(|trace| trace.first_xy_motion_bracket(record.measurement.motion.pose_resolution_m)),
                 "recomputed_inference": record.inference,

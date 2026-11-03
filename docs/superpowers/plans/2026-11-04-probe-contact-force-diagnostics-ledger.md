@@ -16,7 +16,7 @@ Spec: `docs/superpowers/specs/2026-11-04-probe-contact-force-diagnostics-design.
 
 - Task 1: complete. The three RED tests failed on absent digest binding, `Some([])` collapsing to null, and missing partial-trace rejection; all three pass with versioned sample/trace digests and semantic validation. Focused command: `cargo test -p realityos-semantics probe_object_pose_ -- --nocapture` (3 passed).
 - Task 2: complete. Parser RED test first observed missing `contact_force_samples`; worker RED test first observed the missing capture helper. The worker now snapshots MuJoCo contacts in-place and the parser preserves and validates pair order. Focused checks: `cargo test -p realityos-verify probe_pose_trace_tests -- --nocapture` (4 passed) and `python crates/verify/tests/test_mujoco_wrench_gates.py` (6 passed). The legacy parser test explicitly asserts force samples remain absent.
-- Task 3: in progress. Before editing the CLI, the seed 21003 sidecar verified with `status: PASS`; the first analyzer run reports `absent_legacy` for both measurements while retaining motion and wrench onset brackets.
+- Task 3: complete. Added `contact_force_trace_status` to the CLI and the offline analyzer. Reverified seed 21003 after the CLI change (`status: PASS`, both force traces `absent_legacy`); the analyzer reports both as legacy while preserving onset and tool-wrench brackets. `cargo check -p realityos-verify`, `cargo fmt --all -- --check`, and `git diff --check` passed. A synthetic in-memory analyzer check also exercised new force-bearing onset data and exact wrench-sequence pairing; it is a code-path check, not simulator evidence.
 - Task 4: pending.
 
 ## Evidence and implementation notes
