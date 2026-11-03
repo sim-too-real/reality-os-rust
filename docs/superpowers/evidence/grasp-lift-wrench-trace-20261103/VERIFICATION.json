@@ -1,0 +1,65 @@
+{
+  "schema": "realityos.grasp_lift_wrench_trace_verification/v1",
+  "verified_at_utc": "2026-11-03T12:55:57Z",
+  "freeze_sha256": "30A1CC816BA4BA65358152776C04B1EC71809C8DDBA0650BDA73D9A1B7FBD3B9",
+  "result_sha256": "6A920F0544ABAFBE26D366D0CB5D1F228F03D7C70FABB45872A0AEBFE55B00C9",
+  "verifier_sha256": "69775A6C9407D940ED0C47473FAA1EB3154D815313FC220B4F88619D9B14EAEB",
+  "freeze_commit": "65e202804e27cacba402503573b64ae255f64072",
+  "freeze_commit_utc": "2026-11-03T12:54:02Z",
+  "candidate_source": {
+    "repository": "realityos-rust",
+    "branch": "main",
+    "git_head": "5888012c6a86fcfb71b998223bfe60048d451a78",
+    "profile_id": "posthoc_contact_wrench_trace_v1",
+    "source_commit_pushed": false,
+    "integration_test_sha256": "B5FC03870A20EE46BE5A8BAF402B713EEF190E2FBC8DB20420F19E79E4F7D2C1",
+    "execution_sha256": "51C3BCAA77CD7B7FE5FFD6F9EDF9CAB313D3AC870461300A6F38634ABB7FCB0A",
+    "reasoner_sha256": "0CCECC88F33A0AE99F22B783730F772812079528D9963D1472C1F0BA7C661357",
+    "worker_sha256": "3B43A9E6D63822149F4CFDA699BDD90C333C351E5999D9E2193053D7D9C72A58",
+    "observation_sha256": "194C4B00A0E66F4CF53BF5E6353D2F8F53338B8CEF7EA1DE2FACC370C5FBCC72"
+  },
+  "checks": [
+    "committed pre-run freeze, result, all five source files, baseline, and input hashes match",
+    "post_close and lift phases contain finite COM, ctrl, actuator, and contact fields",
+    "world force, signed torque, moment arm, and missing-wrench behavior independently recomputed",
+    "historical outcomes, failure causes, and zero unauthorized writes preserved"
+  ],
+  "trials": [
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25",
+      "outcome": "unexpected_refusal",
+      "failure_cause": "runtime_divergence",
+      "hold_verified": null,
+      "unauthorized_writes": 0,
+      "audit_rows": 10,
+      "phases": [
+        "post_close",
+        "lift_waypoint_1",
+        "lift_waypoint_2",
+        "lift_waypoint_3",
+        "lift_waypoint_4"
+      ],
+      "contacts": 10,
+      "derived_wrenches_recomputed": 10
+    },
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21006:21",
+      "outcome": "action_failed",
+      "failure_cause": "hold_not_verified",
+      "hold_verified": false,
+      "unauthorized_writes": 0,
+      "audit_rows": 14,
+      "phases": [
+        "post_close",
+        "lift_waypoint_1",
+        "lift_waypoint_2",
+        "lift_waypoint_3",
+        "lift_waypoint_4",
+        "post_lift"
+      ],
+      "contacts": 44,
+      "derived_wrenches_recomputed": 44
+    }
+  ],
+  "interpretation": "Simulation-only diagnostic trace; solver forces are not a hardware-capacity measurement."
+}

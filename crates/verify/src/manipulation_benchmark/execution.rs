@@ -148,6 +148,33 @@ pub struct GraspContactAudit {
     pub contact_dimensions: Vec<u8>,
     pub contact_friction: Vec<Vec<f64>>,
     pub force_available: bool,
+    #[serde(default)]
+    pub object_com_world_m: Option<[f64; 3]>,
+    #[serde(default)]
+    pub ctrl: Vec<f64>,
+    #[serde(default)]
+    pub actuator_force: Vec<f64>,
+    #[serde(default)]
+    pub contact_wrenches: Vec<GraspContactWrench>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GraspContactWrench {
+    pub body1: String,
+    pub body2: String,
+    pub position_world_m: Option<[f64; 3]>,
+    pub force_local: Option<[f64; 3]>,
+    pub torque_local: Option<[f64; 3]>,
+    pub contact_frame: Option<[f64; 9]>,
+    pub normal_force_n: Option<f64>,
+    pub tangential_force_n: Option<f64>,
+    pub contact_dimension: Option<u8>,
+    pub friction: Option<Vec<f64>>,
+    pub force_available: bool,
+    pub force_world_on_object_n: Option<[f64; 3]>,
+    pub torque_world_on_object_nm: Option<[f64; 3]>,
+    pub moment_world_about_object_com_nm: Option<[f64; 3]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -3172,6 +3199,7 @@ fn execute_grasp_witness(
     ];
     let mut hold_start = None;
     let mut phase_object_positions = Vec::new();
+    let mut lift_contact_audits = Vec::new();
     for (arm, fingers, phase) in phases {
         match write_grasp_ctrl(
             worker,
@@ -3244,14 +3272,20 @@ fn execute_grasp_witness(
             }
             let state = state_payload(worker)?;
             phase_object_positions.push(body_position(&state, &request.scene.object_id)?);
-            hold_start = Some(VerifierTruth::from_mujoco_state(&state));
+            let truth = VerifierTruth::from_mujoco_state(&state);
+            lift_contact_audits.extend(grasp_contact_audits(
+                "post_close",
+                &truth,
+                &request.scene.object_id,
+                resource,
+            ));
+            hold_start = Some(truth);
         } else {
             let state = state_payload(worker)?;
             phase_object_positions.push(body_position(&state, &request.scene.object_id)?);
         }
     }
 
-    let mut lift_contact_audits = Vec::new();
     for pair in lift_states.windows(2) {
         let (start_arm, start_fingers) = &pair[0];
         let (end_arm, end_fingers) = &pair[1];
@@ -3572,6 +3606,10 @@ fn grasp_contact_audits(
     object_id: &str,
     resource: &ControlledResource,
 ) -> Vec<GraspContactAudit> {
+    let object_com_world_m = truth
+        .xipos
+        .get(object_id)
+        .and_then(|position| finite_vec3(position));
     resource
         .finger_bodies
         .iter()
@@ -3584,6 +3622,10 @@ fn grasp_contact_audits(
                         || (contact.body2 == *object_id && contact.body1 == *finger_body)
                 })
                 .collect::<Vec<_>>();
+            let contact_wrenches = contacts
+                .iter()
+                .map(|contact| grasp_contact_wrench(contact, object_id, object_com_world_m))
+                .collect();
             let force_available = !contacts.is_empty()
                 && contacts.iter().all(|contact| {
                     contact.force_available
@@ -3633,9 +3675,123 @@ fn grasp_contact_audits(
                     .filter_map(|contact| contact.friction.clone())
                     .collect(),
                 force_available,
+                object_com_world_m,
+                ctrl: truth.ctrl.clone(),
+                actuator_force: truth.actuator_force.clone(),
+                contact_wrenches,
             }
         })
         .collect()
+}
+
+fn grasp_contact_wrench(
+    contact: &crate::observation::ContactTruth,
+    object_id: &str,
+    object_com_world_m: Option<[f64; 3]>,
+) -> GraspContactWrench {
+    let sign_on_object = if contact.body1 == object_id {
+        Some(-1.0)
+    } else if contact.body2 == object_id {
+        Some(1.0)
+    } else {
+        None
+    };
+    let force_world_on_object_n = if contact.force_available {
+        contact
+            .force_local
+            .zip(contact.contact_frame)
+            .zip(sign_on_object)
+            .and_then(|((force_local, frame), sign)| {
+                rotate_contact_vector(force_local, frame).map(|mut force| {
+                    for component in &mut force {
+                        *component *= sign;
+                    }
+                    force
+                })
+            })
+    } else {
+        None
+    };
+    let torque_world_on_object_nm = if contact.force_available {
+        contact
+            .torque_local
+            .zip(contact.contact_frame)
+            .zip(sign_on_object)
+            .and_then(|((torque_local, frame), sign)| {
+                rotate_contact_vector(torque_local, frame).map(|mut torque| {
+                    for component in &mut torque {
+                        *component *= sign;
+                    }
+                    torque
+                })
+            })
+    } else {
+        None
+    };
+    let moment_world_about_object_com_nm = force_world_on_object_n
+        .zip(torque_world_on_object_nm)
+        .zip(contact.position)
+        .zip(object_com_world_m)
+        .and_then(|(((force, torque), position), center)| {
+            let position = finite_vec3(&position)?;
+            let arm = sub3(position, center);
+            let mut moment = [
+                arm[1] * force[2] - arm[2] * force[1],
+                arm[2] * force[0] - arm[0] * force[2],
+                arm[0] * force[1] - arm[1] * force[0],
+            ];
+            for axis in 0..3 {
+                moment[axis] += torque[axis];
+            }
+            moment
+                .iter()
+                .all(|value| value.is_finite())
+                .then_some(moment)
+        });
+
+    GraspContactWrench {
+        body1: contact.body1.clone(),
+        body2: contact.body2.clone(),
+        position_world_m: contact.position,
+        force_local: contact.force_local,
+        torque_local: contact.torque_local,
+        contact_frame: contact.contact_frame,
+        normal_force_n: contact.normal_force,
+        tangential_force_n: contact.tangential_force,
+        contact_dimension: contact.contact_dim,
+        friction: contact.friction.clone(),
+        force_available: contact.force_available,
+        force_world_on_object_n,
+        torque_world_on_object_nm,
+        moment_world_about_object_com_nm,
+    }
+}
+
+fn rotate_contact_vector(vector: [f64; 3], frame: [f64; 9]) -> Option<[f64; 3]> {
+    if vector
+        .iter()
+        .chain(frame.iter())
+        .any(|component| !component.is_finite())
+    {
+        return None;
+    }
+    let world = [
+        vector[0] * frame[0] + vector[1] * frame[3] + vector[2] * frame[6],
+        vector[0] * frame[1] + vector[1] * frame[4] + vector[2] * frame[7],
+        vector[0] * frame[2] + vector[1] * frame[5] + vector[2] * frame[8],
+    ];
+    world
+        .iter()
+        .all(|component| component.is_finite())
+        .then_some(world)
+}
+
+fn finite_vec3(values: &[f64]) -> Option<[f64; 3]> {
+    let vector: [f64; 3] = values.try_into().ok()?;
+    vector
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(vector)
 }
 
 fn contact_pair_has(contact: &crate::observation::ContactTruth, left: &str, right: &str) -> bool {
@@ -5353,5 +5509,172 @@ mod grasp_lift_witness_path_tests {
             &[0.0, 0.0],
             &fingers
         ));
+    }
+}
+
+#[cfg(test)]
+mod grasp_contact_wrench_tests {
+    use super::{grasp_contact_audits, GraspContactAudit};
+    use crate::observation::{ContactTruth, VerifierTruth};
+    use realityos_semantics::provenance::Provenanced;
+    use realityos_semantics::resource::{
+        ClosingDirection, ControlledResource, CouplingModel, QualificationStatus, ResourceKind,
+        ResourceTopology,
+    };
+    use serde_json::{json, Value};
+
+    fn fixture_resource() -> ControlledResource {
+        ControlledResource {
+            id: "test_gripper".into(),
+            kind: ResourceKind::Gripper,
+            topology: ResourceTopology::DirectJointGripper,
+            actuator_inputs: Vec::new(),
+            affected_joints: Vec::new(),
+            finger_bodies: vec!["finger_l".into(), "finger_r".into()],
+            coupling: CouplingModel::none(),
+            command_coordinate: "opening".into(),
+            opening_range: Provenanced::declared([0.0, 1.0], "test", 0.0),
+            command_range: Provenanced::declared([0.0, 1.0], "test", 0.0),
+            closing_direction: ClosingDirection::TowardMin,
+            force_bound: Provenanced::unknown("test", 0.0),
+            qualification: QualificationStatus::Qualified,
+            unsupported_detail: None,
+        }
+    }
+
+    fn audit_json(state: &Value) -> Vec<Value> {
+        let truth = VerifierTruth::from_mujoco_state(state);
+        grasp_contact_audits("post_close", &truth, "obj0", &fixture_resource())
+            .into_iter()
+            .map(|audit| serde_json::to_value(audit).expect("audit serializes"))
+            .collect()
+    }
+
+    #[test]
+    fn grasp_contact_audits_keep_signed_world_wrench() {
+        let object_first = audit_json(&json!({
+            "xipos": {"obj0": [0.0, 0.0, 0.0]},
+            "ctrl": [0.3, -0.4],
+            "actuator_force": [1.2, -2.4],
+            "contacts": [{
+                "body1": "obj0",
+                "body2": "finger_l",
+                "pos": [0.0, 1.0, 0.0],
+                "dim": 6,
+                "friction": [0.5, 0.6, 0.01, 0.02, 0.03],
+                "force_local": [2.0, 0.4, -0.2],
+                "torque_local": [0.1, 0.2, 0.3],
+                "frame": [0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+                "normal_force": 2.0,
+                "tangential_force": 0.4472135954999579,
+                "force_available": true
+            }]
+        }));
+        let left = object_first
+            .iter()
+            .find(|audit| audit["finger_body"] == "finger_l")
+            .expect("left finger audit exists");
+        assert_eq!(left["object_com_world_m"], json!([0.0, 0.0, 0.0]));
+        assert_eq!(left["ctrl"], json!([0.3, -0.4]));
+        assert_eq!(left["actuator_force"], json!([1.2, -2.4]));
+        assert_eq!(left["contact_wrenches"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            left["contact_wrenches"][0]["force_world_on_object_n"],
+            json!([0.4, -2.0, 0.2])
+        );
+        assert_eq!(
+            left["contact_wrenches"][0]["moment_world_about_object_com_nm"],
+            json!([0.4, -0.1, -0.7])
+        );
+
+        let object_second = audit_json(&json!({
+            "xipos": {"obj0": [0.0, 0.0, 0.0]},
+            "contacts": [{
+                "body1": "finger_l",
+                "body2": "obj0",
+                "pos": [0.0, 1.0, 0.0],
+                "dim": 3,
+                "friction": [0.5, 0.6, 0.0, 0.0, 0.0],
+                "force_local": [2.0, 0.0, 0.0],
+                "torque_local": [0.0, 0.0, 0.0],
+                "frame": [-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0],
+                "normal_force": 2.0,
+                "tangential_force": 0.0,
+                "force_available": true
+            }]
+        }));
+        let left = object_second
+            .iter()
+            .find(|audit| audit["finger_body"] == "finger_l")
+            .expect("left finger audit exists");
+        assert_eq!(
+            left["contact_wrenches"][0]["force_world_on_object_n"],
+            json!([-2.0, 0.0, 0.0])
+        );
+    }
+
+    #[test]
+    fn grasp_contact_audits_omit_derived_wrench_without_finite_inputs() {
+        let truth = VerifierTruth {
+            xipos: [("obj0".into(), vec![0.0, 0.0, 0.0])].into(),
+            contacts: vec![
+                ContactTruth {
+                    body1: "obj0".into(),
+                    body2: "finger_l".into(),
+                    position: None,
+                    force_local: Some([1.0, 0.0, 0.0]),
+                    torque_local: Some([0.0, 0.0, 0.0]),
+                    contact_frame: Some([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+                    force_available: true,
+                    ..ContactTruth::default()
+                },
+                ContactTruth {
+                    body1: "obj0".into(),
+                    body2: "finger_l".into(),
+                    position: Some([0.0, 0.0, 0.0]),
+                    force_local: Some([f64::NAN, 0.0, 0.0]),
+                    torque_local: Some([0.0, 0.0, 0.0]),
+                    contact_frame: Some([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+                    force_available: true,
+                    ..ContactTruth::default()
+                },
+            ],
+            ..VerifierTruth::default()
+        };
+        let audits = grasp_contact_audits("post_close", &truth, "obj0", &fixture_resource());
+        let left = audits
+            .iter()
+            .find(|audit| audit.finger_body == "finger_l")
+            .expect("left finger audit exists");
+        let left = serde_json::to_value(left).expect("audit serializes");
+        assert_eq!(left["contact_wrenches"].as_array().map(Vec::len), Some(2));
+        assert_eq!(
+            left["contact_wrenches"][0]["force_world_on_object_n"],
+            json!([-1.0, 0.0, 0.0])
+        );
+        assert!(left["contact_wrenches"][0]["moment_world_about_object_com_nm"].is_null());
+        assert!(left["contact_wrenches"][1]["force_world_on_object_n"].is_null());
+        assert!(left["contact_wrenches"][1]["moment_world_about_object_com_nm"].is_null());
+    }
+
+    #[test]
+    fn legacy_grasp_contact_audit_deserializes_with_empty_trace_defaults() {
+        let legacy = json!({
+            "phase": "lift_waypoint_1",
+            "finger_body": "finger_l",
+            "normal_force_n": 1.0,
+            "tangential_force_n": 0.25,
+            "object_vertical_force_n": -0.5,
+            "contact_dimensions": [3],
+            "contact_friction": [[0.5, 0.6, 0.0, 0.0, 0.0]],
+            "force_available": true
+        });
+        let audit: GraspContactAudit =
+            serde_json::from_value(legacy).expect("legacy audit remains readable");
+        let audit = serde_json::to_value(audit).expect("legacy audit serializes");
+        assert_eq!(audit["contact_wrenches"], json!([]));
+        assert_eq!(audit["ctrl"], json!([]));
+        assert_eq!(audit["actuator_force"], json!([]));
+        assert!(audit["object_com_world_m"].is_null());
     }
 }

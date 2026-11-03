@@ -64,6 +64,8 @@ pub struct VerifierTruth {
     pub actuator_force: Vec<f64>,
     pub xpos: BTreeMap<String, Vec<f64>>,
     #[serde(default)]
+    pub xipos: BTreeMap<String, Vec<f64>>,
+    #[serde(default)]
     pub xquat: BTreeMap<String, Vec<f64>>,
     pub named_pos: BTreeMap<String, Vec<f64>>,
     #[serde(default)]
@@ -103,6 +105,10 @@ pub struct ContactTruth {
     #[serde(default)]
     pub force_local: Option<[f64; 3]>,
     #[serde(default)]
+    pub position: Option<[f64; 3]>,
+    #[serde(default)]
+    pub torque_local: Option<[f64; 3]>,
+    #[serde(default)]
     pub contact_frame: Option<[f64; 9]>,
     #[serde(default)]
     pub normal_force: Option<f64>,
@@ -118,6 +124,12 @@ impl VerifierTruth {
         if let Some(obj) = state.get("xpos").and_then(|v| v.as_object()) {
             for (k, v) in obj {
                 xpos.insert(k.clone(), crate::mujoco_exec::json_f64_vec(v));
+            }
+        }
+        let mut xipos = BTreeMap::new();
+        if let Some(obj) = state.get("xipos").and_then(|v| v.as_object()) {
+            for (k, v) in obj {
+                xipos.insert(k.clone(), crate::mujoco_exec::json_f64_vec(v));
             }
         }
         let mut xquat = BTreeMap::new();
@@ -167,6 +179,8 @@ impl VerifierTruth {
                             },
                         ),
                         force_local: array3_opt(&c["force_local"]),
+                        position: array3_opt(&c["pos"]),
+                        torque_local: array3_opt(&c["torque_local"]),
                         contact_frame: array9_opt(&c["frame"]),
                         normal_force: c.get("normal_force").and_then(|v| v.as_f64()),
                         tangential_force: c.get("tangential_force").and_then(|v| v.as_f64()),
@@ -183,6 +197,7 @@ impl VerifierTruth {
             ctrl: crate::mujoco_exec::json_f64_vec(&state["ctrl"]),
             actuator_force: crate::mujoco_exec::json_f64_vec(&state["actuator_force"]),
             xpos,
+            xipos,
             xquat,
             named_pos: named,
             site_xquat,
@@ -311,6 +326,57 @@ pub fn policy_observation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verifier_truth_keeps_contact_geometry_and_actuator_state() {
+        let state = serde_json::json!({
+            "time": 1.25,
+            "ctrl": [0.3, -0.4],
+            "actuator_force": [1.2, -2.4],
+            "xipos": {"obj0": [0.10, 0.20, 0.30]},
+            "contact_forces": [2.0],
+            "contacts": [{
+                "body1": "obj0",
+                "body2": "finger_l",
+                "pos": [0.11, 0.22, 0.33],
+                "dim": 6,
+                "friction": [0.5, 0.6, 0.01, 0.02, 0.03],
+                "force_local": [2.0, 0.4, -0.2],
+                "torque_local": [0.1, 0.2, 0.3],
+                "frame": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                "normal_force": 2.0,
+                "tangential_force": 0.4472135954999579,
+                "force_available": true
+            }]
+        });
+
+        let truth = VerifierTruth::from_mujoco_state(&state);
+        let serialized = serde_json::to_value(&truth).unwrap();
+        assert_eq!(truth.ctrl, vec![0.3, -0.4]);
+        assert_eq!(truth.actuator_force, vec![1.2, -2.4]);
+        assert_eq!(
+            serialized["xipos"]["obj0"],
+            serde_json::json!([0.10, 0.20, 0.30])
+        );
+        assert_eq!(
+            serialized["contacts"][0]["position"],
+            serde_json::json!([0.11, 0.22, 0.33])
+        );
+        assert_eq!(
+            serialized["contacts"][0]["torque_local"],
+            serde_json::json!([0.1, 0.2, 0.3])
+        );
+
+        let legacy = VerifierTruth::from_mujoco_state(&serde_json::json!({
+            "contacts": [{"body1": "obj0", "body2": "finger_l"}]
+        }));
+        let legacy = serde_json::to_value(legacy).unwrap();
+        assert!(legacy["xipos"]
+            .as_object()
+            .is_some_and(|bodies| bodies.is_empty()));
+        assert!(legacy["contacts"][0]["position"].is_null());
+        assert!(legacy["contacts"][0]["torque_local"].is_null());
+    }
 
     #[test]
     fn dropout_does_not_clear_verifier_truth() {

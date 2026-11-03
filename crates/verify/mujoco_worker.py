@@ -425,10 +425,12 @@ class Instance:
         m, d = self.model, self.data
         assert m is not None and d is not None
         xpos = {}
+        xipos = {}
         xquat = {}
         for i in range(m.nbody):
             name = m.body(i).name or f"body_{i}"
             xpos[name] = _jlist(d.xpos[i])
+            xipos[name] = _jlist(d.xipos[i])
             xquat[name] = _jlist(d.xquat[i])
         sites = {}
         site_xquat = {}
@@ -472,6 +474,7 @@ class Instance:
                     contacts[i]["normal_force"] = nrm
                     contacts[i]["tangential_force"] = tan
                     contacts[i]["force_local"] = [float(force[0]), float(force[1]), float(force[2])]
+                    contacts[i]["torque_local"] = [float(force[3]), float(force[4]), float(force[5])]
                     contacts[i]["frame"] = [float(value) for value in d.contact[i].frame]
                     contacts[i]["force_available"] = True
                 except Exception:
@@ -489,6 +492,7 @@ class Instance:
             "actuator_force": _jlist(d.actuator_force),
             "sensordata": _jlist(d.sensordata),
             "xpos": xpos,
+            "xipos": xipos,
             "xquat": xquat,
             "sites": sites,
             "site_xquat": site_xquat,

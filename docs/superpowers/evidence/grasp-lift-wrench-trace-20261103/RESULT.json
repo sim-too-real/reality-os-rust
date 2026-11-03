@@ -1,0 +1,4852 @@
+{
+  "freeze_sha256": "30A1CC816BA4BA65358152776C04B1EC71809C8DDBA0650BDA73D9A1B7FBD3B9",
+  "records": [
+    {
+      "episode": {
+        "acquisition_verified": null,
+        "actions": [
+          {
+            "action_key": "grasp:y",
+            "control_tracking_correction_bound_rad": null,
+            "control_tracking_correction_gain": null,
+            "control_tracking_correction_max_rad": null,
+            "displacement_m": 0.0013369468821280404,
+            "family": "pinch_grasp",
+            "grant_id": "sim-scope:c1d92c4353a3485d7d389f8b13946069d5190f38d139318e59159af1363c59dd",
+            "lateral_displacement_m": null,
+            "observation_epoch": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25:0:4621819117588971520",
+            "reauthorized_after_observation": false,
+            "runtime_divergence": true,
+            "witness_digest": "b3cdf56f340e157b3b29456e44d3b91f624e2591ba7b17c538cd841512c9f184",
+            "writes_after": 7,
+            "writes_before": 0
+          }
+        ],
+        "ctrl_writes_after": 7,
+        "ctrl_writes_before": 0,
+        "decision_audits": [
+          "decision=ContactTransition { action: SelectedPhysicalAction { goal_id: \"acquire:obj0\", candidate_id: \"grasp:y\", candidate_contents: \"algorithm=physical-proof/10\\nfamily=pinch_grasp\\nkey=67726173703a79\\ntarget_body_id=6f626a30\\npush_bits=0,13830554455654793216,0\\nstroke_bits=0\\nq0_bits=13827841069721037808,4609627245704839052,4610637415653253659,4586646004499207872\\nq_transit_bits=13827841069141485189,4609627245077009269,4610637415407163741,4579800535830404117\\ntransit_state_count=1\\napproach_state_count=0\\nq_contact_bits=13827841069141261238,4609627245076758453,4610637415407066619,13795786662845093008\\nq_end_bits=13827841069141261238,4609627245076758453,4610637415407066619,13795786662845093008\\nstroke_state_count=0\\nq_retract_bits=none\\nfinger_bits=0,0\\naction_envelope=pinch:67726970706572:66696e6765725f6c:3f9eb851eb851eb8:0000000000000000,66696e6765725f72:3f9eb851eb851eb8:0000000000000000:3fff333333333333:62643631656531356663376434623935623766313065643332366233346339626537646262393165376166343364303138643230393365363936343337353363:3f9999999999999a\\nlift_trajectory_digest=bd61ee15fc7d4b95b7f10ed326b34c9be7dbb91e7af43d018d2093e69643753c\\ndependency=621110488be7469ef8640b6207020e96a56f61e4f20f59cd8a3e2b368c525859\\nsegments=transit,approach,contact,stroke,retreat,close,lift\\ncontact_observed=false\\ntransit_state_0=13827841069141485189,4609627245077009269,4610637415407163741,4579800535830404117\\nlift_state_0=6a6f696e7431=13827841069141261238,6a6f696e7432=4609627245076758453,6a6f696e7433=4610637415407066619,6c6966745f7a=13795786662845093008;fingers=66696e6765725f6c=0,66696e6765725f72=0\\nlift_state_1=6a6f696e7431=13827841069141261149,6a6f696e7432=4609627245076758351,6a6f696e7433=4610637415407066580,6c6966745f7a=4581421827779458596;fingers=66696e6765725f6c=0,66696e6765725f72=0\\n\", action_key: \"grasp:y\", contact_id: \"pinch_grasp:grasp:y\", witness_id: \"witness:grasp:y\", witness_digest: \"84feecd275fccda57f3a5916f9d15c6035991d00961818b65eebeeb958e359a6\", witness_contents: \"algorithm=physical-proof/10\\nfamily=pinch_grasp\\nkey=67726173703a79\\ntarget_body_id=6f626a30\\npush_bits=0,13830554455654793216,0\\nstroke_bits=0\\nq0_bits=13827841069721037808,4609627245704839052,4610637415653253659,4586646004499207872\\nq_transit_bits=13827841069141485189,4609627245077009269,4610637415407163741,4579800535830404117\\ntransit_state_count=1\\napproach_state_count=0\\nq_contact_bits=13827841069141261238,4609627245076758453,4610637415407066619,13795786662845093008\\nq_end_bits=13827841069141261238,4609627245076758453,4610637415407066619,13795786662845093008\\nstroke_state_count=0\\nq_retract_bits=none\\nfinger_bits=0,0\\naction_envelope=pinch:67726970706572:66696e6765725f6c:3f9eb851eb851eb8:0000000000000000,66696e6765725f72:3f9eb851eb851eb8:0000000000000000:3fff333333333333:62643631656531356663376434623935623766313065643332366233346339626537646262393165376166343364303138643230393365363936343337353363:3f9999999999999a\\nlift_trajectory_digest=bd61ee15fc7d4b95b7f10ed326b34c9be7dbb91e7af43d018d2093e69643753c\\ndependency=621110488be7469ef8640b6207020e96a56f61e4f20f59cd8a3e2b368c525859\\nsegments=transit,approach,contact,stroke,retreat,close,lift\\ncontact_observed=false\\ntransit_state_0=13827841069141485189,4609627245077009269,4610637415407163741,4579800535830404117\\nlift_state_0=6a6f696e7431=13827841069141261238,6a6f696e7432=4609627245076758453,6a6f696e7433=4610637415407066619,6c6966745f7a=13795786662845093008;fingers=66696e6765725f6c=0,66696e6765725f72=0\\nlift_state_1=6a6f696e7431=13827841069141261149,6a6f696e7432=4609627245076758351,6a6f696e7433=4610637415407066580,6c6966745f7a=4581421827779458596;fingers=66696e6765725f6c=0,66696e6765725f72=0\\n\", role: GoalAction, predicted_effect: PredictedPhysicalEffect { object_translation_world_m: Some([0.0, 0.0]), yaw_change_rad: Some(0.0), contact_persists: Some(true), goal_error_derivative: Some(-1.0), goal_progress: Some(StrictProgress) }, robustness: RobustStrictProgress, recoverability: ProgressAndRecoverable, probe: ProbeEvidence { decision_relevant_distinctions: 0, observable_distinctions: 0, future_interaction: Unknown }, rationale: \"ROBUST_STRICT_PROGRESS_AND_RECOVERABLE\" }, phases: [Reobserve, RecheckCollisionAndWitness, ApproachNewContact] };pregrant_action_source=executable;pregrant_action_key=grasp:y;support_friction_interval=Some([0.05, 0.8]);candidates=planar_push:push:+x:IK_RESIDUAL|planar_push:push:-x:IK_FAILED|planar_push:push:+y:IK_FAILED|planar_push:push:-y:IK_FAILED|pinch_grasp:grasp:y:PROVED;authorized_action_key=grasp:y",
+          "grasp_lift_guard_failure=object_tool_relative_pose_exceeded_20mm;relative_pose_error_m=0.020099;waypoint=4",
+          "decision=CurrentlyUnachievable { reason: \"NO_JUSTIFIED_GOAL_ACTION_OR_SAFE_OBSERVABLE_PROBE\" };pregrant_action_source=none;pregrant_action_key=none;support_friction_interval=Some([0.05, 0.8]);candidates=planar_push:push:+x:IK_RESIDUAL|planar_push:push:-x:IK_FAILED|planar_push:push:+y:IK_FAILED|planar_push:push:-y:IK_FAILED|pinch_grasp:grasp:y:PROVED"
+        ],
+        "evidence_status": "SIMULATION_ONLY",
+        "expectation": "expected_success",
+        "failure_cause": "runtime_divergence",
+        "fault_injection": null,
+        "geometry_digest": "914be5e265be9836b2cf1b1e67dfbae78b21a5ec0d8445a0ba51f2273f223f61",
+        "goal_error_end_m": 0.0007433931591838858,
+        "goal_error_start_m": 0.0,
+        "goal_xyz": [
+          0.207674113398419,
+          0.02127639995627907,
+          0.11499999999999999
+        ],
+        "grasp_contact_audits": [
+          {
+            "actuator_force": [
+              -0.001645397465814824,
+              -0.001835158787422131,
+              -0.00011611925292953629,
+              1.059593027205468,
+              -0.7662711888564262,
+              -0.7538515509438564
+            ],
+            "contact_dimensions": [
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.42731089080697465,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "obj0",
+                "body2": "finger_l",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.5057073424496992,
+                  -0.862704821829468,
+                  -0.0006886106655486123,
+                  -0.0003482355522210936,
+                  -0.0005940678823809387,
+                  0.9999997629076475,
+                  -0.8627050263702322,
+                  0.5057074623490709,
+                  5.421010862427522e-20
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.605690614088117,
+                  0.5876986044139594,
+                  -0.010351370963371308
+                ],
+                "force_world_on_object_n": [
+                  0.29757666858535237,
+                  0.5281161117177927,
+                  -0.5872813800582309
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.42731089080697465,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.005505608106021058,
+                  0.003029249604396193,
+                  -0.0000656329274836818
+                ],
+                "normal_force_n": 0.605690614088117,
+                "position_world_m": [
+                  0.20293896990702223,
+                  0.014070698926501857,
+                  0.1328798794306973
+                ],
+                "tangential_force_n": 0.5877897587666332,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  -0.0,
+                  -0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              -0.6987535817969419,
+              1.5428604847293006,
+              1.7671633566295657,
+              -0.004999996802557707,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_l",
+            "force_available": true,
+            "normal_force_n": 0.605690614088117,
+            "object_com_world_m": [
+              0.20725578749272447,
+              0.02151129566884122,
+              0.11418071117923531
+            ],
+            "object_vertical_force_n": -0.5872813800582309,
+            "phase": "post_close",
+            "tangential_force_n": 0.5877897587666332
+          },
+          {
+            "actuator_force": [
+              -0.001645397465814824,
+              -0.001835158787422131,
+              -0.00011611925292953629,
+              1.059593027205468,
+              -0.7662711888564262,
+              -0.7538515509438564
+            ],
+            "contact_dimensions": [
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.42731089080697465,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "obj0",
+                "body2": "finger_r",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.5057180798272538,
+                  0.8626985276385785,
+                  0.0006885826489353385,
+                  -0.00034822877757760535,
+                  -0.000594039378224722,
+                  0.9999997629269397,
+                  0.862698732161207,
+                  -0.5057181997194151,
+                  0.0
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.8565278010820606,
+                  -0.6940363562548642,
+                  0.028787182374526404
+                ],
+                "force_world_on_object_n": [
+                  -0.45823794405081014,
+                  -0.7247793557550979,
+                  0.6934464015353854
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.42731089080697465,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.01028838323082907,
+                  0.006745205069365153,
+                  0.00025129239249453315
+                ],
+                "normal_force_n": 0.8565278010820606,
+                "position_world_m": [
+                  0.21160357951624886,
+                  0.028936438737928543,
+                  0.09288137111057401
+                ],
+                "tangential_force_n": 0.6946331158767144,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  -0.0,
+                  -0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              -0.6987535817969419,
+              1.5428604847293006,
+              1.7671633566295657,
+              -0.004999996802557707,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_r",
+            "force_available": true,
+            "normal_force_n": 0.8565278010820606,
+            "object_com_world_m": [
+              0.20725578749272447,
+              0.02151129566884122,
+              0.11418071117923531
+            ],
+            "object_vertical_force_n": 0.6934464015353854,
+            "phase": "post_close",
+            "tangential_force_n": 0.6946331158767144
+          },
+          {
+            "actuator_force": [
+              0.016684470195134082,
+              -0.001228994741431677,
+              -0.0013187388549411594,
+              1.522416053185193,
+              -0.731431999088959,
+              -0.695379476184873
+            ],
+            "contact_dimensions": [
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.42731089080697465,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "obj0",
+                "body2": "finger_l",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.5060770928907066,
+                  -0.8624829806744876,
+                  -0.0030139837661449327,
+                  -0.001525315070462044,
+                  -0.0025995215095102726,
+                  0.9999954579406137,
+                  -0.862486898141199,
+                  0.5060793915333572,
+                  2.168404344971009e-19
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.6045237119227215,
+                  0.2582438819828296,
+                  0.023712980828118596
+                ],
+                "force_world_on_object_n": [
+                  0.3267816412785186,
+                  0.5100620725644915,
+                  -0.25642068436979676
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.42731089080697465,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.009556009070208883,
+                  0.006223762443221538,
+                  0.00020192147537006913
+                ],
+                "normal_force_n": 0.6045237119227215,
+                "position_world_m": [
+                  0.20328212399223436,
+                  0.013763483236186348,
+                  0.1372908901272952
+                ],
+                "tangential_force_n": 0.2593303068314931,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  -0.0,
+                  -0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              -0.6987535817969395,
+              1.542860484729295,
+              1.7671633566295635,
+              0.001250001398881366,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_l",
+            "force_available": true,
+            "normal_force_n": 0.6045237119227215,
+            "object_com_world_m": [
+              0.2076244611867616,
+              0.02115919547732986,
+              0.11483789218744749
+            ],
+            "object_vertical_force_n": -0.25642068436979676,
+            "phase": "lift_waypoint_1",
+            "tangential_force_n": 0.2593303068314931
+          },
+          {
+            "actuator_force": [
+              0.016684470195134082,
+              -0.001228994741431677,
+              -0.0013187388549411594,
+              1.522416053185193,
+              -0.731431999088959,
+              -0.695379476184873
+            ],
+            "contact_dimensions": [
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.42731089080697465,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "obj0",
+                "body2": "finger_r",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.5060753149501395,
+                  0.8624839838664659,
+                  0.00302542095372727,
+                  -0.0015310978692313465,
+                  -0.002609389059164473,
+                  0.9999954234035536,
+                  0.8624879311256662,
+                  -0.5060776310632272,
+                  2.168404344971009e-19
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.8206390638884448,
+                  -0.8206390638884448,
+                  0.0
+                ],
+                "force_world_on_object_n": [
+                  -0.4165616514398599,
+                  -0.7099294157337864,
+                  0.818152529535286
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.42731089080697465,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.006382832778621845,
+                  0.0037735278119710646,
+                  0.00002456147350915136
+                ],
+                "normal_force_n": 0.8206390638884448,
+                "position_world_m": [
+                  0.2119427016389155,
+                  0.028577562924317262,
+                  0.09729785427040165
+                ],
+                "tangential_force_n": 0.8206390638884448,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  -0.0,
+                  -0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              -0.6987535817969395,
+              1.542860484729295,
+              1.7671633566295635,
+              0.001250001398881366,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_r",
+            "force_available": true,
+            "normal_force_n": 0.8206390638884448,
+            "object_com_world_m": [
+              0.2076244611867616,
+              0.02115919547732986,
+              0.11483789218744749
+            ],
+            "object_vertical_force_n": 0.818152529535286,
+            "phase": "lift_waypoint_1",
+            "tangential_force_n": 0.8206390638884448
+          },
+          {
+            "actuator_force": [
+              -0.009971507321544948,
+              -0.004464726952456033,
+              -0.0004839737242150477,
+              1.6397682837643712,
+              -0.7822504667848849,
+              -0.8003404124988432
+            ],
+            "contact_dimensions": [
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.42731089080697465,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "obj0",
+                "body2": "finger_l",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.5054439197282008,
+                  -0.8628522542828686,
+                  0.003525803279272867,
+                  0.0017821069066434301,
+                  0.0030422662173822147,
+                  0.9999937843363006,
+                  -0.8628576175156394,
+                  0.5054470614171523,
+                  0.0
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.9187689613856275,
+                  -0.8967354820474361,
+                  0.022033479338191365
+                ],
+                "force_world_on_object_n": [
+                  0.48499601915068036,
+                  0.7843532201753951,
+                  0.8934905096243049
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.42731089080697465,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.0026157171850601756,
+                  -0.0018494821771510043,
+                  0.0002037345415159754
+                ],
+                "normal_force_n": 0.9187689613856275,
+                "position_world_m": [
+                  0.20318415413672936,
+                  0.013922735634954648,
+                  0.10301114887613536
+                ],
+                "tangential_force_n": 0.8970061309570823,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  -0.0,
+                  -0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              -0.698753581796937,
+              1.5428604847292893,
+              1.7671633566295615,
+              0.0074999996003204394,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_l",
+            "force_available": true,
+            "normal_force_n": 0.9187689613856275,
+            "object_com_world_m": [
+              0.2075324255979102,
+              0.02137499322382987,
+              0.11483520770249168
+            ],
+            "object_vertical_force_n": 0.8934905096243049,
+            "phase": "lift_waypoint_2",
+            "tangential_force_n": 0.8970061309570823
+          },
+          {
+            "actuator_force": [
+              -0.009971507321544948,
+              -0.004464726952456033,
+              -0.0004839737242150477,
+              1.6397682837643712,
+              -0.7822504667848849,
+              -0.8003404124988432
+            ],
+            "contact_dimensions": [
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.42731089080697465,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "obj0",
+                "body2": "finger_r",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.5054562324243901,
+                  0.8628522451553373,
+                  -0.000011564366540586611,
+                  5.845281142370445e-6,
+                  9.978339634011643e-6,
+                  0.9999999999331328,
+                  0.8628522452130339,
+                  -0.5054562324581886,
+                  -8.470329472543003e-22
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.6574636244068496,
+                  0.20484229903269846,
+                  0.041168134133283185
+                ],
+                "force_world_on_object_n": [
+                  -0.3678423008777329,
+                  -0.5464873184371042,
+                  -0.2048346958686615
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.42731089080697465,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.012110578592454364,
+                  -0.008277877318415339,
+                  0.0003367197309547647
+                ],
+                "normal_force_n": 0.6574636244068496,
+                "position_world_m": [
+                  0.21195357186771863,
+                  0.028858689617072025,
+                  0.13980101899735664
+                ],
+                "tangential_force_n": 0.20893822709360163,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  -0.0,
+                  -0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              -0.698753581796937,
+              1.5428604847292893,
+              1.7671633566295615,
+              0.0074999996003204394,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_r",
+            "force_available": true,
+            "normal_force_n": 0.6574636244068496,
+            "object_com_world_m": [
+              0.2075324255979102,
+              0.02137499322382987,
+              0.11483520770249168
+            ],
+            "object_vertical_force_n": -0.2048346958686615,
+            "phase": "lift_waypoint_2",
+            "tangential_force_n": 0.20893822709360163
+          },
+          {
+            "actuator_force": [
+              0.005208323071638432,
+              0.0027084496529283797,
+              -0.001183406500416595,
+              2.269380188546304,
+              -0.8214547998024697,
+              -0.8111955034890017
+            ],
+            "contact_dimensions": [
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.42731089080697465,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "obj0",
+                "body2": "finger_l",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.5059482964284995,
+                  -0.8625577162146124,
+                  0.003241533546245634,
+                  0.0016400569920434485,
+                  0.0027960244623903402,
+                  0.9999947462163331,
+                  -0.8625622479300622,
+                  0.5059509545853609,
+                  0.0
+                ],
+                "force_available": true,
+                "force_local": [
+                  1.0114547868742487,
+                  -0.8241682911648756,
+                  -0.18728649570937314
+                ],
+                "force_world_on_object_n": [
+                  0.3515492485560018,
+                  0.9695003070089174,
+                  0.820885296540805
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.42731089080697465,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.00008954411793157552,
+                  0.0013819025200247819,
+                  -0.0015937375849732192
+                ],
+                "normal_force_n": 1.0114547868742487,
+                "position_world_m": [
+                  0.20343647074457208,
+                  0.013649103315368009,
+                  0.10870515286672561
+                ],
+                "tangential_force_n": 0.8451802196198915,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  -0.0,
+                  -0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              -0.6987535817969345,
+              1.5428604847292835,
+              1.7671633566295593,
+              0.013749997801759513,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_l",
+            "force_available": true,
+            "normal_force_n": 1.0114547868742487,
+            "object_com_world_m": [
+              0.20778566172072943,
+              0.021109805940746924,
+              0.11492984091011975
+            ],
+            "object_vertical_force_n": 0.820885296540805,
+            "phase": "lift_waypoint_3",
+            "tangential_force_n": 0.8451802196198915
+          },
+          {
+            "actuator_force": [
+              0.005208323071638432,
+              0.0027084496529283797,
+              -0.001183406500416595,
+              2.269380188546304,
+              -0.8214547998024697,
+              -0.8111955034890017
+            ],
+            "contact_dimensions": [
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.42731089080697465,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "obj0",
+                "body2": "finger_r",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.5059502901891612,
+                  0.8625626376428238,
+                  -3.980935225176702e-7,
+                  2.0141553324025656e-7,
+                  3.433805988113917e-7,
+                  0.9999999999999208,
+                  0.8625626376428922,
+                  -0.5059502901892012,
+                  0.0
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.6754705526054658,
+                  -0.3261713482514448,
+                  -0.04186347811636296
+                ],
+                "force_world_on_object_n": [
+                  -0.3056445843040369,
+                  -0.6038163884058166,
+                  0.3261716171518706
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.42731089080697465,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.017551247538586816,
+                  -0.009033550111816613,
+                  -0.00027642455784087716
+                ],
+                "normal_force_n": 0.6754705526054658,
+                "position_world_m": [
+                  0.21208451559324792,
+                  0.02869801126435411,
+                  0.13989801107971264
+                ],
+                "tangential_force_n": 0.32884692368967733,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  -0.0,
+                  -0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              -0.6987535817969345,
+              1.5428604847292835,
+              1.7671633566295593,
+              0.013749997801759513,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_r",
+            "force_available": true,
+            "normal_force_n": 0.6754705526054658,
+            "object_com_world_m": [
+              0.20778566172072943,
+              0.021109805940746924,
+              0.11492984091011975
+            ],
+            "object_vertical_force_n": 0.3261716171518706,
+            "phase": "lift_waypoint_3",
+            "tangential_force_n": 0.32884692368967733
+          },
+          {
+            "actuator_force": [
+              -0.002981226485267996,
+              0.003273136845876934,
+              0.0018192582723202122,
+              2.2342501691388073,
+              -0.9867361808990752,
+              -0.9129964951280003
+            ],
+            "contact_dimensions": [
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.42731089080697465,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "obj0",
+                "body2": "finger_l",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.5059207071139221,
+                  -0.8625799893993381,
+                  -1.0894904636072605e-6,
+                  -5.511957857423872e-7,
+                  -9.397726725495885e-7,
+                  0.9999999999994066,
+                  -0.8625799893998501,
+                  0.5059207071142224,
+                  5.293955920339377e-23
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.8678487235244938,
+                  -0.3852916186549538,
+                  0.011339422268444671
+                ],
+                "force_world_on_object_n": [
+                  0.4488435862424256,
+                  0.7428517321191346,
+                  0.3852925641676333
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.42731089080697465,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.021439321526913902,
+                  0.013012640984774811,
+                  -0.00011305936914210923
+                ],
+                "normal_force_n": 0.8678487235244938,
+                "position_world_m": [
+                  0.20361752956839818,
+                  0.013378533890535753,
+                  0.14105970478537255
+                ],
+                "tangential_force_n": 0.38545844640263943,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  -0.0,
+                  -0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              -0.698753581796932,
+              1.542860484729278,
+              1.767163356629557,
+              0.019999996003198586,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_l",
+            "force_available": true,
+            "normal_force_n": 0.8678487235244938,
+            "object_com_world_m": [
+              0.20832737989202627,
+              0.020921609486492347,
+              0.11611121266034476
+            ],
+            "object_vertical_force_n": 0.3852925641676333,
+            "phase": "lift_waypoint_4",
+            "tangential_force_n": 0.38545844640263943
+          },
+          {
+            "actuator_force": [
+              -0.002981226485267996,
+              0.003273136845876934,
+              0.0018192582723202122,
+              2.2342501691388073,
+              -0.9867361808990752,
+              -0.9129964951280003
+            ],
+            "contact_dimensions": [
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.42731089080697465,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "obj0",
+                "body2": "finger_r",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.5059139613836009,
+                  0.8625684816293288,
+                  0.005165092141183857,
+                  -0.0026131270830233077,
+                  -0.004455305115801761,
+                  0.9999866608226198,
+                  0.8625799877367899,
+                  -0.5059207099496913,
+                  -4.336808689942018e-19
+                ],
+                "force_available": true,
+                "force_local": [
+                  1.1092794881894859,
+                  -1.0439016833004,
+                  0.05125057485063477
+                ],
+                "force_world_on_object_n": [
+                  -0.6081355481383259,
+                  -0.9355516971264032,
+                  1.038158227743855
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.42731089080697465,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.006670359700396182,
+                  -0.003870659047445928,
+                  0.00041928214814661476
+                ],
+                "normal_force_n": 1.1092794881894859,
+                "position_world_m": [
+                  0.2127772927698371,
+                  0.028456781056506963,
+                  0.11487948953268057
+                ],
+                "tangential_force_n": 1.0451590050417827,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  -0.0,
+                  -0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              -0.698753581796932,
+              1.542860484729278,
+              1.767163356629557,
+              0.019999996003198586,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_r",
+            "force_available": true,
+            "normal_force_n": 1.1092794881894859,
+            "object_com_world_m": [
+              0.20832737989202627,
+              0.020921609486492347,
+              0.11611121266034476
+            ],
+            "object_vertical_force_n": 1.038158227743855,
+            "phase": "lift_waypoint_4",
+            "tangential_force_n": 1.0451590050417827
+          }
+        ],
+        "grasp_ee_lift_m": null,
+        "grasp_object_follow_residual_m": null,
+        "grasp_opening_01": null,
+        "grasp_phase_object_positions": [
+          [
+            0.20768871090928706,
+            0.021247525508309315,
+            0.11435640745935709
+          ],
+          [
+            0.20764903637014873,
+            0.021298503106348742,
+            0.11435654401889092
+          ],
+          [
+            0.20725578749272447,
+            0.02151129566884122,
+            0.11418071117923531
+          ],
+          [
+            0.2076244611867616,
+            0.02115919547732986,
+            0.11483789218744749
+          ],
+          [
+            0.2075324255979102,
+            0.02137499322382987,
+            0.11483520770249168
+          ],
+          [
+            0.20778566172072943,
+            0.021109805940746924,
+            0.11492984091011975
+          ],
+          [
+            0.20832737989202627,
+            0.020921609486492347,
+            0.11611121266034476
+          ]
+        ],
+        "grasp_simulated_friction_oracle_interval": [
+          0.40659035383213266,
+          0.4465903538321327
+        ],
+        "grasp_simulated_friction_oracle_samples": [
+          0.43193806219280284,
+          0.43026735455942666,
+          0.4223581637899258,
+          0.4191755379128286,
+          0.42921265070567943
+        ],
+        "grasp_verifier_evidence": [],
+        "hold_verified": null,
+        "initial_observation_evidence": {
+          "format": "realityos.replay_initial_observation_evidence",
+          "observation_json": "{\"actuator_force\":[0.0,0.0,0.0,0.0,0.0,0.0],\"contact_forces\":[],\"contacts\":[],\"ctrl\":[-0.6987536461650716,1.542860624191209,1.7671634112940697,0.044999999999999485,0.03,0.03],\"ctrl_write_count\":0,\"energy\":[0.0,0.0],\"evidence_status\":\"SIMULATION_ONLY\",\"interval_max_force\":0.0,\"interval_max_speed\":0.0,\"kinetic_energy\":0.0,\"last_ctrl\":[-0.6987536461650716,1.542860624191209,1.7671634112940697,0.044999999999999485,0.03,0.03],\"metal\":false,\"nan\":false,\"ncon\":0,\"qacc\":[0.0,0.0,0.0,-9.81,0.0,0.0,0.0,0.0,-9.810000000000002,0.0,0.0,0.0],\"qpos\":[-0.6987536461650716,1.542860624191209,1.7671634112940697,0.044999999999999485,0.03,0.03,0.207674113398419,0.02127639995627907,0.11499999999999999,1.0,0.0,0.0,0.0],\"qvel\":[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],\"safe_write_count\":0,\"sensordata\":[],\"site_xquat\":{\"ee\":[0.2620647721637421,0.0,0.0,0.9650502863533931]},\"sites\":{\"ee\":[0.20767409219953264,0.021276391366300607,0.16499999999999948]},\"subtree_com\":[0.10025564171889266,-0.030230950560052528,0.10825757575757573],\"time\":0.0,\"xipos\":{\"base\":[0.0,0.0,0.08],\"finger_l\":[0.18643001479227314,-0.01495466126972373,0.16499999999999948],\"finger_r\":[0.22891816960679215,0.057507444002324944,0.16499999999999948],\"lift_stage\":[0.25943273882242457,-0.009072290644070113,0.16499999999999948],\"link1\":[0.07656445162095893,-0.06432639231281231,0.12],\"link2\":[0.2062808210321712,-0.06886253763484737,0.12],\"obj0\":[0.207674113398419,0.02127639995627907,0.11499999999999999],\"table\":[0.25,0.0,0.08],\"world\":[0.0,0.0,0.0],\"wrist\":[0.25943273882242457,-0.009072290644070113,0.12]},\"xpos\":{\"base\":[0.0,0.0,0.08],\"finger_l\":[0.18643001479227314,-0.01495466126972373,0.16499999999999948],\"finger_r\":[0.22891816960679215,0.057507444002324944,0.16499999999999948],\"lift_stage\":[0.25943273882242457,-0.009072290644070113,0.16499999999999948],\"link1\":[0.0,0.0,0.12],\"link2\":[0.15312890324191786,-0.12865278462562463,0.12],\"obj0\":[0.207674113398419,0.02127639995627907,0.11499999999999999],\"table\":[0.25,0.0,0.08],\"world\":[0.0,0.0,0.0],\"wrist\":[0.25943273882242457,-0.009072290644070113,0.12]},\"xquat\":{\"base\":[1.0,0.0,0.0,0.0],\"finger_l\":[0.2620647721637421,0.0,0.0,0.9650502863533931],\"finger_r\":[0.2620647721637421,0.0,0.0,0.9650502863533931],\"lift_stage\":[0.2620647721637421,0.0,0.0,0.9650502863533931],\"link1\":[0.9395862164297615,0.0,0.0,-0.34231234551971],\"link2\":[0.912249684126601,0.0,0.0,0.4096346101233593],\"obj0\":[1.0,0.0,0.0,0.0],\"table\":[1.0,0.0,0.0,0.0],\"world\":[1.0,0.0,0.0,0.0],\"wrist\":[0.2620647721637421,0.0,0.0,0.9650502863533931]}}",
+          "observation_sha256": "87687c64a7a678693a379649e610f9710df56c5a358089a6979436dea25f8940",
+          "schema_version": 1,
+          "simulator_time_s": 0.0
+        },
+        "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+        "object_end_xyz": [
+          0.20832737989202627,
+          0.020921609486492347,
+          0.11611121266034476
+        ],
+        "object_id": "obj0",
+        "object_start_xyz": [
+          0.207674113398419,
+          0.02127639995627907,
+          0.11499999999999999
+        ],
+        "outcome": "unexpected_refusal",
+        "paired_trial_key": "4a03287aebe64e2a6e82420253d68914d7bfe986c8460111369199f36d9cb720",
+        "posterior_support_friction_interval": null,
+        "prior_support_friction_interval": null,
+        "reasoning_request_audits": [
+          "ReasoningRequest { scene: TableScene { object_id: \"obj0\", object_center: [0.207674113398419, 0.02127639995627907, 0.11499999999999999], object_half: [0.009672860221306739, 0.009672860221306739, 0.025], object_quat: [1.0, 0.0, 0.0, 0.0], support_origin: [0.0, 0.0, 0.0], support_normal: [0.0, 0.0, 1.0], support_half_extents: None, obstacles: [], arm_q: [-0.6987536461650716, 1.542860624191209, 1.7671634112940697, 0.044999999999999485], joint_names: [\"joint1\", \"joint2\", \"joint3\", \"lift_z\"], ee: \"ee\", tool_radius_m: 0.078, tool_contact_extents_m: [0.078, 0.078, 0.078, 0.078], observation_epoch: \"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25:0:4621819117588971520\", held: false, finger_names: [\"finger_l\", \"finger_r\"], finger_q: [0.03, 0.03] }, belief: PhysicalParameterBelief { parameters: [ParameterBelief { parameter: SupportFriction, status: DerivedConstraint, declared: Provenanced { value: Some(0.5), provenance: ModelDeclared, source: \"benchmark_support_prior\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.5, 0.5]), lineage: [BeliefLineage { belief_before: \"SupportFriction status=DeclaredFact declared=Some(0.5) interval=None\", observation: \"benchmark_support_calibration\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.5, 0.5])\" }], evidence: [] }, ParameterBelief { parameter: ToolObjectFriction, status: Unknown, declared: Provenanced { value: None, provenance: Unknown, source: \"unmeasured_grasp_pair\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.40659035383213266, 0.4465903538321327]), lineage: [BeliefLineage { belief_before: \"ToolObjectFriction status=Unknown declared=None interval=None\", observation: \"mujoco_oracle_friction_input_v1:samples=[0.43193806219280284, 0.43026735455942666, 0.4223581637899258, 0.4191755379128286, 0.42921265070567943]\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"ToolObjectFriction status=Unknown declared=None interval=Some([0.40659035383213266, 0.4465903538321327])\" }], evidence: [] }] }, objective: AcquireObject { object_id: \"obj0\" }, mu_required: 0.3, goal_stroke_m: 0.025, probe_stroke_m: 0.008, grants: [], now_s: 10.0, evidence_fresh: true, safety_faults: [], mass_kg: Some(0.1446630329141567), gripper_force_n: Some(1.95), gripper_resource: Some(ControlledResource { id: \"gripper\", kind: Gripper, topology: DirectJointGripper, actuator_inputs: [\"grip_l\", \"grip_r\"], affected_joints: [\"finger_l\", \"finger_r\"], finger_bodies: [\"finger_l\", \"finger_r\"], coupling: CouplingModel { tendon: None, equalities: [], declared_only: true }, command_coordinate: \"opening\", opening_range: Provenanced { value: Some([0.0, 0.03]), provenance: SimulatorDerived, source: \"verify.inspect\", as_of_s: 0.0, uncertainty: None }, command_range: Provenanced { value: Some([0.0, 0.03]), provenance: SimulatorDerived, source: \"verify.inspect\", as_of_s: 0.0, uncertainty: None }, closing_direction: TowardMin, force_bound: Provenanced { value: Some([0.0, 1.95]), provenance: ModelDeclared, source: \"verify.inspect\", as_of_s: 0.0, uncertainty: None }, qualification: Qualified, unsupported_detail: None }), linear_execution_bound_m: None, linear_wrench_limit: None, gravity_m_s2: [0.0, 0.0, -9.81] }",
+          "ReasoningRequest { scene: TableScene { object_id: \"obj0\", object_center: [0.20832737989202627, 0.020921609486492347, 0.11611121266034476], object_half: [0.009672860221306739, 0.009672860221306739, 0.025], object_quat: [0.9886813026729618, 0.0005992295672920529, -0.005462700964914606, -0.14993025567573112], support_origin: [0.0, 0.0, 0.0], support_normal: [0.0, 0.0, 1.0], support_half_extents: None, obstacles: [], arm_q: [-0.6986676934669397, 1.5427637095393714, 1.7671353063805473, 0.014900216234553636], joint_names: [\"joint1\", \"joint2\", \"joint3\", \"lift_z\"], ee: \"ee\", tool_radius_m: 0.078, tool_contact_extents_m: [0.078, 0.078, 0.078, 0.078], observation_epoch: \"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25:1:4623958327411972395\", held: false, finger_names: [\"finger_l\", \"finger_r\"], finger_q: [0.002024053462086008, 0.0017878224932058174] }, belief: PhysicalParameterBelief { parameters: [ParameterBelief { parameter: SupportFriction, status: DerivedConstraint, declared: Provenanced { value: Some(0.5), provenance: ModelDeclared, source: \"benchmark_support_prior\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.5, 0.5]), lineage: [BeliefLineage { belief_before: \"SupportFriction status=DeclaredFact declared=Some(0.5) interval=None\", observation: \"benchmark_support_calibration\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.5, 0.5])\" }], evidence: [] }, ParameterBelief { parameter: ToolObjectFriction, status: Unknown, declared: Provenanced { value: None, provenance: Unknown, source: \"unmeasured_grasp_pair\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.40659035383213266, 0.4465903538321327]), lineage: [BeliefLineage { belief_before: \"ToolObjectFriction status=Unknown declared=None interval=None\", observation: \"mujoco_oracle_friction_input_v1:samples=[0.43193806219280284, 0.43026735455942666, 0.4223581637899258, 0.4191755379128286, 0.42921265070567943]\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"ToolObjectFriction status=Unknown declared=None interval=Some([0.40659035383213266, 0.4465903538321327])\" }], evidence: [] }] }, objective: AcquireObject { object_id: \"obj0\" }, mu_required: 0.3, goal_stroke_m: 0.025, probe_stroke_m: 0.008, grants: [], now_s: 13.799999999999804, evidence_fresh: true, safety_faults: [], mass_kg: Some(0.1446630329141567), gripper_force_n: Some(1.95), gripper_resource: Some(ControlledResource { id: \"gripper\", kind: Gripper, topology: DirectJointGripper, actuator_inputs: [\"grip_l\", \"grip_r\"], affected_joints: [\"finger_l\", \"finger_r\"], finger_bodies: [\"finger_l\", \"finger_r\"], coupling: CouplingModel { tendon: None, equalities: [], declared_only: true }, command_coordinate: \"opening\", opening_range: Provenanced { value: Some([0.0, 0.03]), provenance: SimulatorDerived, source: \"verify.inspect\", as_of_s: 0.0, uncertainty: None }, command_range: Provenanced { value: Some([0.0, 0.03]), provenance: SimulatorDerived, source: \"verify.inspect\", as_of_s: 0.0, uncertainty: None }, closing_direction: TowardMin, force_bound: Provenanced { value: Some([0.0, 1.95]), provenance: ModelDeclared, source: \"verify.inspect\", as_of_s: 0.0, uncertainty: None }, qualification: Qualified, unsupported_detail: None }), linear_execution_bound_m: None, linear_wrench_limit: None, gravity_m_s2: [0.0, 0.0, -9.81] }"
+        ],
+        "recovery_count": 0,
+        "refusal_code": "NO_JUSTIFIED_CURRENT_ACTION",
+        "robot_id": "arm_gripper_lift",
+        "role": "grasp_fixture",
+        "safety_fault_observations": [],
+        "schema_version": 7,
+        "seed": 21010,
+        "simulation_time_s": 3.799999999999803,
+        "simulator": "MuJoCo",
+        "simulator_version": "3.7.0",
+        "source_hash": "b75b518f36853782407512c054d5257c17371704097a3da0e445c98b5165d185",
+        "task": "pinch_grasp_lift",
+        "trial_digest": "e9881d267030cf649f788b83f921e57a3160d4ffe49c434c852e86ef980fe5d5",
+        "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25",
+        "unauthorized_writes": 0,
+        "wall_time_s": 30.1483932,
+        "wrench_abort": null,
+        "wrench_abort_axis": null,
+        "wrench_abort_result": null,
+        "wrench_caps": null,
+        "wrench_compensation_audit_invalid": false,
+        "wrench_compensation_audit_invalid_samples": 0,
+        "wrench_compensation_digest": null,
+        "wrench_contact_pairs": [],
+        "wrench_inference_compensation_digest": null,
+        "wrench_inference_interval": null,
+        "wrench_inference_measurement_digest": null,
+        "wrench_inference_reason": null,
+        "wrench_max_inter_sample_gap_s": null,
+        "wrench_max_object_speed_m_s": null,
+        "wrench_max_sample_age_s": null,
+        "wrench_minimum_margin": null,
+        "wrench_monitor_gravity_reference": null,
+        "wrench_monitor_gravity_reference_history": [],
+        "wrench_monitor_gravity_reference_orientation": null,
+        "wrench_monitor_gravity_reference_position": null,
+        "wrench_monitor_gravity_reference_status": null,
+        "wrench_peak_conservative_bounds": null,
+        "wrench_precontact_baseline": null,
+        "wrench_precontact_baseline_status": null,
+        "wrench_sample_count": 0,
+        "wrench_sensor_profile_digest": null
+      },
+      "error": null,
+      "expectation": "expected_success",
+      "trial": {
+        "expectation": "expected_success",
+        "fault_injection": null,
+        "goal_xyz": [
+          0.207674113398419,
+          0.02127639995627907,
+          0.11499999999999999
+        ],
+        "index": 25,
+        "initial_qpos": [
+          -0.6987536461650716,
+          1.542860624191209,
+          1.7671634112940697,
+          0.044999999999999485,
+          0.03,
+          0.03
+        ],
+        "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+        "paired_trial_key": "4a03287aebe64e2a6e82420253d68914d7bfe986c8460111369199f36d9cb720",
+        "robot_id": "arm_gripper_lift",
+        "role": "grasp_fixture",
+        "scenario": {
+          "crash_controller": false,
+          "expected_refusal": null,
+          "immovable": false,
+          "move_object_after_obs": false,
+          "neg": null,
+          "object_id": "obj0",
+          "objects": [
+            {
+              "friction": 0.42731089080697465,
+              "mass": 0.1446630329141567,
+              "movable": true,
+              "name": "obj0",
+              "pos": [
+                0.207674113398419,
+                0.02127639995627907,
+                0.11499999999999999
+              ],
+              "rgba": [
+                0.85,
+                0.25,
+                0.2,
+                1.0
+              ],
+              "size": [
+                0.009672860221306739,
+                0.025
+              ],
+              "type": "cylinder"
+            },
+            {
+              "mass": 10.0,
+              "movable": false,
+              "name": "table",
+              "pos": [
+                0.25,
+                0.0,
+                0.08
+              ],
+              "rgba": [
+                0.4,
+                0.4,
+                0.4,
+                1
+              ],
+              "size": [
+                0.15,
+                0.22,
+                0.01
+              ],
+              "type": "box"
+            }
+          ],
+          "planar": true,
+          "polarity": "positive",
+          "push_dir": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "push_dist": 0.0,
+          "replay": false,
+          "required_opening": 0.85,
+          "restart_replay": false,
+          "seed": 21010,
+          "skill": "GRASP",
+          "stale": false,
+          "world_construction": "fixed_world"
+        },
+        "scenario_suite_id": "force_observable_public_probe",
+        "scenario_suite_version": 3,
+        "schema_version": 7,
+        "seed": 21010,
+        "source_hash": "b75b518f36853782407512c054d5257c17371704097a3da0e445c98b5165d185",
+        "stratum": null,
+        "task": "pinch_grasp_lift",
+        "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25"
+      },
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25"
+    },
+    {
+      "episode": {
+        "acquisition_verified": true,
+        "actions": [
+          {
+            "action_key": "grasp:y",
+            "control_tracking_correction_bound_rad": null,
+            "control_tracking_correction_gain": null,
+            "control_tracking_correction_max_rad": null,
+            "displacement_m": 0.012952022782756293,
+            "family": "pinch_grasp",
+            "grant_id": "sim-scope:cb65bbf102b2596eb5d71f1a0772397f93109c89b0cf215bcedb9bd27a328e9b",
+            "lateral_displacement_m": null,
+            "observation_epoch": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21006:21:0:4621819117588971520",
+            "reauthorized_after_observation": false,
+            "runtime_divergence": false,
+            "witness_digest": "f9b1bd8b8671ebdbe7189b91ed263bea09670ae8a34571059ee2db58e3e33688",
+            "writes_after": 7,
+            "writes_before": 0
+          }
+        ],
+        "ctrl_writes_after": 7,
+        "ctrl_writes_before": 0,
+        "decision_audits": [
+          "decision=ContactTransition { action: SelectedPhysicalAction { goal_id: \"acquire:obj0\", candidate_id: \"grasp:y\", candidate_contents: \"algorithm=physical-proof/10\\nfamily=pinch_grasp\\nkey=67726173703a79\\ntarget_body_id=6f626a30\\npush_bits=0,13830554455654793216,0\\nstroke_bits=0\\nq0_bits=4607200298215468632,13833343464191764948,13825357138655368089,4586646004499200040\\nq_transit_bits=4607200281101513687,13833343442513504790,13825357101623722666,4579800535830404107\\ntransit_state_count=1\\napproach_state_count=0\\nq_contact_bits=4607200281094874899,13833343442505296267,13825357101609636671,13795786662845093008\\nq_end_bits=4607200281094874899,13833343442505296267,13825357101609636671,13795786662845093008\\nstroke_state_count=0\\nq_retract_bits=none\\nfinger_bits=0,0\\naction_envelope=pinch:67726970706572:66696e6765725f6c:3f9eb851eb851eb8:0000000000000000,66696e6765725f72:3f9eb851eb851eb8:0000000000000000:3fff333333333333:34646238303339346163336362363661616236376665353666656664323637336366306133313730306661303435323562623531623336373534373266653834:3f9999999999999a\\nlift_trajectory_digest=4db80394ac3cb66aab67fe56fefd2673cf0a31700fa04525bb51b3675472fe84\\ndependency=8d0c3a15da331b4ace266457ed660a5cea674abb0a8bfb64550734a12c440628\\nsegments=transit,approach,contact,stroke,retreat,close,lift\\ncontact_observed=false\\ntransit_state_0=4607200281101513687,13833343442513504790,13825357101623722666,4579800535830404107\\nlift_state_0=6a6f696e7431=4607200281094874899,6a6f696e7432=13833343442505296267,6a6f696e7433=13825357101609636671,6c6966745f7a=13795786662845093008;fingers=66696e6765725f6c=0,66696e6765725f72=0\\nlift_state_1=6a6f696e7431=4607200281094872362,6a6f696e7432=13833343442505293133,6a6f696e7433=13825357101609631291,6c6966745f7a=4581421827779458594;fingers=66696e6765725f6c=0,66696e6765725f72=0\\n\", action_key: \"grasp:y\", contact_id: \"pinch_grasp:grasp:y\", witness_id: \"witness:grasp:y\", witness_digest: \"5f1d884825a2fa052299edbd32cffceb5ef0d3d8e3f710935004f724b2b37b0a\", witness_contents: \"algorithm=physical-proof/10\\nfamily=pinch_grasp\\nkey=67726173703a79\\ntarget_body_id=6f626a30\\npush_bits=0,13830554455654793216,0\\nstroke_bits=0\\nq0_bits=4607200298215468632,13833343464191764948,13825357138655368089,4586646004499200040\\nq_transit_bits=4607200281101513687,13833343442513504790,13825357101623722666,4579800535830404107\\ntransit_state_count=1\\napproach_state_count=0\\nq_contact_bits=4607200281094874899,13833343442505296267,13825357101609636671,13795786662845093008\\nq_end_bits=4607200281094874899,13833343442505296267,13825357101609636671,13795786662845093008\\nstroke_state_count=0\\nq_retract_bits=none\\nfinger_bits=0,0\\naction_envelope=pinch:67726970706572:66696e6765725f6c:3f9eb851eb851eb8:0000000000000000,66696e6765725f72:3f9eb851eb851eb8:0000000000000000:3fff333333333333:34646238303339346163336362363661616236376665353666656664323637336366306133313730306661303435323562623531623336373534373266653834:3f9999999999999a\\nlift_trajectory_digest=4db80394ac3cb66aab67fe56fefd2673cf0a31700fa04525bb51b3675472fe84\\ndependency=8d0c3a15da331b4ace266457ed660a5cea674abb0a8bfb64550734a12c440628\\nsegments=transit,approach,contact,stroke,retreat,close,lift\\ncontact_observed=false\\ntransit_state_0=4607200281101513687,13833343442513504790,13825357101623722666,4579800535830404107\\nlift_state_0=6a6f696e7431=4607200281094874899,6a6f696e7432=13833343442505296267,6a6f696e7433=13825357101609636671,6c6966745f7a=13795786662845093008;fingers=66696e6765725f6c=0,66696e6765725f72=0\\nlift_state_1=6a6f696e7431=4607200281094872362,6a6f696e7432=13833343442505293133,6a6f696e7433=13825357101609631291,6c6966745f7a=4581421827779458594;fingers=66696e6765725f6c=0,66696e6765725f72=0\\n\", role: GoalAction, predicted_effect: PredictedPhysicalEffect { object_translation_world_m: Some([0.0, 0.0]), yaw_change_rad: Some(0.0), contact_persists: Some(true), goal_error_derivative: Some(-1.0), goal_progress: Some(StrictProgress) }, robustness: RobustStrictProgress, recoverability: ProgressAndRecoverable, probe: ProbeEvidence { decision_relevant_distinctions: 0, observable_distinctions: 0, future_interaction: Unknown }, rationale: \"ROBUST_STRICT_PROGRESS_AND_RECOVERABLE\" }, phases: [Reobserve, RecheckCollisionAndWitness, ApproachNewContact] };pregrant_action_source=executable;pregrant_action_key=grasp:y;support_friction_interval=Some([0.05, 0.8]);candidates=planar_push:push:+x:TOOL_CONTACT_ORIENTATION_UNSTABLE|planar_push:push:-x:TOOL_CONTACT_ORIENTATION_UNSTABLE|planar_push:push:+y:IK_FAILED|planar_push:push:-y:IK_FAILED|pinch_grasp:grasp:y:PROVED;authorized_action_key=grasp:y"
+        ],
+        "evidence_status": "SIMULATION_ONLY",
+        "expectation": "expected_success",
+        "failure_cause": "hold_not_verified",
+        "fault_injection": null,
+        "geometry_digest": "495822b1aa761aa1aa52732c77a1064041e09d557ae80b7a34552dd9f145437b",
+        "goal_error_end_m": 0.00005970765336868194,
+        "goal_error_start_m": 0.0,
+        "goal_xyz": [
+          0.2664957264459261,
+          0.02354040393170577,
+          0.11499999999999999
+        ],
+        "grasp_contact_audits": [
+          {
+            "actuator_force": [
+              0.015555303503603568,
+              0.01670520153380295,
+              0.01721901754558708,
+              0.9806060517957564,
+              -1.95,
+              -1.95
+            ],
+            "contact_dimensions": [
+              3,
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8813012530463326,
+                  -0.47255486597094437,
+                  5.113406728925682e-6,
+                  -0.4725548659629902,
+                  0.8813012530611668,
+                  2.741815268104121e-6,
+                  -5.802109904149638e-6,
+                  4.235164736271502e-22,
+                  -0.9999999999831678
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.9741535580615781,
+                  -0.10058140774311075,
+                  0.0001569546733570515
+                ],
+                "force_world_on_object_n": [
+                  -0.8109925186354658,
+                  -0.5489835247435673,
+                  -0.00015224920563504808
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.0119992764286289,
+                  0.017724878851158827,
+                  0.004314934139088686
+                ],
+                "normal_force_n": 0.9741535580615781,
+                "position_world_m": [
+                  0.27413880346102737,
+                  0.0339888146492381,
+                  0.09303846608379206
+                ],
+                "tangential_force_n": 0.10058153020488099,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8813012530463326,
+                  -0.47255486597094437,
+                  5.113406728925682e-6,
+                  -0.4725548659629902,
+                  0.8813012530611668,
+                  2.741815268104121e-6,
+                  -5.802109904149638e-6,
+                  4.235164736271502e-22,
+                  -0.9999999999831678
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.9748259207467299,
+                  -0.1002876168722851,
+                  0.00015695527387557529
+                ],
+                "force_world_on_object_n": [
+                  -0.8117239050179793,
+                  -0.5490423347395365,
+                  -0.0001522455625693981
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.009961132475617498,
+                  -0.014728092990198316,
+                  0.0043167766517860084
+                ],
+                "normal_force_n": 0.9748259207467299,
+                "position_world_m": [
+                  0.27414149487648,
+                  0.0339840116520843,
+                  0.1330384660832691
+                ],
+                "tangential_force_n": 0.10028773969374442,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              1.003966226204686,
+              -1.6192794833610573,
+              -0.4614888935969254,
+              -0.004999996802557707,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_l",
+            "force_available": true,
+            "normal_force_n": 1.9489794788083081,
+            "object_com_world_m": [
+              0.2665118406642299,
+              0.023505350421149207,
+              0.11489282015595122
+            ],
+            "object_vertical_force_n": -0.00030449476820444617,
+            "phase": "post_close",
+            "tangential_force_n": 0.2008692698986254
+          },
+          {
+            "actuator_force": [
+              0.015555303503603568,
+              0.01670520153380295,
+              0.01721901754558708,
+              0.9806060517957564,
+              -1.95,
+              -1.95
+            ],
+            "contact_dimensions": [
+              3,
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8813012530463326,
+                  0.47255486597094437,
+                  -5.113406728925682e-6,
+                  -0.4725548659629902,
+                  0.8813012530611668,
+                  2.741815268104121e-6,
+                  5.802109904149638e-6,
+                  -4.235164736271502e-22,
+                  0.9999999999831678
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.9740693124129449,
+                  0.09721310134461372,
+                  -0.00004559533745135402
+                ],
+                "force_world_on_object_n": [
+                  0.8125099812432083,
+                  0.5459752214026794,
+                  -0.0000503096096615925
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.009906547205430813,
+                  0.014743137015506017,
+                  0.0043532864369187334
+                ],
+                "normal_force_n": 0.9740693124129449,
+                "position_world_m": [
+                  0.2588846091769704,
+                  0.01302232124797878,
+                  0.13303846892199606
+                ],
+                "tangential_force_n": 0.09721311203728093,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8813012530463326,
+                  0.47255486597094437,
+                  -5.113406728925682e-6,
+                  -0.4725548659629902,
+                  0.8813012530611668,
+                  2.741815268104121e-6,
+                  5.802109904149638e-6,
+                  -4.235164736271502e-22,
+                  0.9999999999831678
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.9747416445973529,
+                  0.09691837769434455,
+                  -0.000045651520376305266
+                ],
+                "force_world_on_object_n": [
+                  0.8132417815345134,
+                  0.5460331949256813,
+                  -0.00005037003857226281
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.011933729015675647,
+                  -0.017773255850868315,
+                  0.004355140143100827
+                ],
+                "normal_force_n": 0.9747416445973529,
+                "position_world_m": [
+                  0.2588819177615178,
+                  0.013027124245132582,
+                  0.093038468922519
+                ],
+                "tangential_force_n": 0.09691838844597518,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              1.003966226204686,
+              -1.6192794833610573,
+              -0.4614888935969254,
+              -0.004999996802557707,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_r",
+            "force_available": true,
+            "normal_force_n": 1.9488109570102978,
+            "object_com_world_m": [
+              0.2665118406642299,
+              0.023505350421149207,
+              0.11489282015595122
+            ],
+            "object_vertical_force_n": -0.00010067964823385531,
+            "phase": "post_close",
+            "tangential_force_n": 0.19413150048325611
+          },
+          {
+            "actuator_force": [
+              0.0020913640952855417,
+              0.001817912954031442,
+              0.007139427108002749,
+              2.2853693542793367,
+              -1.95,
+              -1.8973645419285554
+            ],
+            "contact_dimensions": [
+              3,
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8806687336763532,
+                  -0.47373257953429465,
+                  0.0001568842619156157,
+                  -0.47373257201742797,
+                  0.8806687476502066,
+                  0.00008439176056141624,
+                  -0.00017814219288945257,
+                  0.0,
+                  -0.9999999841326795
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.9649502849003926,
+                  -0.48374459848088264,
+                  -0.318239634278755
+                ],
+                "force_world_on_object_n": [
+                  -0.6205792807196637,
+                  -0.8831471373149264,
+                  0.3183501906840487
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.012930254955905492,
+                  0.010210357711843813,
+                  0.003119206123247042
+                ],
+                "normal_force_n": 0.9649502849003926,
+                "position_world_m": [
+                  0.271437775580554,
+                  0.03566488735072997,
+                  0.09600184566034173
+                ],
+                "tangential_force_n": 0.5790382555456125,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8806687336763532,
+                  -0.47373257953429465,
+                  0.0001568842619156157,
+                  -0.47373257201742797,
+                  0.8806687476502066,
+                  0.00008439176056141624,
+                  -0.00017814219288945257,
+                  0.0,
+                  -0.9999999841326795
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.9458126270184206,
+                  -0.4793338548853372,
+                  -0.3207204576374371
+                ],
+                "force_world_on_object_n": [
+                  -0.6058144147559301,
+                  -0.8701966012417599,
+                  0.3208283838364526
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.02214909100003478,
+                  -0.014318370671303947,
+                  0.0029873949948334344
+                ],
+                "normal_force_n": 0.9458126270184206,
+                "position_world_m": [
+                  0.2714486587117335,
+                  0.035651278938575656,
+                  0.1360018451680883
+                ],
+                "tangential_force_n": 0.5767343898073052,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              1.0039662262045452,
+              -1.6192794833608835,
+              -0.46148889359685075,
+              0.0012500013988813643,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_l",
+            "force_available": true,
+            "normal_force_n": 1.9107629119188132,
+            "object_com_world_m": [
+              0.26649021008545387,
+              0.023597719368198374,
+              0.11499283762024672
+            ],
+            "object_vertical_force_n": 0.6391785745205013,
+            "phase": "lift_waypoint_1",
+            "tangential_force_n": 1.1557726453529176
+          },
+          {
+            "actuator_force": [
+              0.0020913640952855417,
+              0.001817912954031442,
+              0.007139427108002749,
+              2.2853693542793367,
+              -1.95,
+              -1.8973645419285554
+            ],
+            "contact_dimensions": [
+              3,
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8806687336763532,
+                  0.47373257953429465,
+                  -0.0001568842619156157,
+                  -0.47373257201742797,
+                  0.8806687476502066,
+                  0.00008439176056141624,
+                  0.00017814219288945257,
+                  0.0,
+                  0.9999999841326795
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.943108716326209,
+                  0.4859565776709367,
+                  0.32654234109247204
+                ],
+                "force_world_on_object_n": [
+                  0.6004110704660072,
+                  0.8747480956363365,
+                  0.3264353877273991
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.02231758564901794,
+                  0.014230005117184068,
+                  0.0029165208442003196
+                ],
+                "normal_force_n": 0.943108716326209,
+                "position_world_m": [
+                  0.26154000496831153,
+                  0.011528149535308185,
+                  0.13600191558519692
+                ],
+                "tangential_force_n": 0.5854773231371148,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8806687336763532,
+                  0.47373257953429465,
+                  -0.0001568842619156157,
+                  -0.47373257201742797,
+                  0.8806687476502066,
+                  0.00008439176056141624,
+                  0.00017814219288945257,
+                  0.0,
+                  0.9999999841326795
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.9238535394439851,
+                  0.48154146478903614,
+                  0.3290235873915126
+                ],
+                "force_world_on_object_n": [
+                  0.5855456630203717,
+                  0.8617380390900938,
+                  0.328919282222133
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.01239976131379697,
+                  -0.009488254160465857,
+                  0.002784157464591018
+                ],
+                "normal_force_n": 0.9238535394439851,
+                "position_world_m": [
+                  0.261529121837132,
+                  0.011541757947462499,
+                  0.09600191607745037
+                ],
+                "tangential_force_n": 0.583214114516402,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              1.0039662262045452,
+              -1.6192794833608835,
+              -0.46148889359685075,
+              0.0012500013988813643,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_r",
+            "force_available": true,
+            "normal_force_n": 1.866962255770194,
+            "object_com_world_m": [
+              0.26649021008545387,
+              0.023597719368198374,
+              0.11499283762024672
+            ],
+            "object_vertical_force_n": 0.6553546699495321,
+            "phase": "lift_waypoint_1",
+            "tangential_force_n": 1.168691437653517
+          },
+          {
+            "actuator_force": [
+              0.00013276309647380913,
+              -0.0007799324565098686,
+              -0.00016897047710173752,
+              3.015417458106321,
+              -1.8447617345853389,
+              -1.838315780024635
+            ],
+            "contact_dimensions": [
+              3,
+              3,
+              3,
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.880431303123108,
+                  -0.4741737228617087,
+                  -0.00003206888251523575,
+                  -0.47417372254716267,
+                  0.8804313037071475,
+                  -0.000017271332068994726,
+                  0.000036424059867256405,
+                  -1.6940658945086007e-21,
+                  -0.9999999993366437
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.4874036141242881,
+                  0.021877300130429517,
+                  -0.27125239839898274
+                ],
+                "force_world_on_object_n": [
+                  -0.43950892008608516,
+                  -0.21185252637013882,
+                  0.2712363898796916
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.00445158426714152,
+                  0.004146177234029781,
+                  -0.0039748828414735374
+                ],
+                "normal_force_n": 0.4874036141242881,
+                "position_world_m": [
+                  0.27923592838625694,
+                  0.020705955000244834,
+                  0.10098799543567957
+                ],
+                "tangential_force_n": 0.2721332024913486,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  -0.0
+                ]
+              },
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.880431303123108,
+                  -0.4741737228617087,
+                  -0.00003206888251523575,
+                  -0.47417372254716267,
+                  0.8804313037071475,
+                  -0.000017271332068994726,
+                  0.000036424059867256405,
+                  -1.6940658945086007e-21,
+                  -0.9999999993366437
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.4870082347198058,
+                  0.021879993980484486,
+                  -0.2709964002815622
+                ],
+                "force_world_on_object_n": [
+                  -0.4391620837101866,
+                  -0.2116626760960567,
+                  0.27098040439529014
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.004022450290551906,
+                  -0.013420960018934776,
+                  -0.003964156244299889
+                ],
+                "normal_force_n": 0.4870082347198058,
+                "position_world_m": [
+                  0.2792282419548171,
+                  0.02071887430999128,
+                  0.1409879954151113
+                ],
+                "tangential_force_n": 0.27187825051325953,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  -0.0
+                ]
+              },
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.880431303123108,
+                  -0.4741737228617087,
+                  -0.00003206888251523575,
+                  -0.47417372254716267,
+                  0.8804313037071475,
+                  -0.000017271332068994726,
+                  0.000036424059867256405,
+                  -1.6940658945086007e-21,
+                  -0.9999999993366437
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.43539049966595145,
+                  0.020498668244152515,
+                  -0.24746133831986952
+                ],
+                "force_world_on_object_n": [
+                  -0.39306036836350566,
+                  -0.18840306491876424,
+                  0.24744702162962626
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.00021818230408268907,
+                  0.005681208811795147,
+                  0.003979026820724007
+                ],
+                "normal_force_n": 0.43539049966595145,
+                "position_world_m": [
+                  0.2710102363179351,
+                  0.03589588177696382,
+                  0.10098799416919418
+                ],
+                "tangential_force_n": 0.24830889908105339,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  -0.0
+                ]
+              },
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.880431303123108,
+                  -0.4741737228617087,
+                  -0.00003206888251523575,
+                  -0.47417372254716267,
+                  0.8804313037071475,
+                  -0.000017271332068994726,
+                  0.000036424059867256405,
+                  -1.6940658945086007e-21,
+                  -0.9999999993366437
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.43519436620316515,
+                  0.02050739396706229,
+                  -0.24730952884765384
+                ],
+                "force_world_on_object_n": [
+                  -0.3928918183022754,
+                  -0.18830238118493986,
+                  0.24729521829658738
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.007316983826428984,
+                  -0.010034792100356007,
+                  0.003983934018811392
+                ],
+                "normal_force_n": 0.43519436620316515,
+                "position_world_m": [
+                  0.2710025498864953,
+                  0.03590880108671027,
+                  0.14098799414862592
+                ],
+                "tangential_force_n": 0.2481583290284024,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  -0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              1.0039662262044042,
+              -1.6192794833607094,
+              -0.4614888935967761,
+              0.007499999600320436,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_l",
+            "force_available": true,
+            "normal_force_n": 1.8449967147132105,
+            "object_com_world_m": [
+              0.2664762044513381,
+              0.023599418663795422,
+              0.11829612808634044
+            ],
+            "object_vertical_force_n": 1.0369590342011954,
+            "phase": "lift_waypoint_2",
+            "tangential_force_n": 1.0404786811140638
+          },
+          {
+            "actuator_force": [
+              0.00013276309647380913,
+              -0.0007799324565098686,
+              -0.00016897047710173752,
+              3.015417458106321,
+              -1.8447617345853389,
+              -1.838315780024635
+            ],
+            "contact_dimensions": [
+              3,
+              3,
+              3,
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.880431303123108,
+                  0.4741737228617087,
+                  0.00003206888251523575,
+                  -0.47417372254716267,
+                  0.8804313037071475,
+                  -0.000017271332068994726,
+                  -0.000036424059867256405,
+                  1.6940658945086007e-21,
+                  0.9999999993366437
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.48616437700008375,
+                  -0.021456603069840208,
+                  0.2709065446035985
+                ],
+                "force_world_on_object_n": [
+                  0.4381986258088616,
+                  0.2116353075509668,
+                  0.2709225057562967
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.004017882204838186,
+                  0.013400456455995847,
+                  -0.003969324215291973
+                ],
+                "normal_force_n": 0.48616437700008375,
+                "position_world_m": [
+                  0.2537164066895742,
+                  0.026495138588408827,
+                  0.14098798398862816
+                ],
+                "tangential_force_n": 0.2717549295309253,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.880431303123108,
+                  0.4741737228617087,
+                  0.00003206888251523575,
+                  -0.47417372254716267,
+                  0.8804313037071475,
+                  -0.000017271332068994726,
+                  -0.000036424059867256405,
+                  1.6940658945086007e-21,
+                  0.9999999993366437
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.4857653779593388,
+                  -0.021459630222683088,
+                  0.2706482178936159
+                ],
+                "force_world_on_object_n": [
+                  0.43784877936911343,
+                  0.21144344749027452,
+                  0.2706641663033152
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.004439964478371355,
+                  -0.004126810175493035,
+                  -0.003958581112847536
+                ],
+                "normal_force_n": 0.4857653779593388,
+                "position_world_m": [
+                  0.253724093121014,
+                  0.02648221927866238,
+                  0.10098798400919642
+                ],
+                "tangential_force_n": 0.2714976493052647,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.880431303123108,
+                  0.4741737228617087,
+                  0.00003206888251523575,
+                  -0.47417372254716267,
+                  0.8804313037071475,
+                  -0.000017271332068994726,
+                  -0.000036424059867256405,
+                  1.6940658945086007e-21,
+                  0.9999999993366437
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.43391265859427,
+                  -0.020091730110160966,
+                  0.24698360536062264
+                ],
+                "force_world_on_object_n": [
+                  0.3915482617608855,
+                  0.18806059258784544,
+                  0.24699786730179743
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.007304086978715443,
+                  0.010004871666960522,
+                  0.003961088719106074
+                ],
+                "normal_force_n": 0.43391265859427,
+                "position_world_m": [
+                  0.26194209875789604,
+                  0.011305211811689843,
+                  0.14098798525511355
+                ],
+                "tangential_force_n": 0.2477994732354194,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.880431303123108,
+                  0.4741737228617087,
+                  0.00003206888251523575,
+                  -0.47417372254716267,
+                  0.8804313037071475,
+                  -0.000017271332068994726,
+                  -0.000036424059867256405,
+                  1.6940658945086007e-21,
+                  0.9999999993366437
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.43371391576076057,
+                  -0.02010067364591707,
+                  0.24683006197441046
+                ],
+                "force_world_on_object_n": [
+                  0.39137752873130804,
+                  0.1879584797897427,
+                  0.2468443176966933
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.0002152680504456713,
+                  -0.005656697285826024,
+                  0.003965953739633132
+                ],
+                "normal_force_n": 0.43371391576076057,
+                "position_world_m": [
+                  0.26194978518933587,
+                  0.011292292501943394,
+                  0.10098798527568181
+                ],
+                "tangential_force_n": 0.2476471614521575,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              1.0039662262044042,
+              -1.6192794833607094,
+              -0.4614888935967761,
+              0.007499999600320436,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_r",
+            "force_available": true,
+            "normal_force_n": 1.839556329314453,
+            "object_com_world_m": [
+              0.2664762044513381,
+              0.023599418663795422,
+              0.11829612808634044
+            ],
+            "object_vertical_force_n": 1.0354288570581025,
+            "phase": "lift_waypoint_2",
+            "tangential_force_n": 1.038699213523767
+          },
+          {
+            "actuator_force": [
+              -0.00031391103353684,
+              0.0007549558244974719,
+              0.00022260516705330247,
+              2.9699213902273787,
+              -1.8346534449780456,
+              -1.8381603892706686
+            ],
+            "contact_dimensions": [
+              3,
+              3,
+              3,
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8804595508498205,
+                  -0.47412127068107623,
+                  2.2570378670236394e-6,
+                  -0.4741212706795184,
+                  0.8804595508527132,
+                  1.2153990043633088e-6,
+                  -2.5634770669904463e-6,
+                  0.0,
+                  -0.9999999999967144
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.4619818110898223,
+                  0.002389104392986424,
+                  -0.25600141364872064
+                ],
+                "force_world_on_object_n": [
+                  -0.4078883668497673,
+                  -0.21693189352466238,
+                  0.25600245926203613
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.004199491841579061,
+                  0.0032147059904396916,
+                  -0.003966960372790641
+                ],
+                "normal_force_n": 0.4619818110898223,
+                "position_world_m": [
+                  0.2792178590760671,
+                  0.020648430149869362,
+                  0.10720174360608298
+                ],
+                "tangential_force_n": 0.2560125614299891,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8804595508498205,
+                  -0.47412127068107623,
+                  2.2570378670236394e-6,
+                  -0.4741212706795184,
+                  0.8804595508527132,
+                  1.2153990043633088e-6,
+                  -2.5634770669904463e-6,
+                  0.0,
+                  -0.9999999999967144
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.46223269044346404,
+                  0.0024519579531103314,
+                  -0.2560925678227555
+                ],
+                "force_world_on_object_n": [
+                  -0.40813905594891325,
+                  -0.21699550074528248,
+                  0.25609361407870707
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.004482402036281814,
+                  -0.013106243927520467,
+                  -0.003961647509721838
+                ],
+                "normal_force_n": 0.46223269044346404,
+                "position_world_m": [
+                  0.2792108609605872,
+                  0.020661521100968513,
+                  0.14720174360598107
+                ],
+                "tangential_force_n": 0.2561043056878515,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8804595508498205,
+                  -0.47412127068107623,
+                  2.2570378670236394e-6,
+                  -0.4741212706795184,
+                  0.8804595508527132,
+                  1.2153990043633088e-6,
+                  -2.5634770669904463e-6,
+                  0.0,
+                  -0.9999999999967144
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.45584824171756655,
+                  0.002370371921995934,
+                  -0.25319734901292346
+                ],
+                "force_world_on_object_n": [
+                  -0.4024791328403712,
+                  -0.21404033100307263,
+                  0.2531983807597824
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.0002948854167124631,
+                  0.0052392786931818505,
+                  0.003960261182916529
+                ],
+                "normal_force_n": 0.45584824171756655,
+                "position_world_m": [
+                  0.27102371693073013,
+                  0.03585555133657715,
+                  0.10720174361644524
+                ],
+                "tangential_force_n": 0.2532084441921729,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8804595508498205,
+                  -0.47412127068107623,
+                  2.2570378670236394e-6,
+                  -0.4741212706795184,
+                  0.8804595508527132,
+                  1.2153990043633088e-6,
+                  -2.5634770669904463e-6,
+                  0.0,
+                  -0.9999999999967144
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.45609576679724195,
+                  0.0024327568822983675,
+                  -0.25328707799352784
+                ],
+                "force_world_on_object_n": [
+                  -0.4027266464674779,
+                  -0.2141027604742459,
+                  0.2532881103748826
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.008272649556169676,
+                  -0.01086449149266504,
+                  0.003969782837181483
+                ],
+                "normal_force_n": 0.45609576679724195,
+                "position_world_m": [
+                  0.27101671881525025,
+                  0.0358686422876763,
+                  0.14720174361634333
+                ],
+                "tangential_force_n": 0.25329876072446117,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              1.0039662262042635,
+              -1.6192794833605353,
+              -0.4614888935967014,
+              0.013749997801759506,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_l",
+            "force_available": true,
+            "normal_force_n": 1.836158510048095,
+            "object_com_world_m": [
+              0.26645993017590885,
+              0.023588839331649344,
+              0.12309032413615088
+            ],
+            "object_vertical_force_n": 1.018582564475408,
+            "phase": "lift_waypoint_3",
+            "tangential_force_n": 1.0186240720344748
+          },
+          {
+            "actuator_force": [
+              -0.00031391103353684,
+              0.0007549558244974719,
+              0.00022260516705330247,
+              2.9699213902273787,
+              -1.8346534449780456,
+              -1.8381603892706686
+            ],
+            "contact_dimensions": [
+              3,
+              3,
+              3,
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8804595508498205,
+                  0.47412127068107623,
+                  -2.2570378670236394e-6,
+                  -0.4741212706795184,
+                  0.8804595508527132,
+                  1.2153990043633088e-6,
+                  2.5634770669904463e-6,
+                  0.0,
+                  0.9999999999967144
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.46263963492166094,
+                  -0.002527662726864832,
+                  0.2562123766430298
+                ],
+                "force_world_on_object_n": [
+                  0.40853456062691273,
+                  0.21712178678728455,
+                  0.25621132937489444
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.004481047826969637,
+                  0.013119422229730546,
+                  -0.003972695093070427
+                ],
+                "normal_force_n": 0.46263963492166094,
+                "position_world_m": [
+                  0.25370064364246403,
+                  0.026531983238379915,
+                  0.1472017443548117
+                ],
+                "tangential_force_n": 0.25622484466563844,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8804595508498205,
+                  0.47412127068107623,
+                  -2.2570378670236394e-6,
+                  -0.4741212706795184,
+                  0.8804595508527132,
+                  1.2153990043633088e-6,
+                  2.5634770669904463e-6,
+                  0.0,
+                  0.9999999999967144
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.46289063972479405,
+                  -0.0025905351223968337,
+                  0.2563035922364635
+                ],
+                "force_world_on_object_n": [
+                  0.4087853695770298,
+                  0.21718543690236192,
+                  0.2563025443253854
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.004201748169082499,
+                  -0.003226574990431643,
+                  -0.003967374111908704
+                ],
+                "normal_force_n": 0.46289063972479405,
+                "position_world_m": [
+                  0.2537076417579439,
+                  0.026518892287280764,
+                  0.10720174435491361
+                ],
+                "tangential_force_n": 0.25631668354895615,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8804595508498205,
+                  0.47412127068107623,
+                  -2.2570378670236394e-6,
+                  -0.4741212706795184,
+                  0.8804595508527132,
+                  1.2153990043633088e-6,
+                  2.5634770669904463e-6,
+                  0.0,
+                  0.9999999999967144
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.4565253440524589,
+                  -0.0025078991821605723,
+                  0.25343226085089005
+                ],
+                "force_world_on_object_n": [
+                  0.40314179739075856,
+                  0.21424027243275834,
+                  0.25343122740697044
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.00827371204912242,
+                  0.010877271425985565,
+                  0.003966084066406325
+                ],
+                "normal_force_n": 0.4565253440524589,
+                "position_world_m": [
+                  0.26189478578780095,
+                  0.011324862051672133,
+                  0.14720174434444944
+                ],
+                "tangential_force_n": 0.25344466930338355,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8804595508498205,
+                  0.47412127068107623,
+                  -2.2570378670236394e-6,
+                  -0.4741212706795184,
+                  0.8804595508527132,
+                  1.2153990043633088e-6,
+                  2.5634770669904463e-6,
+                  0.0,
+                  0.9999999999967144
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.45677299219508316,
+                  -0.0025703022127164105,
+                  0.2535220514998717
+                ],
+                "force_world_on_object_n": [
+                  0.4033894283975,
+                  0.21430274434056612,
+                  0.253521017421156
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.0002924714241224094,
+                  -0.005253699239590302,
+                  0.003975616280801094
+                ],
+                "normal_force_n": 0.45677299219508316,
+                "position_world_m": [
+                  0.26190178390328084,
+                  0.011311771100572982,
+                  0.10720174434455135
+                ],
+                "tangential_force_n": 0.25353508051188556,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              1.0039662262042635,
+              -1.6192794833605353,
+              -0.4614888935967014,
+              0.013749997801759506,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_r",
+            "force_available": true,
+            "normal_force_n": 1.838828610893997,
+            "object_com_world_m": [
+              0.26645993017590885,
+              0.023588839331649344,
+              0.12309032413615088
+            ],
+            "object_vertical_force_n": 1.0194661185284064,
+            "phase": "lift_waypoint_3",
+            "tangential_force_n": 1.0195212780298637
+          },
+          {
+            "actuator_force": [
+              0.000029808152625321327,
+              -0.0001585207606495942,
+              -0.00003846429249954042,
+              2.9705291242534093,
+              -1.8362784604575397,
+              -1.8360850113834148
+            ],
+            "contact_dimensions": [
+              3,
+              3,
+              3,
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8804429988774892,
+                  -0.4741520069832139,
+                  -1.1848994579677823e-6,
+                  -0.47415200698278454,
+                  0.8804429988782864,
+                  -6.381133779069476e-7,
+                  1.3457991709598275e-6,
+                  0.0,
+                  -0.9999999999990945
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.4596345955691574,
+                  0.00018584212472075312,
+                  -0.25497336600224607
+                ],
+                "force_world_on_object_n": [
+                  -0.40477052227011373,
+                  -0.21777304257042676,
+                  0.2549728212626437
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.003907433547420503,
+                  0.0026141578613382128,
+                  -0.003970308684231726
+                ],
+                "normal_force_n": 0.4596345955691574,
+                "position_world_m": [
+                  0.27922658848619974,
+                  0.02064880697633041,
+                  0.11345701980807299
+                ],
+                "tangential_force_n": 0.2549734337294979,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  -0.0
+                ]
+              },
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8804429988774892,
+                  -0.4741520069832139,
+                  -1.1848994579677823e-6,
+                  -0.47415200698278454,
+                  0.8804429988782864,
+                  -6.381133779069476e-7,
+                  1.3457991709598275e-6,
+                  0.0,
+                  -0.9999999999990945
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.45903111284863135,
+                  0.0001856980183853052,
+                  -0.25469089023305164
+                ],
+                "force_world_on_object_n": [
+                  -0.4042391214254192,
+                  -0.2174870269047238,
+                  0.2546903462086078
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.00002892059165982312,
+                  0.004696233692095336,
+                  0.003964339771060448
+                ],
+                "normal_force_n": 0.45903111284863135,
+                "position_world_m": [
+                  0.2710355650092919,
+                  0.03585761023066257,
+                  0.11345701980754609
+                ],
+                "tangential_force_n": 0.25469095793030894,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  -0.0
+                ]
+              },
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8804429988774892,
+                  -0.4741520069832139,
+                  -1.1848994579677823e-6,
+                  -0.47415200698278454,
+                  0.8804429988782864,
+                  -6.381133779069476e-7,
+                  1.3457991709598275e-6,
+                  0.0,
+                  -0.9999999999990945
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.4596160009177493,
+                  0.00024331772207007718,
+                  -0.25496331513073567
+                ],
+                "force_world_on_object_n": [
+                  -0.40478140289577413,
+                  -0.2177136218918499,
+                  0.2549627703764901
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.004695971201000867,
+                  -0.013371872554733396,
+                  -0.003962919735991052
+                ],
+                "normal_force_n": 0.4596160009177493,
+                "position_world_m": [
+                  0.2792196942562001,
+                  0.020661559376068617,
+                  0.15295506496482197
+                ],
+                "tangential_force_n": 0.25496343123273324,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  -0.0
+                ]
+              },
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8804429988774892,
+                  -0.4741520069832139,
+                  -1.1848994579677823e-6,
+                  -0.47415200698278454,
+                  0.8804429988782864,
+                  -6.381133779069476e-7,
+                  1.3457991709598275e-6,
+                  0.0,
+                  -0.9999999999990945
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.45901261091300577,
+                  0.000243123230454112,
+                  -0.2546808866318966
+                ],
+                "force_world_on_object_n": [
+                  -0.404250059791823,
+                  -0.21742769454888877,
+                  0.2546803425927319
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.008561654398276297,
+                  -0.011266330680300897,
+                  0.003971397973946906
+                ],
+                "normal_force_n": 0.45901261091300577,
+                "position_world_m": [
+                  0.27102867188592283,
+                  0.03587036058344317,
+                  0.1529487249164955
+                ],
+                "tangential_force_n": 0.2546810026769059,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  -0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              1.0039662262041227,
+              -1.6192794833603614,
+              -0.46148889359662676,
+              0.01999999600319858,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_l",
+            "force_available": true,
+            "normal_force_n": 1.8372943202485437,
+            "object_com_world_m": [
+              0.26646861553553536,
+              0.023593601698656826,
+              0.12795188515858472
+            ],
+            "object_vertical_force_n": 1.0193062804404736,
+            "phase": "lift_waypoint_4",
+            "tangential_force_n": 1.019308825569446
+          },
+          {
+            "actuator_force": [
+              0.000029808152625321327,
+              -0.0001585207606495942,
+              -0.00003846429249954042,
+              2.9705291242534093,
+              -1.8362784604575397,
+              -1.8360850113834148
+            ],
+            "contact_dimensions": [
+              3,
+              3,
+              3,
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8804429988781073,
+                  0.47415200698354676,
+                  0.0,
+                  -0.4741520069835468,
+                  0.8804429988781072,
+                  0.0,
+                  0.0,
+                  -0.0,
+                  1.0
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.4595776752492059,
+                  -0.00029714800687992426,
+                  0.2549299355922793
+                ],
+                "force_world_on_object_n": [
+                  0.404772839937673,
+                  0.21764805520195565,
+                  0.2549299355922793
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.0039031035157932577,
+                  -0.0026160173921582226,
+                  -0.00396383106022025
+                ],
+                "normal_force_n": 0.4595776752492059,
+                "position_world_m": [
+                  0.25371565856552813,
+                  0.0265290130217261,
+                  0.11345701961366156
+                ],
+                "tangential_force_n": 0.2549301087710545,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8804429988781073,
+                  0.47415200698354676,
+                  0.0,
+                  -0.4741520069835468,
+                  0.8804429988781072,
+                  0.0,
+                  0.0,
+                  -0.0,
+                  1.0
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.45899957306094047,
+                  -0.00029692421042029626,
+                  0.25467272169181887
+                ],
+                "force_world_on_object_n": [
+                  0.40426374779983815,
+                  0.21737414392917406,
+                  0.25467272169181887
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.000025110861670936922,
+                  -0.004697948650180741,
+                  0.0039700410326245035
+                ],
+                "normal_force_n": 0.45899957306094047,
+                "position_world_m": [
+                  0.26190668204243617,
+                  0.011320209767393596,
+                  0.11345701961366156
+                ],
+                "tangential_force_n": 0.25467289478447713,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8804429988781073,
+                  0.47415200698354676,
+                  0.0,
+                  -0.4741520069835468,
+                  0.8804429988781072,
+                  0.0,
+                  0.0,
+                  -0.0,
+                  1.0
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.45959623777280656,
+                  -0.00023968776651331347,
+                  0.25493995905452466
+                ],
+                "force_world_on_object_n": [
+                  0.40476193829332713,
+                  0.21770744712612022,
+                  0.25493995905452466
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.004690388920128522,
+                  0.013370755610338562,
+                  -0.003971218019991768
+                ],
+                "normal_force_n": 0.45959623777280656,
+                "position_world_m": [
+                  0.25370876544616183,
+                  0.026541763367102747,
+                  0.15294870179028974
+                ],
+                "tangential_force_n": 0.25494007172853017,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8804429988781073,
+                  0.47415200698354676,
+                  0.0,
+                  -0.4741520069835468,
+                  0.8804429988781072,
+                  0.0,
+                  0.0,
+                  -0.0,
+                  1.0
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.45901804981229016,
+                  -0.00023949588697631807,
+                  0.25468270207776156
+                ],
+                "force_world_on_object_n": [
+                  0.40425278577138735,
+                  0.21743346708322261,
+                  0.25468270207776156
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.008559095852054634,
+                  0.01127119713002142,
+                  0.003962981637481684
+                ],
+                "normal_force_n": 0.45901804981229016,
+                "position_world_m": [
+                  0.2618997878164391,
+                  0.011332962159728188,
+                  0.1529550418391431
+                ],
+                "tangential_force_n": 0.25468281468507004,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              1.0039662262041227,
+              -1.6192794833603614,
+              -0.46148889359662676,
+              0.01999999600319858,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_r",
+            "force_available": true,
+            "normal_force_n": 1.837191535895243,
+            "object_com_world_m": [
+              0.26646861553553536,
+              0.023593601698656826,
+              0.12795188515858472
+            ],
+            "object_vertical_force_n": 1.0192253184163844,
+            "phase": "lift_waypoint_4",
+            "tangential_force_n": 1.0192258899691318
+          },
+          {
+            "actuator_force": [
+              0.015555303503603568,
+              0.01670520153380295,
+              0.01721901754558708,
+              0.9806060517957564,
+              -1.95,
+              -1.95
+            ],
+            "contact_dimensions": [
+              3,
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8813012530463326,
+                  -0.47255486597094437,
+                  5.113406728925682e-6,
+                  -0.4725548659629902,
+                  0.8813012530611668,
+                  2.741815268104121e-6,
+                  -5.802109904149638e-6,
+                  4.235164736271502e-22,
+                  -0.9999999999831678
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.9741535580615781,
+                  -0.10058140774311075,
+                  0.0001569546733570515
+                ],
+                "force_world_on_object_n": [
+                  -0.8109925186354658,
+                  -0.5489835247435673,
+                  -0.00015224920563504808
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.0119992764286289,
+                  0.017724878851158827,
+                  0.004314934139088686
+                ],
+                "normal_force_n": 0.9741535580615781,
+                "position_world_m": [
+                  0.27413880346102737,
+                  0.0339888146492381,
+                  0.09303846608379206
+                ],
+                "tangential_force_n": 0.10058153020488099,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8813012530463326,
+                  -0.47255486597094437,
+                  5.113406728925682e-6,
+                  -0.4725548659629902,
+                  0.8813012530611668,
+                  2.741815268104121e-6,
+                  -5.802109904149638e-6,
+                  4.235164736271502e-22,
+                  -0.9999999999831678
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.9748259207467299,
+                  -0.1002876168722851,
+                  0.00015695527387557529
+                ],
+                "force_world_on_object_n": [
+                  -0.8117239050179793,
+                  -0.5490423347395365,
+                  -0.0001522455625693981
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.009961132475617498,
+                  -0.014728092990198316,
+                  0.0043167766517860084
+                ],
+                "normal_force_n": 0.9748259207467299,
+                "position_world_m": [
+                  0.27414149487648,
+                  0.0339840116520843,
+                  0.1330384660832691
+                ],
+                "tangential_force_n": 0.10028773969374442,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  -0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              1.003966226204686,
+              -1.6192794833610573,
+              -0.4614888935969254,
+              -0.004999996802557707,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_l",
+            "force_available": true,
+            "normal_force_n": 1.9489794788083081,
+            "object_com_world_m": [
+              0.2665118406642299,
+              0.023505350421149207,
+              0.11489282015595122
+            ],
+            "object_vertical_force_n": -0.00030449476820444617,
+            "phase": "post_close",
+            "tangential_force_n": 0.2008692698986254
+          },
+          {
+            "actuator_force": [
+              0.015555303503603568,
+              0.01670520153380295,
+              0.01721901754558708,
+              0.9806060517957564,
+              -1.95,
+              -1.95
+            ],
+            "contact_dimensions": [
+              3,
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8813012530463326,
+                  0.47255486597094437,
+                  -5.113406728925682e-6,
+                  -0.4725548659629902,
+                  0.8813012530611668,
+                  2.741815268104121e-6,
+                  5.802109904149638e-6,
+                  -4.235164736271502e-22,
+                  0.9999999999831678
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.9740693124129449,
+                  0.09721310134461372,
+                  -0.00004559533745135402
+                ],
+                "force_world_on_object_n": [
+                  0.8125099812432083,
+                  0.5459752214026794,
+                  -0.0000503096096615925
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.009906547205430813,
+                  0.014743137015506017,
+                  0.0043532864369187334
+                ],
+                "normal_force_n": 0.9740693124129449,
+                "position_world_m": [
+                  0.2588846091769704,
+                  0.01302232124797878,
+                  0.13303846892199606
+                ],
+                "tangential_force_n": 0.09721311203728093,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8813012530463326,
+                  0.47255486597094437,
+                  -5.113406728925682e-6,
+                  -0.4725548659629902,
+                  0.8813012530611668,
+                  2.741815268104121e-6,
+                  5.802109904149638e-6,
+                  -4.235164736271502e-22,
+                  0.9999999999831678
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.9747416445973529,
+                  0.09691837769434455,
+                  -0.000045651520376305266
+                ],
+                "force_world_on_object_n": [
+                  0.8132417815345134,
+                  0.5460331949256813,
+                  -0.00005037003857226281
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.011933729015675647,
+                  -0.017773255850868315,
+                  0.004355140143100827
+                ],
+                "normal_force_n": 0.9747416445973529,
+                "position_world_m": [
+                  0.2588819177615178,
+                  0.013027124245132582,
+                  0.093038468922519
+                ],
+                "tangential_force_n": 0.09691838844597518,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              1.003966226204686,
+              -1.6192794833610573,
+              -0.4614888935969254,
+              -0.004999996802557707,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_r",
+            "force_available": true,
+            "normal_force_n": 1.9488109570102978,
+            "object_com_world_m": [
+              0.2665118406642299,
+              0.023505350421149207,
+              0.11489282015595122
+            ],
+            "object_vertical_force_n": -0.00010067964823385531,
+            "phase": "post_close",
+            "tangential_force_n": 0.19413150048325611
+          },
+          {
+            "actuator_force": [
+              0.000029808152625321327,
+              -0.0001585207606495942,
+              -0.00003846429249954042,
+              2.9705291242534093,
+              -1.8362784604575397,
+              -1.8360850113834148
+            ],
+            "contact_dimensions": [
+              3,
+              3,
+              3,
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8804429988774892,
+                  -0.4741520069832139,
+                  -1.1848994579677823e-6,
+                  -0.47415200698278454,
+                  0.8804429988782864,
+                  -6.381133779069476e-7,
+                  1.3457991709598275e-6,
+                  0.0,
+                  -0.9999999999990945
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.4596345955691574,
+                  0.00018584212472075312,
+                  -0.25497336600224607
+                ],
+                "force_world_on_object_n": [
+                  -0.40477052227011373,
+                  -0.21777304257042676,
+                  0.2549728212626437
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.003907433547420503,
+                  0.0026141578613382128,
+                  -0.003970308684231726
+                ],
+                "normal_force_n": 0.4596345955691574,
+                "position_world_m": [
+                  0.27922658848619974,
+                  0.02064880697633041,
+                  0.11345701980807299
+                ],
+                "tangential_force_n": 0.2549734337294979,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  -0.0
+                ]
+              },
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8804429988774892,
+                  -0.4741520069832139,
+                  -1.1848994579677823e-6,
+                  -0.47415200698278454,
+                  0.8804429988782864,
+                  -6.381133779069476e-7,
+                  1.3457991709598275e-6,
+                  0.0,
+                  -0.9999999999990945
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.45903111284863135,
+                  0.0001856980183853052,
+                  -0.25469089023305164
+                ],
+                "force_world_on_object_n": [
+                  -0.4042391214254192,
+                  -0.2174870269047238,
+                  0.2546903462086078
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.00002892059165982312,
+                  0.004696233692095336,
+                  0.003964339771060448
+                ],
+                "normal_force_n": 0.45903111284863135,
+                "position_world_m": [
+                  0.2710355650092919,
+                  0.03585761023066257,
+                  0.11345701980754609
+                ],
+                "tangential_force_n": 0.25469095793030894,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  -0.0
+                ]
+              },
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8804429988774892,
+                  -0.4741520069832139,
+                  -1.1848994579677823e-6,
+                  -0.47415200698278454,
+                  0.8804429988782864,
+                  -6.381133779069476e-7,
+                  1.3457991709598275e-6,
+                  0.0,
+                  -0.9999999999990945
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.4596160009177493,
+                  0.00024331772207007718,
+                  -0.25496331513073567
+                ],
+                "force_world_on_object_n": [
+                  -0.40478140289577413,
+                  -0.2177136218918499,
+                  0.2549627703764901
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.004695971201000867,
+                  -0.013371872554733396,
+                  -0.003962919735991052
+                ],
+                "normal_force_n": 0.4596160009177493,
+                "position_world_m": [
+                  0.2792196942562001,
+                  0.020661559376068617,
+                  0.15295506496482197
+                ],
+                "tangential_force_n": 0.25496343123273324,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  -0.0
+                ]
+              },
+              {
+                "body1": "finger_l",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  -0.8804429988774892,
+                  -0.4741520069832139,
+                  -1.1848994579677823e-6,
+                  -0.47415200698278454,
+                  0.8804429988782864,
+                  -6.381133779069476e-7,
+                  1.3457991709598275e-6,
+                  0.0,
+                  -0.9999999999990945
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.45901261091300577,
+                  0.000243123230454112,
+                  -0.2546808866318966
+                ],
+                "force_world_on_object_n": [
+                  -0.404250059791823,
+                  -0.21742769454888877,
+                  0.2546803425927319
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.008561654398276297,
+                  -0.011266330680300897,
+                  0.003971397973946906
+                ],
+                "normal_force_n": 0.45901261091300577,
+                "position_world_m": [
+                  0.27102867188592283,
+                  0.03587036058344317,
+                  0.1529487249164955
+                ],
+                "tangential_force_n": 0.2546810026769059,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  -0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              1.0039662262041227,
+              -1.6192794833603614,
+              -0.46148889359662676,
+              0.01999999600319858,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_l",
+            "force_available": true,
+            "normal_force_n": 1.8372943202485437,
+            "object_com_world_m": [
+              0.26646861553553536,
+              0.023593601698656826,
+              0.12795188515858472
+            ],
+            "object_vertical_force_n": 1.0193062804404736,
+            "phase": "post_lift",
+            "tangential_force_n": 1.019308825569446
+          },
+          {
+            "actuator_force": [
+              0.000029808152625321327,
+              -0.0001585207606495942,
+              -0.00003846429249954042,
+              2.9705291242534093,
+              -1.8362784604575397,
+              -1.8360850113834148
+            ],
+            "contact_dimensions": [
+              3,
+              3,
+              3,
+              3
+            ],
+            "contact_friction": [
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ],
+              [
+                1.0,
+                1.0,
+                0.6995852276735315,
+                0.01,
+                0.01
+              ]
+            ],
+            "contact_wrenches": [
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8804429988781073,
+                  0.47415200698354676,
+                  0.0,
+                  -0.4741520069835468,
+                  0.8804429988781072,
+                  0.0,
+                  0.0,
+                  -0.0,
+                  1.0
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.4595776752492059,
+                  -0.00029714800687992426,
+                  0.2549299355922793
+                ],
+                "force_world_on_object_n": [
+                  0.404772839937673,
+                  0.21764805520195565,
+                  0.2549299355922793
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.0039031035157932577,
+                  -0.0026160173921582226,
+                  -0.00396383106022025
+                ],
+                "normal_force_n": 0.4595776752492059,
+                "position_world_m": [
+                  0.25371565856552813,
+                  0.0265290130217261,
+                  0.11345701961366156
+                ],
+                "tangential_force_n": 0.2549301087710545,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8804429988781073,
+                  0.47415200698354676,
+                  0.0,
+                  -0.4741520069835468,
+                  0.8804429988781072,
+                  0.0,
+                  0.0,
+                  -0.0,
+                  1.0
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.45899957306094047,
+                  -0.00029692421042029626,
+                  0.25467272169181887
+                ],
+                "force_world_on_object_n": [
+                  0.40426374779983815,
+                  0.21737414392917406,
+                  0.25467272169181887
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  0.000025110861670936922,
+                  -0.004697948650180741,
+                  0.0039700410326245035
+                ],
+                "normal_force_n": 0.45899957306094047,
+                "position_world_m": [
+                  0.26190668204243617,
+                  0.011320209767393596,
+                  0.11345701961366156
+                ],
+                "tangential_force_n": 0.25467289478447713,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8804429988781073,
+                  0.47415200698354676,
+                  0.0,
+                  -0.4741520069835468,
+                  0.8804429988781072,
+                  0.0,
+                  0.0,
+                  -0.0,
+                  1.0
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.45959623777280656,
+                  -0.00023968776651331347,
+                  0.25493995905452466
+                ],
+                "force_world_on_object_n": [
+                  0.40476193829332713,
+                  0.21770744712612022,
+                  0.25493995905452466
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.004690388920128522,
+                  0.013370755610338562,
+                  -0.003971218019991768
+                ],
+                "normal_force_n": 0.45959623777280656,
+                "position_world_m": [
+                  0.25370876544616183,
+                  0.026541763367102747,
+                  0.15294870179028974
+                ],
+                "tangential_force_n": 0.25494007172853017,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "body1": "finger_r",
+                "body2": "obj0",
+                "contact_dimension": 3,
+                "contact_frame": [
+                  0.8804429988781073,
+                  0.47415200698354676,
+                  0.0,
+                  -0.4741520069835468,
+                  0.8804429988781072,
+                  0.0,
+                  0.0,
+                  -0.0,
+                  1.0
+                ],
+                "force_available": true,
+                "force_local": [
+                  0.45901804981229016,
+                  -0.00023949588697631807,
+                  0.25468270207776156
+                ],
+                "force_world_on_object_n": [
+                  0.40425278577138735,
+                  0.21743346708322261,
+                  0.25468270207776156
+                ],
+                "friction": [
+                  1.0,
+                  1.0,
+                  0.6995852276735315,
+                  0.01,
+                  0.01
+                ],
+                "moment_world_about_object_com_nm": [
+                  -0.008559095852054634,
+                  0.01127119713002142,
+                  0.003962981637481684
+                ],
+                "normal_force_n": 0.45901804981229016,
+                "position_world_m": [
+                  0.2618997878164391,
+                  0.011332962159728188,
+                  0.1529550418391431
+                ],
+                "tangential_force_n": 0.25468281468507004,
+                "torque_local": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "torque_world_on_object_nm": [
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            ],
+            "ctrl": [
+              1.0039662262041227,
+              -1.6192794833603614,
+              -0.46148889359662676,
+              0.01999999600319858,
+              0.0,
+              0.0
+            ],
+            "finger_body": "finger_r",
+            "force_available": true,
+            "normal_force_n": 1.837191535895243,
+            "object_com_world_m": [
+              0.26646861553553536,
+              0.023593601698656826,
+              0.12795188515858472
+            ],
+            "object_vertical_force_n": 1.0192253184163844,
+            "phase": "post_lift",
+            "tangential_force_n": 1.0192258899691318
+          }
+        ],
+        "grasp_ee_lift_m": [
+          0.00011816861749369689,
+          0.00021730583307738582,
+          0.020418552110736177
+        ],
+        "grasp_object_follow_residual_m": 0.007362387759005328,
+        "grasp_opening_01": 0.12242178730235367,
+        "grasp_phase_object_positions": [
+          [
+            0.2664957264459261,
+            0.02354040393170577,
+            0.11489224457978392
+          ],
+          [
+            0.2664957264459261,
+            0.02354040393170577,
+            0.11489224457978392
+          ],
+          [
+            0.2665118406642299,
+            0.023505350421149207,
+            0.11489282015595122
+          ],
+          [
+            0.26649021008545387,
+            0.023597719368198374,
+            0.11499283762024672
+          ],
+          [
+            0.2664762044513381,
+            0.023599418663795422,
+            0.11829612808634044
+          ],
+          [
+            0.26645993017590885,
+            0.023588839331649344,
+            0.12309032413615088
+          ],
+          [
+            0.26646861553553536,
+            0.023593601698656826,
+            0.12795188515858472
+          ]
+        ],
+        "grasp_simulated_friction_oracle_interval": [
+          0.6741190656824732,
+          0.7141190656824732
+        ],
+        "grasp_simulated_friction_oracle_samples": [
+          0.6912237376054587,
+          0.6907547859011066,
+          0.6939925619893916,
+          0.6995418363112262,
+          0.6950824066051828
+        ],
+        "grasp_verifier_evidence": [
+          "left_finger_object_contact",
+          "right_finger_object_contact",
+          "grasp_acquired",
+          "no_forbidden_contact",
+          "typed_grasp_authority_matches_resource",
+          "per_finger_force_within_authorized_ceiling",
+          "object_separated_from_table_support",
+          "bounded_vertical_lift_verified",
+          "object_follow_residual_exceeds_five_mm",
+          "gripper_closed_during_hold_check"
+        ],
+        "hold_verified": false,
+        "initial_observation_evidence": {
+          "format": "realityos.replay_initial_observation_evidence",
+          "observation_json": "{\"actuator_force\":[0.0,0.0,0.0,0.0,0.0,0.0],\"contact_forces\":[0.5331822975395129,0.5331822975395129,0.5331822975395129,0.5331822975395129],\"contacts\":[{\"body1\":\"obj0\",\"body2\":\"table\",\"dim\":3,\"dist\":-1.214306433183765e-17,\"force_available\":true,\"force_local\":[0.5331822975395129,0.0,0.0],\"frame\":[0.0,0.0,-1.0,0.0,1.0,0.0,1.0,-0.0,0.0],\"friction\":[1.0,1.0,0.6995852276735315,0.01,0.01],\"geom1\":8,\"geom1_name\":\"geom_8\",\"geom2\":9,\"geom2_name\":\"geom_9\",\"group1\":0,\"group2\":0,\"normal_force\":0.5331822975395129,\"pos\":[0.2764957264459261,0.014903267218285202,0.09],\"tangential_force\":0.0,\"torque_local\":[0.0,0.0,0.0]},{\"body1\":\"obj0\",\"body2\":\"table\",\"dim\":3,\"dist\":-1.214306433183765e-17,\"force_available\":true,\"force_local\":[0.5331822975395129,0.0,0.0],\"frame\":[0.0,0.0,-1.0,0.0,1.0,0.0,1.0,-0.0,0.0],\"friction\":[1.0,1.0,0.6995852276735315,0.01,0.01],\"geom1\":8,\"geom1_name\":\"geom_8\",\"geom2\":9,\"geom2_name\":\"geom_9\",\"group1\":0,\"group2\":0,\"normal_force\":0.5331822975395129,\"pos\":[0.2764957264459261,0.03217754064512634,0.09],\"tangential_force\":0.0,\"torque_local\":[0.0,0.0,0.0]},{\"body1\":\"obj0\",\"body2\":\"table\",\"dim\":3,\"dist\":-1.214306433183765e-17,\"force_available\":true,\"force_local\":[0.5331822975395129,0.0,0.0],\"frame\":[0.0,0.0,-1.0,0.0,1.0,0.0,1.0,-0.0,0.0],\"friction\":[1.0,1.0,0.6995852276735315,0.01,0.01],\"geom1\":8,\"geom1_name\":\"geom_8\",\"geom2\":9,\"geom2_name\":\"geom_9\",\"group1\":0,\"group2\":0,\"normal_force\":0.5331822975395129,\"pos\":[0.2564957264459261,0.014903267218285202,0.09],\"tangential_force\":0.0,\"torque_local\":[0.0,0.0,0.0]},{\"body1\":\"obj0\",\"body2\":\"table\",\"dim\":3,\"dist\":-1.214306433183765e-17,\"force_available\":true,\"force_local\":[0.5331822975395129,0.0,0.0],\"frame\":[0.0,0.0,-1.0,0.0,1.0,0.0,1.0,-0.0,0.0],\"friction\":[1.0,1.0,0.6995852276735315,0.01,0.01],\"geom1\":8,\"geom1_name\":\"geom_8\",\"geom2\":9,\"geom2_name\":\"geom_9\",\"group1\":0,\"group2\":0,\"normal_force\":0.5331822975395129,\"pos\":[0.2564957264459261,0.03217754064512634,0.09],\"tangential_force\":0.0,\"torque_local\":[0.0,0.0,0.0]}],\"ctrl\":[1.0039700277401575,-1.6192842987244278,-0.4614909500481246,0.04499999999994514,0.03,0.03],\"ctrl_write_count\":0,\"energy\":[0.0,0.0],\"evidence_status\":\"SIMULATION_ONLY\",\"interval_max_force\":0.0,\"interval_max_speed\":0.0,\"kinetic_energy\":0.0,\"last_ctrl\":[1.0039700277401575,-1.6192842987244278,-0.4614909500481246,0.04499999999994514,0.03,0.03],\"metal\":false,\"nan\":false,\"ncon\":4,\"qacc\":[0.0,0.0,0.0,-9.81,0.0,0.0,5.4977777301944644e-17,-4.165739227275572e-17,-0.26513513513510584,1.7588676737385753e-15,2.3212839305265522e-15,9.074633397599001e-32],\"qpos\":[1.0039700277401575,-1.6192842987244278,-0.4614909500481246,0.04499999999994514,0.03,0.03,0.2664957264459261,0.02354040393170577,0.11499999999999999,1.0,0.0,0.0,0.0],\"qvel\":[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],\"safe_write_count\":0,\"sensordata\":[],\"site_xquat\":{\"ee\":[0.8585288621535646,0.0,0.0,-0.5127652414597789]},\"sites\":{\"ee\":[0.266494829219916,0.02354059237856731,0.16499999999994513]},\"subtree_com\":[0.08791689688867023,0.055904332365488814,0.10825757575757161],\"time\":0.0,\"xipos\":{\"base\":[0.0,0.0,0.08],\"finger_l\":[0.3034736250013144,0.04345462417922565,0.16499999999994513],\"finger_r\":[0.22951603343851765,0.0036265605779089646,0.16499999999994513],\"lift_stage\":[0.2380462123618327,0.07636744349485072,0.16499999999994513],\"link1\":[0.05369573936121235,0.08436093630616455,0.12],\"link2\":[0.17271884554212869,0.12254465805358991,0.12],\"obj0\":[0.2664957264459261,0.02354040393170577,0.11499999999999999],\"table\":[0.25,0.0,0.08],\"world\":[0.0,0.0,0.0],\"wrist\":[0.2380462123618327,0.07636744349485072,0.12]},\"xpos\":{\"base\":[0.0,0.0,0.08],\"finger_l\":[0.3034736250013144,0.04345462417922565,0.16499999999994513],\"finger_r\":[0.22951603343851765,0.0036265605779089646,0.16499999999994513],\"lift_stage\":[0.2380462123618327,0.07636744349485072,0.16499999999994513],\"link1\":[0.0,0.0,0.12],\"link2\":[0.1073914787224247,0.1687218726123291,0.12],\"obj0\":[0.2664957264459261,0.02354040393170577,0.11499999999999999],\"table\":[0.25,0.0,0.08],\"world\":[0.0,0.0,0.0],\"wrist\":[0.2380462123618327,0.07636744349485072,0.12]},\"xquat\":{\"base\":[1.0,0.0,0.0,0.0],\"finger_l\":[0.8585288621535645,0.0,0.0,-0.512765241459779],\"finger_r\":[0.8585288621535645,0.0,0.0,-0.512765241459779],\"lift_stage\":[0.8585288621535645,0.0,0.0,-0.512765241459779],\"link1\":[0.8766291672115762,0.0,0.0,0.4811666064825554],\"link2\":[0.9530456665990092,0.0,0.0,-0.30282661272888467],\"obj0\":[1.0,0.0,0.0,0.0],\"table\":[1.0,0.0,0.0,0.0],\"world\":[1.0,0.0,0.0,0.0],\"wrist\":[0.8585288621535645,0.0,0.0,-0.512765241459779]}}",
+          "observation_sha256": "9abd3c8dafcfaa5069c4b90e08043eada73644538c7bc98013867d11f954b0c8",
+          "schema_version": 1,
+          "simulator_time_s": 0.0
+        },
+        "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+        "object_end_xyz": [
+          0.26646861553553536,
+          0.023593601698656826,
+          0.12795188515858472
+        ],
+        "object_id": "obj0",
+        "object_start_xyz": [
+          0.2664957264459261,
+          0.02354040393170577,
+          0.11499999999999999
+        ],
+        "outcome": "action_failed",
+        "paired_trial_key": "3b3f41d7e5db79f1d8de6974add2d459193c04054d55ad62185b482787c6f890",
+        "posterior_support_friction_interval": null,
+        "prior_support_friction_interval": null,
+        "reasoning_request_audits": [
+          "ReasoningRequest { scene: TableScene { object_id: \"obj0\", object_center: [0.2664957264459261, 0.02354040393170577, 0.11499999999999999], object_half: [0.01, 0.008637136713420568, 0.025], object_quat: [1.0, 0.0, 0.0, 0.0], support_origin: [0.0, 0.0, 0.0], support_normal: [0.0, 0.0, 1.0], support_half_extents: None, obstacles: [], arm_q: [1.0039700277401575, -1.6192842987244278, -0.4614909500481246, 0.04499999999994514], joint_names: [\"joint1\", \"joint2\", \"joint3\", \"lift_z\"], ee: \"ee\", tool_radius_m: 0.078, tool_contact_extents_m: [0.078, 0.078, 0.078, 0.078], observation_epoch: \"v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21006:21:0:4621819117588971520\", held: false, finger_names: [\"finger_l\", \"finger_r\"], finger_q: [0.03, 0.03] }, belief: PhysicalParameterBelief { parameters: [ParameterBelief { parameter: SupportFriction, status: DerivedConstraint, declared: Provenanced { value: Some(0.5), provenance: ModelDeclared, source: \"benchmark_support_prior\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.5, 0.5]), lineage: [BeliefLineage { belief_before: \"SupportFriction status=DeclaredFact declared=Some(0.5) interval=None\", observation: \"benchmark_support_calibration\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.5, 0.5])\" }], evidence: [] }, ParameterBelief { parameter: ToolObjectFriction, status: Unknown, declared: Provenanced { value: None, provenance: Unknown, source: \"unmeasured_grasp_pair\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.6741190656824732, 0.7141190656824732]), lineage: [BeliefLineage { belief_before: \"ToolObjectFriction status=Unknown declared=None interval=None\", observation: \"mujoco_oracle_friction_input_v1:samples=[0.6912237376054587, 0.6907547859011066, 0.6939925619893916, 0.6995418363112262, 0.6950824066051828]\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"ToolObjectFriction status=Unknown declared=None interval=Some([0.6741190656824732, 0.7141190656824732])\" }], evidence: [] }] }, objective: AcquireObject { object_id: \"obj0\" }, mu_required: 0.3, goal_stroke_m: 0.025, probe_stroke_m: 0.008, grants: [], now_s: 10.0, evidence_fresh: true, safety_faults: [], mass_kg: Some(0.22344257570463133), gripper_force_n: Some(1.95), gripper_resource: Some(ControlledResource { id: \"gripper\", kind: Gripper, topology: DirectJointGripper, actuator_inputs: [\"grip_l\", \"grip_r\"], affected_joints: [\"finger_l\", \"finger_r\"], finger_bodies: [\"finger_l\", \"finger_r\"], coupling: CouplingModel { tendon: None, equalities: [], declared_only: true }, command_coordinate: \"opening\", opening_range: Provenanced { value: Some([0.0, 0.03]), provenance: SimulatorDerived, source: \"verify.inspect\", as_of_s: 0.0, uncertainty: None }, command_range: Provenanced { value: Some([0.0, 0.03]), provenance: SimulatorDerived, source: \"verify.inspect\", as_of_s: 0.0, uncertainty: None }, closing_direction: TowardMin, force_bound: Provenanced { value: Some([0.0, 1.95]), provenance: ModelDeclared, source: \"verify.inspect\", as_of_s: 0.0, uncertainty: None }, qualification: Qualified, unsupported_detail: None }), linear_execution_bound_m: None, linear_wrench_limit: None, gravity_m_s2: [0.0, 0.0, -9.81] }"
+        ],
+        "recovery_count": 0,
+        "refusal_code": "GRASP_VERIFIER:Some(\"SLIP\")",
+        "robot_id": "arm_gripper_lift",
+        "role": "grasp_fixture",
+        "safety_fault_observations": [],
+        "schema_version": 7,
+        "seed": 21006,
+        "simulation_time_s": 3.799999999999803,
+        "simulator": "MuJoCo",
+        "simulator_version": "3.7.0",
+        "source_hash": "b75b518f36853782407512c054d5257c17371704097a3da0e445c98b5165d185",
+        "task": "pinch_grasp_lift",
+        "trial_digest": "3cf3cd648b018a64df8b5c12f8133d9fff2abe8725a44614c936b1b3ec8b40ff",
+        "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21006:21",
+        "unauthorized_writes": 0,
+        "wall_time_s": 23.8006291,
+        "wrench_abort": null,
+        "wrench_abort_axis": null,
+        "wrench_abort_result": null,
+        "wrench_caps": null,
+        "wrench_compensation_audit_invalid": false,
+        "wrench_compensation_audit_invalid_samples": 0,
+        "wrench_compensation_digest": null,
+        "wrench_contact_pairs": [],
+        "wrench_inference_compensation_digest": null,
+        "wrench_inference_interval": null,
+        "wrench_inference_measurement_digest": null,
+        "wrench_inference_reason": null,
+        "wrench_max_inter_sample_gap_s": null,
+        "wrench_max_object_speed_m_s": null,
+        "wrench_max_sample_age_s": null,
+        "wrench_minimum_margin": null,
+        "wrench_monitor_gravity_reference": null,
+        "wrench_monitor_gravity_reference_history": [],
+        "wrench_monitor_gravity_reference_orientation": null,
+        "wrench_monitor_gravity_reference_position": null,
+        "wrench_monitor_gravity_reference_status": null,
+        "wrench_peak_conservative_bounds": null,
+        "wrench_precontact_baseline": null,
+        "wrench_precontact_baseline_status": null,
+        "wrench_sample_count": 0,
+        "wrench_sensor_profile_digest": null
+      },
+      "error": null,
+      "expectation": "expected_success",
+      "trial": {
+        "expectation": "expected_success",
+        "fault_injection": null,
+        "goal_xyz": [
+          0.2664957264459261,
+          0.02354040393170577,
+          0.11499999999999999
+        ],
+        "index": 21,
+        "initial_qpos": [
+          1.0039700277401575,
+          -1.6192842987244278,
+          -0.4614909500481246,
+          0.04499999999994514,
+          0.03,
+          0.03
+        ],
+        "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+        "paired_trial_key": "3b3f41d7e5db79f1d8de6974add2d459193c04054d55ad62185b482787c6f890",
+        "robot_id": "arm_gripper_lift",
+        "role": "grasp_fixture",
+        "scenario": {
+          "crash_controller": false,
+          "expected_refusal": null,
+          "immovable": false,
+          "move_object_after_obs": false,
+          "neg": null,
+          "object_id": "obj0",
+          "objects": [
+            {
+              "friction": 0.6995852276735315,
+              "mass": 0.22344257570463133,
+              "movable": true,
+              "name": "obj0",
+              "pos": [
+                0.2664957264459261,
+                0.02354040393170577,
+                0.11499999999999999
+              ],
+              "rgba": [
+                0.85,
+                0.25,
+                0.2,
+                1.0
+              ],
+              "size": [
+                0.01,
+                0.008637136713420568,
+                0.025
+              ],
+              "type": "box"
+            },
+            {
+              "mass": 10.0,
+              "movable": false,
+              "name": "table",
+              "pos": [
+                0.25,
+                0.0,
+                0.08
+              ],
+              "rgba": [
+                0.4,
+                0.4,
+                0.4,
+                1
+              ],
+              "size": [
+                0.15,
+                0.22,
+                0.01
+              ],
+              "type": "box"
+            }
+          ],
+          "planar": true,
+          "polarity": "positive",
+          "push_dir": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "push_dist": 0.0,
+          "replay": false,
+          "required_opening": 0.85,
+          "restart_replay": false,
+          "seed": 21006,
+          "skill": "GRASP",
+          "stale": false,
+          "world_construction": "fixed_world"
+        },
+        "scenario_suite_id": "force_observable_public_probe",
+        "scenario_suite_version": 3,
+        "schema_version": 7,
+        "seed": 21006,
+        "source_hash": "b75b518f36853782407512c054d5257c17371704097a3da0e445c98b5165d185",
+        "stratum": null,
+        "task": "pinch_grasp_lift",
+        "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21006:21"
+      },
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21006:21"
+    }
+  ],
+  "schema": "realityos.grasp_lift_replay/v1",
+  "stage": "candidate_primary"
+}
