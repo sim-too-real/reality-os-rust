@@ -6165,6 +6165,40 @@ fn replay_grasp_time_profile_frozen_inputs() {
         _ => panic!("unsupported replay stage {stage}"),
     };
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    if stage != "baseline" {
+        let baseline_binding = &freeze["baseline_result"];
+        let baseline_path = repo_root.join(
+            baseline_binding["path"]
+                .as_str()
+                .expect("frozen baseline result path"),
+        );
+        let baseline_bytes = std::fs::read(&baseline_path).expect("committed baseline result");
+        assert_eq!(
+            sha256_upper(&baseline_bytes),
+            baseline_binding["sha256"]
+                .as_str()
+                .expect("frozen baseline result digest")
+        );
+        let baseline: Value =
+            serde_json::from_slice(&baseline_bytes).expect("baseline result JSON");
+        let baseline_records = baseline["records"].as_array().expect("baseline records");
+        let successes = baseline_records
+            .iter()
+            .filter(|record| record["episode"]["outcome"] == "success")
+            .count();
+        assert_eq!(
+            baseline_records.len(),
+            baseline_binding["expected_trials"]
+                .as_u64()
+                .expect("baseline denominator") as usize
+        );
+        assert_eq!(
+            successes,
+            baseline_binding["expected_successes"]
+                .as_u64()
+                .expect("baseline success count") as usize
+        );
+    }
     let source = &freeze[source_key];
     for (relative_path, key) in [
         (
