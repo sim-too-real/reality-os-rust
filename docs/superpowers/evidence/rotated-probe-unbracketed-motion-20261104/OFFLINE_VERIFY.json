@@ -1,0 +1,60 @@
+{
+  "format": "realityos.probe_measurement_sidecar",
+  "measurement_count": 2,
+  "measurements": [
+    {
+      "action_key": "probe:+x",
+      "first_xy_motion_bracket_s": [
+        23.90399999999763,
+        23.90599999999763
+      ],
+      "measurement_digest": "d0c828ef7403706bf04389fd17901bea20cf388eaf35a74c5aec0754bf809b18",
+      "motion_trace_status": "verified",
+      "pose_sample_count": 6071,
+      "posterior_support_friction_interval": [
+        0.2821013451579243,
+        0.3577903655707679
+      ],
+      "prior_support_friction_interval": [
+        0.05,
+        0.8
+      ],
+      "recomputed_inference": {
+        "Updated": {
+          "interval": [
+            0.2821013451579243,
+            0.3577903655707679
+          ],
+          "mode": "slip_onset"
+        }
+      },
+      "sample_count": 6072
+    },
+    {
+      "action_key": "probe:+x",
+      "first_xy_motion_bracket_s": [
+        43.29000000000694,
+        43.292000000006944
+      ],
+      "measurement_digest": "aeb07409f7809ebdfdc90abe4803613e4e9c3df36ac8eec38ca6433f8051e2b2",
+      "motion_trace_status": "verified",
+      "pose_sample_count": 6105,
+      "posterior_support_friction_interval": [
+        0.2821013451579243,
+        0.3577903655707679
+      ],
+      "prior_support_friction_interval": [
+        0.2821013451579243,
+        0.3577903655707679
+      ],
+      "recomputed_inference": {
+        "NoInference": "unbracketed_motion"
+      },
+      "sample_count": 6106
+    }
+  ],
+  "schema_version": 1,
+  "status": "PASS",
+  "trial_digest": "776dee2c071f47b230131719eca5fea3babcd114e137e2d511e1a04eb9a7ba3d",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21000:0"
+}
