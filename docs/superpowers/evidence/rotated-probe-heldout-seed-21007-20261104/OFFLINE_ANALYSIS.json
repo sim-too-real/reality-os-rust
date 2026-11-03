@@ -16,6 +16,31 @@
       },
       "slip_onset": {
         "inference_vs_simulator_friction": {
+          "claim_separation": {
+            "coulomb_parameter_in_inferred_interval": {
+              "coulomb_coefficients": [
+                0.7517095666728832,
+                0.7517095666728832,
+                0.7517095666728832,
+                0.7517095666728832,
+                0.7517095666728832,
+                0.7517095666728832,
+                0.7517095666728832,
+                0.7517095666728832
+              ],
+              "status": "no"
+            },
+            "note": "Do not treat Coulomb-parameter overlap as proof that the slip-onset estimator identified \u03bc; onset force-ratio overlap is a separate claim.",
+            "onset_force_ratio_vs_contact_tn": {
+              "contact_tn_ratios": [
+                0.43705408237592114,
+                0.5431439631255466,
+                0.43728642789166006,
+                0.5453270598416264
+              ],
+              "status": "overlap"
+            }
+          },
           "inferred_interval": [
             0.40597758964968916,
             0.492203371010613

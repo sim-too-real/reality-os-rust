@@ -108,6 +108,27 @@ def _wrench_summary(sample: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
+def _contact_tangential_normal_ratios(contacts: list[dict[str, Any]] | None) -> list[float]:
+    ratios: list[float] = []
+    if not contacts:
+        return ratios
+    for contact in contacts:
+        normal = contact.get("normal_force_n")
+        tangential = contact.get("tangential_force_n")
+        if not isinstance(normal, (int, float)) or not isinstance(tangential, (int, float)):
+            continue
+        if float(normal) <= 0.0 or not math.isfinite(float(normal)) or not math.isfinite(
+            float(tangential)
+        ):
+            continue
+        ratios.append(float(tangential) / float(normal))
+    return ratios
+
+
+def _interval_contains(interval: list[float], value: float) -> bool:
+    return float(interval[0]) <= value <= float(interval[1])
+
+
 def _compare_friction_interval(
     record: dict[str, Any], contacts: list[dict[str, Any]] | None
 ) -> dict[str, Any]:
@@ -117,6 +138,10 @@ def _compare_friction_interval(
             "status": "unavailable",
             "inferred_interval": inferred,
             "simulator_sliding_coefficients": [],
+            "claim_separation": {
+                "status": "unavailable",
+                "note": "Need inferred interval and onset contacts to separate claims.",
+            },
         }
     lower, upper = float(inferred[0]), float(inferred[1])
     coefficients = []
@@ -137,10 +162,45 @@ def _compare_friction_interval(
         status = "overlap"
     else:
         status = "disjoint"
+
+    tn_ratios = _contact_tangential_normal_ratios(contacts)
+    tn_overlap = (
+        "unavailable"
+        if not tn_ratios
+        else (
+            "overlap"
+            if any(_interval_contains(inferred, ratio) for ratio in tn_ratios)
+            else "disjoint"
+        )
+    )
+    coulomb_values = [value for entry in coefficients for value in entry["coefficients"]]
+    coulomb_in_interval = (
+        "unavailable"
+        if not coulomb_values
+        else (
+            "yes"
+            if any(_interval_contains(inferred, value) for value in coulomb_values)
+            else "no"
+        )
+    )
     return {
         "status": status,
         "inferred_interval": inferred,
         "simulator_sliding_coefficients": coefficients,
+        "claim_separation": {
+            "onset_force_ratio_vs_contact_tn": {
+                "status": tn_overlap,
+                "contact_tn_ratios": tn_ratios,
+            },
+            "coulomb_parameter_in_inferred_interval": {
+                "status": coulomb_in_interval,
+                "coulomb_coefficients": coulomb_values,
+            },
+            "note": (
+                "Do not treat Coulomb-parameter overlap as proof that the slip-onset "
+                "estimator identified μ; onset force-ratio overlap is a separate claim."
+            ),
+        },
     }
 
 
