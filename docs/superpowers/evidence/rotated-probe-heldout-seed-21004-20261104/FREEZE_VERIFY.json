@@ -1,0 +1,23 @@
+{
+  "schema": "realityos.rotated_probe_diagnostic.freeze_verify/v1",
+  "experiment_id": "rotated_probe_heldout_seed_21004_iiwa14_20261104_v1",
+  "verified_at_utc": "2026-11-03T20:30:30Z",
+  "status": "PASS",
+  "checks": {
+    "trial_id_matches": true,
+    "trial_seed": 21004,
+    "preflight_authorized_action": "probe:+x",
+    "preflight_zero_step": true,
+    "control_writes_unchanged": true,
+    "thresholds_unchanged": true,
+    "minimum_planar_motion_m": 0.001,
+    "minimum_tangential_force_lower_bound_n": 0.5,
+    "source_commit": "f1db94cd2d4b5db631124e3e2225c55ff50f9ae0",
+    "trial_input_sha256": "EAD2BFF0A778167DFBBA9F09FADD0DE124E1E16110D1014A4086B5B656E142C1",
+    "preflight_sha256": "815ECA1D58E875C34D7EDCA783DA972E3A23CD4BF02B265182600C54BC380DCF"
+  },
+  "admission_status": "NOT_ADMITTED",
+  "metal": false,
+  "shop_release": false,
+  "viewport_admits": false
+}

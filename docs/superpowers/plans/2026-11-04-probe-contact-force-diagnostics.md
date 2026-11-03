@@ -74,7 +74,7 @@
 **Files:**
 - Create: `docs/superpowers/evidence/rotated-probe-heldout-seed-21004-20261104/`
 
-- [ ] Generate seed 21004 trial and zero-step preflight on the current canonical `main`.
+- [x] Generate seed 21004 trial and zero-step preflight on the current canonical `main`.
 - [ ] Freeze trial, preflight, exact source/model hashes, unchanged thresholds, and one-run budget; verify and commit/push the freeze before replay.
 - [ ] Run the frozen simulator trial once; preserve its episode and contact/wrench sidecar whether the task passes or fails.
 - [ ] Independently verify sidecar hashes and recompute support-contact force versus inferred friction at the slip onset.
