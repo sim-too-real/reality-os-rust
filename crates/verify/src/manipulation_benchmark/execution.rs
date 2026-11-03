@@ -3112,7 +3112,6 @@ fn execute_grasp_witness(
         .lines()
         .find_map(|line| line.strip_prefix("lift_trajectory_digest="))
         .unwrap_or_default();
-    let lift_time_profile_id = witness_lift_time_profile(contents);
     let lift_states = parse_lift_states(
         contents,
         &request.scene.joint_names,
@@ -3139,8 +3138,6 @@ fn execute_grasp_witness(
         && force_bound
             .is_some_and(|bound| bound[1].is_finite() && bound[1] >= *per_finger_force_ceiling_n)
         && lift_trajectory_digest == witness_lift_digest
-        && lift_time_profile_id
-            == Some(realityos_semantics::physical_reasoner::GRASP_LIFT_TIME_PROFILE_ID)
         && lift_states.len() >= 2
         && exact_finite_vec(&lift_states[0].0, &contact)
         && exact_finite_vec(&lift_states[0].1, close_positions)
@@ -3156,9 +3153,6 @@ fn execute_grasp_witness(
     if !envelope_matches || !authorized_covers_now(worker, authorized, request.now_s)? {
         return Ok(rejection());
     }
-    let Some(lift_time_profile_id) = lift_time_profile_id else {
-        return Ok(rejection());
-    };
     let measured_arm = read_named_joints(worker, manifest, &request.scene.joint_names)?;
     if !vectors_near(&measured_arm, &q0, 0.03) {
         let max_abs_error_rad = measured_arm
@@ -3290,15 +3284,7 @@ fn execute_grasp_witness(
         })?;
         let start_relative = sub3(start_object, start_ee);
         for waypoint in 1..sample_count {
-            let normalized_time = waypoint as f64 / (sample_count - 1) as f64;
-            let Some(fraction) =
-                realityos_semantics::physical_reasoner::grasp_lift_profile_progress(
-                    lift_time_profile_id,
-                    normalized_time,
-                )
-            else {
-                return Ok(rejection());
-            };
+            let fraction = waypoint as f64 / (sample_count - 1) as f64;
             let target = start_arm
                 .iter()
                 .zip(end_arm)
@@ -3418,17 +3404,6 @@ fn execute_grasp_witness(
         phase_object_positions,
         lift_contact_audits,
     })
-}
-
-fn witness_lift_time_profile(contents: &str) -> Option<&str> {
-    let mut profiles = contents
-        .lines()
-        .filter_map(|line| line.strip_prefix("lift_time_profile="));
-    let profile = profiles.next()?;
-    if profile != realityos_semantics::physical_reasoner::GRASP_LIFT_TIME_PROFILE_ID {
-        return None;
-    }
-    profiles.next().is_none().then_some(profile)
 }
 
 fn write_grasp_ctrl(
@@ -4597,8 +4572,7 @@ mod witness_tests {
         declared_ee_radius, decode_push_witness, injected_safety_fault_alerts,
         joint_control_ramp_steps, observe_probe_motion_sample, observed_frame_quaternion,
         probe_contact_pairs_from_state, probe_sample_tangential_force_lower_bound,
-        probe_slip_onset_resolved, sample_is_after_precontact_baseline, witness_lift_time_profile,
-        PushMotionAudit,
+        probe_slip_onset_resolved, sample_is_after_precontact_baseline, PushMotionAudit,
     };
     use crate::bundle::RobotBundle;
     use crate::manipulation_scenarios::{push_scenario, NegKind};
@@ -4612,27 +4586,6 @@ mod witness_tests {
     use realityos_semantics::provenance::Provenanced;
     use realityos_semantics::transform::Se3;
     use realityos_semantics::{observation::WrenchSample, sensor::WrenchSampleOrigin};
-
-    #[test]
-    fn grasp_executor_accepts_only_one_supported_lift_time_profile() {
-        const PROFILE: &str = realityos_semantics::physical_reasoner::GRASP_LIFT_TIME_PROFILE_ID;
-
-        assert_eq!(
-            witness_lift_time_profile(&format!("lift_time_profile={PROFILE}\n")),
-            Some(PROFILE)
-        );
-        assert_eq!(
-            witness_lift_time_profile("lift_time_profile=uniform_v1\n"),
-            None
-        );
-        assert_eq!(
-            witness_lift_time_profile(&format!(
-                "lift_time_profile={PROFILE}\nlift_time_profile={PROFILE}\n"
-            )),
-            None
-        );
-        assert_eq!(witness_lift_time_profile("contact_observed=false\n"), None);
-    }
 
     fn wrench_sample(sequence: u64, capture_s: f64) -> WrenchSample {
         WrenchSample {

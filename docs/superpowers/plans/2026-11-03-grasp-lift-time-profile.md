@@ -41,15 +41,18 @@ manipulation verifier.
 2. [x] Add failing tests for a witness-bound profile identifier, the
    trapezoidal progress function, and executor rejection of unsupported
    profile identifiers.
-3. [x] Implement the `r = 0.25` trapezoidal progress function; bind its stable
-   identifier into the witness and digest; execute only that profile in the
-   verifier path.
+3. [x] Implement the `r = 0.25` trapezoidal progress function for the
+   experiment; bind its stable identifier into the witness and digest; execute
+   only that profile in the verifier path. The production prototype was restored
+   after the primary gate failed.
 4. [x] Replay the known 21010:25 and 21006:21 controls first. The primary
    21010:25 divergence remained and worsened, so the seven candidate cases
    were not replayed; the negative result is recorded in `RESULT.md`.
-5. [ ] Run focused semantics/verifier tests, formatting, and the repository's
-   relevant broader test command; independently replay the saved results.
-6. [ ] Keep the change only if the spec's decision rule passes. Record a
-   negative result and restore production code otherwise. Commit and push the
-   experiment artifacts and passing implementation to `origin/main`; verify
-   that local and remote `main` match.
+5. [x] Run focused semantics/verifier tests, formatting, and the relevant
+   broader test command; independently replay the saved results. Full semantics
+   and verifier-library suites, integration compile, offline uniform controls,
+   formatting, and saved-result integrity checks passed.
+6. [x] Apply the spec decision rule. The candidate failed; record the negative
+   result and do not replay the seven-case candidate cohort. Restore uniform
+   production files, commit and push experiment evidence plus restored code to
+   `origin/main`, and verify local and remote `main` match.
