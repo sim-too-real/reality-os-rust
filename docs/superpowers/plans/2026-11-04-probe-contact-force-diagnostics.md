@@ -76,7 +76,25 @@
 
 - [x] Generate seed 21004 trial and zero-step preflight on the current canonical `main`.
 - [ ] Freeze trial, preflight, exact source/model hashes, unchanged thresholds, and one-run budget; verify and commit/push the freeze before replay.
-- [ ] Run the frozen simulator trial once; preserve its episode and contact/wrench sidecar whether the task passes or fails.
-- [ ] Independently verify sidecar hashes and recompute support-contact force versus inferred friction at the slip onset.
-- [ ] Record classification, findings, limitations, and next justified experiment; commit/push the result.
+- [ ] Run the frozen simulator trial once; preserve its episode and contact/wrench sidecar whether the task passes or fails. One run completed and the episode was preserved, but no measurement sidecar was emitted because the monitor aborted before inference.
+- [ ] Independently verify sidecar hashes and recompute support-contact force versus inferred friction at the slip onset. Not possible for this seed: there is no sidecar and no slip onset.
+- [x] Record classification, findings, limitations, and next justified experiment; commit/push the result.
 - [ ] Confirm all four repositories remain on `main` and synchronized with their remotes.
+
+### Task 5: Preserve diagnostics when the monitor aborts
+
+**Reason:** Seed 21004 stopped on `unexpected_contact` before a finalized measurement existed. The episode was retained, but the sidecar writer had no records to seal, so there was no time-aligned support-contact trace to inspect.
+
+**Files:**
+- Modify: `crates/verify/src/manipulation_benchmark/execution.rs`
+- Modify: `crates/verify/tests/manipulation_benchmark.rs`
+- Evidence: `docs/superpowers/evidence/rotated-probe-heldout-seed-21005-20261104/`
+
+- [x] Record a probe measurement after `WrenchAborted` when the audit has pose and wrench samples; preserve `UnexpectedContact` as ambiguous so friction inference remains fail-closed.
+- [x] Extend the diagnostic test to accept a preserved sealed sidecar and require at least one nonempty contact-force sample when the freeze is marked `CONTACT_FORCE`.
+- [ ] Commit/push the abort-preservation change, then freeze seed 21005 and its zero-step preflight against that source and model, with a one-run budget.
+- [ ] Run seed 21005 once and preserve its episode and sidecar.
+- [ ] Verify the sidecar, run the offline analyzer at slip onset, and report whether the contact trace explains the inference mismatch.
+- [ ] Record the result and next justified step; synchronize all four canonical `main` branches.
+
+Do not replay seed 21004. Seed 21005 has a separate one-run budget and must be frozen before its only simulator trial.

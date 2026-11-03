@@ -1,0 +1,27 @@
+cargo :     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+At line:1 char:355
++ ... _INDEX='0'; cargo test -p realityos-verify --test manipulation_benchm ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Finished `t...get(s) in 0.41s:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+     Running tests\manipulation_benchmark.rs (target\debug\deps\manipulation_benchmark-6d77b7d0620a261b.exe)
+
+running 1 test
+test iiwa_rotated_probe_unbracketed_motion_diagnostic_capture has been running for over 60 seconds
+
+thread 'iiwa_rotated_probe_unbracketed_motion_diagnostic_capture' (14932) panicked at
+crates\verify\tests\manipulation_benchmark.rs:5743:13:
+diagnostic simulation failed after preserving its episode: InvalidTrial("probe measurement sidecar has no measurement
+records"); outcome=ActionFailed; actions=["probe:+x"]; inference=None
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test iiwa_rotated_probe_unbracketed_motion_diagnostic_capture ... FAILED
+
+failures:
+
+failures:
+    iiwa_rotated_probe_unbracketed_motion_diagnostic_capture
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 112 filtered out; finished in 96.27s
+
+error: test failed, to rerun pass `-p realityos-verify --test manipulation_benchmark`

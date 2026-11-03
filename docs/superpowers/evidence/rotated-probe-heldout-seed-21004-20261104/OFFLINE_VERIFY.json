@@ -1,0 +1,28 @@
+{
+  "schema": "realityos.rotated_probe_diagnostic.post_run_verify/v1",
+  "verified_at_utc": "2026-11-03T20:32:49Z",
+  "status": "PASS_AT_FROZEN_RUN_COMMIT; POST_RUN_SOURCE_CHANGE",
+  "checks": {
+    "trial_input_sha256_match": true,
+    "preflight_sha256_match": true,
+    "all_frozen_source_hashes_match_current_source": false,
+    "all_frozen_model_hashes_match_current_model": true,
+    "episode_trial_id_matches": true,
+    "episode_trial_digest_matches": true,
+    "diagnostic_episode_matches_preserved_episode": true,
+    "sidecar_absent_after_empty_measurement_failure": true,
+    "preauthorized_hold_verified": true,
+    "unauthorized_writes_zero": true,
+    "all_frozen_source_hashes_match_run_commit": true,
+    "post_budget_retry_stopped_before_sidecar_reservation": true
+  },
+  "episode_sha256": "72CF32D58EEB2027D4709EFB8BE1C64AEC0BF222DA1E5C54348E3D8B985E7E93",
+  "run_log_sha256": "D9CD91076F1F0EB5C64C22323F3159D9676C6EBE91C6652EC57644D3E8102AC4",
+  "freeze_sha256": "B13D30374F40C25522FCF63485EE32D834B825FCFE87431EA46930AA96F39D63",
+  "sidecar_verifier": "NOT_RUN_NO_SIDECAR",
+  "current_source_hash_mismatches": [
+    "crates/verify/src/manipulation_benchmark/execution.rs",
+    "crates/verify/tests/manipulation_benchmark.rs"
+  ],
+  "post_run_compile_check": "PASS: cargo check -p realityos-verify --tests"
+}

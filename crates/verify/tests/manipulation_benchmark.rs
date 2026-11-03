@@ -5750,10 +5750,39 @@ fn iiwa_rotated_probe_unbracketed_motion_diagnostic_capture() {
     };
     write_new_json_artifact(&evidence_dir.join("EPISODE.json"), &episode);
     assert_eq!(episode.unauthorized_writes, 0);
-    assert_eq!(
-        episode.wrench_inference_reason.as_deref(),
-        Some(expected_wrench_inference_reason)
-    );
+    let sidecar_bytes = std::fs::read(&sidecar_path).expect("probe measurement sidecar");
+    let sidecar: realityos_verify::manipulation_benchmark::ProbeMeasurementSidecarV1 =
+        serde_json::from_slice(&sidecar_bytes).expect("probe measurement sidecar JSON");
+    sidecar
+        .verify()
+        .expect("probe measurement sidecar must independently verify");
+    let require_contact_force = freeze["classification"]
+        .as_str()
+        .is_some_and(|value| value.contains("CONTACT_FORCE"));
+    if require_contact_force {
+        let has_contact_force = sidecar.measurements.iter().any(|record| {
+            record
+                .measurement
+                .motion_trace
+                .as_ref()
+                .is_some_and(|trace| {
+                    trace.samples.iter().any(|sample| {
+                        sample
+                            .contact_force_samples
+                            .as_ref()
+                            .is_some_and(|forces| !forces.is_empty())
+                    })
+                })
+        });
+        assert!(
+            has_contact_force,
+            "contact-force diagnostic requires sealed contact_force_samples on at least one pose"
+        );
+    }
+    match expected_wrench_inference_reason {
+        "any" => {}
+        expected => assert_eq!(episode.wrench_inference_reason.as_deref(), Some(expected)),
+    }
     match expected_episode_outcome {
         "success" => {
             assert_eq!(episode.outcome, TrialOutcome::Success);
@@ -5770,6 +5799,29 @@ fn iiwa_rotated_probe_unbracketed_motion_diagnostic_capture() {
                 .actions
                 .iter()
                 .all(|action| action.action_key == "probe:+x"));
+        }
+        "action_failed_force_monitor_abort" => {
+            assert_eq!(episode.outcome, TrialOutcome::ActionFailed);
+            assert_eq!(
+                episode.failure_cause,
+                Some(realityos_verify::manipulation_benchmark::FailureCause::ForceMonitorAbort)
+            );
+            assert_eq!(
+                episode.refusal_code.as_deref(),
+                Some("WRENCH_MONITOR_ABORTED_ACTION")
+            );
+        }
+        "preserve_sealed_sidecar" => {
+            assert!(
+                matches!(
+                    episode.outcome,
+                    TrialOutcome::Success
+                        | TrialOutcome::UnexpectedRefusal
+                        | TrialOutcome::ActionFailed
+                ),
+                "contact-force diagnostics preserve any sealed outcome: {:?}",
+                episode.outcome
+            );
         }
         other => panic!("unsupported frozen episode outcome: {other}"),
     }

@@ -1,0 +1,38 @@
+{
+  "format": "realityos.rotated_probe_diagnostic.preparation_audit/v1",
+  "status": "RECORDED",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21004:0",
+  "trial_digest": "15e151d9b2c2d9682de50b5edc66963be4200f03934569657ae2cc3010750a84",
+  "source_commit": "f1db94cd2d4b5db631124e3e2225c55ff50f9ae0",
+  "observed_prepare_only_invocations": 2,
+  "successful_artifact_sets": 1,
+  "observed_invocations": [
+    {
+      "mode": "prepare_only",
+      "simulator_steps": 0,
+      "simulation_time_before_s": 0.0,
+      "simulation_time_after_s": 0.0,
+      "control_writes_before": 0,
+      "control_writes_after": 0,
+      "result": "wrote the unique TRIAL_INPUT.json and PREFLIGHT.json artifact set"
+    },
+    {
+      "mode": "prepare_only",
+      "simulator_steps": 0,
+      "simulation_time_before_s": 0.0,
+      "simulation_time_after_s": 0.0,
+      "control_writes_before": 0,
+      "control_writes_after": 0,
+      "result": "failed at create_new evidence write because the concurrent invocation had already created the file"
+    }
+  ],
+  "freeze_metadata_note": "FREEZE.json records one artifact-producing prepare-only run. This addendum records the second observed zero-step invocation without altering the frozen file.",
+  "simulation_replays_in_this_audit": 0,
+  "post_run_same_seed_invocation": {
+    "observed": true,
+    "stopped": true,
+    "sidecar_reservation_created": false,
+    "additional_simulator_steps_confirmed": 0,
+    "note": "A later test process for seed 21004 was stopped because the one-run budget was exhausted; its sidecar reservation path was not created."
+  }
+}

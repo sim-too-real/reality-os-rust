@@ -1,0 +1,209 @@
+{
+  "schema": "realityos.rotated_probe_diagnostic.result/v1",
+  "experiment_id": "rotated_probe_heldout_seed_21004_iiwa14_20261104_v1",
+  "completed_at_utc": "2026-11-03T20:32:49Z",
+  "classification": "HELD_OUT_FORCE_MONITOR_ABORT_BEFORE_INFERENCE; EMPTY_SIDECAR; CONTACT_FORCE_NOT_PRESERVED; SIMULATION_ONLY; NOT_ADMITTED",
+  "repository": "reality-os-rust",
+  "branch": "main",
+  "implementation_commit": "f1db94cd2d4b5db631124e3e2225c55ff50f9ae0",
+  "source_commit": "f1db94cd2d4b5db631124e3e2225c55ff50f9ae0",
+  "freeze_commit": "26eddfaf8b0b869619ad88f3dfe231706dd6d58b",
+  "run_head": "f1db94cd2d4b5db631124e3e2225c55ff50f9ae0",
+  "freeze_sha256": "B13D30374F40C25522FCF63485EE32D834B825FCFE87431EA46930AA96F39D63",
+  "frozen_model_hashes_match_current_model": true,
+  "freeze_verification_status": "PASS",
+  "freeze_commit_before_runner_start": false,
+  "freeze_commit_timing_note": "The freeze and verification files were present and validated before the trial runner consumed them. The single runner process started before commit 26eddfa was created; commit-before-simulator-step ordering is not established.",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21004:0",
+  "trial_digest": "15e151d9b2c2d9682de50b5edc66963be4200f03934569657ae2cc3010750a84",
+  "trial_seed": 21004,
+  "trial_index": 0,
+  "simulation_runs": 1,
+  "preparation": {
+    "prepare_only_preflight_attempts_observed": 2,
+    "artifact_sets_written": 1,
+    "each_preflight_simulator_steps": 0,
+    "each_preflight_control_writes_before_after": [
+      0,
+      0
+    ],
+    "duplicate_attempt_result": "stopped on exclusive evidence-file collision before trial motion",
+    "freeze_run_budget_recorded_preflight_runs": 1
+  },
+  "verification": {
+    "preflight_zero_step": true,
+    "preflight_authorized_action": "probe:+x",
+    "preflight_control_writes_before": 0,
+    "preflight_control_writes_after": 0,
+    "freeze_source_hashes_verified": 14,
+    "freeze_model_hashes_verified": 20,
+    "post_run_hash_checks": {
+      "trial_input_sha256_match": true,
+      "preflight_sha256_match": true,
+      "all_frozen_source_hashes_match_current_source": true,
+      "all_frozen_model_hashes_match_current_model": true,
+      "episode_trial_id_matches": true,
+      "episode_trial_digest_matches": true,
+      "diagnostic_episode_matches_preserved_episode": true,
+      "sidecar_absent_after_empty_measurement_failure": true,
+      "preauthorized_hold_verified": true,
+      "unauthorized_writes_zero": true
+    },
+    "offline_sidecar_verifier_status": "NOT_RUN_NO_SIDECAR",
+    "targeted_replay": {
+      "command": "$env:REALITYOS_ROTATED_PROBE_DIAGNOSTIC_DIR='C:\\projects\\reality-os-rust\\docs\\superpowers\\evidence\\rotated-probe-heldout-seed-21004-20261104'; $env:REALITYOS_ROTATED_PROBE_TRIAL_SEED='21004'; $env:REALITYOS_ROTATED_PROBE_TRIAL_INDEX='0'; Remove-Item Env:REALITYOS_ROTATED_PROBE_PREPARE_ONLY -ErrorAction SilentlyContinue; cargo test -p realityos-verify --test manipulation_benchmark iiwa_rotated_probe_unbracketed_motion_diagnostic_capture -- --ignored --exact --nocapture",
+      "result": "0 passed; 1 failed; exit code 101; 96.27 seconds; one simulator run",
+      "failure": "InvalidTrial(\"probe measurement sidecar has no measurement records\")"
+    },
+    "post_budget_retry": {
+      "same_seed_runner_invocation_observed": true,
+      "stopped_before_sidecar_reservation": true,
+      "additional_simulator_steps_confirmed": 0,
+      "reason": "The seed 21004 single-run budget was exhausted; no second trial was authorized."
+    },
+    "current_source_hashes_match_freeze": false,
+    "frozen_source_hashes_match_run_commit": true,
+    "post_run_compile_check": "PASS: cargo check -p realityos-verify --tests"
+  },
+  "episode": {
+    "path": "EPISODE.json",
+    "sha256": "72CF32D58EEB2027D4709EFB8BE1C64AEC0BF222DA1E5C54348E3D8B985E7E93",
+    "outcome": "action_failed",
+    "failure_cause": "force_monitor_abort",
+    "refusal_code": "WRENCH_MONITOR_ABORTED_ACTION",
+    "friction_inference": null,
+    "friction_interval": null,
+    "actions": [
+      {
+        "action_key": "probe:+x",
+        "family": "planar_push",
+        "grant_id": "sim-scope:e18e12ca756ae90e2d133c505ab54b1b8d9cd8c1e8ffd9c704da2c9bc1e7b74d",
+        "witness_digest": "f99c95deb329c7c7854ce70e848a394e92d27d21bec5053e8e6db4ac3f6b2199",
+        "observation_epoch": "v7:development:menagerie_iiwa14:push_probe_replan:21004:0:0:4621819117588971520",
+        "writes_before": 0,
+        "writes_after": 5417,
+        "displacement_m": 1.4870352392781783e-06,
+        "lateral_displacement_m": 0.0,
+        "reauthorized_after_observation": false,
+        "runtime_divergence": false,
+        "control_tracking_correction_bound_rad": 0.01,
+        "control_tracking_correction_gain": 1.0,
+        "control_tracking_correction_max_rad": 0.007210429458370027
+      }
+    ],
+    "wrench_sample_count": 6416,
+    "simulation_time_s": 12.834000000000955,
+    "control_writes_before": 0,
+    "control_writes_after": 5417,
+    "unauthorized_writes": 0,
+    "wrench_abort": {
+      "reason": {
+        "kind": "unexpected_contact"
+      },
+      "triggering_sample": {
+        "sensor_id": "sim-ft-menagerie-iiwa14-v1",
+        "sensor_frame": "attachment_site",
+        "transform_epoch": "v7:development:menagerie_iiwa14:push_probe_replan:21004:0:0:4621819117588971520",
+        "units": "N,N*m",
+        "wrench": [
+          9.251,
+          -0.377,
+          -0.927,
+          -0.08850000000000001,
+          -0.49610000000000004,
+          0.0002
+        ],
+        "error_bounds": [
+          0.05,
+          0.05,
+          0.05,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "capture_s": 12.832000000000955,
+        "receive_s": 12.834000000000955,
+        "sequence": 6415,
+        "clock_domain": "mujoco_simulation_clock",
+        "origin": "simulation",
+        "digest": "29deae2d17bb718e3fcc32392f79490a631b38d914ad318f97e7abcd81f6acbb"
+      },
+      "triggering_sensor_position": null,
+      "triggering_sensor_orientation": null,
+      "triggered_at_s": 12.834000000000955,
+      "stopped_at_s": 12.834000000000955,
+      "stop_write_count": 1,
+      "contract_id": "sim-wrench-stop-v1",
+      "stop_verified": true,
+      "stop_actuator_ids": [
+        "actuator1",
+        "actuator2",
+        "actuator3",
+        "actuator4",
+        "actuator5",
+        "actuator6",
+        "actuator7"
+      ],
+      "stop_error": null
+    },
+    "wrench_abort_result": "preauthorized_hold_verified"
+  },
+  "sidecar": {
+    "path": "PROBE_MEASUREMENT_SIDECAR.json",
+    "present": false,
+    "measurement_count": 0,
+    "diagnostic_episode_path": "PROBE_MEASUREMENT_SIDECAR.json.episode-diagnostic.json",
+    "diagnostic_episode_sha256": "72CF32D58EEB2027D4709EFB8BE1C64AEC0BF222DA1E5C54348E3D8B985E7E93",
+    "same_as_episode_json": true,
+    "reason": "The monitor aborted on unexpected_contact before a probe measurement was finalized; the runner rejected the empty measurement set."
+  },
+  "offline_analysis": {
+    "path": "OFFLINE_ANALYSIS.json",
+    "status": "INCOMPLETE_NO_MEASUREMENT_SIDECAR",
+    "onset_trace_available": false,
+    "preflight_support_contact_points": 4
+  },
+  "preparation_audit": {
+    "path": "PREPARATION_AUDIT.json",
+    "observed_prepare_only_attempts": 2,
+    "duplicate_zero_step_attempt": true
+  },
+  "scope_limits": {
+    "physical_test": false,
+    "physical_actions": 0,
+    "purchases": 0,
+    "fabrication": 0,
+    "external_contact": false,
+    "admission_status": "NOT_ADMITTED",
+    "metal": false,
+    "shop_release": false,
+    "viewport_admits": false
+  },
+  "scenario_friction": {
+    "obj0": 0.5725908634194633,
+    "table": 0.5725908634194633
+  },
+  "interpretation": "The single held-out episode stopped fail-closed on an unexpected-contact monitor abort at 12.834 s, before measurable object motion or friction inference. The preflight confirms four obj0-table support contacts with runtime sliding friction 0.5725908634 and normal force about 2.61718 N at each point, but this is initial-state evidence, not a slip-onset comparison. The episode preserves a verified preauthorized hold and zero unauthorized writes. The aborting contact identity was not recorded, and no measurement sidecar exists, so this seed cannot explain the prior-versus-inferred friction discrepancy. No physical/customer evidence was generated.",
+  "source_hashes_match_run_commit": true,
+  "current_source_hashes_match_freeze": false,
+  "current_source_hash_mismatches": [
+    "crates/verify/src/manipulation_benchmark/execution.rs",
+    "crates/verify/tests/manipulation_benchmark.rs"
+  ],
+  "post_run_code_change": {
+    "status": "COMPILE_CHECKED_NOT_SIMULATION_REPLAYED",
+    "files": [
+      "crates/verify/src/manipulation_benchmark/execution.rs",
+      "crates/verify/tests/manipulation_benchmark.rs"
+    ],
+    "purpose": "Record partial probe measurement/pose contact-force trace after a wrench monitor abort.",
+    "fail_closed_guard": "UnexpectedContact is carried as runtime_contact_ambiguous, so infer_support_friction returns NoInference and does not narrow the belief.",
+    "verification": "cargo check -p realityos-verify --tests passed; the single-run budget prevents replaying seed 21004 with this post-run patch."
+  },
+  "post_budget_retry": {
+    "same_seed_runner_invocation_observed": true,
+    "stopped_before_sidecar_reservation": true,
+    "additional_simulator_steps_confirmed": 0,
+    "reason": "The seed 21004 single-run budget was exhausted; no second trial was authorized."
+  }
+}

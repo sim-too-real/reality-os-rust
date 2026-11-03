@@ -1547,6 +1547,38 @@ fn run_benchmark_trial_inner(
                 .into(),
             );
             episode.outcome = TrialOutcome::ActionFailed;
+            // Preserve probe wrench/contact evidence even when the monitor stops
+            // the action. Contact-force diagnostics need the sealed sidecar;
+            // abort must not discard an otherwise complete measurement audit.
+            if action_key.starts_with("probe:") {
+                if let (Some(profile), Some(audit)) = (wrench_profile, push_witness_audit.as_ref())
+                {
+                    if audit.motion.started && !audit.samples.is_empty() {
+                        let prior = belief
+                            .entry(PhysicalParameter::SupportFriction)
+                            .and_then(|entry| entry.empirical_interval)
+                            .unwrap_or([0.05, 0.8]);
+                        if let Ok(measurement) = push_probe_measurement(
+                            &manifest,
+                            &request,
+                            profile,
+                            audit,
+                            &geometry.digest,
+                            &after_state,
+                        ) {
+                            record_probe_measurement(
+                                &mut episode,
+                                &mut belief,
+                                &mut blocked_action_keys,
+                                probe_measurement_records.as_mut(),
+                                &action_key,
+                                prior,
+                                measurement,
+                            );
+                        }
+                    }
+                }
+            }
             let state = state_payload(&mut worker)?;
             let object = body_position(&state, &trial.scenario.object_id)?;
             episode.object_end_xyz = object;
@@ -1665,7 +1697,6 @@ fn run_benchmark_trial_inner(
                 .entry(PhysicalParameter::SupportFriction)
                 .and_then(|entry| entry.empirical_interval)
                 .unwrap_or([0.05, 0.8]);
-            episode.prior_support_friction_interval = Some(prior);
             let measurement = push_probe_measurement(
                 &manifest,
                 &request,
@@ -1674,53 +1705,15 @@ fn run_benchmark_trial_inner(
                 &geometry.digest,
                 &after_state,
             )?;
-            episode.wrench_precontact_baseline = measurement.precontact_baseline.clone();
-            episode.wrench_inference_compensation_digest =
-                Some(inference_compensation_digest(&measurement));
-            let measurement_digest = measurement.digest();
-            episode.wrench_inference_measurement_digest = Some(measurement_digest.clone());
-            let inference = infer_support_friction(&measurement);
-            match inference {
-                FrictionInferenceResult::Updated { interval, mode } => {
-                    episode.wrench_inference_interval = Some(interval);
-                    episode.wrench_inference_reason = Some(format!("updated:{mode:?}"));
-                    match belief.intersect_support_friction_with_probe(interval, &measurement) {
-                        Ok(posterior) => {
-                            episode.posterior_support_friction_interval = Some(posterior);
-                            if posterior == prior && !blocked_action_keys.contains(&action_key) {
-                                blocked_action_keys.push(action_key.clone());
-                            }
-                        }
-                        Err(error) => {
-                            episode.wrench_inference_reason =
-                                Some(format!("belief_update_rejected:{error:?}"));
-                            if !blocked_action_keys.contains(&action_key) {
-                                blocked_action_keys.push(action_key.clone());
-                            }
-                        }
-                    }
-                }
-                FrictionInferenceResult::NoInference(reason) => {
-                    episode.wrench_inference_reason = Some(format!("no_inference:{reason:?}"));
-                    episode.posterior_support_friction_interval = Some(prior);
-                    if !blocked_action_keys.contains(&action_key) {
-                        // Without a strict evidence-derived narrowing, this
-                        // interaction cannot justify repeating the same probe.
-                        blocked_action_keys.push(action_key.clone());
-                    }
-                }
-            }
-            if let Some(records) = probe_measurement_records.as_mut() {
-                records.push(ProbeMeasurementRecordV1 {
-                    action_key: action_key.clone(),
-                    measurement_digest,
-                    prior_support_friction_interval: prior,
-                    inference,
-                    posterior_support_friction_interval: episode
-                        .posterior_support_friction_interval,
-                    measurement,
-                });
-            }
+            record_probe_measurement(
+                &mut episode,
+                &mut belief,
+                &mut blocked_action_keys,
+                probe_measurement_records.as_mut(),
+                &action_key,
+                prior,
+                measurement,
+            );
         }
         previous_action_was_probe = is_probe;
         episode.object_end_xyz = object_after;
@@ -2946,6 +2939,66 @@ fn probe_sample_tangential_force_lower_bound(
         lower_magnitude(support_force[0], support_error[0])
             .hypot(lower_magnitude(support_force[1], support_error[1])),
     )
+}
+
+fn record_probe_measurement(
+    episode: &mut BenchmarkEpisode,
+    belief: &mut PhysicalParameterBelief,
+    blocked_action_keys: &mut Vec<String>,
+    probe_measurement_records: Option<&mut Vec<ProbeMeasurementRecordV1>>,
+    action_key: &str,
+    prior: [f64; 2],
+    measurement: PushProbeMeasurement,
+) {
+    episode.prior_support_friction_interval = Some(prior);
+    episode.wrench_precontact_baseline = measurement.precontact_baseline.clone();
+    episode.wrench_inference_compensation_digest =
+        Some(inference_compensation_digest(&measurement));
+    let measurement_digest = measurement.digest();
+    episode.wrench_inference_measurement_digest = Some(measurement_digest.clone());
+    let inference = infer_support_friction(&measurement);
+    match &inference {
+        FrictionInferenceResult::Updated { interval, mode } => {
+            episode.wrench_inference_interval = Some(*interval);
+            episode.wrench_inference_reason = Some(format!("updated:{mode:?}"));
+            match belief.intersect_support_friction_with_probe(*interval, &measurement) {
+                Ok(posterior) => {
+                    episode.posterior_support_friction_interval = Some(posterior);
+                    if posterior == prior
+                        && !blocked_action_keys.iter().any(|key| key == action_key)
+                    {
+                        blocked_action_keys.push(action_key.to_owned());
+                    }
+                }
+                Err(error) => {
+                    episode.wrench_inference_reason =
+                        Some(format!("belief_update_rejected:{error:?}"));
+                    if !blocked_action_keys.iter().any(|key| key == action_key) {
+                        blocked_action_keys.push(action_key.to_owned());
+                    }
+                }
+            }
+        }
+        FrictionInferenceResult::NoInference(reason) => {
+            episode.wrench_inference_reason = Some(format!("no_inference:{reason:?}"));
+            episode.posterior_support_friction_interval = Some(prior);
+            if !blocked_action_keys.iter().any(|key| key == action_key) {
+                // Without a strict evidence-derived narrowing, this
+                // interaction cannot justify repeating the same probe.
+                blocked_action_keys.push(action_key.to_owned());
+            }
+        }
+    }
+    if let Some(records) = probe_measurement_records {
+        records.push(ProbeMeasurementRecordV1 {
+            action_key: action_key.to_owned(),
+            measurement_digest,
+            prior_support_friction_interval: prior,
+            inference,
+            posterior_support_friction_interval: episode.posterior_support_friction_interval,
+            measurement,
+        });
+    }
 }
 
 fn push_probe_measurement(
