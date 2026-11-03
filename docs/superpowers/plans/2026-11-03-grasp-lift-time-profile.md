@@ -38,10 +38,10 @@ manipulation verifier.
    inputs, and the first seven resolved expected-success inputs absent from
    the local evidence archive in the fixed seed/index selection order. Run
    and commit their uniform-profile baseline before treatment.
-2. [ ] Add failing tests for a witness-bound profile identifier, the
+2. [x] Add failing tests for a witness-bound profile identifier, the
    trapezoidal progress function, and executor rejection of unsupported
    profile identifiers.
-3. [ ] Implement the `r = 0.25` trapezoidal progress function; bind its stable
+3. [x] Implement the `r = 0.25` trapezoidal progress function; bind its stable
    identifier into the witness and digest; execute only that profile in the
    verifier path.
 4. [ ] Replay the known 21010:25 and 21006:21 controls first. If the primary

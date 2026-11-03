@@ -47,6 +47,7 @@ use crate::work_counters;
 
 pub const EVIDENCE_STATUS: &str = "SIMULATION_ONLY";
 pub const BENCHMARK_SCHEMA: &str = "realityos.physical_benchmark/1";
+pub const GRASP_LIFT_TIME_PROFILE_ID: &str = "trapezoidal_velocity_ramp_r025_v1";
 /// Maximum pre-contact gap for the benchmark's bounded 8 mm push probe.
 pub const PUSH_PROBE_APPROACH_GAP_M: f64 = 0.004;
 
@@ -1856,6 +1857,7 @@ fn prove_arm_path_with_ik_mode(
                     &request.scene.finger_names,
                     &states,
                     &finger_q,
+                    GRASP_LIFT_TIME_PROFILE_ID,
                     BOUNDED_GRASP_LIFT_M,
                     MAXIMUM_GRASP_LIFT_M,
                 );
@@ -2602,11 +2604,13 @@ fn lift_trajectory_digest(
     finger_joint_names: &[String],
     arm_states: &[Vec<f64>],
     closed_finger_positions: &[f64],
+    time_profile_id: &str,
     lift_distance_m: f64,
     maximum_lift_m: f64,
 ) -> String {
     let mut bytes = Vec::new();
-    push_str(&mut bytes, "realityos.pinch_lift_trajectory/v1");
+    push_str(&mut bytes, "realityos.pinch_lift_trajectory/v2");
+    push_str(&mut bytes, time_profile_id);
     bytes.extend_from_slice(&(arm_joint_names.len() as u64).to_le_bytes());
     for name in arm_joint_names {
         push_str(&mut bytes, name);
@@ -2623,6 +2627,23 @@ fn lift_trajectory_digest(
     push_f64(&mut bytes, lift_distance_m);
     push_f64(&mut bytes, maximum_lift_m);
     digest_bytes(&bytes)
+}
+
+/// Progress along the supported grasp-lift joint path at normalized time `t`.
+/// The profile changes timing only; its endpoints remain exactly 0 and 1.
+pub fn grasp_lift_profile_progress(profile_id: &str, t: f64) -> Option<f64> {
+    if profile_id != GRASP_LIFT_TIME_PROFILE_ID || !t.is_finite() || !(0.0..=1.0).contains(&t) {
+        return None;
+    }
+    const RAMP: f64 = 0.25;
+    let progress = if t < RAMP {
+        t * t / (2.0 * RAMP * (1.0 - RAMP))
+    } else if t <= 1.0 - RAMP {
+        (t - RAMP / 2.0) / (1.0 - RAMP)
+    } else {
+        1.0 - (1.0 - t).powi(2) / (2.0 * RAMP * (1.0 - RAMP))
+    };
+    Some(progress)
 }
 
 fn carried_object_lift_clear(
@@ -3422,6 +3443,9 @@ fn witness_text(
         action_envelope_witness(action_envelope),
         solved.lift_trajectory_digest.as_deref().unwrap_or("none"),
     );
+    if solved.lift_trajectory_digest.is_some() {
+        witness.push_str(&format!("lift_time_profile={GRASP_LIFT_TIME_PROFILE_ID}\n"));
+    }
     for (index, state) in solved.transit_waypoints.iter().enumerate() {
         witness.push_str(&format!("transit_state_{index}={}\n", bits_q(state)));
     }
@@ -4845,6 +4869,98 @@ mod tests {
         let mut changed_observation = request;
         changed_observation.scene.arm_q[0] += 0.001;
         assert!(reasoner.prepare_step(&changed_observation, &step).is_err());
+    }
+
+    #[test]
+    fn lift_witness_names_the_time_profile_bound_to_its_trajectory() {
+        let (model, request) = qualified_grasp_fixture();
+        let mut reasoner = PhysicalReasoner::new(model);
+        let step = reasoner
+            .consider(&request)
+            .executable
+            .expect("fixture grasp step");
+        let profile = step
+            .witness_contents
+            .lines()
+            .find_map(|line| line.strip_prefix("lift_time_profile="));
+
+        assert_eq!(
+            profile,
+            Some("trapezoidal_velocity_ramp_r025_v1"),
+            "the grasp witness must bind the exact profile used by the executor"
+        );
+
+        let mut unsupported_profile = step.clone();
+        unsupported_profile.witness_contents = unsupported_profile.witness_contents.replace(
+            "lift_time_profile=trapezoidal_velocity_ramp_r025_v1",
+            "lift_time_profile=uniform_v1",
+        );
+        unsupported_profile.witness_digest = contents_digest(&unsupported_profile.witness_contents);
+        assert!(reasoner
+            .prepare_step(&request, &unsupported_profile)
+            .is_err());
+    }
+
+    #[test]
+    fn grasp_lift_profile_uses_symmetric_quadratic_ramps() {
+        let expected = [
+            (0.0, 0.0),
+            (0.125, 1.0 / 24.0),
+            (0.25, 1.0 / 6.0),
+            (0.5, 0.5),
+            (0.75, 5.0 / 6.0),
+            (0.875, 23.0 / 24.0),
+            (1.0, 1.0),
+        ];
+        for (time, expected_progress) in expected {
+            let progress = grasp_lift_profile_progress(GRASP_LIFT_TIME_PROFILE_ID, time)
+                .expect("supported profile and normalized time");
+            assert!(
+                (progress - expected_progress).abs() < 1e-12,
+                "t={time}: {progress} != {expected_progress}"
+            );
+        }
+        assert_eq!(grasp_lift_profile_progress("uniform_v1", 0.5), None);
+        assert_eq!(
+            grasp_lift_profile_progress(GRASP_LIFT_TIME_PROFILE_ID, f64::NAN),
+            None
+        );
+        assert_eq!(
+            grasp_lift_profile_progress(GRASP_LIFT_TIME_PROFILE_ID, -0.01),
+            None
+        );
+        assert_eq!(
+            grasp_lift_profile_progress(GRASP_LIFT_TIME_PROFILE_ID, 1.01),
+            None
+        );
+    }
+
+    #[test]
+    fn lift_trajectory_digest_binds_the_time_profile() {
+        let arm_joint_names = vec!["joint1".to_owned(), "lift_z".to_owned()];
+        let finger_joint_names = vec!["finger_l".to_owned(), "finger_r".to_owned()];
+        let arm_states = vec![vec![0.1, 0.0], vec![0.1, 0.025]];
+        let closed_finger_positions = vec![0.0, 0.0];
+        let uniform_digest = lift_trajectory_digest(
+            &arm_joint_names,
+            &finger_joint_names,
+            &arm_states,
+            &closed_finger_positions,
+            "uniform_v1",
+            0.025,
+            0.025,
+        );
+        let trapezoidal_digest = lift_trajectory_digest(
+            &arm_joint_names,
+            &finger_joint_names,
+            &arm_states,
+            &closed_finger_positions,
+            GRASP_LIFT_TIME_PROFILE_ID,
+            0.025,
+            0.025,
+        );
+
+        assert_ne!(uniform_digest, trapezoidal_digest);
     }
 
     #[test]

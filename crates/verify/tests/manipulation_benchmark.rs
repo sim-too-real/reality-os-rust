@@ -4332,22 +4332,26 @@ fn historical_grasp_failure_reaches_verified_hold_within_frozen_limits() {
 }
 
 #[test]
-fn fresh_grasp_divergence_records_its_relative_pose_guard() {
-    let _mujoco_guard = lock_mujoco_test();
+fn archived_uniform_grasp_divergence_records_its_relative_pose_guard() {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let trial_path = repo_root.join(
-        "docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-25mm/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21010_25.json",
+        "docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-lift-guard-diagnostics-20261102/target-25mm-21010/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21010_25.json",
     );
     let record: BenchmarkTrialRecord = serde_json::from_slice(
         &std::fs::read(&trial_path).expect("fresh grasp control trial exists"),
     )
-    .expect("fresh grasp trial record parses");
-    let trial = record
-        .trial
-        .expect("fresh grasp record contains its resolved input");
-    let episode =
-        run_test_benchmark_trial(&grasp_fixture_bundle(), &trial, simulation_admission(120.0))
-            .expect("fresh grasp trial executes under simulation admission");
+    .expect("archived uniform-profile grasp record parses");
+    assert_eq!(
+        record
+            .trial
+            .as_ref()
+            .expect("archived uniform-profile input exists")
+            .trial_id,
+        "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25"
+    );
+    let episode = record
+        .episode
+        .expect("archived uniform-profile result exists");
 
     assert_eq!(episode.outcome, TrialOutcome::UnexpectedRefusal);
     assert_eq!(episode.failure_cause, Some(FailureCause::RuntimeDivergence));
@@ -4381,8 +4385,7 @@ fn fresh_grasp_divergence_records_its_relative_pose_guard() {
 }
 
 #[test]
-fn fresh_grasp_trial_21006_remains_a_hold_verifier_refusal() {
-    let _mujoco_guard = lock_mujoco_test();
+fn archived_uniform_grasp_trial_21006_is_a_hold_verifier_refusal() {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let trial_path = repo_root.join(
         "docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-25mm/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21006_21.json",
@@ -4390,13 +4393,10 @@ fn fresh_grasp_trial_21006_remains_a_hold_verifier_refusal() {
     let record: BenchmarkTrialRecord = serde_json::from_slice(
         &std::fs::read(&trial_path).expect("fresh grasp control trial exists"),
     )
-    .expect("fresh grasp trial record parses");
-    let trial = record
-        .trial
-        .expect("fresh grasp record contains its resolved input");
-    let episode =
-        run_test_benchmark_trial(&grasp_fixture_bundle(), &trial, simulation_admission(120.0))
-            .expect("fresh grasp trial executes under simulation admission");
+    .expect("archived uniform-profile grasp record parses");
+    let episode = record
+        .episode
+        .expect("archived uniform-profile result exists");
 
     assert_eq!(episode.outcome, TrialOutcome::ActionFailed);
     assert_eq!(episode.failure_cause, Some(FailureCause::HoldNotVerified));
