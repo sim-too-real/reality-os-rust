@@ -2043,6 +2043,7 @@ fn execute_push_witness(
                 audit.precontact_baseline_orientation =
                     monitor.wrench_window.precontact_baseline_orientation;
             }
+            let pose_trace_start = audit.object_pose_trace.len();
             record_push_wrench_window(&mut audit, monitor.wrench_window);
             remaining_steps -= steps;
             elapsed_steps += steps;
@@ -2088,7 +2089,29 @@ fn execute_push_witness(
                 let current_position = body_position(&state, &request.scene.object_id)?;
                 let step_delta = sub3(current_position, prior_position);
                 let start_delta = sub3(current_position, audit.motion.start_position);
-                if is_probe && audit.motion.first_motion_s.is_none() {
+                let probe_pose_samples = is_probe
+                    .then(|| {
+                        audit.object_pose_trace[pose_trace_start..]
+                            .iter()
+                            .map(|sample| (sample.capture_s, sample.position_world_m))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let observed_probe_trace = !probe_pose_samples.is_empty();
+                if observed_probe_trace {
+                    let observations = probe_pose_samples
+                        .into_iter()
+                        .map(|(sample_time_s, position)| {
+                            let force_lower_bound = latest_probe_tangential_force_lower_bound(
+                                &audit,
+                                profile,
+                                sample_time_s,
+                            );
+                            (sample_time_s, position, force_lower_bound)
+                        })
+                        .collect::<Vec<_>>();
+                    observe_probe_motion_trace(&mut audit.motion, &observations);
+                } else if is_probe {
                     let force_lower_bound =
                         latest_probe_tangential_force_lower_bound(&audit, profile, time_s);
                     observe_probe_motion_sample(
@@ -2628,13 +2651,13 @@ fn latest_probe_tangential_force_lower_bound(
     profile: &SimulationWrenchSensorProfile,
     now_s: f64,
 ) -> Option<f64> {
-    let index = audit.samples.len().checked_sub(1)?;
     if audit.samples.len() != audit.sample_free_space_wrenches.len()
         || audit.samples.len() != audit.sample_free_space_wrench_error_bounds.len()
         || audit.samples.len() != audit.sensor_orientations.len()
     {
         return None;
     }
+    let index = latest_sample_index_at(&audit.samples, now_s)?;
     let sample = audit.samples.get(index)?;
     let age_s = now_s - sample.capture_s;
     if !age_s.is_finite() || age_s < 0.0 || age_s > profile.limit_policy.max_sample_age_s {
@@ -2651,6 +2674,18 @@ fn latest_probe_tangential_force_lower_bound(
         profile.limit_policy.max_rise_rate,
         age_s,
     )
+}
+
+fn latest_sample_index_at(samples: &[WrenchSample], now_s: f64) -> Option<usize> {
+    if !now_s.is_finite() {
+        return None;
+    }
+    samples
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, sample)| sample.capture_s.is_finite() && sample.capture_s <= now_s)
+        .map(|(index, _)| index)
 }
 
 fn probe_slip_onset_resolved(displacement: [f64; 3], force_lower_bound: Option<f64>) -> bool {
@@ -2680,6 +2715,15 @@ fn observe_probe_motion_sample(
     }
     motion.end_s = time_s;
     motion.end_position = current_position;
+}
+
+fn observe_probe_motion_trace(
+    motion: &mut PushMotionAudit,
+    samples: &[(f64, [f64; 3], Option<f64>)],
+) {
+    for (time_s, position, force_lower_bound) in samples {
+        observe_probe_motion_sample(motion, *position, *time_s, *force_lower_bound);
+    }
 }
 
 fn probe_sample_tangential_force_lower_bound(
@@ -4796,9 +4840,10 @@ mod witness_tests {
     use super::{
         declared_ee_contact_extent, declared_ee_observation_key, declared_ee_push_contact_extents,
         declared_ee_radius, decode_push_witness, injected_safety_fault_alerts,
-        joint_control_ramp_steps, observe_probe_motion_sample, observed_frame_quaternion,
-        probe_contact_pairs_from_state, probe_sample_tangential_force_lower_bound,
-        probe_slip_onset_resolved, sample_is_after_precontact_baseline, PushMotionAudit,
+        joint_control_ramp_steps, latest_sample_index_at, observe_probe_motion_sample,
+        observe_probe_motion_trace, observed_frame_quaternion, probe_contact_pairs_from_state,
+        probe_sample_tangential_force_lower_bound, probe_slip_onset_resolved,
+        sample_is_after_precontact_baseline, PushMotionAudit,
     };
     use crate::bundle::RobotBundle;
     use crate::manipulation_scenarios::{push_scenario, NegKind};
@@ -5180,6 +5225,42 @@ mod witness_tests {
         assert_eq!(motion.first_motion_s, Some(2.0));
         assert!(!motion.unresolved_motion_before_force);
         assert_eq!(motion.start_position, [0.0; 3]);
+    }
+
+    #[test]
+    fn probe_motion_trace_catches_force_resolved_motion_inside_a_control_batch() {
+        let mut motion = PushMotionAudit::default();
+        motion.started = true;
+        let samples = [
+            (1.002, [0.0006, 0.0, 0.0], Some(0.8)),
+            (1.004, [0.0011, 0.0, 0.0], Some(0.8)),
+            (1.006, [0.0012, 0.0, 0.0], Some(0.0)),
+        ];
+
+        observe_probe_motion_trace(&mut motion, &samples);
+
+        assert_eq!(motion.first_motion_s, Some(1.004));
+        assert!(!motion.unresolved_motion_before_force);
+        assert_eq!(motion.end_position, [0.0012, 0.0, 0.0]);
+
+        let mut unresolved = PushMotionAudit::default();
+        unresolved.started = true;
+        let weak_force_samples = [
+            (1.002, [0.0006, 0.0, 0.0], Some(0.49)),
+            (1.004, [0.0011, 0.0, 0.0], Some(0.49)),
+            (1.006, [0.0012, 0.0, 0.0], Some(0.8)),
+        ];
+        observe_probe_motion_trace(&mut unresolved, &weak_force_samples);
+        assert!(unresolved.unresolved_motion_before_force);
+        assert_eq!(unresolved.first_motion_s, None);
+    }
+
+    #[test]
+    fn latest_probe_wrench_selection_never_uses_a_future_sample() {
+        let samples = [wrench_sample(10, 1.0), wrench_sample(11, 1.002)];
+        assert_eq!(latest_sample_index_at(&samples, 0.999), None);
+        assert_eq!(latest_sample_index_at(&samples, 1.001), Some(0));
+        assert_eq!(latest_sample_index_at(&samples, 1.002), Some(1));
     }
 
     fn witness(include_retract: bool) -> String {

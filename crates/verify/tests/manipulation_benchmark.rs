@@ -5623,6 +5623,7 @@ fn iiwa_rotated_probe_unbracketed_motion_diagnostic_capture() {
         "precreated evidence directory required"
     );
     let prepare_only = std::env::var_os("REALITYOS_ROTATED_PROBE_PREPARE_ONLY").is_some();
+    let expect_success = std::env::var_os("REALITYOS_ROTATED_PROBE_EXPECT_SUCCESS").is_some();
 
     let bundle = iiwa14_bundle();
     let suite = scenario_suite_v3();
@@ -5708,21 +5709,30 @@ fn iiwa_rotated_probe_unbracketed_motion_diagnostic_capture() {
     )
     .expect("the single diagnostic simulation completes and writes its sidecar");
     write_new_json_artifact(&evidence_dir.join("EPISODE.json"), &episode);
-    assert_eq!(episode.outcome, TrialOutcome::UnexpectedRefusal);
-    assert_eq!(
-        episode.refusal_code.as_deref(),
-        Some("NO_JUSTIFIED_CURRENT_ACTION")
-    );
-    assert_eq!(
-        episode.wrench_inference_reason.as_deref(),
-        Some("no_inference:UnbracketedMotion")
-    );
-    assert_eq!(episode.actions.len(), 2);
-    assert!(episode
-        .actions
-        .iter()
-        .all(|action| action.action_key == "probe:+x"));
     assert_eq!(episode.unauthorized_writes, 0);
+    if expect_success {
+        assert_eq!(episode.outcome, TrialOutcome::Success);
+        assert!(episode
+            .wrench_inference_reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("updated:")));
+        assert!(episode.wrench_inference_interval.is_some());
+    } else {
+        assert_eq!(episode.outcome, TrialOutcome::UnexpectedRefusal);
+        assert_eq!(
+            episode.refusal_code.as_deref(),
+            Some("NO_JUSTIFIED_CURRENT_ACTION")
+        );
+        assert_eq!(
+            episode.wrench_inference_reason.as_deref(),
+            Some("no_inference:UnbracketedMotion")
+        );
+        assert_eq!(episode.actions.len(), 2);
+        assert!(episode
+            .actions
+            .iter()
+            .all(|action| action.action_key == "probe:+x"));
+    }
 }
 
 #[test]
