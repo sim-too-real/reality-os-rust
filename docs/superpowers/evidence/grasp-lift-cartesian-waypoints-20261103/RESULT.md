@@ -2,6 +2,11 @@
 
 **Classification:** `VALIDATED_LEARNING; CARTESIAN_PATH_HYPOTHESIS_REJECTED; SIMULATION_ONLY; NOT_ADMITTED`
 
+**Candidate source and executor correction commit:**
+`0f14e9b073fcadf11ed69c6643cc7bbbfb36daf5` (Cartesian planner implementation
+is preserved in history and removed from the final production reasoning code;
+the multi-waypoint executor validation fix remains).
+
 ## Hypothesis and frozen gates
 
 The candidate replaced endpoint-only joint interpolation with sequential

@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import re
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,6 +17,7 @@ EVIDENCE = ROOT / "docs/superpowers/evidence/grasp-lift-cartesian-waypoints-2026
 FREEZE_PATH = EVIDENCE / "FREEZE-v2.json"
 RESULT_PATH = EVIDENCE / "CANDIDATE_PRIMARY_V2.json"
 OUTPUT_PATH = EVIDENCE / "INDEPENDENT_VERIFICATION.json"
+CANDIDATE_SOURCE_COMMIT = "0f14e9b073fcadf11ed69c6643cc7bbbfb36daf5"
 
 
 def sha256(data: bytes) -> str:
@@ -46,6 +48,20 @@ def verify() -> dict:
     assert result["stage"] == "candidate_primary"
     assert result["freeze_sha256"] == sha256(freeze_bytes)
     assert freeze["candidate_source"]["profile_id"] == "cartesian_vertical_max_1mm_v1"
+
+    source_files = {
+        "crates/verify/tests/manipulation_benchmark.rs": "integration_test_sha256",
+        "crates/verify/src/manipulation_benchmark/execution.rs": "execution_sha256",
+        "crates/semantics/src/physical_reasoner.rs": "reasoner_sha256",
+    }
+    for relative_path, freeze_key in source_files.items():
+        source = subprocess.run(
+            ["git", "show", f"{CANDIDATE_SOURCE_COMMIT}:{relative_path}"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        ).stdout
+        assert sha256(source) == freeze["candidate_source"][freeze_key]
 
     baseline_binding = freeze["baseline_result"]
     baseline_path = ROOT / baseline_binding["path"]
@@ -128,6 +144,8 @@ def verify() -> dict:
         "classification": "VALIDATED_LEARNING; CARTESIAN_PATH_HYPOTHESIS_REJECTED; SIMULATION_ONLY; NOT_ADMITTED",
         "verified_at_utc": datetime.now(timezone.utc).isoformat(),
         "freeze_sha256": sha256(freeze_bytes),
+        "candidate_source_commit": CANDIDATE_SOURCE_COMMIT,
+        "candidate_source_hashes_match": True,
         "primary_result_sha256": sha256(RESULT_PATH.read_bytes()),
         "baseline_result_sha256": sha256(baseline_bytes),
         "baseline_trials": len(baseline_records),

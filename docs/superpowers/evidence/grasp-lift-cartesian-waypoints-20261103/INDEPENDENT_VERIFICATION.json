@@ -1,8 +1,10 @@
 {
   "schema": "realityos.grasp_lift_cartesian_waypoints_verification/v1",
   "classification": "VALIDATED_LEARNING; CARTESIAN_PATH_HYPOTHESIS_REJECTED; SIMULATION_ONLY; NOT_ADMITTED",
-  "verified_at_utc": "2026-11-03T10:47:46.454069+00:00",
+  "verified_at_utc": "2026-11-03T10:59:42.205732+00:00",
   "freeze_sha256": "69649BACDFA74496A01355706226F52AB6A60812A086C626A052DD3F0248B248",
+  "candidate_source_commit": "0f14e9b073fcadf11ed69c6643cc7bbbfb36daf5",
+  "candidate_source_hashes_match": true,
   "primary_result_sha256": "CA34D4F8EB9F9ACE00ACA2F377F2C4CB325DAE8ECCF704899589EF576CD585B3",
   "baseline_result_sha256": "6877DEDA6D344973D6C28196E5BB076EFE85F6C63AA37BAB3D9317ACEC48CDD1",
   "baseline_trials": 7,
