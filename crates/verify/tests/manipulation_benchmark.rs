@@ -6143,8 +6143,8 @@ fn export_grasp_time_profile_trial_inputs() {
 }
 
 #[test]
-#[ignore = "SIMULATION_ONLY: replays only the frozen grasp time-profile inputs named by a committed freeze"]
-fn replay_grasp_time_profile_frozen_inputs() {
+#[ignore = "SIMULATION_ONLY: replays only the frozen grasp-lift inputs named by a committed freeze"]
+fn replay_grasp_lift_frozen_inputs() {
     let _mujoco_guard = lock_mujoco_test();
     let stage = std::env::var("REALITYOS_GRASP_TIME_PROFILE_STAGE")
         .expect("REALITYOS_GRASP_TIME_PROFILE_STAGE is required");
@@ -6257,7 +6257,7 @@ fn replay_grasp_time_profile_frozen_inputs() {
             .expect("frozen grasp trial executes under simulation admission");
         assert_eq!(episode.unauthorized_writes, 0, "{}", trial.trial_id);
         println!(
-            "GRASP_TIME_PROFILE_RESULT stage={stage} trial={} outcome={:?} cause={:?} hold={:?} follow={:?}",
+            "GRASP_LIFT_RESULT stage={stage} trial={} outcome={:?} cause={:?} hold={:?} follow={:?}",
             trial.trial_id,
             episode.outcome,
             episode.failure_cause,
@@ -6267,7 +6267,7 @@ fn replay_grasp_time_profile_frozen_inputs() {
         records.push(BenchmarkTrialRecord::completed(trial, episode));
     }
     let result = serde_json::to_vec_pretty(&serde_json::json!({
-        "schema": "realityos.grasp_lift_time_profile_replay/v1",
+        "schema": "realityos.grasp_lift_replay/v1",
         "stage": stage,
         "freeze_sha256": sha256_upper(&freeze_bytes),
         "records": records,

@@ -1821,36 +1821,19 @@ fn prove_arm_path_with_ik_mode(
                 lift_scene.arm_q = q_contact.clone();
                 let mut lift_request = request.clone();
                 lift_request.scene = lift_scene;
-                let q_lift = match solve_first_ik_candidate_matching(
+                let states = match collision_checked_cartesian_grasp_lift(
                     model,
                     &lift_request,
-                    lift_target,
                     &q_contact,
-                    |q_candidate_lift| {
-                        arm_motion_clear(
-                            model,
-                            &lift_request,
-                            q_candidate_lift,
-                            q_candidate_lift,
-                            ContactPhase::GraspLift,
-                        )?;
-                        arm_motion_clear(
-                            model,
-                            &lift_request,
-                            &q_contact,
-                            q_candidate_lift,
-                            ContactPhase::GraspLift,
-                        )
-                    },
+                    lift_target,
                 ) {
-                    Ok(q) => q,
+                    Ok(states) => states,
                     Err(reason) => {
                         last_refusal = Some(reason);
                         continue;
                     }
                 };
                 carried_object_lift_clear(request, MAXIMUM_GRASP_LIFT_M)?;
-                let states = vec![q_contact.clone(), q_lift];
                 let digest = lift_trajectory_digest(
                     &request.scene.joint_names,
                     &request.scene.finger_names,
@@ -1921,6 +1904,53 @@ fn collision_checked_contact_approach(
     }
     arm_motion_clear(model, request, &prior_q, q_contact, contact_phase)?;
     Ok(waypoints)
+}
+
+fn collision_checked_cartesian_grasp_lift(
+    model: &EmbodimentModel,
+    request: &ReasoningRequest,
+    start_q: &[f64],
+    target_xyz: [f64; 3],
+) -> Result<Vec<Vec<f64>>, &'static str> {
+    const MAX_LIFT_STEP_M: f64 = 0.001;
+    const MAX_LIFT_WAYPOINTS: usize = 64;
+
+    let chain = model.ee_joint_chain(&request.scene.ee).ok_or("NO_CHAIN")?;
+    if start_q.len() != chain.len() || !target_xyz.iter().all(|value| value.is_finite()) {
+        return Err("GRASP_LIFT_TARGET_INVALID");
+    }
+    let start_fk =
+        forward_kinematics(model, &chain, &request.scene.ee, start_q).map_err(|_| "FK_FAILED")?;
+    let delta = sub3(target_xyz, start_fk.ee.xyz);
+    let distance = norm3(delta);
+    if !distance.is_finite() || distance <= 1e-9 {
+        return Err("GRASP_LIFT_DISTANCE_INVALID");
+    }
+    let segment_count = (distance / MAX_LIFT_STEP_M).ceil() as usize;
+    if segment_count == 0 || segment_count > MAX_LIFT_WAYPOINTS {
+        return Err("GRASP_LIFT_WAYPOINT_BUDGET_EXCEEDED");
+    }
+
+    let mut prior_q = start_q.to_vec();
+    let mut states = Vec::with_capacity(segment_count + 1);
+    states.push(prior_q.clone());
+    for segment_index in 1..=segment_count {
+        let fraction = segment_index as f64 / segment_count as f64;
+        let target = add3(start_fk.ee.xyz, scale3(delta, fraction));
+        let next_q =
+            solve_first_ik_candidate_matching(model, request, target, &prior_q, |q_candidate| {
+                arm_motion_clear(
+                    model,
+                    request,
+                    &prior_q,
+                    q_candidate,
+                    ContactPhase::GraspLift,
+                )
+            })?;
+        states.push(next_q.clone());
+        prior_q = next_q;
+    }
+    Ok(states)
 }
 
 fn collision_checked_transit_path(
@@ -4749,6 +4779,59 @@ mod tests {
             .consider(&coupled)
             .executable
             .is_none());
+    }
+
+    #[test]
+    fn grasp_lift_witness_tracks_bounded_cartesian_waypoints() {
+        let (model, request) = qualified_grasp_fixture();
+        let step = PhysicalReasoner::new(model.clone())
+            .consider(&request)
+            .executable
+            .expect("qualified grasp step");
+        let lift_states = step
+            .witness_contents
+            .lines()
+            .filter_map(|line| {
+                let payload = line.strip_prefix("lift_state_")?.split_once('=')?.1;
+                let arm = payload.split_once(";fingers=")?.0;
+                let mut by_name = BTreeMap::new();
+                for field in arm.split(',') {
+                    let (name_hex, bits) = field.split_once('=')?;
+                    let name = String::from_utf8(hex::decode(name_hex).ok()?).ok()?;
+                    let value = f64::from_bits(bits.parse::<u64>().ok()?);
+                    if !value.is_finite() || by_name.insert(name, value).is_some() {
+                        return None;
+                    }
+                }
+                request
+                    .scene
+                    .joint_names
+                    .iter()
+                    .map(|name| by_name.get(name).copied())
+                    .collect::<Option<Vec<_>>>()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(lift_states.len(), 26, "25 mm lift at 1 mm Cartesian steps");
+        let chain = model
+            .ee_joint_chain(&request.scene.ee)
+            .expect("end-effector joint chain");
+        let start = forward_kinematics(&model, &chain, &request.scene.ee, &lift_states[0])
+            .expect("start forward kinematics")
+            .ee
+            .xyz;
+        for (index, joints) in lift_states.iter().enumerate() {
+            let actual = forward_kinematics(&model, &chain, &request.scene.ee, joints)
+                .expect("waypoint forward kinematics")
+                .ee
+                .xyz;
+            let expected = add3(start, [0.0, 0.0, index as f64 * 0.001]);
+            let error = norm3(sub3(actual, expected));
+            assert!(
+                error <= 1e-3,
+                "waypoint {index} misses Cartesian path by {error} m"
+            );
+        }
     }
 
     #[test]

@@ -3138,18 +3138,12 @@ fn execute_grasp_witness(
         && force_bound
             .is_some_and(|bound| bound[1].is_finite() && bound[1] >= *per_finger_force_ceiling_n)
         && lift_trajectory_digest == witness_lift_digest
-        && lift_states.len() >= 2
-        && exact_finite_vec(&lift_states[0].0, &contact)
-        && exact_finite_vec(&lift_states[0].1, close_positions)
-        && exact_finite_vec(&lift_states[1].1, close_positions)
+        && grasp_lift_states_match(&lift_states, &contact, close_positions)
         && *maximum_lift_m >= 0.02
         && q0.len() == request.scene.joint_names.len()
         && transit.len() == q0.len()
         && contact.len() == q0.len()
-        && witness_close.len() == request.scene.finger_names.len()
-        && lift_states.iter().all(|(arm, fingers)| {
-            arm.len() == q0.len() && fingers.len() == request.scene.finger_names.len()
-        });
+        && witness_close.len() == request.scene.finger_names.len();
     if !envelope_matches || !authorized_covers_now(worker, authorized, request.now_s)? {
         return Ok(rejection());
     }
@@ -3267,7 +3261,7 @@ fn execute_grasp_witness(
         // Execute the same joint-space samples used by the collision proof,
         // observing finger contact, force, and object motion at each waypoint.
         const LIFT_STEPS_PER_WAYPOINT: u32 = 50;
-        if !exact_finite_vec(start_arm, &contact) || end_arm.len() != start_arm.len() {
+        if start_arm.len() != contact.len() || end_arm.len() != contact.len() {
             return Ok(rejection());
         }
         let sample_count =
@@ -3514,6 +3508,30 @@ fn parse_lift_states(
             ))
         })
         .collect()
+}
+
+fn grasp_lift_states_match(
+    lift_states: &[(Vec<f64>, Vec<f64>)],
+    contact: &[f64],
+    close_positions: &[f64],
+) -> bool {
+    lift_states.len() >= 2
+        && lift_states.first().is_some_and(|(arm, fingers)| {
+            finite_values_match(arm, contact) && finite_values_match(fingers, close_positions)
+        })
+        && lift_states.iter().all(|(arm, fingers)| {
+            arm.len() == contact.len()
+                && arm.iter().all(|value| value.is_finite())
+                && finite_values_match(fingers, close_positions)
+        })
+}
+
+fn finite_values_match(left: &[f64], right: &[f64]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(a, b)| a.is_finite() && b.is_finite() && a.to_bits() == b.to_bits())
 }
 
 fn parse_named_witness_values(payload: &str, expected_names: &[String]) -> Option<Vec<f64>> {
@@ -5302,5 +5320,38 @@ mod replay_initial_observation_evidence_tests {
         let mut changed_json_bytes = evidence;
         changed_json_bytes.observation_json.push(' ');
         assert!(changed_json_bytes.verify().is_err());
+    }
+}
+
+#[cfg(test)]
+mod grasp_lift_witness_path_tests {
+    use super::grasp_lift_states_match;
+
+    #[test]
+    fn accepts_all_collision_checked_waypoints_after_the_contact_start() {
+        let fingers = vec![0.0, 0.0];
+        let path = vec![
+            (vec![0.0, 0.0], fingers.clone()),
+            (vec![0.001, 0.0], fingers.clone()),
+            (vec![0.002, 0.0], fingers.clone()),
+        ];
+
+        assert!(grasp_lift_states_match(&path, &[0.0, 0.0], &fingers));
+
+        let mut wrong_start = path.clone();
+        wrong_start[0].0[0] = 0.0001;
+        assert!(!grasp_lift_states_match(
+            &wrong_start,
+            &[0.0, 0.0],
+            &fingers
+        ));
+
+        let mut opened_during_lift = path;
+        opened_during_lift[1].1[0] = 0.001;
+        assert!(!grasp_lift_states_match(
+            &opened_during_lift,
+            &[0.0, 0.0],
+            &fingers
+        ));
     }
 }

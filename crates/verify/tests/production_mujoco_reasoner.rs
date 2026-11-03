@@ -945,27 +945,28 @@ impl World {
             }
         }
 
-        let lift_steps = 5_u32;
-        let steps_per_lift = 160_u32;
-        for step in 1..=lift_steps {
+        let lift_segment_count = lift_states.len().saturating_sub(1);
+        if lift_segment_count == 0 || lift_segment_count > 800 {
+            result.aborted = true;
+            return result;
+        }
+        let total_lift_steps = 800_u32;
+        let base_steps_per_segment = total_lift_steps / lift_segment_count as u32;
+        let extra_steps = total_lift_steps % lift_segment_count as u32;
+        for (index, pair) in lift_states.windows(2).enumerate() {
             if !grasp_action_covers(authorized, now_s) {
                 result.aborted = true;
                 return result;
             }
-            if step == 1 {
+            if index == 0 {
                 result.phases.push("lift");
             }
-            let fraction = f64::from(step) / f64::from(lift_steps);
-            let target = lift_states[0]
-                .0
-                .iter()
-                .zip(&lift_states[1].0)
-                .map(|(start, end)| start + fraction * (end - start))
-                .collect::<Vec<_>>();
-            self.command_q(&target, close_positions, steps_per_lift);
-            now_s += f64::from(steps_per_lift) * 0.002;
+            let target = &pair[1].0;
+            let steps = base_steps_per_segment + u32::from((index as u32) < extra_steps);
+            self.command_q(target, close_positions, steps);
+            now_s += f64::from(steps) * 0.002;
             let measured = self.arm_q();
-            if !q_tracks(&measured, &target, 0.025) {
+            if !q_tracks(&measured, target, 0.025) {
                 result.aborted = true;
                 result.runtime_divergence = true;
                 return result;

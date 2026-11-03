@@ -1,0 +1,44 @@
+{
+  "schema": "realityos.grasp_lift_cartesian_waypoints_verification/v1",
+  "classification": "VALIDATED_LEARNING; CARTESIAN_PATH_HYPOTHESIS_REJECTED; SIMULATION_ONLY; NOT_ADMITTED",
+  "verified_at_utc": "2026-11-03T10:47:46.454069+00:00",
+  "freeze_sha256": "69649BACDFA74496A01355706226F52AB6A60812A086C626A052DD3F0248B248",
+  "primary_result_sha256": "CA34D4F8EB9F9ACE00ACA2F377F2C4CB325DAE8ECCF704899589EF576CD585B3",
+  "baseline_result_sha256": "6877DEDA6D344973D6C28196E5BB076EFE85F6C63AA37BAB3D9317ACEC48CDD1",
+  "baseline_trials": 7,
+  "baseline_successes": 4,
+  "candidate_primary_trials": 2,
+  "candidate_cohort_run": false,
+  "authority_flags_closed": true,
+  "trials": [
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21006:21",
+      "outcome": "unexpected_refusal",
+      "failure_cause": "runtime_divergence",
+      "guard": "object_tool_relative_pose_exceeded_20mm;relative_pose_error_m=0.020128;waypoint=1",
+      "object_vertical_delta_m": 2.6047710216275943e-05,
+      "last_sample_net_vertical_contact_force_n": 0.5014505916597126,
+      "weight_n": 2.1919716676624335,
+      "vertical_contact_force_to_weight_ratio": 0.22876691293846443,
+      "last_sample_normal_forces_n": [
+        1.8284920888964389,
+        1.8285977783223526
+      ]
+    },
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25",
+      "outcome": "unexpected_refusal",
+      "failure_cause": "runtime_divergence",
+      "guard": "object_tool_relative_pose_exceeded_20mm;relative_pose_error_m=0.020032;waypoint=1",
+      "object_vertical_delta_m": -0.00010404976393170451,
+      "last_sample_net_vertical_contact_force_n": 0.1354402272514028,
+      "weight_n": 1.4191443528878773,
+      "vertical_contact_force_to_weight_ratio": 0.09543794961787341,
+      "last_sample_normal_forces_n": [
+        1.3398030750851098,
+        0.987162588592803
+      ]
+    }
+  ],
+  "interpretation": "Both candidate controls hit the unchanged relative-pose guard. At the final recorded contact sample, simulated net vertical finger force remained below the request weight, while object vertical motion stayed below 1 mm. This supports a contact-load distribution mismatch with the scalar hold screen; it is simulation evidence only."
+}

@@ -1,0 +1,197 @@
+{
+  "schema": "realityos.grasp_lift_time_profile_candidate_freeze/v1",
+  "experiment_id": "grasp_lift_cartesian_vertical_waypoints_1mm_v1_20261103",
+  "frozen_at_utc": "2026-11-03T10:36:11Z",
+  "status": "FROZEN_BEFORE_SIMULATION",
+  "simulation_started": false,
+  "classification": "software-only simulation experiment; Cartesian trajectory hypothesis; NOT_ADMITTED",
+  "candidate_source": {
+    "repository": "reality-os-rust",
+    "branch": "main",
+    "git_head": "17e56ec1e4ea75fabe4e832cd5f0805ccdc3a19e",
+    "integration_test_sha256": "B5FC03870A20EE46BE5A8BAF402B713EEF190E2FBC8DB20420F19E79E4F7D2C1",
+    "execution_sha256": "90A2768D0C559B8D720751D2CB77A126BC7FCF5CEB50D57BBEF6DDA5B1776448",
+    "reasoner_sha256": "46C45B40AAC75C28D439C340E35C54BF0D1CC42E8A257BDD127B58C5351120E1",
+    "profile_id": "cartesian_vertical_max_1mm_v1",
+    "source_commit_pushed": false
+  },
+  "baseline_result": {
+    "path": "docs/superpowers/evidence/grasp-lift-time-profile-20261103/BASELINE.json",
+    "sha256": "6877DEDA6D344973D6C28196E5BB076EFE85F6C63AA37BAB3D9317ACEC48CDD1",
+    "expected_trials": 7,
+    "expected_successes": 4,
+    "source_head": "77b5b9d1e545fa4fab601649d473e886ae2a1d2a",
+    "freeze_path": "docs/superpowers/evidence/grasp-lift-time-profile-20261103/FREEZE.json",
+    "freeze_sha256": "AAC36CB177DEA7F7523DDB371372F770409856F3C6B0D7A327D9A41BE14BFB82"
+  },
+  "cohort_inputs": [
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:22000:16",
+      "seed": 22000,
+      "index": 16,
+      "expectation": "expected_success",
+      "paired_trial_key": "46b185d3e7f276dd19e08c949efd727f739515e2cbc0cdcffcf5873b8d7ea362",
+      "trial_digest": "bab93f14073ecc63cd2008206b5c0ea071bf76ea1f11fe34a14cb2d58d94ebf8",
+      "path": "docs/superpowers/evidence/grasp-lift-time-profile-20261103/inputs/trial_22000_16.json",
+      "sha256": "075A5F4EEE8401729AE299E254E3BAB886A9EB86A1FAD51E4E5C5FBFBC47627C",
+      "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+      "source_hash": "b75b518f36853782407512c054d5257c17371704097a3da0e445c98b5165d185"
+    },
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:22000:20",
+      "seed": 22000,
+      "index": 20,
+      "expectation": "expected_success",
+      "paired_trial_key": "5c25b8daaae1d5f0edd120c810f03a27dd4780e45cb6fae76554722772e99d9d",
+      "trial_digest": "2fc07ef472a003b84bc817e583c6be5fa459bb6433629dc4417c633ee024d4df",
+      "path": "docs/superpowers/evidence/grasp-lift-time-profile-20261103/inputs/trial_22000_20.json",
+      "sha256": "FEB1E9ECCD4695EBD414C199AA14BBA14A07D758346108C518F62FDD4A3A19B6",
+      "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+      "source_hash": "b75b518f36853782407512c054d5257c17371704097a3da0e445c98b5165d185"
+    },
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:22000:21",
+      "seed": 22000,
+      "index": 21,
+      "expectation": "expected_success",
+      "paired_trial_key": "f82cf9abcdaa5a77b820c2446a1ed7aebb48d54be9bb68205430768a3eebc40f",
+      "trial_digest": "0a756c981fb65c94541c4685f2859b2088c8da81fca78fed3eb51271588a05f4",
+      "path": "docs/superpowers/evidence/grasp-lift-time-profile-20261103/inputs/trial_22000_21.json",
+      "sha256": "6FC9485C14D4C7CFD08F5421CBB82D10430625D1E7F5C4D399696A147536E9A9",
+      "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+      "source_hash": "b75b518f36853782407512c054d5257c17371704097a3da0e445c98b5165d185"
+    },
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:22000:26",
+      "seed": 22000,
+      "index": 26,
+      "expectation": "expected_success",
+      "paired_trial_key": "1cde2e809086ad83c8320809b7ec2b1424a57e80a18cc6ba2fee18603a2f8460",
+      "trial_digest": "344f3283d4e6138d29c2375b49a4abcb448b48a47e492a493b77a9c779483199",
+      "path": "docs/superpowers/evidence/grasp-lift-time-profile-20261103/inputs/trial_22000_26.json",
+      "sha256": "067020E3C1B3F39F8D86673515006ECC2E40791BE85D8FD8F3C14C8A7DDB997E",
+      "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+      "source_hash": "b75b518f36853782407512c054d5257c17371704097a3da0e445c98b5165d185"
+    },
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:22000:30",
+      "seed": 22000,
+      "index": 30,
+      "expectation": "expected_success",
+      "paired_trial_key": "9cd66f661ea68802d655e89f8cd5a66d0ed2ab5892ba622c50abb6e653408eb5",
+      "trial_digest": "c68c7bdce86c5114d1f815e01772968e24058cefe244d94b00264d09e46a72ba",
+      "path": "docs/superpowers/evidence/grasp-lift-time-profile-20261103/inputs/trial_22000_30.json",
+      "sha256": "81CAEFA59C4912946D70AC6F0EA45963986ABFA937C26CE5F3A018828097EF24",
+      "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+      "source_hash": "b75b518f36853782407512c054d5257c17371704097a3da0e445c98b5165d185"
+    },
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:22000:31",
+      "seed": 22000,
+      "index": 31,
+      "expectation": "expected_success",
+      "paired_trial_key": "b47b0859e34e8e2dd863e7e7c4759d0caa80a53bfb52f96fcad9da6567b7a623",
+      "trial_digest": "f7a33b1ae5a5abe04039e2a6a6273f014864156de8013009a3311f2a3c0b65e5",
+      "path": "docs/superpowers/evidence/grasp-lift-time-profile-20261103/inputs/trial_22000_31.json",
+      "sha256": "FE5BFEE89A691B631AD15B614E7ADD4930812DCB5083B03250D12D8E653C6FB5",
+      "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+      "source_hash": "b75b518f36853782407512c054d5257c17371704097a3da0e445c98b5165d185"
+    },
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:22001:15",
+      "seed": 22001,
+      "index": 15,
+      "expectation": "expected_success",
+      "paired_trial_key": "695775809b32719498ed06dc06526786e59d560a01fa922797daa01b19b7f29c",
+      "trial_digest": "5dd8babb2be35ee116078d8bb0c41eda5bca0629fc07ab7868bb1706f59c0baf",
+      "path": "docs/superpowers/evidence/grasp-lift-time-profile-20261103/inputs/trial_22001_15.json",
+      "sha256": "FE35C9DF0BDCCB7A35DD599B5093274EC7F018C79E72A2145696646EBD855541",
+      "model_hash": "11c38ac6be1199800ae58040e011ca1e95987d41edaa4c1f1d86922b6aefa8ac",
+      "source_hash": "b75b518f36853782407512c054d5257c17371704097a3da0e445c98b5165d185"
+    }
+  ],
+  "primary_control_inputs": [
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25",
+      "seed": 21010,
+      "index": 25,
+      "expectation": "expected_success",
+      "paired_trial_key": "4a03287aebe64e2a6e82420253d68914d7bfe986c8460111369199f36d9cb720",
+      "trial_digest": "e9881d267030cf649f788b83f921e57a3160d4ffe49c434c852e86ef980fe5d5",
+      "path": "docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-25mm/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21010_25.json",
+      "sha256": "71921E9971AC34CBE77D0429A4F8C1A6C4922B66E6712D57752794D1A8F01D8E",
+      "historical_outcome": "unexpected_refusal",
+      "historical_failure_cause": "runtime_divergence",
+      "historical_hold_verified": null,
+      "historical_follow_residual_m": null
+    },
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21006:21",
+      "seed": 21006,
+      "index": 21,
+      "expectation": "expected_success",
+      "paired_trial_key": "3b3f41d7e5db79f1d8de6974add2d459193c04054d55ad62185b482787c6f890",
+      "trial_digest": "3cf3cd648b018a64df8b5c12f8133d9fff2abe8725a44614c936b1b3ec8b40ff",
+      "path": "docs/superpowers/evidence/grasp-lift-margin-20261102/suite-v3-candidate-25mm/trials/v7_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_21006_21.json",
+      "sha256": "2E997A30E7154AB6CC771971031C52E2B0DD617069B8EA55B621E6BAE14C670A",
+      "historical_outcome": "action_failed",
+      "historical_failure_cause": "hold_not_verified",
+      "historical_hold_verified": false,
+      "historical_follow_residual_m": 0.007362387759005328
+    }
+  ],
+  "baseline_profile": {
+    "id": "uniform_v1",
+    "lift_target_m": 0.025,
+    "lift_steps_per_waypoint": 50,
+    "interpolation": "linear"
+  },
+  "candidate_profile": {
+    "id": "cartesian_vertical_max_1mm_v1",
+    "lift_target_m": 0.025,
+    "maximum_cartesian_step_m": 0.001,
+    "maximum_waypoints": 64,
+    "interpolation": "sequential translation IK seeded from previous joint state; collision check each adjacent pair",
+    "lift_steps_per_waypoint": 50,
+    "grip_force_ceiling_n": 1.95
+  },
+  "fixed_guards": {
+    "per_finger_force_ceiling_n": 1.95,
+    "object_tool_relative_pose_stop_m": 0.02,
+    "hold_verifier_lift_window_m": [
+      0.02,
+      0.025
+    ],
+    "object_follow_residual_max_m": 0.005,
+    "unauthorized_writes_allowed": 0,
+    "collision_proof": "unchanged; each adjacent Cartesian waypoint transition checked",
+    "authority_checks": "unchanged",
+    "admission_status": "NOT_ADMITTED",
+    "metal": false,
+    "shop_release": false,
+    "viewport_admits": false
+  },
+  "historical_controls": {
+    "source": "suite-v3-candidate-25mm",
+    "source_code_head": "09e4c49ae72f612208006c3f308d70a8b272eb2a",
+    "profile": "uniform_v1",
+    "fresh_expected_success_rate": "3/7",
+    "replay_policy": "candidate only; baseline is preserved in the referenced records"
+  },
+  "decision_rule": [
+    "Primary control 21010:25 must complete without runtime divergence, and both primary controls must have zero unauthorized writes.",
+    "Primary control 21006:21 must pass the unchanged independent hold verifier with object-follow residual <= 5 mm, 20-25 mm end-effector lift, and per-finger force <= 1.95 N.",
+    "Only if both primary controls pass, run the frozen seven-case cohort; candidate success count must exceed the paired uniform baseline (4/7) and historical rate (3/7).",
+    "Every candidate success must pass the unchanged independent hold verifier; no expected-refusal control may become a false acceptance.",
+    "Any unmet gate rejects the candidate; no admission, physical, manufacturing, or release claim follows."
+  ],
+  "run_protocol": [
+    "Validate the existing frozen uniform baseline and all frozen input digests before replay.",
+    "Replay the two frozen primary controls once under the candidate source.",
+    "If both primary gates pass, replay the seven frozen cohort cases once.",
+    "Independently verify source, input, and output digests plus the fixed safety and verifier gates."
+  ],
+  "safety_boundary": "Simulation only. No actuation, fabrication, purchasing, external contact, admission, or release claim.",
+  "hypothesis": "A 1 mm-bounded Cartesian vertical lift represented by sequential, collision-checked IK waypoints will reduce object-tool-relative drift versus endpoint-only joint interpolation on the two frozen primary failures and generalize to a fresh seven-case cohort.",
+  "scope_limit": "Simulation only. Translation-only IK does not prove physical grasp stability; no force, friction, lift-distance, verifier-threshold, admission, or physical-evidence changes."
+}
