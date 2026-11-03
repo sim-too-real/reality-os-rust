@@ -1,0 +1,556 @@
+{
+  "format": "realityos.first_action_preflight",
+  "schema_version": 1,
+  "evidence_status": "SIMULATION_ONLY",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21003:0",
+  "trial_digest": "73d9d43556bd3e6a0f91201dc0345853d22e160895e29511824b7053a5f2c28e",
+  "paired_trial_key": "7faf918f97c58f7ad61c40140cbba97c7983b92a289d309755c3f60efce9cf2c",
+  "initial_observation": {
+    "actuator_force": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "contact_forces": [
+      3.0153921990957615,
+      3.0153921990957615,
+      3.0153921990957615,
+      3.0153921990957615
+    ],
+    "contacts": [
+      {
+        "body1": "obj0",
+        "body2": "table",
+        "dim": 3,
+        "dist": -1.3877787807814457e-17,
+        "force_available": true,
+        "force_local": [
+          3.0153921990957615,
+          0.0,
+          0.0
+        ],
+        "frame": [
+          0.0,
+          0.0,
+          -1.0,
+          0.0,
+          1.0,
+          0.0,
+          1.0,
+          -0.0,
+          0.0
+        ],
+        "friction": [
+          0.5136990717140287,
+          0.5136990717140287,
+          0.01,
+          0.01,
+          0.01
+        ],
+        "geom1": 63,
+        "geom1_name": "geom_63",
+        "geom2": 64,
+        "geom2_name": "geom_64",
+        "group1": 0,
+        "group2": 0,
+        "normal_force": 3.0153921990957615,
+        "pos": [
+          0.6656230509306895,
+          -0.05496162909673053,
+          0.42000000000000004
+        ],
+        "tangential_force": 0.0,
+        "torque_local": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "body1": "obj0",
+        "body2": "table",
+        "dim": 3,
+        "dist": -1.3877787807814457e-17,
+        "force_available": true,
+        "force_local": [
+          3.0153921990957615,
+          0.0,
+          0.0
+        ],
+        "frame": [
+          0.0,
+          0.0,
+          -1.0,
+          0.0,
+          1.0,
+          0.0,
+          1.0,
+          -0.0,
+          0.0
+        ],
+        "friction": [
+          0.5136990717140287,
+          0.5136990717140287,
+          0.01,
+          0.01,
+          0.01
+        ],
+        "geom1": 63,
+        "geom1_name": "geom_63",
+        "geom2": 64,
+        "geom2_name": "geom_64",
+        "group1": 0,
+        "group2": 0,
+        "normal_force": 3.0153921990957615,
+        "pos": [
+          0.6656230509306895,
+          0.04745215950630211,
+          0.42000000000000004
+        ],
+        "tangential_force": 0.0,
+        "torque_local": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "body1": "obj0",
+        "body2": "table",
+        "dim": 3,
+        "dist": -1.3877787807814457e-17,
+        "force_available": true,
+        "force_local": [
+          3.0153921990957615,
+          0.0,
+          0.0
+        ],
+        "frame": [
+          0.0,
+          0.0,
+          -1.0,
+          0.0,
+          1.0,
+          0.0,
+          1.0,
+          -0.0,
+          0.0
+        ],
+        "friction": [
+          0.5136990717140287,
+          0.5136990717140287,
+          0.01,
+          0.01,
+          0.01
+        ],
+        "geom1": 63,
+        "geom1_name": "geom_63",
+        "geom2": 64,
+        "geom2_name": "geom_64",
+        "group1": 0,
+        "group2": 0,
+        "normal_force": 3.0153921990957615,
+        "pos": [
+          0.5632092623276568,
+          -0.05496162909673053,
+          0.42000000000000004
+        ],
+        "tangential_force": 0.0,
+        "torque_local": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "body1": "obj0",
+        "body2": "table",
+        "dim": 3,
+        "dist": -1.3877787807814457e-17,
+        "force_available": true,
+        "force_local": [
+          3.0153921990957615,
+          0.0,
+          0.0
+        ],
+        "frame": [
+          0.0,
+          0.0,
+          -1.0,
+          0.0,
+          1.0,
+          0.0,
+          1.0,
+          -0.0,
+          0.0
+        ],
+        "friction": [
+          0.5136990717140287,
+          0.5136990717140287,
+          0.01,
+          0.01,
+          0.01
+        ],
+        "geom1": 63,
+        "geom1_name": "geom_63",
+        "geom2": 64,
+        "geom2_name": "geom_64",
+        "group1": 0,
+        "group2": 0,
+        "normal_force": 3.0153921990957615,
+        "pos": [
+          0.5632092623276568,
+          0.04745215950630211,
+          0.42000000000000004
+        ],
+        "tangential_force": 0.0,
+        "torque_local": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "ctrl": [
+      -0.06102303028687345,
+      -0.0035863703942765057,
+      0.04958560518636555,
+      0.04661195698570171,
+      0.03885589458499697,
+      0.02928415167444813,
+      0.036827066883739185
+    ],
+    "ctrl_write_count": 0,
+    "energy": [
+      0.0,
+      0.0
+    ],
+    "evidence_status": "SIMULATION_ONLY",
+    "interval_max_force": 0.0,
+    "interval_max_speed": 0.0,
+    "kinetic_energy": 0.0,
+    "last_ctrl": [
+      -0.06102303028687345,
+      -0.0035863703942765057,
+      0.04958560518636555,
+      0.04661195698570171,
+      0.03885589458499697,
+      0.02928415167444813,
+      0.036827066883739185
+    ],
+    "metal": false,
+    "nan": false,
+    "ncon": 4,
+    "qacc": [
+      0.5843412136387663,
+      1.3924740447112136,
+      0.9420411632238803,
+      4.957107710353423,
+      -2.6181217601808826,
+      7.931348636959676,
+      1.096141576410133,
+      1.6817913595228192e-19,
+      -3.3635827190456448e-19,
+      -0.04523297035231548,
+      1.43229315218004e-17,
+      7.161465760900188e-18,
+      1.0002448670534096e-34
+    ],
+    "qpos": [
+      -0.06102303028687345,
+      -0.0035863703942765057,
+      0.04958560518636555,
+      0.04661195698570171,
+      0.03885589458499697,
+      0.02928415167444813,
+      0.036827066883739185,
+      0.6144161566291731,
+      -0.0037547347952142096,
+      0.4443083705160051,
+      1.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "qvel": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "safe_write_count": 0,
+    "sensordata": [
+      -0.24266519100578238,
+      -0.08516801661306903,
+      11.70704643542192,
+      -0.0019330024373050325,
+      0.01042443009573671,
+      -6.505213034913027e-19
+    ],
+    "site_xquat": {
+      "attachment_site": [
+        0.9994295866377293,
+        -0.0011125866360351894,
+        -0.010427184413169824,
+        0.032101983261599555
+      ]
+    },
+    "sites": {
+      "attachment_site": [
+        -0.024205633972555315,
+        0.000588269471249924,
+        1.3054658016012322
+      ]
+    },
+    "subtree_com": [
+      -0.020761923137173177,
+      0.00033615573934159645,
+      0.5653526306801645
+    ],
+    "time": 0.0,
+    "time_observed_s": 0.0,
+    "xipos": {
+      "base": [
+        -0.1,
+        0.0,
+        0.07
+      ],
+      "benchmark_obstacle_0": [
+        0.6315453395154055,
+        0.13677465982166545,
+        0.4712068943015163
+      ],
+      "benchmark_obstacle_1": [
+        0.6465012417473381,
+        -0.1552956897743455,
+        0.4712068943015163
+      ],
+      "link1": [
+        -0.001829554929214583,
+        -0.02994416017792095,
+        0.27749999999999997
+      ],
+      "link2": [
+        0.0020507356734818646,
+        0.04195302386093795,
+        0.41899854466104297
+      ],
+      "link3": [
+        -0.0008542805885498389,
+        0.030071197358190485,
+        0.6944925160509885
+      ],
+      "link4": [
+        -0.005253568171729013,
+        -0.03385557310711703,
+        0.8469189585531364
+      ],
+      "link5": [
+        -0.014097265820819245,
+        -0.02070723799764786,
+        1.0402088547966462
+      ],
+      "link6": [
+        -0.021593976518344462,
+        0.0007931923104226202,
+        1.1800925299203358
+      ],
+      "link7": [
+        -0.023682786330284478,
+        0.000549408536137218,
+        1.2804712998024226
+      ],
+      "obj0": [
+        0.6144161566291731,
+        -0.0037547347952142096,
+        0.4443083705160051
+      ],
+      "table": [
+        0.9,
+        0.0,
+        0.4
+      ],
+      "world": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "xpos": {
+      "base": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "benchmark_obstacle_0": [
+        0.6315453395154055,
+        0.13677465982166545,
+        0.4712068943015163
+      ],
+      "benchmark_obstacle_1": [
+        0.6465012417473381,
+        -0.1552956897743455,
+        0.4712068943015163
+      ],
+      "link1": [
+        0.0,
+        0.0,
+        0.1575
+      ],
+      "link2": [
+        0.0,
+        0.0,
+        0.36
+      ],
+      "link3": [
+        -0.0007320460551171619,
+        0.00004472720091643911,
+        0.5644986848565308
+      ],
+      "link4": [
+        -0.0015034686706562749,
+        0.00009186026594084178,
+        0.779997298971848
+      ],
+      "link5": [
+        -0.010759378502170187,
+        0.0002304889960331533,
+        0.9642649274779588
+      ],
+      "link6": [
+        -0.021570481855510287,
+        0.0003924103582818914,
+        1.179493512535232
+      ],
+      "link7": [
+        -0.023264508216467805,
+        0.0005183197880470531,
+        1.260475698363375
+      ],
+      "obj0": [
+        0.6144161566291731,
+        -0.0037547347952142096,
+        0.4443083705160051
+      ],
+      "table": [
+        0.9,
+        0.0,
+        0.4
+      ],
+      "world": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "xquat": {
+      "base": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "benchmark_obstacle_0": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "benchmark_obstacle_1": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "link1": [
+        0.9995345598320663,
+        0.0,
+        0.0,
+        -0.0305067812349575
+      ],
+      "link2": [
+        0.022838899769464995,
+        0.020304134633770753,
+        0.706815210728217,
+        0.7067378471946443
+      ],
+      "link3": [
+        -0.9999820404780922,
+        0.0000991202850384368,
+        0.001790442647454213,
+        0.005718672185575362
+      ],
+      "link4": [
+        -0.7070368551449172,
+        -0.7067082477001884,
+        0.021784698350253748,
+        -0.01370273757694957
+      ],
+      "link5": [
+        0.01370655924263495,
+        0.025084157043280517,
+        -0.0007197994151750982,
+        -0.9995911150005076
+      ],
+      "link6": [
+        0.0022971415715527885,
+        0.017069878198234086,
+        -0.7076524159803697,
+        -0.706350763117053
+      ],
+      "link7": [
+        0.9994295866377293,
+        -0.0011125866360351894,
+        -0.010427184413169824,
+        0.032101983261599555
+      ],
+      "obj0": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "table": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "world": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "initial_observation_sha256": "5dba84c8a53d7911adf00d7ec53da684da4b3e00f626c3ebeae1ddc73b7ea9b6",
+  "reasoning_request_audit": "ReasoningRequest { scene: TableScene { object_id: \"obj0\", object_center: [0.6144161566291731, -0.0037547347952142096, 0.4443083705160051], object_half: [0.05120689430151632, 0.05120689430151632, 0.02430837051600507], object_quat: [1.0, 0.0, 0.0, 0.0], support_origin: [0.9, 0.0, 0.42000000000000004], support_normal: [0.0, 0.0, 1.0], support_half_extents: Some([0.4, 0.25, 0.02]), obstacles: [NamedBox { name: \"benchmark_obstacle_0\", center: [0.6315453395154055, 0.13677465982166545, 0.4712068943015163], half_extents: [0.06656292450702134, 0.06656292450702134, 0.06656292450702134], quat_wxyz: [1.0, 0.0, 0.0, 0.0] }, NamedBox { name: \"benchmark_obstacle_1\", center: [0.6465012417473381, -0.1552956897743455, 0.4712068943015163], half_extents: [0.055127917176136694, 0.055127917176136694, 0.055127917176136694], quat_wxyz: [1.0, 0.0, 0.0, 0.0] }], arm_q: [-0.06102303028687345, -0.0035863703942765057, 0.04958560518636555, 0.04661195698570171, 0.03885589458499697, 0.02928415167444813, 0.036827066883739185], joint_names: [\"joint1\", \"joint2\", \"joint3\", \"joint4\", \"joint5\", \"joint6\", \"joint7\"], ee: \"tool0\", tool_radius_m: 0.061, tool_contact_extents_m: [0.059979086094309166, 0.06002091390569083, 0.06000155443740451, 0.05999844556259549], observation_epoch: \"v7:development:menagerie_iiwa14:push_probe_replan:21003:0:0:4621819117588971520\", held: false, finger_names: [], finger_q: [] }, belief: PhysicalParameterBelief { parameters: [ParameterBelief { parameter: SupportFriction, status: DerivedConstraint, declared: Provenanced { value: Some(0.5), provenance: ModelDeclared, source: \"benchmark_prior\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.05, 0.8]), lineage: [BeliefLineage { belief_before: \"SupportFriction status=DeclaredFact declared=Some(0.5) interval=None\", observation: \"benchmark_uncertain_support\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.05, 0.8])\" }], evidence: [] }, ParameterBelief { parameter: ToolObjectFriction, status: Unknown, declared: Provenanced { value: None, provenance: Unknown, source: \"unmeasured_tool_object_pair\", as_of_s: 0.0, uncertainty: None }, empirical_interval: None, lineage: [], evidence: [] }] }, objective: PlanarTranslation { target_xy: [0.6594374889377156, -0.0037547347952142096] }, mu_required: 0.3, goal_stroke_m: 0.025, probe_stroke_m: 0.008, grants: [], now_s: 10.0, evidence_fresh: true, safety_faults: [], mass_kg: Some(1.2352131658401928), gripper_force_n: None, gripper_resource: None, linear_execution_bound_m: None, linear_wrench_limit: None, gravity_m_s2: [0.0, 0.0, -9.81] }",
+  "decision_audit": "decision=Refuse { reason: \"SCOPED_GRANT_DOES_NOT_COVER_PROBE\" };pregrant_action_source=authority_request;pregrant_action_key=probe:+x;support_friction_interval=Some([0.05, 0.8]);candidates=planar_push:push:+x:MECHANICS_UNKNOWN|planar_push:push:-x:MECHANICS_UNKNOWN|planar_push:push:+y:COLLISION_NECESSARY_CONDITION|planar_push:push:-y:COLLISION_NECESSARY_CONDITION|planar_push:probe:+x:PROVED|pinch_grasp:grasp:y:GRIPPER_RESOURCE_UNKNOWN",
+  "pregrant_action_source": "authority_request",
+  "pregrant_action_key": "probe:+x",
+  "authorized_action_key": "probe:+x",
+  "authorized_grant_id": "sim-scope:1733bc3e310b3529e5e45e0fce2673957055661fbce6c8ec8c6d2c269fa8310c",
+  "authorized_witness_digest": "e6f4dc2b174cfcee4b48c2e66d6792bd62145e3f6793883511e8b43290c090e4",
+  "authorized_observation_epoch": "v7:development:menagerie_iiwa14:push_probe_replan:21003:0:0:4621819117588971520",
+  "refusal_code": null,
+  "control_writes_before": 0,
+  "control_writes_after": 0,
+  "simulation_time_before_s": 0.0,
+  "simulation_time_after_s": 0.0,
+  "simulation_timestep_s": 0.002,
+  "simulator_steps": 0
+}
