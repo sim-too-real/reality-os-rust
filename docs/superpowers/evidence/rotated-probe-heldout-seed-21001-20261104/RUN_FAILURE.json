@@ -1,0 +1,41 @@
+{
+  "schema": "realityos.rotated_probe_diagnostic.run_failure/v1",
+  "experiment_id": "rotated_probe_heldout_seed_21001_iiwa14_20261104_v1",
+  "recorded_at_utc": "2026-11-03T19:34:59Z",
+  "classification": "HELD_OUT_DIAGNOSTIC_CAPTURE_FAILURE; SIMULATION_ONLY; NOT_ADMITTED",
+  "repository": "reality-os-rust",
+  "branch": "main",
+  "source_commit": "e5ded32035ce54006f945412abb2290396749fbb",
+  "run_head": "5113efa27dfbfabfbb76c4e4253f2d7fad302372",
+  "freeze_sha256": "745719E7A9149580C6601F41F3A4C5830F4F610A20E9D78DA9EA7D9C4C8F3251",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21001:0",
+  "trial_digest": "3e31533a841c0ce2445a366d3928a11755f6f482ebca81ba62ef71781780f2ff",
+  "trial_seed": 21001,
+  "trial_index": 0,
+  "simulation_runs": 1,
+  "run": {
+    "test": "iiwa_rotated_probe_unbracketed_motion_diagnostic_capture",
+    "result": "FAILED",
+    "exit_code": 101,
+    "wall_time_s": 102.75,
+    "error": "InvalidTrial(\"probe measurement sidecar has no measurement records\")",
+    "failure_stage": "final sidecar validation after run_benchmark_trial_inner finalized the episode"
+  },
+  "artifacts": {
+    "episode_written": false,
+    "probe_measurement_sidecar_written": false,
+    "reservation_released": true
+  },
+  "interpretation": "The test harness expected an updated probe inference, but the sidecar path returned an error before the finalized episode could be written. The task outcome, action sequence, and inference are unavailable; this run does not confirm or refute held-out task success or the time-aligned observer.",
+  "scope_limits": {
+    "full_lift_replay": false,
+    "physical_test": false,
+    "physical_actions": 0,
+    "purchases": 0,
+    "fabrication": 0,
+    "external_contact": false,
+    "admission_status": "NOT_ADMITTED",
+    "shop_release": false
+  },
+  "next_action": "Improve diagnostic capture so a completed episode remains reviewable when a requested probe sidecar has zero records. Freeze a different held-out trial and run it once; do not replay seed 21001."
+}
