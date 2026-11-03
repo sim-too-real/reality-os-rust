@@ -1,0 +1,409 @@
+{
+  "format": "realityos.first_action_preflight",
+  "schema_version": 1,
+  "evidence_status": "SIMULATION_ONLY",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21000:0",
+  "trial_digest": "776dee2c071f47b230131719eca5fea3babcd114e137e2d511e1a04eb9a7ba3d",
+  "paired_trial_key": "17efc38ab09492aaf96c65bd84caa19919aa1fdd0fbc7aeef94aafd89e4cdb52",
+  "initial_observation": {
+    "actuator_force": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "contact_forces": [
+      2.8681280792511537
+    ],
+    "contacts": [
+      {
+        "body1": "obj0",
+        "body2": "table",
+        "dim": 3,
+        "dist": -9.868122050982123e-17,
+        "force_available": true,
+        "force_local": [
+          2.535286929667858,
+          -0.9482823585948,
+          0.9482823585948017
+        ],
+        "frame": [
+          -0.0,
+          0.0,
+          -1.0,
+          0.0,
+          1.0,
+          0.0,
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "friction": [
+          0.7480670905513903,
+          0.7480670905513903,
+          0.01,
+          0.01,
+          0.01
+        ],
+        "geom1": 63,
+        "geom1_name": "geom_63",
+        "geom2": 64,
+        "geom2_name": "geom_64",
+        "group1": 0,
+        "group2": 0,
+        "normal_force": 2.535286929667858,
+        "pos": [
+          0.6904158142911088,
+          -0.04879606671729618,
+          0.42000000000000004
+        ],
+        "tangential_force": 1.3410737724839141,
+        "torque_local": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "ctrl": [
+      -0.046963283704703575,
+      -0.03549429073941041,
+      0.03898215142595464,
+      -0.026496931078590212,
+      -0.021596525894677816,
+      -0.044065048084278684,
+      -0.05069451053303456
+    ],
+    "ctrl_write_count": 0,
+    "energy": [
+      0.0,
+      0.0
+    ],
+    "evidence_status": "SIMULATION_ONLY",
+    "interval_max_force": 0.0,
+    "interval_max_speed": 0.0,
+    "kinetic_energy": 0.0,
+    "last_ctrl": [
+      -0.046963283704703575,
+      -0.03549429073941041,
+      0.03898215142595464,
+      -0.026496931078590212,
+      -0.021596525894677816,
+      -0.044065048084278684,
+      -0.05069451053303456
+    ],
+    "metal": false,
+    "nan": false,
+    "ncon": 1,
+    "qacc": [
+      0.20665449338554223,
+      -1.8262788135313046,
+      -1.053389073646859,
+      -4.2042842459637395,
+      1.3444645877982904,
+      -7.172858521453965,
+      -0.4998097976273712,
+      -0.7783988789141648,
+      0.778398878914164,
+      -7.728906235160224,
+      -63.59937138565964,
+      -63.599371385659694,
+      -1.0868340950601446e-14
+    ],
+    "qpos": [
+      -0.046963283704703575,
+      -0.03549429073941041,
+      0.03898215142595464,
+      -0.026496931078590212,
+      -0.021596525894677816,
+      -0.044065048084278684,
+      -0.05069451053303456,
+      0.6241653624235973,
+      0.017454385150215315,
+      0.45115341504701145,
+      1.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "qvel": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "safe_write_count": 0,
+    "sensordata": [
+      0.260185921684075,
+      0.06468762910951471,
+      11.721329270274225,
+      0.0017894621809433572,
+      -0.011297275616078472,
+      2.4936649967166602e-18
+    ],
+    "site_xquat": {
+      "attachment_site": [
+        0.9988429777816437,
+        -0.0003144620464259993,
+        -0.02653329372313714,
+        -0.040107245905459596
+      ]
+    },
+    "sites": {
+      "attachment_site": [
+        -0.02514708945398104,
+        0.0016289172745500996,
+        1.3055415474310477
+      ]
+    },
+    "subtree_com": [
+      -0.02388987353327351,
+      0.0006687498890120504,
+      0.5653210560839788
+    ],
+    "time": 0.0,
+    "time_observed_s": 0.0,
+    "xipos": {
+      "base": [
+        -0.1,
+        0.0,
+        0.07
+      ],
+      "benchmark_obstacle_0": [
+        0.6494530891220365,
+        0.184468864344288,
+        0.4862504518675115
+      ],
+      "benchmark_obstacle_1": [
+        0.6373682634336859,
+        -0.14903878351290545,
+        0.4862504518675115
+      ],
+      "link1": [
+        -0.001408380668895046,
+        -0.029966922829871647,
+        0.27749999999999997
+      ],
+      "link2": [
+        -0.00041916252302494827,
+        0.042066058886031876,
+        0.4189521924323107
+      ],
+      "link3": [
+        -0.011617092481111674,
+        0.03055627555121992,
+        0.6942478230096991
+      ],
+      "link4": [
+        -0.015760476972503462,
+        -0.03320170633985227,
+        0.8467797227487942
+      ],
+      "link5": [
+        -0.017943331116577088,
+        -0.019909167774773154,
+        1.0402487988694735
+      ],
+      "link6": [
+        -0.018491563196320625,
+        0.0016830702508052677,
+        1.180317663775857
+      ],
+      "link7": [
+        -0.023822590358673575,
+        0.0015600034974057443,
+        1.2805767531591565
+      ],
+      "obj0": [
+        0.6241653624235973,
+        0.017454385150215315,
+        0.45115341504701145
+      ],
+      "table": [
+        0.9,
+        0.0,
+        0.4
+      ],
+      "world": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "xpos": {
+      "base": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "benchmark_obstacle_0": [
+        0.6494530891220365,
+        0.184468864344288,
+        0.4862504518675115
+      ],
+      "benchmark_obstacle_1": [
+        0.6373682634336859,
+        -0.14903878351290545,
+        0.4862504518675115
+      ],
+      "link1": [
+        0.0,
+        0.0,
+        0.1575
+      ],
+      "link2": [
+        0.0,
+        0.0,
+        0.36
+      ],
+      "link3": [
+        -0.007249057005918601,
+        0.0003406900272281838,
+        0.5643711944057437
+      ],
+      "link4": [
+        -0.01488803883856143,
+        0.000699705679392849,
+        0.7797354603932144
+      ],
+      "link5": [
+        -0.016540962888062456,
+        0.0009681006699316654,
+        0.9642278607955497
+      ],
+      "link6": [
+        -0.018471614013631402,
+        0.001281591837742553,
+        1.1797189843007163
+      ],
+      "link7": [
+        -0.0227629910824276,
+        0.0015048724756902602,
+        1.2606049177416436
+      ],
+      "obj0": [
+        0.6241653624235973,
+        0.017454385150215315,
+        0.45115341504701145
+      ],
+      "table": [
+        0.9,
+        0.0,
+        0.4
+      ],
+      "world": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "xquat": {
+      "base": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "benchmark_obstacle_0": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "benchmark_obstacle_1": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "link1": [
+        0.9997243189155669,
+        0.0,
+        0.0,
+        -0.023479483997861227
+      ],
+      "link2": [
+        0.029144896575258566,
+        0.004054879125739623,
+        0.7070951548096449,
+        0.7065058916977391
+      ],
+      "link3": [
+        -0.99983456250431,
+        0.0007623683433244253,
+        0.017729830733123363,
+        0.003989927129483744
+      ],
+      "link4": [
+        -0.7075954953086627,
+        -0.7065921920010176,
+        0.005997725971159187,
+        -0.00034132866794086766
+      ],
+      "link5": [
+        -0.014797299238327205,
+        0.004489787793910897,
+        -0.0006610001421802923,
+        -0.9998802152356192
+      ],
+      "link6": [
+        -0.02920064359472261,
+        0.008299775562617271,
+        -0.7074783374468369,
+        -0.7060827417397499
+      ],
+      "link7": [
+        0.9988429777816434,
+        -0.0003144620464259993,
+        -0.026533293723137147,
+        -0.04010724590545961
+      ],
+      "obj0": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "table": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "world": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "initial_observation_sha256": "91e72ea86cc617a7042d24c97c22b63b67589bef064e3146e51ef67ecc29b500",
+  "reasoning_request_audit": "ReasoningRequest { scene: TableScene { object_id: \"obj0\", object_center: [0.6241653624235973, 0.017454385150215315, 0.45115341504701145], object_half: [0.0662504518675115, 0.0662504518675115, 0.031153415047011447], object_quat: [1.0, 0.0, 0.0, 0.0], support_origin: [0.9, 0.0, 0.42000000000000004], support_normal: [0.0, 0.0, 1.0], support_half_extents: Some([0.4, 0.25, 0.02]), obstacles: [NamedBox { name: \"benchmark_obstacle_0\", center: [0.6494530891220365, 0.184468864344288, 0.4862504518675115], half_extents: [0.05076179777770938, 0.05076179777770938, 0.05076179777770938], quat_wxyz: [1.0, 0.0, 0.0, 0.0] }, NamedBox { name: \"benchmark_obstacle_1\", center: [0.6373682634336859, -0.14903878351290545, 0.4862504518675115], half_extents: [0.05457163350651472, 0.05457163350651472, 0.05457163350651472], quat_wxyz: [1.0, 0.0, 0.0, 0.0] }], arm_q: [-0.046963283704703575, -0.03549429073941041, 0.03898215142595464, -0.026496931078590212, -0.021596525894677816, -0.044065048084278684, -0.05069451053303456], joint_names: [\"joint1\", \"joint2\", \"joint3\", \"joint4\", \"joint5\", \"joint6\", \"joint7\"], ee: \"tool0\", tool_radius_m: 0.061, tool_contact_extents_m: [0.0599470200361877, 0.06005297996381229, 0.06000275655108577, 0.059997243448914224], observation_epoch: \"v7:development:menagerie_iiwa14:push_probe_replan:21000:0:0:4621819117588971520\", held: false, finger_names: [], finger_q: [] }, belief: PhysicalParameterBelief { parameters: [ParameterBelief { parameter: SupportFriction, status: DerivedConstraint, declared: Provenanced { value: Some(0.5), provenance: ModelDeclared, source: \"benchmark_prior\", as_of_s: 0.0, uncertainty: None }, empirical_interval: Some([0.05, 0.8]), lineage: [BeliefLineage { belief_before: \"SupportFriction status=DeclaredFact declared=Some(0.5) interval=None\", observation: \"benchmark_uncertain_support\", inference: \"EMPIRICAL_INTERVAL_NARROWED\", belief_after: \"SupportFriction status=DerivedConstraint declared=Some(0.5) interval=Some([0.05, 0.8])\" }], evidence: [] }, ParameterBelief { parameter: ToolObjectFriction, status: Unknown, declared: Provenanced { value: None, provenance: Unknown, source: \"unmeasured_tool_object_pair\", as_of_s: 0.0, uncertainty: None }, empirical_interval: None, lineage: [], evidence: [] }] }, objective: PlanarTranslation { target_xy: [0.7022392834981697, 0.017454385150215315] }, mu_required: 0.3, goal_stroke_m: 0.025, probe_stroke_m: 0.008, grants: [], now_s: 10.0, evidence_fresh: true, safety_faults: [], mass_kg: Some(1.2182473334463388), gripper_force_n: None, gripper_resource: None, linear_execution_bound_m: None, linear_wrench_limit: None, gravity_m_s2: [0.0, 0.0, -9.81] }",
+  "decision_audit": "decision=Refuse { reason: \"SCOPED_GRANT_DOES_NOT_COVER_PROBE\" };pregrant_action_source=authority_request;pregrant_action_key=probe:+x;support_friction_interval=Some([0.05, 0.8]);candidates=planar_push:push:+x:MECHANICS_UNKNOWN|planar_push:push:-x:MECHANICS_UNKNOWN|planar_push:push:+y:COLLISION_NECESSARY_CONDITION|planar_push:push:-y:COLLISION_NECESSARY_CONDITION|planar_push:probe:+x:PROVED|pinch_grasp:grasp:y:GRIPPER_RESOURCE_UNKNOWN",
+  "pregrant_action_source": "authority_request",
+  "pregrant_action_key": "probe:+x",
+  "authorized_action_key": "probe:+x",
+  "authorized_grant_id": "sim-scope:c2dcd7afb689ebd3b0d13b57de63c10c273043f6ea5190d6ab7d5799b2c601f1",
+  "authorized_witness_digest": "33db4cd3b42659f24b0dba3e51dea02e91f3c740c05d98337327f71d750bfb11",
+  "authorized_observation_epoch": "v7:development:menagerie_iiwa14:push_probe_replan:21000:0:0:4621819117588971520",
+  "refusal_code": null,
+  "control_writes_before": 0,
+  "control_writes_after": 0,
+  "simulation_time_before_s": 0.0,
+  "simulation_time_after_s": 0.0,
+  "simulation_timestep_s": 0.002,
+  "simulator_steps": 0
+}
