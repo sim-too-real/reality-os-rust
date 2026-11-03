@@ -37,10 +37,10 @@
 
 **Interfaces:** Add `ProbeContactForceSample` and an optional `contact_force_samples` field on `ProbeObjectPoseSample`. Each contact sample carries the corresponding `ProbeContactPair`, `position_world_m`, `frame: [f64; 9]`, `friction: [f64; 5]`, `force_local: [f64; 3]`, `torque_local: [f64; 3]`, `normal_force_n`, `tangential_force_n`, and `force_available`. Preserve existing digest selection when the field is absent; select the new sample/trace digest versions when it is present.
 
-- [ ] Add inline tests `probe_object_pose_digest_binds_contact_force_samples` and `probe_object_pose_trace_rejects_partial_contact_force_samples` in a new `probe_object_pose_trace_tests` module for force/friction digest binding, identity alignment, empty-versus-missing data, and partial-trace rejection.
-- [ ] Run the focused semantics tests and confirm they fail on the missing field/digest behavior.
-- [ ] Implement the optional type, validation, and digest versioning.
-- [ ] Run the focused semantics tests and confirm they pass, including legacy compatibility.
+- [x] Add inline tests `probe_object_pose_digest_binds_contact_force_samples` and `probe_object_pose_trace_rejects_partial_contact_force_samples` in a new `probe_object_pose_trace_tests` module for force/friction digest binding, identity alignment, empty-versus-missing data, and partial-trace rejection.
+- [x] Run the focused semantics tests and confirm they fail on the missing field/digest behavior.
+- [x] Implement the optional type, validation, and digest versioning.
+- [x] Run the focused semantics tests and confirm they pass, including legacy compatibility.
 
 ### Task 2: Capture contact snapshots from the existing worker stream
 
@@ -51,11 +51,11 @@
 
 **Interfaces:** Emit `contact_force_samples` beside each `object_pose_trace` record, from the same `MjData.contact` entries and simulation step. Parse each record into the semantic type from Task 1; require ordering and identity alignment with `contact_pairs` when the field is present.
 
-- [ ] Add `probe_pose_trace_tests::parses_and_seals_contact_force_samples`, proving contact force, friction, position, frame, and availability survive into a pose sample.
-- [ ] Run the focused parser test and confirm it fails before the field is parsed.
-- [ ] Add one worker helper that captures contact force and torque without advancing physics; populate the trace field.
-- [ ] Parse and validate the new field in Rust.
-- [ ] Run focused capture/parse/validation tests.
+- [x] Add `probe_pose_trace_tests::parses_and_seals_contact_force_samples`, proving contact force, friction, position, frame, and availability survive into a pose sample.
+- [x] Run the focused parser test and confirm it fails before the field is parsed.
+- [x] Add one worker helper that captures contact force and torque without advancing physics; populate the trace field.
+- [x] Parse and validate the new field in Rust.
+- [x] Run focused capture/parse/validation tests.
 
 ### Task 3: Verify and analyze the new evidence
 
@@ -64,7 +64,7 @@
 - Create: `crates/verify/probe_contact_force_analysis.py`
 - Test: offline compatibility checks against the committed seed 21003 sidecar and analyzer output (no simulator replay).
 
-- [ ] Before editing the CLI, verify the committed seed 21003 sidecar with `target/debug/realityos-verify.exe`; it must pass.
+- [x] Before editing the CLI, verify the committed seed 21003 sidecar with `target/debug/realityos-verify.exe`; it must pass.
 - [ ] Extend CLI output with `contact_force_trace_status`; create the analyzer to report per-contact force, friction, normal/tangential magnitudes, and the paired tool-wrench interval at slip onset.
 - [ ] Re-run the verifier and analyzer on seed 21003; confirm the old sidecar still verifies and reports `absent_legacy`, then run formatting and `git diff --check`.
 - [ ] Run `cargo check -p realityos-verify`, `cargo fmt --all -- --check`, and `git diff --check`.

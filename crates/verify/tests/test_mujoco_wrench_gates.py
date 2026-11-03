@@ -19,6 +19,46 @@ from mujoco_worker import (
 
 
 class MonitoredWrenchGateTests(unittest.TestCase):
+    def test_probe_contact_force_capture_is_per_contact_and_does_not_advance_physics(self):
+        model = mujoco.MjModel.from_xml_string(
+            """
+            <mujoco><option gravity="0 0 -9.81"/><worldbody>
+              <geom name="table_geom" type="plane" size="1 1 .1"/>
+              <body name="obj0" pos="0 0 .04"><freejoint/>
+                <geom name="obj_geom" type="box" size=".05 .05 .05"
+                  mass=".1" friction=".37 .37 .01" condim="4"/>
+              </body>
+            </worldbody></mujoco>
+            """
+        )
+        data = mujoco.MjData(model)
+        mujoco.mj_forward(model, data)
+        self.assertGreater(data.ncon, 0)
+        time_before = float(data.time)
+        qpos_before = data.qpos.copy()
+
+        with patch.object(
+            mujoco_worker, "INST", SimpleNamespace(model=model, data=data)
+        ):
+            samples = mujoco_worker._probe_contact_force_evidence()
+
+        self.assertEqual(float(data.time), time_before)
+        self.assertEqual(data.qpos.tolist(), qpos_before.tolist())
+        self.assertEqual(len(samples), data.ncon)
+        sample = next(
+            record
+            for record in samples
+            if {record["contact_pair"]["body1"], record["contact_pair"]["body2"]}
+            == {"world", "obj0"}
+        )
+        self.assertEqual(sample["contact_pair"]["geom1_name"], "table_geom")
+        self.assertEqual(sample["contact_pair"]["geom2_name"], "obj_geom")
+        self.assertEqual(sample["friction"][2], 0.37)
+        self.assertEqual(len(sample["frame"]), 9)
+        self.assertEqual(len(sample["force_local"]), 3)
+        self.assertEqual(len(sample["torque_local"]), 3)
+        self.assertTrue(sample["force_available"])
+
     def test_force_limited_actuator_is_flagged_at_either_force_bound(self):
         self.assertFalse(_actuator_force_limit_reached(0.0, True, (-8.0, 8.0)))
         self.assertTrue(_actuator_force_limit_reached(-8.0, True, (-8.0, 8.0)))

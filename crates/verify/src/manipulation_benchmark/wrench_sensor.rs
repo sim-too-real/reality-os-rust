@@ -6,7 +6,7 @@
 use realityos_kernel::physical_action::WrenchLimitPolicy;
 use realityos_semantics::observation::{wrench_sample_digest, WrenchSample};
 use realityos_semantics::push_probe::{
-    ProbeContactPair, ProbeObjectPoseSample, WrenchCompensation,
+    ProbeContactForceSample, ProbeContactPair, ProbeObjectPoseSample, WrenchCompensation,
 };
 use realityos_semantics::sensor::WrenchSampleOrigin;
 use serde::{Deserialize, Serialize};
@@ -795,6 +795,13 @@ fn parse_probe_pose_samples(
                 )
             },
             contact_pairs: Some(parse_probe_contact_pairs(&record["contact_pairs"])?),
+            contact_force_samples: if record["contact_force_samples"].is_null() {
+                None
+            } else {
+                Some(parse_probe_contact_force_samples(
+                    &record["contact_force_samples"],
+                )?)
+            },
             capture_s: record["capture_s"]
                 .as_f64()
                 .ok_or(WrenchSensorError::Worker("object_pose_capture_s"))?,
@@ -827,21 +834,59 @@ fn parse_probe_contact_pairs(value: &Value) -> Result<Vec<ProbeContactPair>, Wre
     let records = value
         .as_array()
         .ok_or(WrenchSensorError::Worker("object_pose_contact_pairs"))?;
+    records.iter().map(parse_probe_contact_pair).collect()
+}
+
+fn parse_probe_contact_pair(value: &Value) -> Result<ProbeContactPair, WrenchSensorError> {
+    let field = |name| {
+        value[name]
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned)
+            .ok_or(WrenchSensorError::Worker("object_pose_contact_identity"))
+    };
+    Ok(ProbeContactPair {
+        body1: field("body1")?,
+        geom1_name: field("geom1_name")?,
+        body2: field("body2")?,
+        geom2_name: field("geom2_name")?,
+    })
+}
+
+fn parse_probe_contact_force_samples(
+    value: &Value,
+) -> Result<Vec<ProbeContactForceSample>, WrenchSensorError> {
+    let records = value.as_array().ok_or(WrenchSensorError::Worker(
+        "object_pose_contact_force_samples",
+    ))?;
     records
         .iter()
         .map(|record| {
-            let field = |name| {
-                record[name]
-                    .as_str()
-                    .filter(|value| !value.trim().is_empty())
-                    .map(str::to_owned)
-                    .ok_or(WrenchSensorError::Worker("object_pose_contact_identity"))
-            };
-            Ok(ProbeContactPair {
-                body1: field("body1")?,
-                geom1_name: field("geom1_name")?,
-                body2: field("body2")?,
-                geom2_name: field("geom2_name")?,
+            Ok(ProbeContactForceSample {
+                contact_pair: parse_probe_contact_pair(&record["contact_pair"])?,
+                position_world_m: parse_three(&record["position_world_m"]).ok_or(
+                    WrenchSensorError::Worker("object_pose_contact_force_position"),
+                )?,
+                frame: parse_fixed_array(&record["frame"])
+                    .ok_or(WrenchSensorError::Worker("object_pose_contact_force_frame"))?,
+                friction: parse_fixed_array(&record["friction"]).ok_or(
+                    WrenchSensorError::Worker("object_pose_contact_force_friction"),
+                )?,
+                force_local: parse_three(&record["force_local"]).ok_or(
+                    WrenchSensorError::Worker("object_pose_contact_force_wrench"),
+                )?,
+                torque_local: parse_three(&record["torque_local"]).ok_or(
+                    WrenchSensorError::Worker("object_pose_contact_force_wrench"),
+                )?,
+                normal_force_n: record["normal_force_n"].as_f64().ok_or(
+                    WrenchSensorError::Worker("object_pose_contact_force_normal"),
+                )?,
+                tangential_force_n: record["tangential_force_n"].as_f64().ok_or(
+                    WrenchSensorError::Worker("object_pose_contact_force_tangential"),
+                )?,
+                force_available: record["force_available"].as_bool().ok_or(
+                    WrenchSensorError::Worker("object_pose_contact_force_available"),
+                )?,
             })
         })
         .collect()
@@ -923,6 +968,21 @@ fn parse_six(value: &Value) -> Option<[f64; 6]> {
         return None;
     }
     let mut out = [0.0; 6];
+    for (index, value) in values.iter().enumerate() {
+        out[index] = value.as_f64()?;
+        if !out[index].is_finite() {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+fn parse_fixed_array<const N: usize>(value: &Value) -> Option<[f64; N]> {
+    let values = value.as_array()?;
+    if values.len() != N {
+        return None;
+    }
+    let mut out = [0.0; N];
     for (index, value) in values.iter().enumerate() {
         out[index] = value.as_f64()?;
         if !out[index].is_finite() {
@@ -1044,9 +1104,98 @@ mod probe_pose_trace_tests {
         assert_eq!(samples[0].capture_s, 1.25);
         assert_eq!(samples[0].position_world_m, [0.1, 0.2, 0.3]);
         assert_eq!(samples[0].contact_pairs.as_ref().unwrap()[0].body1, "tool0");
+        assert_eq!(samples[0].contact_force_samples, None);
         samples[0]
             .validate()
             .expect("parser seals a valid pose digest");
+    }
+
+    #[test]
+    fn parses_and_seals_contact_force_samples() {
+        let samples = parse_probe_pose_samples(&json!([{
+            "object_id": "obj0",
+            "simulator_step": 19,
+            "wrench_sequence": 7,
+            "capture_s": 1.25,
+            "clock_domain": "mujoco_simulation_clock",
+            "position_world_m": [0.1, 0.2, 0.3],
+            "orientation_world_wxyz": [1.0, 0.0, 0.0, 0.0],
+            "contact_pairs": [{
+                "body1": "table",
+                "geom1_name": "table_geom",
+                "body2": "obj0",
+                "geom2_name": "obj_geom"
+            }],
+            "contact_force_samples": [{
+                "contact_pair": {
+                    "body1": "table",
+                    "geom1_name": "table_geom",
+                    "body2": "obj0",
+                    "geom2_name": "obj_geom"
+                },
+                "position_world_m": [0.0, 0.0, 0.01],
+                "frame": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                "friction": [0.42, 0.42, 0.01, 0.0, 0.0],
+                "force_local": [1.25, 0.3, 0.4],
+                "torque_local": [0.01, 0.02, 0.03],
+                "normal_force_n": 1.25,
+                "tangential_force_n": 0.5,
+                "force_available": true
+            }]
+        }]))
+        .expect("valid force capture");
+
+        let force = &samples[0].contact_force_samples.as_ref().unwrap()[0];
+        assert_eq!(force.position_world_m, [0.0, 0.0, 0.01]);
+        assert_eq!(force.frame[0], 1.0);
+        assert_eq!(force.friction[0], 0.42);
+        assert_eq!(force.force_local, [1.25, 0.3, 0.4]);
+        assert_eq!(force.tangential_force_n, 0.5);
+        assert!(force.force_available);
+        samples[0]
+            .validate()
+            .expect("force values bind to the pose digest");
+    }
+
+    #[test]
+    fn rejects_contact_force_samples_with_misaligned_contact_identity() {
+        let error = parse_probe_pose_samples(&json!([{
+            "object_id": "obj0",
+            "simulator_step": 19,
+            "wrench_sequence": null,
+            "capture_s": 1.25,
+            "clock_domain": "mujoco_simulation_clock",
+            "position_world_m": [0.1, 0.2, 0.3],
+            "orientation_world_wxyz": [1.0, 0.0, 0.0, 0.0],
+            "contact_pairs": [{
+                "body1": "table",
+                "geom1_name": "table_geom",
+                "body2": "obj0",
+                "geom2_name": "obj_geom"
+            }],
+            "contact_force_samples": [{
+                "contact_pair": {
+                    "body1": "tool",
+                    "geom1_name": "tool_geom",
+                    "body2": "obj0",
+                    "geom2_name": "obj_geom"
+                },
+                "position_world_m": [0.0, 0.0, 0.01],
+                "frame": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                "friction": [0.42, 0.42, 0.01, 0.0, 0.0],
+                "force_local": [1.25, 0.3, 0.4],
+                "torque_local": [0.01, 0.02, 0.03],
+                "normal_force_n": 1.25,
+                "tangential_force_n": 0.5,
+                "force_available": true
+            }]
+        }]))
+        .expect_err("contact identity order must be preserved");
+
+        assert!(matches!(
+            error,
+            WrenchSensorError::Worker("contact_force_pair_mismatch")
+        ));
     }
 
     #[test]

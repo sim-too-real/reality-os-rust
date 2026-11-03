@@ -548,6 +548,49 @@ def _probe_contact_pair_evidence() -> list[dict[str, str]]:
     return pairs
 
 
+def _probe_contact_force_evidence() -> list[dict[str, Any]]:
+    """Capture force, geometry, and friction for each current MuJoCo contact.
+
+    This is a read-only snapshot: it uses the current ``MjData.contact`` array
+    and ``mj_contactForce`` without advancing the simulation.
+    """
+    m, d = INST.model, INST.data
+    if m is None or d is None:
+        raise ValueError("probe_contact_model_missing")
+    contact_pairs = _probe_contact_pair_evidence()
+    samples = []
+    for index, pair in enumerate(contact_pairs):
+        contact = d.contact[index]
+        wrench = np.zeros(6, dtype=np.float64)
+        force_available = True
+        try:
+            mujoco.mj_contactForce(m, d, index, wrench)
+            force_local = [float(value) for value in wrench[:3]]
+            torque_local = [float(value) for value in wrench[3:]]
+            normal_force_n = float(wrench[0])
+            tangential_force_n = float(math.hypot(wrench[1], wrench[2]))
+        except Exception:
+            force_available = False
+            force_local = [0.0, 0.0, 0.0]
+            torque_local = [0.0, 0.0, 0.0]
+            normal_force_n = 0.0
+            tangential_force_n = 0.0
+        samples.append(
+            {
+                "contact_pair": pair,
+                "position_world_m": [float(value) for value in contact.pos],
+                "frame": [float(value) for value in contact.frame],
+                "friction": [float(value) for value in contact.friction],
+                "force_local": force_local,
+                "torque_local": torque_local,
+                "normal_force_n": normal_force_n,
+                "tangential_force_n": tangential_force_n,
+                "force_available": force_available,
+            }
+        )
+    return samples
+
+
 def _end_effector_chains(m, joints, bodies, sites) -> list[dict[str, Any]]:
     name_to_id = {m.body(i).name or f"body_{i}": i for i in range(m.nbody)}
     chains = []
@@ -2242,6 +2285,7 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                     wrench_sequence_at_step = sequence
                     sequence += 1
                 if expected_contact_body_id is not None:
+                    contact_force_samples = _probe_contact_force_evidence()
                     object_pose_trace.append(
                         {
                             "object_id": expected_contact_name,
@@ -2257,7 +2301,11 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
                                 float(value)
                                 for value in INST.data.xquat[expected_contact_body_id]
                             ],
-                            "contact_pairs": _probe_contact_pair_evidence(),
+                            "contact_pairs": [
+                                sample["contact_pair"]
+                                for sample in contact_force_samples
+                            ],
+                            "contact_force_samples": contact_force_samples,
                         }
                     )
                 newly_available = []

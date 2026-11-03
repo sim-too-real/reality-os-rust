@@ -65,6 +65,58 @@ impl ProbeContactPair {
     }
 }
 
+/// A raw MuJoCo contact-force snapshot paired with one object-pose sample.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProbeContactForceSample {
+    pub contact_pair: ProbeContactPair,
+    pub position_world_m: [f64; 3],
+    /// Contact frame rows in world coordinates, flattened in row-major order.
+    pub frame: [f64; 9],
+    /// MuJoCo contact friction: two sliding, one torsional, and two rolling terms.
+    pub friction: [f64; 5],
+    /// Force and torque in MuJoCo's contact frame.
+    pub force_local: [f64; 3],
+    pub torque_local: [f64; 3],
+    pub normal_force_n: f64,
+    pub tangential_force_n: f64,
+    pub force_available: bool,
+}
+
+impl ProbeContactForceSample {
+    fn validate(&self) -> Result<(), &'static str> {
+        self.contact_pair.validate()?;
+        if self.position_world_m.iter().any(|value| !value.is_finite()) {
+            return Err("contact_force_position");
+        }
+        if self.frame.iter().any(|value| !value.is_finite()) {
+            return Err("contact_force_frame");
+        }
+        if self
+            .friction
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err("contact_force_friction");
+        }
+        if self
+            .force_local
+            .iter()
+            .chain(self.torque_local.iter())
+            .any(|value| !value.is_finite())
+        {
+            return Err("contact_force_wrench");
+        }
+        if !self.normal_force_n.is_finite()
+            || self.normal_force_n < 0.0
+            || !self.tangential_force_n.is_finite()
+            || self.tangential_force_n < 0.0
+        {
+            return Err("contact_force_magnitude");
+        }
+        Ok(())
+    }
+}
+
 /// A target-body pose captured at a simulation step during a push probe.
 /// `wrench_sequence` is present when a force sample was captured at the same
 /// simulator time, making the two evidence streams directly pairable offline.
@@ -78,6 +130,9 @@ pub struct ProbeObjectPoseSample {
     /// identifies legacy pose evidence that did not record contacts.
     #[serde(default)]
     pub contact_pairs: Option<Vec<ProbeContactPair>>,
+    /// Contact forces in the exact order of `contact_pairs`; `None` is legacy evidence.
+    #[serde(default)]
+    pub contact_force_samples: Option<Vec<ProbeContactForceSample>>,
     pub capture_s: f64,
     pub clock_domain: String,
     pub position_world_m: [f64; 3],
@@ -88,7 +143,9 @@ pub struct ProbeObjectPoseSample {
 
 impl ProbeObjectPoseSample {
     pub fn digest(&self) -> String {
-        let mut bytes = if self.contact_pairs.is_some() {
+        let mut bytes = if self.contact_force_samples.is_some() {
+            b"realityos.probe_object_pose_sample/3\0".to_vec()
+        } else if self.contact_pairs.is_some() {
             b"realityos.probe_object_pose_sample/2\0".to_vec()
         } else {
             b"realityos.probe_object_pose_sample/1\0".to_vec()
@@ -104,6 +161,9 @@ impl ProbeObjectPoseSample {
         }
         if let Some(contact_pairs) = &self.contact_pairs {
             push_contact_pairs(&mut bytes, contact_pairs);
+        }
+        if let Some(contact_force_samples) = &self.contact_force_samples {
+            push_contact_force_samples(&mut bytes, contact_force_samples);
         }
         push_f64(&mut bytes, self.capture_s);
         push_string(&mut bytes, &self.clock_domain);
@@ -128,6 +188,20 @@ impl ProbeObjectPoseSample {
         if let Some(contact_pairs) = &self.contact_pairs {
             for pair in contact_pairs {
                 pair.validate()?;
+            }
+        }
+        if let Some(contact_force_samples) = &self.contact_force_samples {
+            let Some(contact_pairs) = self.contact_pairs.as_ref() else {
+                return Err("contact_force_pair_mismatch");
+            };
+            if contact_pairs.len() != contact_force_samples.len() {
+                return Err("contact_force_pair_mismatch");
+            }
+            for (pair, force_sample) in contact_pairs.iter().zip(contact_force_samples) {
+                force_sample.validate()?;
+                if pair != &force_sample.contact_pair {
+                    return Err("contact_force_pair_mismatch");
+                }
             }
         }
         if self
@@ -174,7 +248,9 @@ pub struct ProbeObjectPoseTrace {
 
 impl ProbeObjectPoseTrace {
     pub fn digest(&self) -> String {
-        let mut bytes = if self.has_contact_trace() {
+        let mut bytes = if self.has_contact_force_trace() {
+            b"realityos.probe_object_pose_trace/4\0".to_vec()
+        } else if self.has_contact_trace() {
             b"realityos.probe_object_pose_trace/3\0".to_vec()
         } else {
             match self.start_wrench_sequence {
@@ -206,6 +282,14 @@ impl ProbeObjectPoseTrace {
                 .samples
                 .iter()
                 .all(|sample| sample.contact_pairs.is_some())
+    }
+
+    pub fn has_contact_force_trace(&self) -> bool {
+        self.has_contact_trace()
+            && self
+                .samples
+                .iter()
+                .all(|sample| sample.contact_force_samples.is_some())
     }
 
     pub fn contains_contact_between(&self, first: &str, second: &str) -> bool {
@@ -260,6 +344,14 @@ impl ProbeObjectPoseTrace {
                 .count();
         if recorded_contact_lists != 0 && recorded_contact_lists != self.samples.len() + 1 {
             return Err("incomplete_contact_trace");
+        }
+        let recorded_contact_force_lists = self
+            .samples
+            .iter()
+            .filter(|sample| sample.contact_force_samples.is_some())
+            .count();
+        if recorded_contact_force_lists != 0 && recorded_contact_force_lists != self.samples.len() {
+            return Err("incomplete_contact_force_trace");
         }
         if let Some(contact_pairs) = &self.start_contact_pairs {
             for pair in contact_pairs {
@@ -947,6 +1039,21 @@ fn push_contact_pairs(bytes: &mut Vec<u8>, contact_pairs: &[ProbeContactPair]) {
     }
 }
 
+fn push_contact_force_samples(bytes: &mut Vec<u8>, samples: &[ProbeContactForceSample]) {
+    bytes.extend_from_slice(&(samples.len() as u64).to_le_bytes());
+    for sample in samples {
+        push_contact_pairs(bytes, std::slice::from_ref(&sample.contact_pair));
+        push_f64s(bytes, &sample.position_world_m);
+        push_f64s(bytes, &sample.frame);
+        push_f64s(bytes, &sample.friction);
+        push_f64s(bytes, &sample.force_local);
+        push_f64s(bytes, &sample.torque_local);
+        push_f64(bytes, sample.normal_force_n);
+        push_f64(bytes, sample.tangential_force_n);
+        bytes.push(u8::from(sample.force_available));
+    }
+}
+
 fn compensation_for_sample(
     measurement: &PushProbeMeasurement,
     sample: &WrenchSample,
@@ -1341,4 +1448,102 @@ fn push_opt_f64(bytes: &mut Vec<u8>, value: Option<f64>) {
 
 fn sha256(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
+}
+
+#[cfg(test)]
+mod probe_object_pose_trace_tests {
+    use super::{ProbeObjectPoseSample, ProbeObjectPoseTrace};
+    use serde_json::{json, Value};
+
+    fn pose_sample_json(step: u64, with_force_samples: bool, friction: f64) -> Value {
+        let pair = json!({
+            "body1": "obj0",
+            "geom1_name": "obj0_geom",
+            "body2": "table",
+            "geom2_name": "table_geom"
+        });
+        let mut sample = json!({
+            "object_id": "obj0",
+            "simulator_step": step,
+            "wrench_sequence": step + 10,
+            "contact_pairs": [pair.clone()],
+            "capture_s": step as f64 * 0.002,
+            "clock_domain": "mujoco_simulation_clock",
+            "position_world_m": [0.0, 0.0, 0.4],
+            "orientation_world_wxyz": [1.0, 0.0, 0.0, 0.0],
+            "digest": ""
+        });
+        if with_force_samples {
+            sample["contact_force_samples"] = json!([{
+                "contact_pair": pair,
+                "position_world_m": [0.0, 0.0, 0.42],
+                "frame": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                "friction": [friction, friction, 0.01, 0.01, 0.01],
+                "force_local": [2.0, 0.25, 0.0],
+                "torque_local": [0.0, 0.0, 0.0],
+                "normal_force_n": 2.0,
+                "tangential_force_n": 0.25,
+                "force_available": true
+            }]);
+        }
+        let parsed: ProbeObjectPoseSample =
+            serde_json::from_value(sample.clone()).expect("pose sample parses");
+        sample["digest"] = json!(parsed.digest());
+        sample
+    }
+
+    #[test]
+    fn probe_object_pose_digest_binds_contact_force_samples() {
+        let first: ProbeObjectPoseSample = serde_json::from_value(pose_sample_json(1, true, 0.5))
+            .expect("sample with contact force data parses");
+        let changed: ProbeObjectPoseSample = serde_json::from_value(pose_sample_json(1, true, 0.6))
+            .expect("sample with changed contact friction parses");
+
+        assert_ne!(
+            first.digest(),
+            changed.digest(),
+            "changing the recorded contact friction must change the pose digest"
+        );
+        assert_eq!(
+            serde_json::to_value(&first).expect("sample serializes")["contact_force_samples"][0]
+                ["friction"][0],
+            json!(0.5),
+            "contact force data must survive serde roundtrip"
+        );
+    }
+
+    #[test]
+    fn probe_object_pose_sample_preserves_empty_contact_force_samples() {
+        let mut value = pose_sample_json(1, false, 0.5);
+        value["contact_force_samples"] = json!([]);
+        let sample: ProbeObjectPoseSample =
+            serde_json::from_value(value).expect("empty contact force list parses");
+        let serialized = serde_json::to_value(sample).expect("sample serializes");
+
+        assert_eq!(serialized["contact_force_samples"], json!([]));
+    }
+
+    #[test]
+    fn probe_object_pose_trace_rejects_partial_contact_force_samples() {
+        let mut trace = json!({
+            "object_id": "obj0",
+            "clock_domain": "mujoco_simulation_clock",
+            "start_s": 0.0,
+            "start_position_world_m": [0.0, 0.0, 0.4],
+            "start_orientation_world_wxyz": [1.0, 0.0, 0.0, 0.0],
+            "start_wrench_sequence": 10,
+            "start_contact_pairs": [],
+            "samples": [
+                pose_sample_json(1, true, 0.5),
+                pose_sample_json(2, false, 0.5)
+            ],
+            "digest": ""
+        });
+        let parsed: ProbeObjectPoseTrace =
+            serde_json::from_value(trace.clone()).expect("trace parses");
+        trace["digest"] = json!(parsed.digest());
+        let trace: ProbeObjectPoseTrace = serde_json::from_value(trace).expect("trace parses");
+
+        assert_eq!(trace.validate(), Err("incomplete_contact_force_trace"));
+    }
 }

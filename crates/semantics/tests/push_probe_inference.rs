@@ -102,6 +102,7 @@ fn sealed_pose_sample(
         simulator_step: step,
         wrench_sequence,
         contact_pairs: None,
+        contact_force_samples: None,
         capture_s,
         clock_domain: "sim:1".into(),
         position_world_m,
@@ -143,6 +144,7 @@ fn pose_trace_brackets_cumulative_motion_from_the_original_probe_origin() {
         position_world_m: [0.0006, 0.0, 0.0],
         orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
         contact_pairs: None,
+        contact_force_samples: None,
         digest: String::new(),
     };
     first.digest = first.digest();
@@ -155,6 +157,7 @@ fn pose_trace_brackets_cumulative_motion_from_the_original_probe_origin() {
         position_world_m: [0.0011, 0.0, 0.0],
         orientation_world_wxyz: [1.0, 0.0, 0.0, 0.0],
         contact_pairs: None,
+        contact_force_samples: None,
         digest: String::new(),
     };
     crossing.digest = crossing.digest();
