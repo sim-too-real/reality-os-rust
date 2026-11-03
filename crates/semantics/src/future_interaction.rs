@@ -55,6 +55,8 @@ pub enum CoverageMethod {
     /// Axis-aligned box translated along one axis. The occupied set is an
     /// exact larger AABB, not a sample.
     ExactAxisAlignedObjectSweep,
+    /// An oriented box and its linear translation enclosed by world AABBs.
+    ConservativeWorldAabbObjectSweep,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -458,6 +460,103 @@ pub fn domain_from_exact_axis_sweep(
     }))
 }
 
+/// Certifies a fixed-orientation box translation through world-AABB supersets.
+/// Rotated boxes remain admissible only when the complete conservative swept
+/// envelope has positive clearance from every conservatively enclosed obstacle.
+pub fn domain_from_conservative_world_aabb_sweep(
+    input: &CommonWitnessCoverage,
+    obstacles: &[crate::contact_collision::NamedBox],
+    sweep_clearance_m: f64,
+) -> Result<SupportedOutcomeDomain, String> {
+    use crate::contact_collision::{classify_conservative_aabb_sweep, ConservativeAabbSweepClass};
+    if input.label.is_empty() || input.witness_digest.is_empty() {
+        return Err("WITNESS_IDENTITY_MISSING".into());
+    }
+    if input.observation_epoch.trim().is_empty() {
+        return Err("OBSERVATION_EPOCH_MISSING".into());
+    }
+    if !input.model_applicable || input.model_applicability.trim().is_empty() {
+        return Err("MODEL_NOT_APPLICABLE".into());
+    }
+    if !finite_nonnegative(input.yaw_abs_rad)
+        || input.yaw_abs_rad > 0.0
+        || !input.joint_margin_rad.is_finite()
+        || input.joint_margin_rad <= 0.0
+    {
+        return Err("COVERAGE_BOUNDS_INVALID".into());
+    }
+    if !finite_nonnegative(input.translation_radius_m)
+        || !finite_nonnegative(input.geometry_residual_m)
+        || input.geometry_residual_m > 0.0
+    {
+        return Err("COVERAGE_BOUNDS_INVALID".into());
+    }
+    let gap = match classify_conservative_aabb_sweep(
+        input.object_center,
+        input.object_half,
+        input.object_quat,
+        input.push_direction,
+        input.translation_radius_m,
+        obstacles,
+    ) {
+        ConservativeAabbSweepClass::Clear { gap_m } => gap_m,
+        ConservativeAabbSweepClass::BoundaryContact => {
+            return Err("BOUNDARY_CONTACT_IS_NOT_CLEARANCE".into());
+        }
+        ConservativeAabbSweepClass::Penetration => {
+            return Err("OBJECT_SWEEP_AABB_SUPERSET_HITS_AN_OBSTACLE".into());
+        }
+        ConservativeAabbSweepClass::Invalid => return Err("SWEEP_GEOMETRY_INVALID".into()),
+    };
+    if !sweep_clearance_m.is_finite() {
+        return Err("SWEEP_CLEARANCE_INVALID".into());
+    }
+    if sweep_clearance_m <= 1e-9 {
+        return Err("CALLER_CLEARANCE_DISAGREES_WITH_GEOMETRY".into());
+    }
+    Ok(seal_domain(SupportedOutcomeDomain {
+        derivation: format!(
+            "witness {} covers a fixed-orientation object enclosed by its world AABB over a {:.6} m linear sweep; recomputed obstacle-envelope clearance lower bound is {:.6} m",
+            input.witness_digest, input.translation_radius_m, gap
+        ),
+        bounds: UncertaintyBounds {
+            translation_radius_m: input.translation_radius_m,
+            yaw_abs_rad: input.yaw_abs_rad,
+            residual_high_m: input.geometry_residual_m,
+        },
+        coverage: CoverageMethod::ConservativeWorldAabbObjectSweep,
+        obligations: vec![
+            "OBJECT_SUPPORTED".into(),
+            "ARM_CONFIGURATION_CLEAR_OF_OBSTACLES_AND_SUPPORT".into(),
+            "OBJECT_SWEEP_WORLD_AABB_SUPERSET_CLEAR".into(),
+            "MOTION_WITHIN_COMMANDED_STROKE".into(),
+            "MODEL_APPLICABLE".into(),
+            "OBJECT_AND_OBSTACLE_ROTATIONS_ENCLOSED_BY_WORLD_AABBS".into(),
+        ],
+        witnesses: vec![FutureInteractionWitnessRecord {
+            label: input.label.clone(),
+            digest: input.witness_digest.clone(),
+            clearance_m: Some(gap),
+            obligations_met: true,
+        }],
+        model_applicable: true,
+        model_applicability: input.model_applicability.clone(),
+        unresolved: Vec::new(),
+        failure_reasons: Vec::new(),
+        observation_epoch: input.observation_epoch.clone(),
+        geometric_assumptions: vec![
+            "ORIENTED_OBJECT_AND_OBSTACLES_ARE_ENCLOSED_BY_WORLD_AABBS".into(),
+            "FIXED_ORIENTATION_OBJECT_TRANSLATION_IS_ENCLOSED_BY_THE_SWEPT_AABB".into(),
+            "POSITIVE_SEPARATING_AXIS_GAP_IS_A_CLEARANCE_LOWER_BOUND".into(),
+        ],
+        mechanical_assumptions: vec![
+            "OBJECT_TRAVEL_CANNOT_EXCEED_THE_COMMANDED_TOOL_TRAVEL".into(),
+        ],
+        proof_valid: true,
+        content_seal: 0,
+    }))
+}
+
 /// Assess whether every supported post-probe outcome still has a safe,
 /// executable future interaction. Incomplete inputs stay `Unknown`.
 /// `Preserved` is returned only when `inputs.domain` covers the outcomes.
@@ -574,6 +673,7 @@ fn domain_seal(domain: &SupportedOutcomeDomain) -> u64 {
             buf.extend_from_slice(&subdivisions.to_le_bytes());
         }
         CoverageMethod::ExactAxisAlignedObjectSweep => buf.push(5),
+        CoverageMethod::ConservativeWorldAabbObjectSweep => buf.push(6),
     }
     for item in &domain.obligations {
         push_seal_str(&mut buf, item);
@@ -738,6 +838,19 @@ fn coverage_failure(inputs: &ProbeFutureInputs) -> Option<String> {
                 "MOTION_WITHIN_COMMANDED_STROKE",
                 "MODEL_APPLICABLE",
                 "AXIS_ALIGNED_TRANSLATION",
+            ],
+            false,
+        ),
+        CoverageMethod::ConservativeWorldAabbObjectSweep => witness_obligations(
+            domain,
+            inputs,
+            &[
+                "OBJECT_SUPPORTED",
+                "ARM_CONFIGURATION_CLEAR_OF_OBSTACLES_AND_SUPPORT",
+                "OBJECT_SWEEP_WORLD_AABB_SUPERSET_CLEAR",
+                "MOTION_WITHIN_COMMANDED_STROKE",
+                "MODEL_APPLICABLE",
+                "OBJECT_AND_OBSTACLE_ROTATIONS_ENCLOSED_BY_WORLD_AABBS",
             ],
             false,
         ),
@@ -1114,6 +1227,25 @@ mod tests {
         assert_ne!(
             assess_probe_future(&inputs).assessment,
             ProbeRecoverabilityAssessment::Preserved
+        );
+    }
+
+    #[test]
+    fn conservative_sweep_refuses_unmodeled_yaw_and_geometry_residual() {
+        let mut coverage = centered_coverage(0.004, true);
+        coverage.model_applicability = "fixed orientation conservative sweep".into();
+        coverage.geometry_residual_m = 0.0;
+        coverage.yaw_abs_rad = 0.01;
+        assert!(
+            domain_from_conservative_world_aabb_sweep(&coverage, &[], 0.02).is_err(),
+            "the sweep certificate does not yet enclose future yaw uncertainty"
+        );
+
+        coverage.yaw_abs_rad = 0.0;
+        coverage.geometry_residual_m = 0.001;
+        assert!(
+            domain_from_conservative_world_aabb_sweep(&coverage, &[], 0.02).is_err(),
+            "the sweep certificate must not ignore an unexpanded geometry residual"
         );
     }
 }

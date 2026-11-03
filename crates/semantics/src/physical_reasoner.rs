@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::adapter::synth_planar_two_link;
 use crate::allowed_contact::ContactPhase;
 use crate::contact_collision::{
-    policy_from_scene_model, scene_from_collision_world, CollisionWorld, NamedBox,
+    classify_conservative_aabb_sweep, policy_from_scene_model, scene_from_collision_world,
+    CollisionWorld, ConservativeAabbSweepClass, NamedBox,
 };
 use crate::embodiment::EmbodimentModel;
 use crate::execution_envelope::{
@@ -20,8 +21,8 @@ use crate::execution_envelope::{
     ObservationField,
 };
 use crate::future_interaction::{
-    assess_probe_future, domain_from_exact_axis_sweep, CommonWitnessCoverage, ProbeFutureInputs,
-    SupportedProbeOutcome,
+    assess_probe_future, domain_from_conservative_world_aabb_sweep, CommonWitnessCoverage,
+    ProbeFutureInputs, SupportedProbeOutcome,
 };
 use crate::grasp_hold::{evaluate_pinch_hold, HoldFeasibility, PinchHoldInput};
 use crate::kinematics::{
@@ -1248,21 +1249,22 @@ fn finish_probe(
     let gap = match sweep_gap(
         request.scene.object_center,
         request.scene.object_half,
+        request.scene.object_quat,
         candidate.direction,
         candidate.stroke_m,
         &request.scene.obstacles,
     ) {
         SweepGapStatus::Clear(gap) => gap,
-        SweepGapStatus::UnsupportedDirection => {
+        SweepGapStatus::Blocked => {
+            return rejected(PUSH_FAMILY, candidate, "PROBE_SWEEP_BLOCKED", mechanics);
+        }
+        SweepGapStatus::Invalid => {
             return rejected(
                 PUSH_FAMILY,
                 candidate,
-                "PROBE_SWEEP_DIRECTION_UNSUPPORTED",
+                "PROBE_SWEEP_GEOMETRY_INVALID",
                 mechanics,
             );
-        }
-        SweepGapStatus::Blocked => {
-            return rejected(PUSH_FAMILY, candidate, "PROBE_SWEEP_BLOCKED", mechanics);
         }
     };
     if margin <= 0.0 {
@@ -1294,10 +1296,12 @@ fn finish_probe(
         joint_margin_rad: margin,
         collision_admissible_for_grown_object: false,
         model_applicable: true,
-        model_applicability: "axis-aligned tool-driven sweep of at most the probe stroke".into(),
+        model_applicability: "fixed-orientation tool-driven sweep enclosed by world AABBs".into(),
         observation_epoch: request.scene.observation_epoch.clone(),
     };
-    let Ok(domain) = domain_from_exact_axis_sweep(&coverage, &request.scene.obstacles, gap) else {
+    let Ok(domain) =
+        domain_from_conservative_world_aabb_sweep(&coverage, &request.scene.obstacles, gap)
+    else {
         return rejected(PUSH_FAMILY, candidate, "PROBE_DOMAIN_UNPROVED", mechanics);
     };
     let outcome = SupportedProbeOutcome {
@@ -3282,50 +3286,24 @@ fn aabb_separated(a_c: [f64; 3], a_h: [f64; 3], b_c: [f64; 3], b_h: [f64; 3]) ->
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum SweepGapStatus {
     Clear(f64),
-    UnsupportedDirection,
     Blocked,
+    Invalid,
 }
 
 fn sweep_gap(
     center: [f64; 3],
     half: [f64; 3],
+    quat: [f64; 4],
     direction: [f64; 3],
     distance: f64,
     obstacles: &[NamedBox],
 ) -> SweepGapStatus {
-    if direction.iter().filter(|value| value.abs() > 1e-6).count() != 1 {
-        return SweepGapStatus::UnsupportedDirection;
-    }
-    let mut swept_center = center;
-    let mut swept_half = half;
-    for axis in 0..3 {
-        let delta = direction[axis] * distance;
-        swept_center[axis] += 0.5 * delta;
-        swept_half[axis] += 0.5 * delta.abs();
-    }
-    let mut gap = f64::INFINITY;
-    for obstacle in obstacles {
-        if !aabb_separated(
-            swept_center,
-            swept_half,
-            obstacle.center,
-            obstacle.half_extents,
-        ) {
-            return SweepGapStatus::Blocked;
+    match classify_conservative_aabb_sweep(center, half, quat, direction, distance, obstacles) {
+        ConservativeAabbSweepClass::Clear { gap_m } => SweepGapStatus::Clear(gap_m),
+        ConservativeAabbSweepClass::BoundaryContact | ConservativeAabbSweepClass::Penetration => {
+            SweepGapStatus::Blocked
         }
-        for axis in 0..3 {
-            let separation = (swept_center[axis] - obstacle.center[axis]).abs()
-                - swept_half[axis]
-                - obstacle.half_extents[axis];
-            if separation >= 0.0 {
-                gap = gap.min(separation);
-            }
-        }
-    }
-    if gap.is_finite() {
-        SweepGapStatus::Clear(gap)
-    } else {
-        SweepGapStatus::Clear(distance.max(0.0))
+        ConservativeAabbSweepClass::Invalid => SweepGapStatus::Invalid,
     }
 }
 
@@ -3899,7 +3877,7 @@ mod tests {
     }
 
     #[test]
-    fn rotated_probe_sweep_is_distinct_from_an_obstacle_collision() {
+    fn rotated_probe_sweep_requires_positive_conservative_clearance() {
         let yaw = -7.523292422447527e-5_f64;
         let (model, mut rotated_request) = benchmark_scene();
         rotated_request.scene.object_quat = [(yaw * 0.5).cos(), 0.0, 0.0, (yaw * 0.5).sin()];
@@ -3910,13 +3888,38 @@ mod tests {
             .find(|candidate| candidate.action_key == "probe:+x")
             .expect("rotated probe candidate");
         assert_eq!(
-            rotated_probe.status, "PROBE_SWEEP_DIRECTION_UNSUPPORTED",
-            "the saved slight yaw is unsupported geometry, not a proven collision"
+            rotated_probe.status, "PROVED",
+            "a slight yaw with positive conservative clearance should remain provable"
+        );
+
+        let mut blocked_request = rotated_request.clone();
+        blocked_request.scene.obstacles = vec![NamedBox::aabb(
+            "rotated-probe-wall",
+            [0.205, -0.019, 0.0],
+            [0.012, 0.005, 0.02],
+        )];
+        let obstacle_yaw = 0.3_f64;
+        blocked_request.scene.obstacles[0].quat_wxyz = [
+            (obstacle_yaw * 0.5).cos(),
+            0.0,
+            0.0,
+            (obstacle_yaw * 0.5).sin(),
+        ];
+        let blocked_report = PhysicalReasoner::new(model.clone()).consider(&blocked_request);
+        let blocked_probe = blocked_report
+            .candidates
+            .iter()
+            .find(|candidate| candidate.action_key == "probe:+x")
+            .expect("blocked rotated probe candidate");
+        assert_ne!(
+            blocked_probe.status, "PROVED",
+            "an obstacle intersecting the rotated candidate motion must remain refused"
         );
 
         let blocked = sweep_gap(
             [0.20, 0.0, 0.0],
             [0.02, 0.02, 0.02],
+            [1.0, 0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0],
             0.008,
             &[NamedBox::aabb(

@@ -1071,6 +1071,114 @@ pub enum AxisSweepClass {
     Invalid,
 }
 
+/// Result of checking a translated oriented box using conservative world AABBs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ConservativeAabbSweepClass {
+    Clear { gap_m: f64 },
+    BoundaryContact,
+    Penetration,
+    Invalid,
+}
+
+/// Proves clearance using world-axis AABBs that enclose the oriented object
+/// and every oriented obstacle. The swept AABB encloses every fixed-orientation
+/// object pose along the linear translation, so this can reject clear passages
+/// but cannot admit a collision hidden by box rotation.
+pub fn classify_conservative_aabb_sweep(
+    object_center: [f64; 3],
+    object_half: [f64; 3],
+    object_quat: [f64; 4],
+    direction: [f64; 3],
+    distance: f64,
+    obstacles: &[NamedBox],
+) -> ConservativeAabbSweepClass {
+    if !object_center.iter().all(|value| value.is_finite())
+        || !distance.is_finite()
+        || distance < 0.0
+        || !direction.iter().all(|value| value.is_finite())
+    {
+        return ConservativeAabbSweepClass::Invalid;
+    }
+    let Some(object_aabb_half) = oriented_box_aabb_half(object_half, object_quat) else {
+        return ConservativeAabbSweepClass::Invalid;
+    };
+    let direction_norm = norm3(direction);
+    if !direction_norm.is_finite() || direction_norm <= 1e-9 {
+        return ConservativeAabbSweepClass::Invalid;
+    }
+    let displacement = scale3(direction, distance / direction_norm);
+    if !displacement.iter().all(|value| value.is_finite()) {
+        return ConservativeAabbSweepClass::Invalid;
+    }
+    let swept_center = add3(object_center, scale3(displacement, 0.5));
+    let swept_half = [
+        object_aabb_half[0] + displacement[0].abs() * 0.5,
+        object_aabb_half[1] + displacement[1].abs() * 0.5,
+        object_aabb_half[2] + displacement[2].abs() * 0.5,
+    ];
+    if !swept_center.iter().all(|value| value.is_finite())
+        || !swept_half.iter().all(|value| value.is_finite())
+    {
+        return ConservativeAabbSweepClass::Invalid;
+    }
+    let mut gap = f64::INFINITY;
+    for obstacle in obstacles {
+        if !obstacle.center.iter().all(|value| value.is_finite()) {
+            return ConservativeAabbSweepClass::Invalid;
+        }
+        let Some(obstacle_aabb_half) =
+            oriented_box_aabb_half(obstacle.half_extents, obstacle.quat_wxyz)
+        else {
+            return ConservativeAabbSweepClass::Invalid;
+        };
+        let largest_separation = (0..3)
+            .map(|axis| {
+                (swept_center[axis] - obstacle.center[axis]).abs()
+                    - swept_half[axis]
+                    - obstacle_aabb_half[axis]
+            })
+            .fold(f64::NEG_INFINITY, f64::max);
+        if !largest_separation.is_finite() {
+            return ConservativeAabbSweepClass::Invalid;
+        }
+        if largest_separation < -1e-9 {
+            return ConservativeAabbSweepClass::Penetration;
+        }
+        if largest_separation <= 1e-9 {
+            return ConservativeAabbSweepClass::BoundaryContact;
+        }
+        gap = gap.min(largest_separation);
+    }
+    ConservativeAabbSweepClass::Clear {
+        gap_m: if gap.is_finite() {
+            gap
+        } else {
+            distance.max(1.0)
+        },
+    }
+}
+
+fn oriented_box_aabb_half(half: [f64; 3], quat: [f64; 4]) -> Option<[f64; 3]> {
+    if !half.iter().all(|value| value.is_finite() && *value >= 0.0) {
+        return None;
+    }
+    let unit = unit_quat(quat)?;
+    let axes = [
+        rotate_by_quat(unit, [half[0], 0.0, 0.0]),
+        rotate_by_quat(unit, [0.0, half[1], 0.0]),
+        rotate_by_quat(unit, [0.0, 0.0, half[2]]),
+    ];
+    let world_half: [f64; 3] = [
+        axes.iter().map(|axis| axis[0].abs()).sum(),
+        axes.iter().map(|axis| axis[1].abs()).sum(),
+        axes.iter().map(|axis| axis[2].abs()).sum(),
+    ];
+    world_half
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(world_half)
+}
+
 pub fn classify_axis_aligned_sweep(
     object_center: [f64; 3],
     object_half: [f64; 3],
@@ -1306,6 +1414,100 @@ mod tests {
             tool_offset_ee: [0.0, 0.0, 0.0],
             declared_geoms: vec![],
         }
+    }
+
+    #[test]
+    fn conservative_aabb_sweep_accepts_rotated_boxes_with_positive_separation() {
+        let object_yaw = 0.3_f64;
+        let obstacle_yaw = 0.4_f64;
+        let object_quat = [(object_yaw * 0.5).cos(), 0.0, 0.0, (object_yaw * 0.5).sin()];
+        let mut obstacle =
+            NamedBox::aabb("far-rotated-obstacle", [1.0, 0.0, 0.0], [0.02, 0.01, 0.02]);
+        obstacle.quat_wxyz = [
+            (obstacle_yaw * 0.5).cos(),
+            0.0,
+            0.0,
+            (obstacle_yaw * 0.5).sin(),
+        ];
+
+        let result = classify_conservative_aabb_sweep(
+            [0.0, 0.0, 0.0],
+            [0.02, 0.01, 0.01],
+            object_quat,
+            [1.0, 0.2, 0.0],
+            0.1,
+            &[obstacle],
+        );
+
+        assert!(matches!(
+            result,
+            ConservativeAabbSweepClass::Clear { gap_m } if gap_m > 0.8
+        ));
+    }
+
+    #[test]
+    fn conservative_aabb_sweep_rejects_rotated_obstacle_intersection_and_boundary_contact() {
+        let mut obstacle = NamedBox::aabb("rotated-hit", [0.12, 0.0, 0.0], [0.01, 0.01, 0.01]);
+        let obstacle_yaw = 0.3_f64;
+        obstacle.quat_wxyz = [
+            (obstacle_yaw * 0.5).cos(),
+            0.0,
+            0.0,
+            (obstacle_yaw * 0.5).sin(),
+        ];
+        let hit = classify_conservative_aabb_sweep(
+            [0.0, 0.0, 0.0],
+            [0.01, 0.01, 0.01],
+            [1.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            0.1,
+            &[obstacle],
+        );
+        assert_eq!(hit, ConservativeAabbSweepClass::Penetration);
+
+        let boundary = classify_conservative_aabb_sweep(
+            [0.0, 0.0, 0.0],
+            [0.01, 0.01, 0.01],
+            [1.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            0.1,
+            &[NamedBox::aabb(
+                "boundary",
+                [0.12, 0.0, 0.0],
+                [0.01, 0.01, 0.01],
+            )],
+        );
+        assert_eq!(boundary, ConservativeAabbSweepClass::BoundaryContact);
+    }
+
+    #[test]
+    fn conservative_aabb_sweep_fails_closed_for_invalid_orientations() {
+        assert_eq!(
+            classify_conservative_aabb_sweep(
+                [0.0, 0.0, 0.0],
+                [0.01, 0.01, 0.01],
+                [0.0; 4],
+                [1.0, 0.0, 0.0],
+                0.1,
+                &[],
+            ),
+            ConservativeAabbSweepClass::Invalid
+        );
+    }
+
+    #[test]
+    fn conservative_aabb_sweep_fails_closed_on_overflowed_envelopes() {
+        assert_eq!(
+            classify_conservative_aabb_sweep(
+                [f64::MAX, 0.0, 0.0],
+                [0.01; 3],
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                f64::MAX,
+                &[],
+            ),
+            ConservativeAabbSweepClass::Invalid
+        );
     }
 
     #[test]

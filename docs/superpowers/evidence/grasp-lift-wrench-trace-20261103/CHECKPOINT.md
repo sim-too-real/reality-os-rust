@@ -58,3 +58,15 @@ The scalar screen's 21006 false pass is now decision-relevant: preserve the curr
 The friction mapping correction validates simulator contact parameter wiring only. It does not evaluate the predictor, change the two frozen outcomes, justify another full-lift replay, or support a physical friction/capacity claim. The archived comparison's predictive limits are further constrained by the friction mismatch above.
 
 No physical test, actuation, supplier/customer contact, purchase, or fabrication occurred. The traces and force resultants are simulation-only. The two development controls do not establish predictor accuracy, held-out performance, or hardware capacity.
+
+## Rotated-Sweep Follow-up (2026-11-04)
+
+**Classification: FOUNDATIONAL SOFTWARE ADVANCE; SIMULATION-ONLY; END-TO-END TASK SUCCESS NOT ESTABLISHED.**
+
+The physical reasoner now checks arbitrary-direction, fixed-orientation sweeps by enclosing the oriented object and each oriented obstacle in world AABBs. It proves clearance only when the full swept envelope has positive separation. Overlap, boundary contact, invalid inputs, overflowed envelopes, nonzero yaw uncertainty, and nonzero geometry residual still refuse. The existing `ExactAxisAlignedObjectSweep` certificate and its rotated-box rejection remain unchanged.
+
+`cargo test -p realityos-semantics --lib` passed 371/371; `cargo fmt --all -- --check` and `git diff --check` passed. The reasoner now returns `PROVED` for the saved slight-yaw `probe:+x` case with positive clearance. Direct geometry tests cover rotated object and obstacle envelopes, an obstacle intersection, boundary contact, invalid orientation, and overflow. The reasoner-level obstacle case remains refused.
+
+The exact regression `cargo test -p realityos-verify --test manipulation_benchmark iiwa_expected_success_probe_tracks_retract_under_wrench_monitor -- --exact --nocapture` was run once and failed after 100.35 seconds. The simulator episode performed two authorized `probe:+x` actions (4.805 mm and 4.816 mm object displacement), then returned `UnexpectedRefusal` / `NO_JUSTIFIED_CURRENT_ACTION`; unauthorized writes were zero. The probe candidate was `PROVED`, but force inference returned `no_inference:UnbracketedMotion`, so the expected-success task remains unsolved. The tracked evidence snapshots did not change.
+
+The refusal follows the existing inference contract: object motion exceeding 1 mm before a tangential force lower bound of at least 0.5 N is available marks motion unresolved. Preserve that guard and the test expectation. The simulator output does not include the per-sample force lower-bound timeline needed to distinguish sensor timing from probe pacing. Next diagnostic: freeze the current test, scenario seed `21000`, execution, sensor, parser, and reasoner inputs, then capture one probe-measurement sidecar for that exact case. Do not change the force or displacement thresholds, and do not run a full-lift replay while the separate held-out predictor gate remains closed.
