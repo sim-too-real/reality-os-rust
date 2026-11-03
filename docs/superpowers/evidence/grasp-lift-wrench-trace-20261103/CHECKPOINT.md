@@ -37,9 +37,11 @@ Inspection of the immutable `RESULT.json` found that the historical contacts use
 
 ## Future-Capture Sample Time
 
-`GraspContactAudit` now carries an optional `sample_time_s` copied from finite verifier-truth simulation time; both finger rows from one sampled state receive the same value. The serde default keeps older audit JSON readable with no timestamp. The focused audit tests passed 6/6, including a test that first failed with the expected missing-time `null` and now checks legacy deserialization. Formatting and `git diff --check` passed. The historical `RESULT.json` remains unchanged and still has no per-sample time; future captures can now align repeated phase rows by their timestamps.
+`GraspContactAudit` carries optional `sample_time_s` values from the source timestamp; both finger rows from one sampled state receive the same value. To keep existing worker-clock consumers compatible, the worker retains its numeric `time` field and adds nullable `time_observed_s`. `VerifierTruth` keeps the legacy zero fallback in `time_s` and separately retains the finite source value for audits. Missing, null, or mistyped source timestamps remain absent, while a real zero timestamp remains valid. The serde default keeps older audit JSON readable with no timestamp.
 
-A broader `cargo test -p realityos-verify --lib` attempt was canceled after it spawned MuJoCo worker processes and rewrote five tracked evidence snapshots. The five files, which were clean before the run, were restored to their pre-run `HEAD` contents. That canceled command has no test-result claim. No standalone frozen grasp-lift replay command was issued in this follow-up, and no data from the canceled suite is used as evidence.
+Focused audit tests passed 7/7 and the verifier-truth parser test passed 1/1. Formatting, `git diff --check`, and Python syntax parsing passed. The historical `RESULT.json` remains unchanged and still has no per-sample time; future captures can now align repeated phase rows by their timestamps. Its `FREEZE.json` and `RESULT.json` hashes remain `30A1CC816BA4BA65358152776C04B1EC71809C8DDBA0650BDA73D9A1B7FBD3B9` and `6A920F0544ABAFBE26D366D0CB5D1F228F03D7C70FABB45872A0AEBFE55B00C9`.
+
+A broader `cargo test -p realityos-verify --lib` attempt was canceled after it spawned MuJoCo worker processes and rewrote five tracked evidence snapshots. The five files, which were clean before the run, were restored to their pre-run `HEAD` contents. That canceled command has no test-result claim, and it may have entered simulator cases before cancellation. No standalone frozen grasp-lift replay command was issued in this follow-up, and no data from the canceled suite is used as evidence.
 
 ## Limits and Next Diagnostic Question
 

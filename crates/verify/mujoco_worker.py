@@ -487,6 +487,7 @@ class Instance:
         ke = _jf(d.energy[1]) if len(d.energy) > 1 else 0.0
         out = {
             "time": _jf(d.time) or 0.0,
+            "time_observed_s": _jf(d.time),
             "qpos": _jlist(d.qpos),
             "qvel": _jlist(d.qvel),
             "qacc": qacc,

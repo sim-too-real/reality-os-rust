@@ -83,8 +83,9 @@ Tasks 1 through 4 for the telemetry capture are synchronized to `main`. The offl
 
 ## Follow-up: preserve sample simulation time
 
-- [x] Add a failing regression proving `sample_time_s` from `VerifierTruth.time_s` is serialized on each finger audit row; the baseline emitted JSON `null` instead of `12.5`.
-- [x] Add serde-defaulted `Option<f64>` `sample_time_s` to `GraspContactAudit`; populate it from finite verifier-truth simulation time without changing control behavior.
+- [x] Add a failing regression proving a valid `sample_time_s` is serialized on each finger audit row; the initial baseline emitted JSON `null` instead of `12.5`.
+- [x] Preserve optional source timestamp availability in `VerifierTruth` via `time_observed_s`, leave the legacy numeric worker/verifier clock zero fallback intact, and populate the audit only from the optional source timestamp.
+- [x] Verify unavailable missing/null/invalid input stays absent while an actual zero timestamp remains valid.
 - [x] Extend the legacy audit regression to prove missing sample time deserializes as `None`.
-- [x] Run the focused Rust audit tests (6 passed), formatting, and `git diff --check`. A broader `cargo test -p realityos-verify --lib` attempt was canceled after it spawned MuJoCo workers and rewrote five tracked evidence snapshots; those files were restored to their clean pre-run `HEAD` state. That canceled run has no result claim. No standalone frozen grasp-lift replay command was issued.
+- [x] Run the focused Rust audit tests (7 passed), the verifier-truth parser test (1 passed), formatting, `git diff --check`, and Python syntax parsing. A broader `cargo test -p realityos-verify --lib` attempt was canceled after it spawned MuJoCo workers and rewrote five tracked evidence snapshots; those files were restored to their clean pre-run `HEAD` state. That canceled run has no result claim, and it may have entered simulator cases before cancellation. No standalone frozen grasp-lift replay command was issued.
 - [ ] Commit and push the telemetry follow-up directly on canonical `main`; verify the push and preserve frozen replay files.

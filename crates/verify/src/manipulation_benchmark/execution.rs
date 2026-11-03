@@ -3687,7 +3687,7 @@ fn grasp_contact_audits(
                 });
             GraspContactAudit {
                 phase: phase.into(),
-                sample_time_s: truth.time_s.is_finite().then_some(truth.time_s),
+                sample_time_s: truth.sample_time_s,
                 finger_body: finger_body.clone(),
                 normal_force_n: force_available.then(|| {
                     contacts
@@ -5634,12 +5634,47 @@ mod grasp_contact_wrench_tests {
     fn grasp_contact_audits_preserve_sample_time_on_each_finger_row() {
         let audits = audit_json(&json!({
             "time": 12.5,
+            "time_observed_s": 12.5,
             "xipos": {"obj0": [0.0, 0.0, 0.0]}
         }));
 
         assert_eq!(audits.len(), 2);
         assert_eq!(audits[0]["sample_time_s"], json!(12.5));
         assert_eq!(audits[1]["sample_time_s"], json!(12.5));
+    }
+
+    #[test]
+    fn grasp_contact_audits_do_not_report_fallback_time_as_observed() {
+        for state in [
+            json!({"xipos": {"obj0": [0.0, 0.0, 0.0]}}),
+            json!({"time": null, "xipos": {"obj0": [0.0, 0.0, 0.0]}}),
+            json!({"time": "12.5", "xipos": {"obj0": [0.0, 0.0, 0.0]}}),
+            json!({
+                "time": 12.5,
+                "time_observed_s": "12.5",
+                "xipos": {"obj0": [0.0, 0.0, 0.0]}
+            }),
+        ] {
+            let audits = audit_json(&state);
+            assert_eq!(audits.len(), 2);
+            assert!(audits.iter().all(|audit| audit["sample_time_s"].is_null()));
+        }
+
+        let zero_time = audit_json(&json!({
+            "time": 0.0,
+            "time_observed_s": 0.0,
+            "xipos": {"obj0": [0.0, 0.0, 0.0]}
+        }));
+        assert_eq!(zero_time[0]["sample_time_s"], json!(0.0));
+
+        let unavailable_source_time = audit_json(&json!({
+            "time": 0.0,
+            "time_observed_s": null,
+            "xipos": {"obj0": [0.0, 0.0, 0.0]}
+        }));
+        assert!(unavailable_source_time
+            .iter()
+            .all(|audit| audit["sample_time_s"].is_null()));
     }
 
     #[test]

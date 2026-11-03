@@ -57,6 +57,10 @@ pub struct PolicyContactPair {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct VerifierTruth {
     pub time_s: f64,
+    /// The source simulation timestamp, when the state supplied a finite value.
+    /// `time_s` retains its legacy zero fallback for existing verifier logic.
+    #[serde(default)]
+    pub sample_time_s: Option<f64>,
     pub qpos: Vec<f64>,
     pub qvel: Vec<f64>,
     pub qacc: Vec<f64>,
@@ -191,6 +195,11 @@ impl VerifierTruth {
             .unwrap_or_default();
         Self {
             time_s: state["time"].as_f64().unwrap_or(0.0),
+            sample_time_s: state
+                .get("time_observed_s")
+                .or_else(|| state.get("time"))
+                .and_then(Value::as_f64)
+                .filter(|time_s| time_s.is_finite()),
             qpos: crate::mujoco_exec::json_f64_vec(&state["qpos"]),
             qvel: crate::mujoco_exec::json_f64_vec(&state["qvel"]),
             qacc: crate::mujoco_exec::json_f64_vec(&state["qacc"]),
@@ -331,6 +340,7 @@ mod tests {
     fn verifier_truth_keeps_contact_geometry_and_actuator_state() {
         let state = serde_json::json!({
             "time": 1.25,
+            "time_observed_s": 1.25,
             "ctrl": [0.3, -0.4],
             "actuator_force": [1.2, -2.4],
             "xipos": {"obj0": [0.10, 0.20, 0.30]},
@@ -352,6 +362,8 @@ mod tests {
 
         let truth = VerifierTruth::from_mujoco_state(&state);
         let serialized = serde_json::to_value(&truth).unwrap();
+        assert_eq!(truth.time_s, 1.25);
+        assert_eq!(truth.sample_time_s, Some(1.25));
         assert_eq!(truth.ctrl, vec![0.3, -0.4]);
         assert_eq!(truth.actuator_force, vec![1.2, -2.4]);
         assert_eq!(
@@ -367,15 +379,24 @@ mod tests {
             serde_json::json!([0.1, 0.2, 0.3])
         );
 
-        let legacy = VerifierTruth::from_mujoco_state(&serde_json::json!({
+        let legacy_truth = VerifierTruth::from_mujoco_state(&serde_json::json!({
             "contacts": [{"body1": "obj0", "body2": "finger_l"}]
         }));
-        let legacy = serde_json::to_value(legacy).unwrap();
+        assert_eq!(legacy_truth.time_s, 0.0);
+        assert_eq!(legacy_truth.sample_time_s, None);
+        let legacy = serde_json::to_value(legacy_truth).unwrap();
         assert!(legacy["xipos"]
             .as_object()
             .is_some_and(|bodies| bodies.is_empty()));
         assert!(legacy["contacts"][0]["position"].is_null());
         assert!(legacy["contacts"][0]["torque_local"].is_null());
+
+        let unavailable_source_time = VerifierTruth::from_mujoco_state(&serde_json::json!({
+            "time": 0.0,
+            "time_observed_s": null
+        }));
+        assert_eq!(unavailable_source_time.time_s, 0.0);
+        assert_eq!(unavailable_source_time.sample_time_s, None);
     }
 
     #[test]
