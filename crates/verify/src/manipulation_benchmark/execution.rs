@@ -91,7 +91,9 @@ pub enum TrialOutcome {
 
 #[cfg(test)]
 mod probe_sidecar_reservation_tests {
-    use super::ProbeSidecarReservation;
+    use super::{
+        probe_episode_diagnostic_path, write_probe_episode_diagnostic, ProbeSidecarReservation,
+    };
     use std::fs;
     use std::io::ErrorKind;
     use std::path::PathBuf;
@@ -138,6 +140,47 @@ mod probe_sidecar_reservation_tests {
         let reservation = ProbeSidecarReservation::acquire(&sidecar_path)
             .expect("failed reservation left no stale lock");
         drop(reservation);
+        fs::remove_dir_all(dir).expect("remove test directory");
+    }
+
+    #[test]
+    fn existing_episode_diagnostic_is_rejected_before_another_simulation_can_start() {
+        let dir = fresh_test_dir();
+        let sidecar_path = dir.join("measurement.json");
+        let episode_path = probe_episode_diagnostic_path(&sidecar_path);
+        fs::write(&episode_path, b"frozen episode").expect("existing episode fixture");
+
+        let result = ProbeSidecarReservation::acquire(&sidecar_path);
+        assert!(matches!(result, Err(error) if error.kind() == ErrorKind::AlreadyExists));
+
+        fs::remove_file(&episode_path).expect("remove episode fixture");
+        let reservation = ProbeSidecarReservation::acquire(&sidecar_path)
+            .expect("failed reservation left no stale lock");
+        drop(reservation);
+        fs::remove_dir_all(dir).expect("remove test directory");
+    }
+
+    #[test]
+    fn missing_probe_measurements_preserve_the_finalized_episode_once() {
+        let dir = fresh_test_dir();
+        let sidecar_path = dir.join("measurement.json");
+        let episode = serde_json::json!({
+            "outcome": "unexpected_refusal",
+            "refusal_code": "NO_JUSTIFIED_CURRENT_ACTION"
+        });
+
+        let episode_path = write_probe_episode_diagnostic(&sidecar_path, &episode)
+            .expect("empty sidecar failure preserves the finalized episode");
+        assert_eq!(
+            episode_path.file_name().and_then(|name| name.to_str()),
+            Some("measurement.json.episode-diagnostic.json")
+        );
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(&episode_path).expect("episode artifact exists"))
+                .expect("episode artifact JSON");
+        assert_eq!(saved, episode);
+        assert!(write_probe_episode_diagnostic(&sidecar_path, &episode).is_err());
+
         fs::remove_dir_all(dir).expect("remove test directory");
     }
 }
@@ -810,9 +853,20 @@ impl ProbeSidecarReservation {
 
         let reservation = Self { reservation_path };
         match fs::symlink_metadata(sidecar_path) {
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "probe measurement sidecar already exists",
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+
+        match fs::symlink_metadata(probe_episode_diagnostic_path(sidecar_path)) {
             Ok(_) => Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
-                "probe measurement sidecar already exists",
+                "probe episode diagnostic already exists",
             )),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(reservation),
             Err(error) => Err(error),
@@ -1698,6 +1752,9 @@ fn run_benchmark_trial_inner(
             paired_trial_key: trial.paired_trial_key.clone(),
             measurements: probe_measurement_records.unwrap_or_default(),
         };
+        if sidecar.measurements.is_empty() {
+            write_probe_episode_diagnostic(path, &episode)?;
+        }
         sidecar.verify().map_err(BenchmarkError::InvalidTrial)?;
         write_probe_measurement_sidecar(path, &sidecar)?;
     }
@@ -1713,10 +1770,29 @@ fn write_probe_measurement_sidecar(
             "probe measurement sidecar requested but no probe measurement was produced".into(),
         ));
     }
+    write_new_json_artifact(path, sidecar)
+}
+
+fn probe_episode_diagnostic_path(sidecar_path: &Path) -> PathBuf {
+    let mut path = sidecar_path.as_os_str().to_os_string();
+    path.push(".episode-diagnostic.json");
+    PathBuf::from(path)
+}
+
+fn write_probe_episode_diagnostic<T: Serialize>(
+    sidecar_path: &Path,
+    episode: &T,
+) -> Result<PathBuf, BenchmarkError> {
+    let path = probe_episode_diagnostic_path(sidecar_path);
+    write_new_json_artifact(&path, episode)?;
+    Ok(path)
+}
+
+fn write_new_json_artifact<T: Serialize>(path: &Path, value: &T) -> Result<(), BenchmarkError> {
     let file = OpenOptions::new().write(true).create_new(true).open(path)?;
     let mut writer = BufWriter::new(file);
     let result = (|| {
-        serde_json::to_writer_pretty(&mut writer, sidecar)?;
+        serde_json::to_writer_pretty(&mut writer, value)?;
         writer.write_all(b"\n")?;
         writer.flush()?;
         Ok::<(), BenchmarkError>(())

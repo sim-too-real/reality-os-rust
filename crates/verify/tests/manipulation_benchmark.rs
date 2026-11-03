@@ -5722,13 +5722,32 @@ fn iiwa_rotated_probe_unbracketed_motion_diagnostic_capture() {
         "preflight bytes must match the freeze"
     );
 
-    let episode = run_test_benchmark_trial_with_probe_measurement_sidecar(
+    let sidecar_path = evidence_dir.join("PROBE_MEASUREMENT_SIDECAR.json");
+    let episode = match run_test_benchmark_trial_with_probe_measurement_sidecar(
         &bundle,
         &trial,
         admission,
-        &evidence_dir.join("PROBE_MEASUREMENT_SIDECAR.json"),
-    )
-    .expect("the single diagnostic simulation completes and writes its sidecar");
+        &sidecar_path,
+    ) {
+        Ok(episode) => episode,
+        Err(error) => {
+            let mut episode_diagnostic_path = sidecar_path.as_os_str().to_os_string();
+            episode_diagnostic_path.push(".episode-diagnostic.json");
+            let episode_diagnostic_path = PathBuf::from(episode_diagnostic_path);
+            let bytes = std::fs::read(&episode_diagnostic_path).unwrap_or_else(|_| {
+                panic!("diagnostic simulation failed without a saved episode: {error:?}")
+            });
+            let episode: realityos_verify::manipulation_benchmark::BenchmarkEpisode =
+                serde_json::from_slice(&bytes).expect("saved failed-capture episode JSON");
+            write_new_json_artifact(&evidence_dir.join("EPISODE.json"), &episode);
+            panic!(
+                "diagnostic simulation failed after preserving its episode: {error:?}; outcome={:?}; actions={:?}; inference={:?}",
+                episode.outcome,
+                episode.actions.iter().map(|action| action.action_key.as_str()).collect::<Vec<_>>(),
+                episode.wrench_inference_reason
+            );
+        }
+    };
     write_new_json_artifact(&evidence_dir.join("EPISODE.json"), &episode);
     assert_eq!(episode.unauthorized_writes, 0);
     assert_eq!(
