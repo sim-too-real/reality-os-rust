@@ -292,6 +292,7 @@
     }
   },
   "final_source_validation": {
+    "final_source_commit": "7f239943fcf3d68dbdd54ebe601acee738b002e2",
     "cargo_check_realityos_verify_tests": "PASS",
     "python_mujoco_wrench_gate_tests": "PASS (8 tests)",
     "cargo_fmt_check": "PASS",

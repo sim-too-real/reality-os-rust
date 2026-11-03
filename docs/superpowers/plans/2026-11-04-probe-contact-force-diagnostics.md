@@ -79,7 +79,7 @@
 - [ ] Run the frozen simulator trial once; preserve its episode and contact/wrench sidecar whether the task passes or fails. One run completed and the episode was preserved, but no measurement sidecar was emitted because the monitor aborted before inference.
 - [ ] Independently verify sidecar hashes and recompute support-contact force versus inferred friction at the slip onset. Not possible for this seed: there is no sidecar and no slip onset.
 - [x] Record classification, findings, limitations, and next justified experiment; commit/push the result.
-- [ ] Confirm all four repositories remain on `main` and synchronized with their remotes.
+- [x] Confirm all four repositories remain on `main` and synchronized with their remotes (all report 0 ahead / 0 behind after fetching; `first-principles` has local working-tree changes that were left untouched).
 
 ### Task 5: Preserve diagnostics when the monitor aborts
 
@@ -110,6 +110,6 @@
 - [x] Freeze and run seed 21006 once. Its freeze verified before the reservation; the working-tree freeze was not committed before replay and changed the expected-contact gate for probe transit.
 - [x] Verify and analyze the seed 21006 sidecar: 6,130 pose samples, 25,912 force samples, onset bracket 23.978–23.980 s, and simulated μ=0.631634 inside inferred [0.335121, 0.8].
 - [x] Record that the seed 21006 run does not validate the final source change: the final code restores the original transit gate and decouples evidence capture. Do not replay seed 21006; its one-run budget is consumed.
-- [ ] Commit/push the final source and evidence, then confirm all four canonical repositories are on `main` and synchronized.
+- [x] Commit/push the final source and evidence in `7f239943fcf3d68dbdd54ebe601acee738b002e2`, then confirm all four canonical repositories are on `main` and synchronized.
 
 Do not replay seeds 21004, 21005, or 21006. Any further simulator evidence needs a new seed frozen against a committed source snapshot.
