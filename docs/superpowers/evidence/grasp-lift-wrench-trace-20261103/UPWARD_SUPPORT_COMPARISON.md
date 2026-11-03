@@ -2,6 +2,8 @@
 
 This offline comparison uses the committed freeze and its two unchanged trial inputs. It compares the earlier scalar proxy (`lower simulated friction × summed post-close normal force`) with the signed world-z resultant of object-finger forces at `lift_waypoint_1`. Object weight uses the frozen trial mass and the checked-in model gravity, `[0, 0, -9.81] m/s²`.
 
+**Archived-model caveat:** both trials' recorded contact friction vectors were `(1.0, 1.0, μ, 0.01, 0.01)`, placing scenario μ in the torsional slot while the two sliding coefficients remained 1.0. The table below faithfully reports the frozen runs, but their first-lift forces were not generated with corrected scenario sliding friction. These traces cannot validate predictor performance under the corrected friction mapping or serve as μ-specific corrected-model cases. `FREEZE.json` and `RESULT.json` remain unchanged; no replacement replay was run.
+
 | Trial | Scalar proxy / weight | First-lift finger z-force / weight | Outcome |
 |---|---:|---:|---|
 | 21010:25 | 0.595 / 1.419 N (0.419×) | 0.562 / 1.419 N (0.396×) | Runtime divergence |
@@ -13,4 +15,4 @@ Trial `21010:25` is directionally consistent with the scalar screen's rejection:
 
 **Decision:** keep the force cap, hold verifier, and refusal gates unchanged. Do not use the scalar proxy alone to authorize a lift. Prioritize an offline direction- and moment-aware predictor that also accounts for actuator realization, then evaluate it on independent cases before another full-lift replay.
 
-Only two development trials were analyzed. Contact values are simulator-derived, the post-close phase has no sample timestamp, and no held-out, physical, or commercial claim follows. Reproduction: run `compare_upward_support.ps1`; its output is bound to `FREEZE.json` and `RESULT.json` in `UPWARD_SUPPORT_COMPARISON.json`.
+Only two development trials were analyzed. Contact values are simulator-derived, the post-close phase has no sample timestamp, and the recorded sliding friction does not match scenario μ. No held-out, corrected-model, physical, or commercial claim follows. Reproduction: run `compare_upward_support.ps1`; its output is bound to `FREEZE.json` and `RESULT.json` in `UPWARD_SUPPORT_COMPARISON.json`.

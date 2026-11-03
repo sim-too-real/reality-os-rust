@@ -624,11 +624,17 @@ def _collect_assets(roots: list[str]) -> dict[str, bytes]:
     return assets
 
 
-def _unique_spec_name(spec: Any, attribute: str, prefix: str) -> str:
+def _unique_spec_name(
+    spec: Any,
+    attribute: str,
+    prefix: str,
+    reserved_names: set[str] | None = None,
+) -> str:
     used = {
         str(getattr(item, attribute, "") or "")
         for item in getattr(spec, f"{attribute}s", []) or []
     }
+    used.update(reserved_names or ())
     index = 0
     while True:
         name = f"{prefix}_{index}"
@@ -715,9 +721,12 @@ def _add_tool_object_friction_pairs(
                 None,
             )
             if pair is None:
-                pair_name = _unique_spec_name(spec, "pair", "scenario_tool_friction_pair")
-                while pair_name in pair_names:
-                    pair_name = _unique_spec_name(spec, "pair", "scenario_tool_friction_pair")
+                pair_name = _unique_spec_name(
+                    spec,
+                    "pair",
+                    "scenario_tool_friction_pair",
+                    pair_names,
+                )
                 pair_names.add(pair_name)
                 pair = spec.add_pair(
                     name=pair_name,

@@ -43,3 +43,8 @@ The worker writes a scenario scalar as `[μ, μ, 0.01]` to a MuJoCo geom. Geom f
 3. Rust preparation attaches the override only to the target object and the selected gripper's finger bodies.
 4. Runtime object-friction updates retain sliding/torsional/rolling order and update only the explicit target–finger pairs.
 5. Focused Python and Rust tests pass; no grasp/lift replay is run.
+6. The actual two-finger `arm_gripper_lift` bundle compiles two uniquely named target–finger pairs, each with the requested friction vector; pair-name allocation remains finite when the spec does not enumerate pairs added earlier in the same load.
+
+## Archived evidence limit
+
+The two frozen lift traces predate this correction. Their recorded contact vectors were `(1.0, 1.0, μ, 0.01, 0.01)`, so they do not validate outcomes under the corrected scenario sliding friction. Keep them immutable and exclude them from corrected-μ predictor validation.

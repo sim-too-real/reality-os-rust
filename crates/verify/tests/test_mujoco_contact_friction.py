@@ -4,12 +4,26 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import mujoco
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import mujoco_worker
 
 
 class ScenarioContactFrictionTests(unittest.TestCase):
+    def test_pair_name_allocator_skips_pairs_already_created_in_the_same_load(self):
+        spec = mujoco_worker.mujoco.MjSpec()
+        self.assertEqual(
+            mujoco_worker._unique_spec_name(
+                spec,
+                "pair",
+                "scenario_tool_friction_pair",
+                {"scenario_tool_friction_pair_0"},
+            ),
+            "scenario_tool_friction_pair_1",
+        )
+
     def test_target_finger_pair_uses_scenario_sliding_friction_only(self):
         with tempfile.TemporaryDirectory() as directory:
             model_path = Path(directory) / "friction_fixture.xml"
@@ -151,6 +165,52 @@ class ScenarioContactFrictionTests(unittest.TestCase):
             ]
             self.assertTrue(contacts)
             self.assertTrue(all(contact["dim"] == 4 for contact in contacts))
+
+    def test_actual_two_finger_gripper_compiles_two_target_friction_pairs(self):
+        repo_root = Path(__file__).resolve().parents[3]
+        model_path = repo_root / "robots/bundles/arm_gripper_lift/model.xml"
+        spec = mujoco_worker._load_spec(str(model_path), {})
+        friction = 0.7
+        worker_objects = [
+            {
+                "name": "target",
+                "type": "box",
+                "pos": [0.25, 0.0, 0.12],
+                "size": [0.01, 0.01, 0.02],
+                "mass": 0.2,
+                "movable": True,
+                "friction": friction,
+                "tool_object_friction_bodies": ["finger_l", "finger_r"],
+            }
+        ]
+        mujoco_worker._add_scenario_objects(spec, worker_objects)
+        model = spec.compile()
+        target_body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "target")
+        target_geom_ids = {
+            geom_id
+            for geom_id in range(model.ngeom)
+            if int(model.geom_bodyid[geom_id]) == target_body
+        }
+        target_pair_ids = [
+            pair_id
+            for pair_id in range(model.npair)
+            if int(model.pair_geom1[pair_id]) in target_geom_ids
+            or int(model.pair_geom2[pair_id]) in target_geom_ids
+        ]
+        finger_names = set()
+        for pair_id in target_pair_ids:
+            geom_ids = [int(model.pair_geom1[pair_id]), int(model.pair_geom2[pair_id])]
+            pair_bodies = {
+                model.body(int(model.geom_bodyid[geom_id])).name for geom_id in geom_ids
+            }
+            finger_names.update(pair_bodies - {"target"})
+            self.assertEqual(
+                list(model.pair_friction[pair_id]),
+                [friction, friction, 0.01, 0.01, 0.01],
+            )
+
+        self.assertEqual(len(target_pair_ids), 2)
+        self.assertEqual(finger_names, {"finger_l", "finger_r"})
 
 
 if __name__ == "__main__":

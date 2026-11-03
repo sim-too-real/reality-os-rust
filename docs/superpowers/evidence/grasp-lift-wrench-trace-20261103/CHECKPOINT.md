@@ -12,6 +12,14 @@ The worker previously mapped scenario geom friction to `[μ, μ, 0.01]`. MuJoCo 
 
 Focused worker-load checks verified μ=0.4 gives target–finger `condim=3`, tangential friction `[0.4, 0.4]`, torsional friction `0.01`, while an unrelated target–support pair retains `[1.0, 1.0]`. Additional checks verified a `condim=4` finger, a runtime update to μ=0.6, and fail-closed handling of a missing finger body. Rust unit checks verified that only the target scenario object receives the selected gripper's finger-body mapping and that missing gripper metadata is rejected. The old worker failed the regression with tangential friction `[1.0, 1.0]`; the focused checks pass after the fix.
 
+### Follow-up: two-finger pair allocation
+
+The actual `arm_gripper_lift` bundle exposed a second-pair name-allocation hang during a read-only worker/model-load check. `MjSpec.pairs` did not expose pairs added earlier in the same load, so repeatedly asking it for the next available name could return the same name forever. The allocator now reserves names as pairs are created. The allocator regression and actual-bundle regression confirmed that the compiled model contains exactly two target pairs, one for each finger, with `[0.7, 0.7, 0.01, 0.01, 0.01]`. The diagnostic compiled the model only; it ran no simulation step, grasp, or lift.
+
+### Archived trace friction limitation
+
+Inspection of the immutable `RESULT.json` found that the historical contacts used friction vectors `(1.0, 1.0, μ, 0.01, 0.01)` for both frozen trials, with each trial's scenario μ in the torsional slot. The recorded first-lift forces therefore came from the pre-correction contact model, not from target sliding friction set to scenario μ. `UPWARD_SUPPORT_COMPARISON.md` remains an accurate description of those archived runs, but those two traces do not validate a predictor under the corrected scenario sliding friction and must not be used as μ-specific corrected-model validation. `FREEZE.json` and `RESULT.json` remain immutable; no replay was run to replace them.
+
 ## Verification
 
 - Parser and wrench unit tests were observed failing before implementation and passing after it. Coverage includes both geom body orderings, a rotated contact frame, contact torque, missing/non-finite inputs, and legacy audit deserialization.
@@ -33,6 +41,6 @@ The audit stores sample phase but not per-sample simulation time. The result con
 
 The scalar screen's 21006 false pass is now decision-relevant: preserve the current cap and hold/refusal gates, and do not use scalar friction times normal load alone to authorize lift. Next, build an offline predictor using post-close measurements only, including contact direction/moment arms and actuator realization; compare its predictions against first-lift outcomes on independent frozen cases. Align samples by simulation time in any later capture; the current audit has repeated `post_close` phase labels without timestamps. Do not run another full-lift replay until the predictor is independently evaluated. Separately resolve the rotated-sweep contract with conservative geometry and collision tests; do not weaken the existing refusal based on this telemetry.
 
-The friction mapping correction validates simulator contact parameter wiring only. It does not evaluate the predictor, change the two frozen outcomes, justify another full-lift replay, or support a physical friction/capacity claim.
+The friction mapping correction validates simulator contact parameter wiring only. It does not evaluate the predictor, change the two frozen outcomes, justify another full-lift replay, or support a physical friction/capacity claim. The archived comparison's predictive limits are further constrained by the friction mismatch above.
 
 No physical test, actuation, supplier/customer contact, purchase, or fabrication occurred. The traces and force resultants are simulation-only. The two development controls do not establish predictor accuracy, held-out performance, or hardware capacity.

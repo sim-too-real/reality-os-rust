@@ -54,3 +54,9 @@
 ## Checkpoint
 
 No full-grasp or lift replay is part of this plan. After the coefficient mapping is independently tested, return to the frozen offline predictor work before considering a new full-lift case.
+
+## Follow-up regression and evidence correction
+
+- [x] Reserve pair names created earlier in the same `MjSpec` load; the actual two-finger bundle regression verifies both target pairs compile with the requested friction. The diagnostic performs model compilation only.
+- [x] Record that the archived frozen traces used sliding coefficients `[1.0, 1.0]` and scenario μ in the torsional slot. Preserve `FREEZE.json` and `RESULT.json`; do not use those runs to validate corrected-μ predictor performance.
+- [ ] Continue offline predictor work with corrected-model evidence. Keep full-lift replay gated until independent predictor evaluation; no lift was run in this follow-up.
