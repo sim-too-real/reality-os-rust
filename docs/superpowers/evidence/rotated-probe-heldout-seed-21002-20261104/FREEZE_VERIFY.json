@@ -1,0 +1,16 @@
+{
+  "status": "PASS",
+  "verified_at_utc": "2026-11-03T19:39:54Z",
+  "branch": "main",
+  "frozen_source_commit": "c49bd4006c19054609747e66e5f00dbe7b735af9",
+  "source_hashes_verified": 13,
+  "model_hashes_verified": 20,
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21002:0",
+  "trial_digest": "160d49bb60590c1c6bd76fbf7880b03cc1575dad5a3fb24994e2b9ea37896a66",
+  "trial_input_sha256_match": true,
+  "preflight_sha256_match": true,
+  "first_action": "probe:+x",
+  "zero_step_preflight": true,
+  "simulation_runs_at_freeze": 0,
+  "run_budget_max": 1
+}
