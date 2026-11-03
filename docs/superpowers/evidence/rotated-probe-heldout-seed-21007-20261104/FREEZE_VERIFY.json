@@ -1,0 +1,27 @@
+{
+  "schema": "realityos.rotated_probe_diagnostic.freeze_verify/v1",
+  "experiment_id": "rotated_probe_heldout_seed_21007_iiwa14_20261104_v1",
+  "verified_at_utc": "2026-11-03T22:11:03Z",
+  "status": "PASS",
+  "checks": {
+    "trial_id_matches": true,
+    "trial_seed": 21007,
+    "preflight_authorized_action": "probe:+x",
+    "preflight_zero_step": true,
+    "control_writes_unchanged": true,
+    "thresholds_unchanged": true,
+    "minimum_planar_motion_m": 0.001,
+    "minimum_tangential_force_lower_bound_n": 0.5,
+    "source_commit": "7f74bb962da5ac09538282bacb2c0aece916b422",
+    "tracked_source_changes_at_freeze": false,
+    "trial_input_sha256": "7026DFFE901CDBF5422F20763D89A271117D77D837FD1C834E8F380577E3E53A",
+    "preflight_sha256": "71EA0AD6ED69685B5CAF270329EE6AE9FE085E50C52CCD7ADF71AE1DDC0DB66A",
+    "model_file_hash_mismatches": [],
+    "execution_rs_sha256": "CF90A6213BAEF8519EEC92A37508F4888C6BB076B4778888EC78B0242E3A4F85",
+    "mujoco_worker_sha256": "3337AE4DE5F2F1C4953195168C93D14D4C385B7802ABBA998A81F667929A05CD"
+  },
+  "admission_status": "NOT_ADMITTED",
+  "metal": false,
+  "shop_release": false,
+  "viewport_admits": false
+}
