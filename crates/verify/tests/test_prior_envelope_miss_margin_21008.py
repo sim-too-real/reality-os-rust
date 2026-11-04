@@ -63,7 +63,13 @@ class TestPriorEnvelopeMissMargin21008(unittest.TestCase):
             "PRIOR_ENVELOPE_MISS_MARGIN.json",
         )
         self.assertFalse(portfolio["governor_weakened_any"])
-        self.assertIn("PRIOR_ENVELOPE_MISS_MARGIN sealed", portfolio["conclusion"])
+        self.assertIn("PRIOR_ENVELOPE_MISS_MARGIN", portfolio["conclusion"])
+        self.assertTrue(row.get("first_onset_policy_comparison_present"))
+        self.assertEqual(
+            row.get("first_onset_policy_comparison_path"),
+            "FIRST_ONSET_POLICY_COMPARISON.json",
+        )
+        self.assertIn("FIRST_ONSET_POLICY_COMPARISON sealed", portfolio["conclusion"])
 
 
 if __name__ == "__main__":

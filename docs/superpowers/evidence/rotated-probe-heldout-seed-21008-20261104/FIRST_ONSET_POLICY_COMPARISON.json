@@ -1,0 +1,57 @@
+{
+  "schema": "realityos.first_onset_outside_prior_policy_comparison/v1",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21008:0",
+  "declared_prior": [0.05, 0.8],
+  "measurement_bounds": [0.8410610796690302, 0.9046710475934353],
+  "mu_required": 0.3,
+  "bound_diagnosis": "entirely_above_prior",
+  "prior_envelope_miss_margin_path": "PRIOR_ENVELOPE_MISS_MARGIN.json",
+  "live_policy": "retain_declared_prior",
+  "live_governor_path_changed": false,
+  "governor_contact_threshold_m": 0.001,
+  "governor_force_threshold_n": 0.5,
+  "arms": [
+    {
+      "policy": "retain_declared_prior",
+      "family": "first_onset_outside_prior",
+      "outcome_kind": "rejected",
+      "reason": "prior_measurement_incompatible",
+      "proves_mu_required": false,
+      "live_status_quo": true
+    },
+    {
+      "policy": "prefer_higher_load_family_on_incompatible",
+      "family": "successive_probe_cadence",
+      "outcome_kind": "rejected",
+      "reason": "prior_measurement_incompatible",
+      "proves_mu_required": false,
+      "note": "No first SlipOnset posterior; PreferHigherLoadFamily does not apply."
+    },
+    {
+      "policy": "refuse_prior_envelope_as_not_credible",
+      "family": "first_onset_outside_prior",
+      "outcome_kind": "refused_prior_envelope",
+      "proves_mu_required": false,
+      "named_hole": true
+    },
+    {
+      "policy": "narrow_to_measurement_on_entirely_above_prior",
+      "family": "first_onset_outside_prior",
+      "outcome_kind": "accepted_by_replacing_prior",
+      "interval": [0.8410610796690302, 0.9046710475934353],
+      "quarantined_prior": [0.05, 0.8],
+      "proves_mu_required": true,
+      "wired_live": false,
+      "note": "Research-only; discards declared prior envelope; not wired into Governor path."
+    }
+  ],
+  "admission_status": "NOT_ADMITTED",
+  "metal": false,
+  "shop_release": false,
+  "viewport_admits": false,
+  "limitations": [
+    "Offline policy comparison only; does not invent measurements.",
+    "Does not change contact/force Governor thresholds.",
+    "NarrowToMeasurement remains unwired live."
+  ]
+}

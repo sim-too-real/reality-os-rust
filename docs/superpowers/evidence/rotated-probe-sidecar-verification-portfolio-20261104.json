@@ -137,10 +137,12 @@
       "notes": "Non-empty sidecar; RESULT records offline_sidecar_verifier_status=PASS. Portfolio uses sealed status (full replay opt-in via --full-replay). PRIOR_ENVELOPE_MISS_MARGIN.json sealed for entirely_above_prior honesty (relative_miss>0.05); live Governor path unchanged.",
       "failure_class_after_verification": "expected_success_blocked_by_first_onset_outside_prior",
       "prior_envelope_miss_margin_path": "PRIOR_ENVELOPE_MISS_MARGIN.json",
-      "prior_envelope_miss_margin_present": true
+      "prior_envelope_miss_margin_present": true,
+      "first_onset_policy_comparison_path": "FIRST_ONSET_POLICY_COMPARISON.json",
+      "first_onset_policy_comparison_present": true
     }
   ],
-  "conclusion": "Sidecar verification completed offline for sealed seeds. Historical 21004/21005 remain FAIL_NO_SIDECAR with episode-diagnostic integrity checked; fresh 21004/21005 sidecar captures PASS structurally (PASS_RECORDED_AT_SEAL / PASS_STRUCTURAL_AMBIGUOUS_CONTACT). 21008 clean-tree FREEZE replay sealed PriorMeasurementIncompatible with offline verifier PASS; bound diagnosis entirely_above_prior; failure_class first_onset_outside_prior (not successive PreferHigherLoad); PRIOR_ENVELOPE_MISS_MARGIN sealed. Governor thresholds unchanged. Do not invent measurements or weaken contact/force gates. Next: seed/physics match for first onset above prior.upper, or non-ambiguous intended-contact capture for Updated(SlipOnset) transfer. Live NarrowToMeasurement remains unwired.",
+  "conclusion": "Sidecar verification completed offline for sealed seeds. Historical 21004/21005 remain FAIL_NO_SIDECAR with episode-diagnostic integrity checked; fresh 21004/21005 sidecar captures PASS structurally (PASS_RECORDED_AT_SEAL / PASS_STRUCTURAL_AMBIGUOUS_CONTACT). 21008 clean-tree FREEZE replay sealed PriorMeasurementIncompatible with offline verifier PASS; bound diagnosis entirely_above_prior; failure_class first_onset_outside_prior (not successive PreferHigherLoad); PRIOR_ENVELOPE_MISS_MARGIN and FIRST_ONSET_POLICY_COMPARISON sealed. Governor thresholds unchanged. Do not invent measurements or weaken contact/force gates. Next: seed/physics match for first onset above prior.upper, or non-ambiguous intended-contact capture for Updated(SlipOnset) transfer. Live NarrowToMeasurement remains unwired.",
   "admission_status": "NOT_ADMITTED",
   "metal": false,
   "shop_release": false,

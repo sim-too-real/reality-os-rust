@@ -25,4 +25,9 @@ into the Governor path in this experiment.
 
 ```powershell
 cargo test -p realityos-semantics --test push_probe_inference first_onset_outside_prior -- --nocapture
+py -3.10 -B -m unittest crates.verify.tests.test_first_onset_policy_comparison_21008
 ```
+
+Machine-readable seal:
+`FIRST_ONSET_POLICY_COMPARISON.json` (bound to `FRICTION_BOUND_DIAGNOSIS.json` and
+`PRIOR_ENVELOPE_MISS_MARGIN.json`).
