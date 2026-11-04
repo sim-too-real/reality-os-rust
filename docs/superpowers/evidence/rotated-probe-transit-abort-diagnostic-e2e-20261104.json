@@ -1,0 +1,18 @@
+{
+  "schema": "realityos.transit_abort_diagnostic_e2e/v1",
+  "baseline_failure_class": "transit_unexpected_contact_without_measurement_trace",
+  "treatment_failure_class": "unexpected_contact_with_preserved_episode",
+  "governor_weakened": false,
+  "expected_contact_allowed_during_transit": false,
+  "probe_trace_captures_abort_step": true,
+  "heldout_simulator_replay": {
+    "seed": 21008,
+    "status": "prepared_and_freeze_hashed",
+    "replay_authorized": false,
+    "block_reason": "freeze_not_committed"
+  },
+  "admission_status": "NOT_ADMITTED",
+  "metal": false,
+  "shop_release": false,
+  "viewport_admits": false
+}
