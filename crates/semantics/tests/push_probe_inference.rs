@@ -5,10 +5,11 @@ use realityos_semantics::physical_belief::{
 use realityos_semantics::push_probe::{
     apply_first_onset_outside_prior, apply_successive_probe_cadence,
     friction_interval_proves_mu_required, infer_support_friction,
-    intersect_measurement_bounds_with_prior, transform_sensor_wrench_to_support,
-    FirstOnsetOutsidePriorOutcome, FirstOnsetOutsidePriorPolicy, FrictionInferenceMode,
-    FrictionInferenceResult, FrictionInferredQuantity, FrictionNoInferenceReason,
-    IntendedContactEvidence, ProbeContactPair, ProbeMotionWindow, ProbeObjectPoseSample,
+    intersect_measurement_bounds_with_prior, prior_envelope_miss_margin,
+    transform_sensor_wrench_to_support, FirstOnsetOutsidePriorOutcome,
+    FirstOnsetOutsidePriorPolicy, FrictionInferenceMode, FrictionInferenceResult,
+    FrictionInferredQuantity, FrictionNoInferenceReason, IntendedContactEvidence,
+    PriorEnvelopeMissMargin, ProbeContactPair, ProbeMotionWindow, ProbeObjectPoseSample,
     ProbeObjectPoseTrace, PushProbeMeasurement, SuccessiveProbeCadenceOutcome,
     SuccessiveProbeCadencePolicy, WrenchCompensation, WrenchEvidenceOrigin, WrenchTransform,
 };
@@ -1193,6 +1194,36 @@ fn first_onset_outside_prior_transfers_to_heldout_numeric_family() {
     assert!(matches!(
         retained,
         FirstOnsetOutsidePriorOutcome::Rejected { .. }
+    ));
+}
+
+#[test]
+fn prior_envelope_miss_margin_quantifies_21008_and_heldout() {
+    let prior = [0.05, 0.8];
+    let bounds = [0.8410610796690302, 0.9046710475934353];
+    let miss = prior_envelope_miss_margin(prior, bounds);
+    match miss {
+        PriorEnvelopeMissMargin::EntirelyAbovePrior {
+            absolute_miss,
+            relative_miss,
+            ..
+        } => {
+            assert!((absolute_miss - (bounds[0] - prior[1])).abs() < 1e-12);
+            assert!((relative_miss - absolute_miss / prior[1]).abs() < 1e-12);
+            assert!(relative_miss > 0.05);
+        }
+        other => panic!("expected entirely_above miss on 21008, got {other:?}"),
+    }
+
+    let heldout_prior = [0.05, 0.75];
+    let heldout_bounds = [0.82, 0.91];
+    assert!(matches!(
+        prior_envelope_miss_margin(heldout_prior, heldout_bounds),
+        PriorEnvelopeMissMargin::EntirelyAbovePrior { .. }
+    ));
+    assert!(matches!(
+        prior_envelope_miss_margin([0.05, 0.8], [0.2, 0.4]),
+        PriorEnvelopeMissMargin::NotEntirelyAbovePrior { .. }
     ));
 }
 

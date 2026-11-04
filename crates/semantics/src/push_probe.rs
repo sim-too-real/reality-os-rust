@@ -1262,6 +1262,65 @@ pub fn apply_first_onset_outside_prior(
     }
 }
 
+/// Offline honesty metric when first-onset bounds sit entirely above `prior.upper`.
+///
+/// Returns `(measurement.lower − prior.upper) / prior.upper` when the geometry is
+/// `entirely_above_prior` with a positive finite prior upper bound. Does not invent
+/// measurements, change Governor thresholds, or select a live belief policy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PriorEnvelopeMissMargin {
+    EntirelyAbovePrior {
+        absolute_miss: f64,
+        relative_miss: f64,
+        declared_prior: [f64; 2],
+        measurement_bounds: [f64; 2],
+    },
+    NotEntirelyAbovePrior {
+        declared_prior: [f64; 2],
+        measurement_bounds: [f64; 2],
+    },
+    InvalidInputs {
+        reason: String,
+    },
+}
+
+pub fn prior_envelope_miss_margin(
+    declared_prior: [f64; 2],
+    measurement_bounds: [f64; 2],
+) -> PriorEnvelopeMissMargin {
+    if !(declared_prior[0].is_finite()
+        && declared_prior[1].is_finite()
+        && declared_prior[0] <= declared_prior[1]
+        && measurement_bounds[0].is_finite()
+        && measurement_bounds[1].is_finite()
+        && measurement_bounds[0] <= measurement_bounds[1])
+    {
+        return PriorEnvelopeMissMargin::InvalidInputs {
+            reason: "non_finite_or_unordered_interval".into(),
+        };
+    }
+    if !(declared_prior[1] > 0.0) {
+        return PriorEnvelopeMissMargin::InvalidInputs {
+            reason: "non_positive_prior_upper".into(),
+        };
+    }
+    if measurement_bounds[0] > declared_prior[1] {
+        let absolute_miss = measurement_bounds[0] - declared_prior[1];
+        PriorEnvelopeMissMargin::EntirelyAbovePrior {
+            absolute_miss,
+            relative_miss: absolute_miss / declared_prior[1],
+            declared_prior,
+            measurement_bounds,
+        }
+    } else {
+        PriorEnvelopeMissMargin::NotEntirelyAbovePrior {
+            declared_prior,
+            measurement_bounds,
+        }
+    }
+}
+
 fn push_contact_pairs(bytes: &mut Vec<u8>, contact_pairs: &[ProbeContactPair]) {
     bytes.extend_from_slice(&(contact_pairs.len() as u64).to_le_bytes());
     for pair in contact_pairs {
