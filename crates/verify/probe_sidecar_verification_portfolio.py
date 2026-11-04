@@ -27,6 +27,8 @@ SCHEMA = "realityos.probe_sidecar_verification_portfolio/v1"
 DEFAULT_SEEDS = [
     "rotated-probe-heldout-seed-21004-20261104",
     "rotated-probe-heldout-seed-21005-20261104",
+    "rotated-probe-heldout-seed-21004-sidecar-capture-20261104",
+    "rotated-probe-heldout-seed-21005-sidecar-capture-20261104",
     "rotated-probe-heldout-seed-21006-20261104",
     "rotated-probe-heldout-seed-21007-20261104",
 ]
@@ -198,10 +200,12 @@ def build_portfolio(seed_dirs: list[str], *, full_replay: bool = False) -> dict:
         "rows": rows,
         "conclusion": (
             "Sidecar verification completed offline for sealed seeds. "
-            "21004/21005-class remain FAIL_NO_SIDECAR with episode-diagnostic integrity "
-            "checked; do not invent measurements or weaken contact/force gates. "
-            "Next authorized capture must seal non-empty PROBE_MEASUREMENT_SIDECAR "
-            "(probe_trace on abort) or owner-gated 21008 replay."
+            "Historical 21004/21005 remain FAIL_NO_SIDECAR with episode-diagnostic integrity "
+            "checked; fresh 21004/21005 sidecar captures PASS structurally "
+            "(PASS_RECORDED_AT_SEAL / PASS_STRUCTURAL_AMBIGUOUS_CONTACT). "
+            "Do not invent measurements or weaken contact/force gates. "
+            "Next: owner-gated 21008 replay or non-ambiguous intended-contact capture "
+            "for interval-replay science."
         ),
         "admission_status": "NOT_ADMITTED",
         "metal": False,

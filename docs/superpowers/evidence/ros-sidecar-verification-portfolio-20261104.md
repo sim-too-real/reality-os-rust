@@ -1,34 +1,26 @@
-# Probe sidecar verification portfolio — 2026-11-04
+# ROS sidecar verification portfolio — 2026-11-04 (updated)
 
 ## Question
 
-Can offline verification of sealed 21004/21005-class evidence complete without
-inventing measurements or weakening Governor gates, and how does that change the
-research next-action vs “sidecar still unverified”?
+Can offline verification of sealed probe sidecars complete without inventing
+measurements or weakening Governor gates, including after fresh 21004/21005
+captures?
 
 ## Measured
 
-| Seed | Sidecar verification | Episode diagnostic | Failure class after verification |
-|---|---|---|---|
-| 21004 | `FAIL_NO_SIDECAR` | `INTEGRITY_PASS` | `unexpected_contact_with_episode_diagnostic_only` |
-| 21005 | `FAIL_NO_SIDECAR` | `INTEGRITY_PASS` | `unexpected_contact_with_episode_diagnostic_only` |
-| 21006 | structural / sealed | n/a | unchanged (task_success path) |
-| 21007 | `PASS_RECORDED_AT_SEAL` (non-empty) | n/a | positive control |
+| Seed | Status | Notes |
+|---|---|---|
+| 21004 historical | `FAIL_NO_SIDECAR` | episode diagnostic `INTEGRITY_PASS` |
+| 21005 historical | `FAIL_NO_SIDECAR` | episode diagnostic `INTEGRITY_PASS` |
+| 21004 sidecar capture | `PASS_RECORDED_AT_SEAL` | `PASS_STRUCTURAL_AMBIGUOUS_CONTACT` |
+| 21005 sidecar capture | `PASS_RECORDED_AT_SEAL` | `PASS_STRUCTURAL_AMBIGUOUS_CONTACT` |
+| 21006 | `PASS_STRUCTURAL_NONEMPTY` | success path |
+| 21007 | `PASS_STRUCTURAL_NONEMPTY` | success path |
 
-`governor_weakened=false`. `invented_measurements=false`. Contact/force thresholds unchanged.
+Portfolio: 6 seeds; fail_no_sidecar=2; pass=4; governor_weakened_any=false;
+invented_measurements_any=false.
 
 ## Classification
 
-**VALIDATED_LEARNING**: the open “complete sidecar verification” action is now a
-measured negative for sealed 21004/21005 (absent sidecar), with diagnostic
-integrity checked. Next capture must seal a non-empty `PROBE_MEASUREMENT_SIDECAR`
-or wait for owner-gated 21008 replay — not gate weakening.
-
-## Evidence
-
-```powershell
-py -3.10 -m unittest crates.verify.tests.test_probe_sidecar_verification_portfolio -v
-py -3.10 -B crates/verify/probe_sidecar_verification_portfolio.py
-```
-
-Artifact: `docs/superpowers/evidence/rotated-probe-sidecar-verification-portfolio-20261104.json`
+**SIGNIFICANT_ADVANCE** for capture transfer; historical empty-sidecar seeds
+remain explicit measured negatives.

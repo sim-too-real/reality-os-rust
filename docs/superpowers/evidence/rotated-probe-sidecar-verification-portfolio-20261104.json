@@ -1,8 +1,8 @@
 {
   "schema": "realityos.probe_sidecar_verification_portfolio/v1",
-  "seed_count": 4,
+  "seed_count": 6,
   "fail_no_sidecar_count": 2,
-  "pass_count": 2,
+  "pass_count": 4,
   "governor_weakened_any": false,
   "invented_measurements_any": false,
   "rows": [
@@ -43,6 +43,44 @@
       "failure_class_after_verification": "unexpected_contact_with_episode_diagnostic_only"
     },
     {
+      "seed_dir": "rotated-probe-heldout-seed-21004-sidecar-capture-20261104",
+      "sidecar_path": "PROBE_MEASUREMENT_SIDECAR.json",
+      "sidecar_present": true,
+      "episode_diagnostic": {
+        "present": false,
+        "status": "ABSENT",
+        "trial_id_match": null,
+        "trial_digest_match": null
+      },
+      "governor_weakened": false,
+      "admission_status": "NOT_ADMITTED",
+      "invented_measurements": false,
+      "measurement_count": 1,
+      "result_recorded_sidecar_status": "PASS_STRUCTURAL_AMBIGUOUS_CONTACT",
+      "verification_status": "PASS_RECORDED_AT_SEAL",
+      "notes": "Non-empty sidecar; RESULT records offline_sidecar_verifier_status=PASS_STRUCTURAL_AMBIGUOUS_CONTACT. Portfolio uses sealed status (full replay opt-in via --full-replay).",
+      "failure_class_after_verification": "unexpected_contact_with_preserved_episode"
+    },
+    {
+      "seed_dir": "rotated-probe-heldout-seed-21005-sidecar-capture-20261104",
+      "sidecar_path": "PROBE_MEASUREMENT_SIDECAR.json",
+      "sidecar_present": true,
+      "episode_diagnostic": {
+        "present": false,
+        "status": "ABSENT",
+        "trial_id_match": null,
+        "trial_digest_match": null
+      },
+      "governor_weakened": false,
+      "admission_status": "NOT_ADMITTED",
+      "invented_measurements": false,
+      "measurement_count": 1,
+      "result_recorded_sidecar_status": "PASS_STRUCTURAL_AMBIGUOUS_CONTACT",
+      "verification_status": "PASS_RECORDED_AT_SEAL",
+      "notes": "Non-empty sidecar; RESULT records offline_sidecar_verifier_status=PASS_STRUCTURAL_AMBIGUOUS_CONTACT. Portfolio uses sealed status (full replay opt-in via --full-replay).",
+      "failure_class_after_verification": "unexpected_contact_with_preserved_episode"
+    },
+    {
       "seed_dir": "rotated-probe-heldout-seed-21006-20261104",
       "sidecar_path": "PROBE_MEASUREMENT_SIDECAR.json",
       "sidecar_present": true,
@@ -81,7 +119,7 @@
       "failure_class_after_verification": "task_success"
     }
   ],
-  "conclusion": "Sidecar verification completed offline for sealed seeds. 21004/21005-class remain FAIL_NO_SIDECAR with episode-diagnostic integrity checked; do not invent measurements or weaken contact/force gates. Next authorized capture must seal non-empty PROBE_MEASUREMENT_SIDECAR (probe_trace on abort) or owner-gated 21008 replay.",
+  "conclusion": "Sidecar verification completed offline for sealed seeds. Historical 21004/21005 remain FAIL_NO_SIDECAR with episode-diagnostic integrity checked; fresh 21004/21005 sidecar captures PASS structurally (PASS_RECORDED_AT_SEAL / PASS_STRUCTURAL_AMBIGUOUS_CONTACT). Do not invent measurements or weaken contact/force gates. Next: owner-gated 21008 replay or non-ambiguous intended-contact capture for interval-replay science.",
   "admission_status": "NOT_ADMITTED",
   "metal": false,
   "shop_release": false,

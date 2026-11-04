@@ -45,6 +45,38 @@ class ProbeSidecarVerificationPortfolioTests(unittest.TestCase):
             "unexpected_contact_with_episode_diagnostic_only",
         )
 
+    def test_21004_sidecar_capture_records_pass_at_seal(self) -> None:
+        path = EVIDENCE / "rotated-probe-heldout-seed-21004-sidecar-capture-20261104"
+        if not (path / "PROBE_MEASUREMENT_SIDECAR.json").is_file():
+            self.skipTest("gitignored 21004 capture sidecar not present locally")
+        row = verify_evidence_dir(path)
+        self.assertEqual(row["verification_status"], "PASS_RECORDED_AT_SEAL")
+        self.assertEqual(
+            row["result_recorded_sidecar_status"],
+            "PASS_STRUCTURAL_AMBIGUOUS_CONTACT",
+        )
+        self.assertEqual(
+            row["failure_class_after_verification"],
+            "unexpected_contact_with_preserved_episode",
+        )
+        self.assertFalse(row["governor_weakened"])
+
+    def test_21005_sidecar_capture_records_pass_at_seal(self) -> None:
+        path = EVIDENCE / "rotated-probe-heldout-seed-21005-sidecar-capture-20261104"
+        if not (path / "PROBE_MEASUREMENT_SIDECAR.json").is_file():
+            self.skipTest("gitignored 21005 capture sidecar not present locally")
+        row = verify_evidence_dir(path)
+        self.assertEqual(row["verification_status"], "PASS_RECORDED_AT_SEAL")
+        self.assertEqual(
+            row["result_recorded_sidecar_status"],
+            "PASS_STRUCTURAL_AMBIGUOUS_CONTACT",
+        )
+        self.assertEqual(
+            row["failure_class_after_verification"],
+            "unexpected_contact_with_preserved_episode",
+        )
+        self.assertFalse(row["governor_weakened"])
+
     def test_21007_records_pass_without_inventing(self) -> None:
         row = verify_evidence_dir(
             EVIDENCE / "rotated-probe-heldout-seed-21007-20261104"

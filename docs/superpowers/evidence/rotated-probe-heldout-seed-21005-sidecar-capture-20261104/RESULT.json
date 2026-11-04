@@ -1,0 +1,51 @@
+{
+  "schema": "realityos.rotated_probe_diagnostic.result/v1",
+  "experiment_id": "rotated_probe_heldout_seed_21005_sidecar_capture_iiwa14_20261104_v1",
+  "completed_at_utc": "2026-11-04T16:15:00Z",
+  "classification": "SIDECAR_CAPTURED; CONTACT_FORCE_TRACE; OFFLINE_VERIFIER_PASS_STRUCTURAL_AMBIGUOUS_CONTACT; SIMULATION_ONLY; NOT_ADMITTED",
+  "repository": "reality-os-rust",
+  "branch": "main",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21005:0",
+  "trial_seed": 21005,
+  "trial_index": 0,
+  "simulation_runs": 1,
+  "baseline_sealed_21005": {
+    "classification": "EMPTY_SIDECAR; CONTACT_FORCE_NOT_PRESERVED",
+    "offline_sidecar_verifier_status": "NOT_RUN_NO_SIDECAR",
+    "failure_class_after_diagnostic": "unexpected_contact_with_episode_diagnostic_only"
+  },
+  "verification": {
+    "seal_gate_status": "PASS_SIDECAR_PRESENT",
+    "seal_allowed": true,
+    "sidecar_bytes": 12885817,
+    "measurement_record_count": 1,
+    "offline_sidecar_verifier_status": "PASS_STRUCTURAL_AMBIGUOUS_CONTACT",
+    "offline_sidecar_verifier_error": null,
+    "interval_replay_supported": false,
+    "unauthorized_writes": 0,
+    "governor_weakened": false,
+    "thresholds_changed": false,
+    "invented_measurements": false
+  },
+  "episode": {
+    "path": "EPISODE.json",
+    "outcome": "action_failed",
+    "failure_cause": "force_monitor_abort",
+    "refusal_code": "WRENCH_MONITOR_ABORTED_ACTION",
+    "abort_kind": "unexpected_contact",
+    "wrench_inference_reason": "no_inference:UnexpectedContact",
+    "actions": ["probe:+x"]
+  },
+  "failure_class": "unexpected_contact_with_preserved_episode",
+  "failure_class_path": "FAILURE_CLASS.json",
+  "admission_status": "NOT_ADMITTED",
+  "metal": false,
+  "shop_release": false,
+  "viewport_admits": false,
+  "notes": [
+    "Fresh capture sealed a non-empty probe-measurement sidecar under the fail-closed seal gate.",
+    "Sealed historical 21005 evidence was not overwritten.",
+    "Independent offline verifier structurally PASSes ambiguous runtime contact; friction-interval replay remains unsupported by design — do not weaken Governor gates.",
+    "Transfers the 21004 sidecar-capture + structural-verify discovery to held-out seed 21005."
+  ]
+}
