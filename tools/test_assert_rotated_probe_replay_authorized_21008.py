@@ -17,7 +17,7 @@ LIVE = (
 
 
 class AssertReplayAuthorized21008Tests(unittest.TestCase):
-    def test_live_freeze_currently_blocks_until_clean_tree_authorize(self) -> None:
+    def test_live_freeze_is_clean_tree_authorized_without_threshold_change(self) -> None:
         result = subprocess.run(
             [sys.executable, str(TOOL), "--freeze", str(LIVE), "--json"],
             cwd=ROOT,
@@ -25,10 +25,12 @@ class AssertReplayAuthorized21008Tests(unittest.TestCase):
             text=True,
             check=False,
         )
-        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         report = json.loads(result.stdout)
-        self.assertFalse(report["ok"])
-        self.assertFalse(report["replay_authorized"])
+        self.assertTrue(report["ok"])
+        self.assertTrue(report["replay_authorized"])
+        self.assertTrue(report["thresholds_unchanged"])
+        self.assertEqual(report["admission_status"], "NOT_ADMITTED")
 
     def test_authorized_freeze_fixture_passes_without_threshold_change(self) -> None:
         with tempfile.TemporaryDirectory(prefix="assert-21008-") as tmp:
