@@ -51,3 +51,11 @@ Contact T/N at the detected onset **overlaps** the wrench-derived posterior. Bot
 
 Unit coverage: `crates/verify/tests/test_probe_contact_force_claim_separation.py`.
 Refreshed analysis: `OFFLINE_ANALYSIS.json`. Keep seed 21007 sealed.
+
+## Runtime quantity label (landed after seal)
+
+`FrictionInferenceResult::Updated` now carries
+`inferred_quantity = onset_or_sticking_force_ratio` (serde-defaulted for old
+records). Episode reasons include `quantity=OnsetOrStickingForceRatio`. This
+does **not** rewrite sealed 21007 artifacts; it prevents future runs from
+treating the wrench-derived interval as identified Coulomb μ.

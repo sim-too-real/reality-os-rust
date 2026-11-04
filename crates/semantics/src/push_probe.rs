@@ -606,6 +606,19 @@ pub enum FrictionInferenceMode {
     SlipOnset,
 }
 
+/// What an updated probe friction interval actually estimates.
+///
+/// Seed 21007 showed wrench-derived onset T/N can overlap contact T/N while
+/// remaining disjoint from the simulator Coulomb parameter. Callers must not
+/// treat this interval as identified Coulomb μ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FrictionInferredQuantity {
+    /// Tool-wrench tangential/normal force-ratio envelope at sticking or slip onset.
+    #[default]
+    OnsetOrStickingForceRatio,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FrictionNoInferenceReason {
@@ -645,6 +658,8 @@ pub enum FrictionInferenceResult {
     Updated {
         interval: [f64; 2],
         mode: FrictionInferenceMode,
+        #[serde(default)]
+        inferred_quantity: FrictionInferredQuantity,
     },
     NoInference(FrictionNoInferenceReason),
 }
@@ -1026,7 +1041,11 @@ pub fn infer_support_friction(measurement: &PushProbeMeasurement) -> FrictionInf
     if interval[0] > interval[1] {
         return fail(FrictionNoInferenceReason::EmptyIntersection);
     }
-    FrictionInferenceResult::Updated { interval, mode }
+    FrictionInferenceResult::Updated {
+        interval,
+        mode,
+        inferred_quantity: FrictionInferredQuantity::OnsetOrStickingForceRatio,
+    }
 }
 
 fn push_contact_pairs(bytes: &mut Vec<u8>, contact_pairs: &[ProbeContactPair]) {

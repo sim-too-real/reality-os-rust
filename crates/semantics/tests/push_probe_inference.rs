@@ -4,9 +4,10 @@ use realityos_semantics::physical_belief::{
 };
 use realityos_semantics::push_probe::{
     infer_support_friction, transform_sensor_wrench_to_support, FrictionInferenceMode,
-    FrictionInferenceResult, FrictionNoInferenceReason, IntendedContactEvidence, ProbeContactPair,
-    ProbeMotionWindow, ProbeObjectPoseSample, ProbeObjectPoseTrace, PushProbeMeasurement,
-    WrenchCompensation, WrenchEvidenceOrigin, WrenchTransform,
+    FrictionInferenceResult, FrictionInferredQuantity, FrictionNoInferenceReason,
+    IntendedContactEvidence, ProbeContactPair, ProbeMotionWindow, ProbeObjectPoseSample,
+    ProbeObjectPoseTrace, PushProbeMeasurement, WrenchCompensation, WrenchEvidenceOrigin,
+    WrenchTransform,
 };
 use realityos_semantics::sensor::WrenchSampleOrigin;
 
@@ -375,10 +376,19 @@ fn valid_pose_trace_is_bound_into_the_measurement_digest() {
 #[test]
 fn sticking_probe_adds_only_a_conservative_lower_bound() {
     let result = infer_support_friction(&measurement());
-    let FrictionInferenceResult::Updated { interval, mode } = result else {
+    let FrictionInferenceResult::Updated {
+        interval,
+        mode,
+        inferred_quantity,
+    } = result
+    else {
         panic!("sticking wrench and motion evidence should provide a lower bound: {result:?}");
     };
     assert_eq!(mode, FrictionInferenceMode::Sticking);
+    assert_eq!(
+        inferred_quantity,
+        FrictionInferredQuantity::OnsetOrStickingForceRatio
+    );
     assert!(interval[0] > 0.30 && interval[0] < 0.32, "{interval:?}");
     assert_eq!(
         interval[1], 0.8,
@@ -440,6 +450,7 @@ fn per_sample_sensor_pose_transforms_the_wrench_into_support_axes() {
         FrictionInferenceResult::Updated {
             mode: FrictionInferenceMode::Sticking,
             interval,
+            ..
         } if interval[0] > 0.30
     ));
 }
@@ -489,11 +500,19 @@ fn slip_onset_interval_intersects_prior() {
     ];
     measurement.motion.first_motion_s = Some(1.005);
     measurement.motion.displacement_m = [0.002, 0.0, 0.0];
-    let FrictionInferenceResult::Updated { interval, mode } = infer_support_friction(&measurement)
+    let FrictionInferenceResult::Updated {
+        interval,
+        mode,
+        inferred_quantity,
+    } = infer_support_friction(&measurement)
     else {
         panic!("a synchronized slip-onset bracket should bound friction");
     };
     assert_eq!(mode, FrictionInferenceMode::SlipOnset);
+    assert_eq!(
+        inferred_quantity,
+        FrictionInferredQuantity::OnsetOrStickingForceRatio
+    );
     assert!(interval[0] > 0.29 && interval[0] < 0.32, "{interval:?}");
     assert!(
         interval[1] > interval[0] && interval[1] < 0.36,
