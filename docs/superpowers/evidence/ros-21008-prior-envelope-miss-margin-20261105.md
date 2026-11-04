@@ -33,4 +33,8 @@ When `measurement.lower > prior.upper`:
 
 ```powershell
 cargo test --offline -p realityos-semantics --test push_probe_inference prior_envelope_miss_margin
+py -3.10 -B -m unittest crates.verify.tests.test_prior_envelope_miss_margin_21008
 ```
+
+Sealed seed artifact:
+`docs/superpowers/evidence/rotated-probe-heldout-seed-21008-20261104/PRIOR_ENVELOPE_MISS_MARGIN.json`.

@@ -1,0 +1,19 @@
+{
+  "schema": "realityos.prior_envelope_miss_margin/v1",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21008:0",
+  "source_diagnosis": "entirely_above_prior",
+  "kind": "entirely_above_prior",
+  "declared_prior": [0.05, 0.8],
+  "measurement_bounds": [0.8410610796690302, 0.9046710475934353],
+  "absolute_miss": 0.0410610796690302,
+  "relative_miss": 0.05132634958628775,
+  "live_governor_path_changed": false,
+  "admission_status": "NOT_ADMITTED",
+  "metal": false,
+  "shop_release": false,
+  "viewport_admits": false,
+  "limitations": [
+    "Offline honesty metric only; does not invent measurements or select live belief.",
+    "Does not change contact/force Governor thresholds (1 mm / 0.5 N)."
+  ]
+}
