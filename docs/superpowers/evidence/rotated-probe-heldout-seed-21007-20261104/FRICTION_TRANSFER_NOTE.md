@@ -59,3 +59,7 @@ Refreshed analysis: `OFFLINE_ANALYSIS.json`. Keep seed 21007 sealed.
 records). Episode reasons include `quantity=OnsetOrStickingForceRatio`. This
 does **not** rewrite sealed 21007 artifacts; it prevents future runs from
 treating the wrench-derived interval as identified Coulomb μ.
+
+Offline analyses now also emit `coulomb_mu_identified` + `inferred_quantity`;
+the claim-separation gate fails closed if force-ratio quantity is marked as
+identified Coulomb μ.

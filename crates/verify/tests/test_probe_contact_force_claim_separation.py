@@ -112,6 +112,35 @@ class ClaimSeparationTests(unittest.TestCase):
         self.assertIn("measurement[0]_missing_onset_force_ratio_claim", violations)
         self.assertIn("measurement[0]_missing_coulomb_parameter_claim", violations)
 
+    def test_claim_separation_gate_rejects_force_ratio_claimed_as_coulomb_mu(self) -> None:
+        analysis = {
+            "measurements": [
+                {
+                    "slip_onset": {
+                        "inference_vs_simulator_friction": {
+                            "status": "disjoint",
+                            "claim_separation": {
+                                "onset_force_ratio_vs_contact_tn": {"status": "overlap"},
+                                "coulomb_parameter_in_inferred_interval": {"status": "no"},
+                                "coulomb_mu_identified": True,
+                                "inferred_quantity": "onset_or_sticking_force_ratio",
+                                "note": "Coulomb note present",
+                            },
+                        }
+                    }
+                }
+            ]
+        }
+        violations = self.mod.claim_separation_gate_violations(analysis)
+        self.assertIn(
+            "measurement[0]_coulomb_mu_identified_true_without_interval_hit",
+            violations,
+        )
+        self.assertIn(
+            "measurement[0]_force_ratio_quantity_cannot_identify_coulomb_mu",
+            violations,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

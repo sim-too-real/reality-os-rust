@@ -196,6 +196,8 @@ def _compare_friction_interval(
                 "status": coulomb_in_interval,
                 "coulomb_coefficients": coulomb_values,
             },
+            "coulomb_mu_identified": coulomb_in_interval == "yes",
+            "inferred_quantity": "onset_or_sticking_force_ratio",
             "note": (
                 "Do not treat Coulomb-parameter overlap as proof that the slip-onset "
                 "estimator identified μ; onset force-ratio overlap is a separate claim."
@@ -344,6 +346,27 @@ def claim_separation_gate_violations(analysis: dict[str, Any]) -> list[str]:
         note = separation.get("note")
         if not isinstance(note, str) or "Coulomb" not in note:
             violations.append(f"measurement[{index}]_missing_claim_separation_note")
+        # Optional explicit identification flag (new analyses). When present it
+        # must agree with the Coulomb-in-interval status.
+        if "coulomb_mu_identified" in separation:
+            identified = separation.get("coulomb_mu_identified")
+            coulomb_status = (
+                coulomb.get("status") if isinstance(coulomb, dict) else None
+            )
+            if identified is True and coulomb_status != "yes":
+                violations.append(
+                    f"measurement[{index}]_coulomb_mu_identified_true_without_interval_hit"
+                )
+            if identified is False and coulomb_status == "yes":
+                violations.append(
+                    f"measurement[{index}]_coulomb_mu_identified_false_with_interval_hit"
+                )
+            if identified is True and separation.get("inferred_quantity") == (
+                "onset_or_sticking_force_ratio"
+            ):
+                violations.append(
+                    f"measurement[{index}]_force_ratio_quantity_cannot_identify_coulomb_mu"
+                )
     return violations
 
 
