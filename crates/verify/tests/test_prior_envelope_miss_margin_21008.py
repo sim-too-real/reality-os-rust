@@ -42,6 +42,29 @@ class TestPriorEnvelopeMissMargin21008(unittest.TestCase):
         self.assertFalse(miss["shop_release"])
         self.assertFalse(miss["viewport_admits"])
 
+    def test_sidecar_portfolio_records_miss_margin_for_21008(self) -> None:
+        portfolio = json.loads(
+            (
+                ROOT
+                / "docs"
+                / "superpowers"
+                / "evidence"
+                / "rotated-probe-sidecar-verification-portfolio-20261104.json"
+            ).read_text(encoding="utf-8")
+        )
+        row = next(
+            r
+            for r in portfolio["rows"]
+            if r["seed_dir"] == "rotated-probe-heldout-seed-21008-20261104"
+        )
+        self.assertTrue(row.get("prior_envelope_miss_margin_present"))
+        self.assertEqual(
+            row.get("prior_envelope_miss_margin_path"),
+            "PRIOR_ENVELOPE_MISS_MARGIN.json",
+        )
+        self.assertFalse(portfolio["governor_weakened_any"])
+        self.assertIn("PRIOR_ENVELOPE_MISS_MARGIN sealed", portfolio["conclusion"])
+
 
 if __name__ == "__main__":
     unittest.main()
