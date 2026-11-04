@@ -1,0 +1,89 @@
+{
+  "schema": "realityos.probe_sidecar_verification_portfolio/v1",
+  "seed_count": 4,
+  "fail_no_sidecar_count": 2,
+  "pass_count": 2,
+  "governor_weakened_any": false,
+  "invented_measurements_any": false,
+  "rows": [
+    {
+      "seed_dir": "rotated-probe-heldout-seed-21004-20261104",
+      "sidecar_path": "PROBE_MEASUREMENT_SIDECAR.json",
+      "sidecar_present": false,
+      "episode_diagnostic": {
+        "present": true,
+        "status": "INTEGRITY_PASS",
+        "trial_id_match": true,
+        "trial_digest_match": true,
+        "diagnostic_path": "PROBE_MEASUREMENT_SIDECAR.json.episode-diagnostic.json"
+      },
+      "governor_weakened": false,
+      "admission_status": "NOT_ADMITTED",
+      "invented_measurements": false,
+      "verification_status": "FAIL_NO_SIDECAR",
+      "notes": "Probe-measurement sidecar absent. Offline verification completed with explicit fail; do not invent samples. Episode diagnostic integrity is INTEGRITY_PASS.",
+      "failure_class_after_verification": "unexpected_contact_with_episode_diagnostic_only"
+    },
+    {
+      "seed_dir": "rotated-probe-heldout-seed-21005-20261104",
+      "sidecar_path": "PROBE_MEASUREMENT_SIDECAR.json",
+      "sidecar_present": false,
+      "episode_diagnostic": {
+        "present": true,
+        "status": "INTEGRITY_PASS",
+        "trial_id_match": true,
+        "trial_digest_match": true,
+        "diagnostic_path": "PROBE_MEASUREMENT_SIDECAR.json.episode-diagnostic.json"
+      },
+      "governor_weakened": false,
+      "admission_status": "NOT_ADMITTED",
+      "invented_measurements": false,
+      "verification_status": "FAIL_NO_SIDECAR",
+      "notes": "Probe-measurement sidecar absent. Offline verification completed with explicit fail; do not invent samples. Episode diagnostic integrity is INTEGRITY_PASS.",
+      "failure_class_after_verification": "unexpected_contact_with_episode_diagnostic_only"
+    },
+    {
+      "seed_dir": "rotated-probe-heldout-seed-21006-20261104",
+      "sidecar_path": "PROBE_MEASUREMENT_SIDECAR.json",
+      "sidecar_present": true,
+      "episode_diagnostic": {
+        "present": false,
+        "status": "ABSENT",
+        "trial_id_match": null,
+        "trial_digest_match": null
+      },
+      "governor_weakened": false,
+      "admission_status": "NOT_ADMITTED",
+      "invented_measurements": false,
+      "measurement_count": 1,
+      "result_recorded_sidecar_status": null,
+      "verification_status": "PASS_STRUCTURAL_NONEMPTY",
+      "notes": "Non-empty sidecar present; RESULT did not record PASS. Structural portfolio pass only; run --full-replay for independent verify.",
+      "failure_class_after_verification": "task_success"
+    },
+    {
+      "seed_dir": "rotated-probe-heldout-seed-21007-20261104",
+      "sidecar_path": "PROBE_MEASUREMENT_SIDECAR.json",
+      "sidecar_present": true,
+      "episode_diagnostic": {
+        "present": false,
+        "status": "ABSENT",
+        "trial_id_match": null,
+        "trial_digest_match": null
+      },
+      "governor_weakened": false,
+      "admission_status": "NOT_ADMITTED",
+      "invented_measurements": false,
+      "measurement_count": 1,
+      "result_recorded_sidecar_status": null,
+      "verification_status": "PASS_STRUCTURAL_NONEMPTY",
+      "notes": "Non-empty sidecar present; RESULT did not record PASS. Structural portfolio pass only; run --full-replay for independent verify.",
+      "failure_class_after_verification": "task_success"
+    }
+  ],
+  "conclusion": "Sidecar verification completed offline for sealed seeds. 21004/21005-class remain FAIL_NO_SIDECAR with episode-diagnostic integrity checked; do not invent measurements or weaken contact/force gates. Next authorized capture must seal non-empty PROBE_MEASUREMENT_SIDECAR (probe_trace on abort) or owner-gated 21008 replay.",
+  "admission_status": "NOT_ADMITTED",
+  "metal": false,
+  "shop_release": false,
+  "viewport_admits": false
+}

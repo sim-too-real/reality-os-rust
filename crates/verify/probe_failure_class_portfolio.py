@@ -17,6 +17,7 @@ from probe_transit_abort_failure_class import classify_episode  # noqa: E402
 EVIDENCE = ROOT / "docs" / "superpowers" / "evidence"
 SCHEMA = "realityos.probe_failure_class_portfolio/v1"
 DEFAULT_SEEDS = [
+    "rotated-probe-heldout-seed-21003-20261104",
     "rotated-probe-heldout-seed-21004-20261104",
     "rotated-probe-heldout-seed-21005-20261104",
     "rotated-probe-heldout-seed-21006-20261104",
@@ -43,7 +44,15 @@ def classify_dir(path: Path) -> dict:
         }
     episode = json.loads(episode_path.read_text(encoding="utf-8"))
     result = json.loads(result_path.read_text(encoding="utf-8"))
-    report = classify_episode(episode, result)
+    diagnosis_path = path / "INFERENCE_BOUND_DIAGNOSIS.json"
+    diagnosis = (
+        json.loads(diagnosis_path.read_text(encoding="utf-8"))
+        if diagnosis_path.is_file()
+        else None
+    )
+    report = classify_episode(
+        episode, result, diagnosis, evidence_dir=path
+    )
     return {
         "seed_dir": path.name,
         "status": "CLASSIFIED",

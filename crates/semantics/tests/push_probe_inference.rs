@@ -3,11 +3,13 @@ use realityos_semantics::physical_belief::{
     BeliefEpistemicStatus, BeliefEvidenceReference, PhysicalParameter, PhysicalParameterBelief,
 };
 use realityos_semantics::push_probe::{
-    infer_support_friction, transform_sensor_wrench_to_support, FrictionInferenceMode,
-    FrictionInferenceResult, FrictionInferredQuantity, FrictionNoInferenceReason,
-    IntendedContactEvidence, ProbeContactPair, ProbeMotionWindow, ProbeObjectPoseSample,
-    ProbeObjectPoseTrace, PushProbeMeasurement, WrenchCompensation, WrenchEvidenceOrigin,
-    WrenchTransform,
+    apply_successive_probe_cadence, friction_interval_proves_mu_required, infer_support_friction,
+    intersect_measurement_bounds_with_prior, transform_sensor_wrench_to_support,
+    FrictionInferenceMode, FrictionInferenceResult, FrictionInferredQuantity,
+    FrictionNoInferenceReason, IntendedContactEvidence, ProbeContactPair, ProbeMotionWindow,
+    ProbeObjectPoseSample, ProbeObjectPoseTrace, PushProbeMeasurement,
+    SuccessiveProbeCadenceOutcome, SuccessiveProbeCadencePolicy, WrenchCompensation,
+    WrenchEvidenceOrigin, WrenchTransform,
 };
 use realityos_semantics::sensor::WrenchSampleOrigin;
 
@@ -951,11 +953,147 @@ fn sample_gap_and_motion_skew_are_bounded() {
 fn empty_friction_intersection_produces_no_inference() {
     let mut measurement = measurement();
     measurement.prior_support_friction = [0.1, 0.2];
+    let result = infer_support_friction(&measurement);
+    match result {
+        FrictionInferenceResult::NoInference(
+            FrictionNoInferenceReason::PriorMeasurementIncompatible
+            | FrictionNoInferenceReason::EmptyIntersection,
+        ) => {}
+        other => panic!("expected empty/prior-incompatible no-inference, got {other:?}"),
+    }
+}
+
+#[test]
+fn prior_incompatible_distinct_from_empty_measurement_bounds() {
+    // 21003 second onset offline numbers: non-empty bounds entirely above prior.
+    assert_eq!(
+        intersect_measurement_bounds_with_prior(
+            [0.4173207930536931, 0.491342106128889],
+            [0.2590453156056787, 0.33705505290410587],
+        ),
+        Err(FrictionNoInferenceReason::PriorMeasurementIncompatible)
+    );
+    assert_eq!(
+        intersect_measurement_bounds_with_prior([0.5, 0.4], [0.05, 0.8]),
+        Err(FrictionNoInferenceReason::EmptyIntersection)
+    );
+    assert_eq!(
+        intersect_measurement_bounds_with_prior([0.2, 0.3], [0.05, 0.8]),
+        Ok([0.2, 0.3])
+    );
+}
+
+#[test]
+fn successive_probe_cadence_policies_on_21003_numbers() {
+    // Sealed 21003 offline diagnosis: first SlipOnset posterior, second bounds
+    // entirely above it, original prior [0.05, 0.8], mu_required = 0.3.
+    let first = [0.2590453156056787, 0.33705505290410587];
+    let second_bounds = [0.4173207930536931, 0.491342106128889];
+    let orig_prior = [0.05, 0.8];
+    let mu_required = 0.3;
+
+    assert_eq!(
+        apply_successive_probe_cadence(
+            SuccessiveProbeCadencePolicy::StrictIntersect,
+            first,
+            second_bounds,
+            Some(first),
+            Some(orig_prior),
+        ),
+        SuccessiveProbeCadenceOutcome::Rejected {
+            reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
+        }
+    );
+
+    let retained = apply_successive_probe_cadence(
+        SuccessiveProbeCadencePolicy::RetainFirstOnPriorIncompatible,
+        first,
+        second_bounds,
+        Some(first),
+        Some(orig_prior),
+    );
+    assert_eq!(
+        retained,
+        SuccessiveProbeCadenceOutcome::RetainedFirst {
+            retained_interval: first,
+            quarantined_bounds: second_bounds,
+        }
+    );
+    let SuccessiveProbeCadenceOutcome::RetainedFirst {
+        retained_interval, ..
+    } = retained
+    else {
+        panic!("retain-first");
+    };
+    assert!(
+        !friction_interval_proves_mu_required(retained_interval, mu_required),
+        "retain-first leaves push MECHANICS_UNKNOWN when first posterior straddles mu_required"
+    );
+
+    let escalated = apply_successive_probe_cadence(
+        SuccessiveProbeCadencePolicy::PreferHigherLoadFamilyOnIncompatible,
+        first,
+        second_bounds,
+        Some(first),
+        Some(orig_prior),
+    );
+    assert_eq!(
+        escalated,
+        SuccessiveProbeCadenceOutcome::EscalatedHigherLoadFamily {
+            interval: second_bounds,
+            quarantined_first_interval: first,
+            measurement_bounds: second_bounds,
+        }
+    );
+    let SuccessiveProbeCadenceOutcome::EscalatedHigherLoadFamily { interval, .. } = escalated
+    else {
+        panic!("escalate");
+    };
+    assert!(
+        friction_interval_proves_mu_required(interval, mu_required),
+        "higher-load-family escalation yields a push-proving lower bound on 21003 numbers"
+    );
+}
+
+#[test]
+fn successive_probe_cadence_transfers_to_heldout_numeric_family() {
+    // Held-out numeric family: different first/second intervals than 21003,
+    // same structural pattern (second entirely above first; straddling then proving).
+    let first = [0.18, 0.28];
+    let second_bounds = [0.35, 0.45];
+    let orig_prior = [0.05, 0.9];
+    let mu_required = 0.3;
+
+    assert!(
+        !friction_interval_proves_mu_required(first, mu_required),
+        "held-out first posterior must straddle/fail mu_required"
+    );
+    let escalated = apply_successive_probe_cadence(
+        SuccessiveProbeCadencePolicy::PreferHigherLoadFamilyOnIncompatible,
+        first,
+        second_bounds,
+        Some(first),
+        Some(orig_prior),
+    );
+    let SuccessiveProbeCadenceOutcome::EscalatedHigherLoadFamily { interval, .. } = escalated
+    else {
+        panic!("expected escalation on held-out numeric family, got {escalated:?}");
+    };
+    assert!(friction_interval_proves_mu_required(interval, mu_required));
+
+    let retained = apply_successive_probe_cadence(
+        SuccessiveProbeCadencePolicy::RetainFirstOnPriorIncompatible,
+        first,
+        second_bounds,
+        Some(first),
+        Some(orig_prior),
+    );
     assert!(matches!(
-        infer_support_friction(&measurement),
-        FrictionInferenceResult::NoInference(FrictionNoInferenceReason::EmptyIntersection)
+        retained,
+        SuccessiveProbeCadenceOutcome::RetainedFirst { .. }
     ));
 }
+
 
 #[test]
 fn measurement_digest_binds_sample_values_origin_and_transform() {

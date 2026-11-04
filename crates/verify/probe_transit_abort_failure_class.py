@@ -13,7 +13,24 @@ from pathlib import Path
 SCHEMA = "realityos.probe_transit_abort_failure_class/v1"
 
 
-def classify_episode(episode: dict, result: dict | None = None) -> dict:
+def evidence_dir_has_episode_diagnostic(evidence_dir: Path | None) -> bool:
+    """True when a sealed episode-diagnostic artifact exists under evidence_dir."""
+    if evidence_dir is None or not evidence_dir.is_dir():
+        return False
+    direct = evidence_dir / "PROBE_MEASUREMENT_SIDECAR.json.episode-diagnostic.json"
+    if direct.is_file():
+        return True
+    return any(evidence_dir.glob("*.episode-diagnostic.json"))
+
+
+def classify_episode(
+    episode: dict,
+    result: dict | None = None,
+    inference_bound_diagnosis: dict | None = None,
+    *,
+    episode_diagnostic_present: bool | None = None,
+    evidence_dir: Path | None = None,
+) -> dict:
     result = result or {}
     outcome = episode.get("outcome") or episode.get("trial_outcome")
     failure_cause = episode.get("failure_cause") or (
@@ -34,6 +51,19 @@ def classify_episode(episode: dict, result: dict | None = None) -> dict:
         (result.get("verification") or {}).get("offline_sidecar_verifier_status")
         or (result.get("diagnosis") or {}).get("offline_sidecar_verification")
     )
+    if episode_diagnostic_present is None:
+        episode_diagnostic_present = evidence_dir_has_episode_diagnostic(evidence_dir)
+    wrench_inference_reason = episode.get("wrench_inference_reason") or ""
+    diagnosis_rows = (
+        (inference_bound_diagnosis or {}).get("measurements")
+        if isinstance(inference_bound_diagnosis, dict)
+        else None
+    ) or []
+    prior_incompatible_offline = any(
+        row.get("diagnosis") == "measurement_bounds_do_not_overlap_prior"
+        for row in diagnosis_rows
+        if isinstance(row, dict)
+    )
     abort_kind = None
     if isinstance(wrench_abort, dict):
         abort_kind = wrench_abort.get("kind")
@@ -51,17 +81,69 @@ def classify_episode(episode: dict, result: dict | None = None) -> dict:
     elif abort_kind == "unexpected_contact" and sidecar_status in {
         "NOT_RUN_NO_SIDECAR",
         "UNAVAILABLE_NO_SIDECAR",
+        "FAIL_NO_SIDECAR",
+        "FAIL_EMPTY_MEASUREMENTS",
+        "FAIL_UNREADABLE",
         None,
     }:
-        # 21004/21005 pattern: transit abort before pose/force trace sealed.
-        failure_class = "transit_unexpected_contact_without_measurement_trace"
-        notes.append(
-            "Correct refusal may still apply; diagnostics were unavailable because "
-            "no probe measurement sidecar was sealed."
-        )
+        if episode_diagnostic_present:
+            # 21004/21005 after diagnostic capture: episode preserved, but the
+            # probe-measurement sidecar still failed verification / was not run.
+            failure_class = "unexpected_contact_with_episode_diagnostic_only"
+            if sidecar_status in {
+                "FAIL_NO_SIDECAR",
+                "FAIL_EMPTY_MEASUREMENTS",
+                "FAIL_UNREADABLE",
+            }:
+                notes.append(
+                    "Governor refusal preserved. Offline sidecar verification "
+                    f"completed as {sidecar_status}; episode diagnostic remains. "
+                    "Do not invent measurements or weaken contact/force gates. "
+                    "Next: seal a non-empty probe-measurement sidecar on a fresh "
+                    "authorized capture (or owner-gated 21008 replay)."
+                )
+            else:
+                notes.append(
+                    "Governor refusal preserved. Episode diagnostic exists, but the "
+                    "probe-measurement sidecar is still missing or unverified. Next: "
+                    "complete sidecar verification — do not weaken contact/force gates."
+                )
+        else:
+            # Transit abort with neither sidecar nor episode diagnostic.
+            failure_class = "transit_unexpected_contact_without_measurement_trace"
+            notes.append(
+                "Correct refusal may still apply; diagnostics were unavailable because "
+                "no probe measurement sidecar was sealed."
+            )
     elif abort_kind == "unexpected_contact":
         failure_class = "unexpected_contact_with_preserved_episode"
         notes.append("Governor refusal preserved; inspect sealed trace before any policy change.")
+    elif (
+        outcome == "unexpected_refusal"
+        and sidecar_status in {"PASS", "pass", "OK"}
+        and (
+            prior_incompatible_offline
+            or "PriorMeasurementIncompatible" in wrench_inference_reason
+            or wrench_inference_reason.startswith("no_inference:EmptyIntersection")
+        )
+    ):
+        # 21003 pattern: first SlipOnset update narrows prior; later onset bounds
+        # sit entirely outside that prior (offline: measurement_bounds_do_not_overlap_prior).
+        if prior_incompatible_offline or "PriorMeasurementIncompatible" in wrench_inference_reason:
+            failure_class = (
+                "expected_success_blocked_by_successive_prior_incompatibility"
+            )
+            notes.append(
+                "Sealed probe measurements exist; empty prior∩measurement is successive-"
+                "probe incompatibility, not a malformed single-measurement interval. "
+                "Do not weaken Governor contact/force thresholds."
+            )
+        else:
+            failure_class = "expected_success_blocked_by_empty_friction_intersection"
+            notes.append(
+                "Sealed probe measurements exist; Governor did not weaken. Next research "
+                "should attack inference/cadence bounds, not contact-force thresholds."
+            )
     elif failure_cause == "force_monitor_abort":
         failure_class = "force_monitor_abort_other"
     elif outcome in {"success", "Success", "completed"}:
@@ -76,6 +158,7 @@ def classify_episode(episode: dict, result: dict | None = None) -> dict:
         "abort_kind": abort_kind,
         "unauthorized_writes": unauthorized,
         "sidecar_status": sidecar_status,
+        "episode_diagnostic_present": bool(episode_diagnostic_present),
         "notes": notes,
         "governor_weakened": False,
         "physical_test": False,
@@ -87,13 +170,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--episode", type=Path, required=True)
     parser.add_argument("--result", type=Path)
+    parser.add_argument(
+        "--evidence-dir",
+        type=Path,
+        help="Optional sealed evidence directory; detects *.episode-diagnostic.json",
+    )
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
     episode = json.loads(args.episode.read_text(encoding="utf-8"))
     result = (
         json.loads(args.result.read_text(encoding="utf-8")) if args.result else None
     )
-    report = classify_episode(episode, result)
+    report = classify_episode(episode, result, evidence_dir=args.evidence_dir)
     text = json.dumps(report, indent=2) + "\n"
     if args.out:
         args.out.write_text(text, encoding="utf-8")

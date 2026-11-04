@@ -1,27 +1,52 @@
 {
   "schema": "realityos.probe_failure_class_portfolio/v1",
-  "seed_count": 4,
-  "classified_count": 4,
+  "seed_count": 5,
+  "classified_count": 5,
   "missing_count": 0,
   "governor_weakened_any": false,
   "rows": [
     {
-      "seed_dir": "rotated-probe-heldout-seed-21004-20261104",
+      "seed_dir": "rotated-probe-heldout-seed-21003-20261104",
       "status": "CLASSIFIED",
-      "failure_class": "transit_unexpected_contact_without_measurement_trace",
+      "failure_class": "expected_success_blocked_by_successive_prior_incompatibility",
       "governor_weakened": false,
       "admission_status": "NOT_ADMITTED",
       "report": {
         "schema": "realityos.probe_transit_abort_failure_class/v1",
-        "failure_class": "transit_unexpected_contact_without_measurement_trace",
+        "failure_class": "expected_success_blocked_by_successive_prior_incompatibility",
+        "outcome": "unexpected_refusal",
+        "failure_cause": "bridge_refusal",
+        "refusal_code": "NO_JUSTIFIED_CURRENT_ACTION",
+        "abort_kind": null,
+        "unauthorized_writes": 0,
+        "sidecar_status": "PASS",
+        "episode_diagnostic_present": false,
+        "notes": [
+          "Sealed probe measurements exist; empty prior\u2229measurement is successive-probe incompatibility, not a malformed single-measurement interval. Do not weaken Governor contact/force thresholds."
+        ],
+        "governor_weakened": false,
+        "physical_test": false,
+        "admission_status": "NOT_ADMITTED"
+      }
+    },
+    {
+      "seed_dir": "rotated-probe-heldout-seed-21004-20261104",
+      "status": "CLASSIFIED",
+      "failure_class": "unexpected_contact_with_episode_diagnostic_only",
+      "governor_weakened": false,
+      "admission_status": "NOT_ADMITTED",
+      "report": {
+        "schema": "realityos.probe_transit_abort_failure_class/v1",
+        "failure_class": "unexpected_contact_with_episode_diagnostic_only",
         "outcome": "action_failed",
         "failure_cause": "force_monitor_abort",
         "refusal_code": "WRENCH_MONITOR_ABORTED_ACTION",
         "abort_kind": "unexpected_contact",
         "unauthorized_writes": 0,
         "sidecar_status": "NOT_RUN_NO_SIDECAR",
+        "episode_diagnostic_present": true,
         "notes": [
-          "Correct refusal may still apply; diagnostics were unavailable because no probe measurement sidecar was sealed."
+          "Governor refusal preserved. Episode diagnostic exists, but the probe-measurement sidecar is still missing or unverified. Next: complete sidecar verification \u2014 do not weaken contact/force gates."
         ],
         "governor_weakened": false,
         "physical_test": false,
@@ -31,20 +56,21 @@
     {
       "seed_dir": "rotated-probe-heldout-seed-21005-20261104",
       "status": "CLASSIFIED",
-      "failure_class": "transit_unexpected_contact_without_measurement_trace",
+      "failure_class": "unexpected_contact_with_episode_diagnostic_only",
       "governor_weakened": false,
       "admission_status": "NOT_ADMITTED",
       "report": {
         "schema": "realityos.probe_transit_abort_failure_class/v1",
-        "failure_class": "transit_unexpected_contact_without_measurement_trace",
+        "failure_class": "unexpected_contact_with_episode_diagnostic_only",
         "outcome": "action_failed",
         "failure_cause": "force_monitor_abort",
         "refusal_code": "WRENCH_MONITOR_ABORTED_ACTION",
         "abort_kind": "unexpected_contact",
         "unauthorized_writes": 0,
         "sidecar_status": "UNAVAILABLE_NO_SIDECAR",
+        "episode_diagnostic_present": true,
         "notes": [
-          "Correct refusal may still apply; diagnostics were unavailable because no probe measurement sidecar was sealed."
+          "Governor refusal preserved. Episode diagnostic exists, but the probe-measurement sidecar is still missing or unverified. Next: complete sidecar verification \u2014 do not weaken contact/force gates."
         ],
         "governor_weakened": false,
         "physical_test": false,
@@ -66,6 +92,7 @@
         "abort_kind": null,
         "unauthorized_writes": 0,
         "sidecar_status": null,
+        "episode_diagnostic_present": false,
         "notes": [],
         "governor_weakened": false,
         "physical_test": false,
@@ -87,6 +114,7 @@
         "abort_kind": null,
         "unauthorized_writes": 0,
         "sidecar_status": null,
+        "episode_diagnostic_present": false,
         "notes": [],
         "governor_weakened": false,
         "physical_test": false,

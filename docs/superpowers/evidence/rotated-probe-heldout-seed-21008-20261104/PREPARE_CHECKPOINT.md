@@ -24,9 +24,13 @@ Source-hash deltas vs 21007 freeze (expected post-21007 commits):
 
 ## Remaining before any replay
 
-1. Commit the 21008 evidence freeze (and related verify tooling if desired) on `reality-os-rust`.
-2. Re-run freeze verify against the committed tree; set `replay_authorized` only then.
-3. Clear `REALITYOS_ROTATED_PROBE_PREPARE_ONLY` and run the command in `FREEZE.json` once.
-4. Do not weaken Governor expected-contact policy.
+1. Commit the 21008 evidence freeze (done on `main` as of `a5e5da6`) plus the
+   clean-tree authorize writer and
+   `tools/assert_rotated_probe_replay_authorized_21008.py`.
+2. On a clean tree, re-run `py -3.10 -B tools/write_rotated_probe_freeze_21008.py`
+   and expect `PASS_CLEAN_TREE` / `replay_authorized=true`; commit that freeze.
+3. Gate: `py -3.10 -B tools/assert_rotated_probe_replay_authorized_21008.py` must exit 0.
+4. Clear `REALITYOS_ROTATED_PROBE_PREPARE_ONLY` and run the command in `FREEZE.json` once.
+5. Do not weaken Governor expected-contact policy (1 mm / 0.5 N unchanged).
 
 `SIMULATION_ONLY`; `NOT_ADMITTED`; unauthorized writes expected 0.

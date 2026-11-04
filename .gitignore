@@ -26,3 +26,7 @@ crates/plant/wip/
 crates/governor/wip/
 crates/reality-os/wip/
 target/
+
+# MuJoCo probe sidecars can exceed GitHub 100MB limit
+docs/superpowers/evidence/**/PROBE_MEASUREMENT_SIDECAR.json
+

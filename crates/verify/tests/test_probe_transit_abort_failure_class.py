@@ -12,7 +12,7 @@ EVIDENCE = ROOT / "docs/superpowers/evidence"
 
 
 class ProbeTransitAbortFailureClassTests(unittest.TestCase):
-    def test_seed_21005_classifies_transit_abort_without_sidecar(self) -> None:
+    def test_seed_21005_without_evidence_dir_keeps_empty_trace_class(self) -> None:
         episode = json.loads(
             (EVIDENCE / "rotated-probe-heldout-seed-21005-20261104/EPISODE.json").read_text(
                 encoding="utf-8"
@@ -28,6 +28,19 @@ class ProbeTransitAbortFailureClassTests(unittest.TestCase):
             report["failure_class"],
             "transit_unexpected_contact_without_measurement_trace",
         )
+        self.assertFalse(report["governor_weakened"])
+        self.assertEqual(report["admission_status"], "NOT_ADMITTED")
+
+    def test_seed_21005_with_episode_diagnostic_refines_class(self) -> None:
+        seed = EVIDENCE / "rotated-probe-heldout-seed-21005-20261104"
+        episode = json.loads((seed / "EPISODE.json").read_text(encoding="utf-8"))
+        result = json.loads((seed / "RESULT.json").read_text(encoding="utf-8"))
+        report = MOD["classify_episode"](episode, result, evidence_dir=seed)
+        self.assertEqual(
+            report["failure_class"],
+            "unexpected_contact_with_episode_diagnostic_only",
+        )
+        self.assertTrue(report["episode_diagnostic_present"])
         self.assertFalse(report["governor_weakened"])
         self.assertEqual(report["admission_status"], "NOT_ADMITTED")
 

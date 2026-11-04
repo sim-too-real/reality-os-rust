@@ -41,9 +41,10 @@ use realityos_semantics::physical_reasoner::{
 };
 use realityos_semantics::provenance::Provenanced;
 use realityos_semantics::push_probe::{
-    infer_support_friction, FrictionInferenceResult, IntendedContactEvidence, ProbeContactPair,
+    apply_successive_probe_cadence, infer_support_friction, FrictionInferenceMode,
+    FrictionInferenceResult, FrictionNoInferenceReason, IntendedContactEvidence, ProbeContactPair,
     ProbeMotionWindow, ProbeObjectPoseSample, ProbeObjectPoseTrace, PushProbeMeasurement,
-    WrenchTransform,
+    SuccessiveProbeCadenceOutcome, SuccessiveProbeCadencePolicy, WrenchTransform,
 };
 use realityos_semantics::resource::{
     ControlledResource, QualificationStatus, ResourceKind, ResourceTopology,
@@ -386,6 +387,12 @@ pub struct BenchmarkEpisode {
     pub prior_support_friction_interval: Option<[f64; 2]>,
     #[serde(default)]
     pub posterior_support_friction_interval: Option<[f64; 2]>,
+    /// First accepted SlipOnset interval in this episode, if any.
+    #[serde(default)]
+    pub first_slip_onset_interval: Option<[f64; 2]>,
+    /// Empirical support-friction prior present immediately before that first onset.
+    #[serde(default)]
+    pub support_friction_prior_before_first_onset: Option<[f64; 2]>,
 }
 
 /// Complete, opt-in audit data for probe measurements. This is written to a
@@ -1147,6 +1154,8 @@ fn run_benchmark_trial_inner(
         wrench_inference_reason: None,
         prior_support_friction_interval: None,
         posterior_support_friction_interval: None,
+        first_slip_onset_interval: None,
+        support_friction_prior_before_first_onset: None,
     };
 
     if let GeometryGateResult::UnsupportedPresent { geom_names } = &geometry.result {
@@ -2993,6 +3002,12 @@ fn record_probe_measurement(
     prior: [f64; 2],
     measurement: PushProbeMeasurement,
 ) {
+    // Offline 21003 comparison: retain-first keeps push MECHANICS_UNKNOWN when
+    // the first posterior straddles mu_required; higher-load-family escalation
+    // yields a push-proving interval without changing force/contact gates.
+    const CADENCE_POLICY: SuccessiveProbeCadencePolicy =
+        SuccessiveProbeCadencePolicy::PreferHigherLoadFamilyOnIncompatible;
+
     episode.prior_support_friction_interval = Some(prior);
     episode.wrench_precontact_baseline = measurement.precontact_baseline.clone();
     episode.wrench_inference_compensation_digest =
@@ -3013,6 +3028,12 @@ fn record_probe_measurement(
             match belief.intersect_support_friction_with_probe(*interval, &measurement) {
                 Ok(posterior) => {
                     episode.posterior_support_friction_interval = Some(posterior);
+                    if *mode == FrictionInferenceMode::SlipOnset
+                        && episode.first_slip_onset_interval.is_none()
+                    {
+                        episode.first_slip_onset_interval = Some(posterior);
+                        episode.support_friction_prior_before_first_onset = Some(prior);
+                    }
                     if posterior == prior
                         && !blocked_action_keys.iter().any(|key| key == action_key)
                     {
@@ -3029,11 +3050,72 @@ fn record_probe_measurement(
             }
         }
         FrictionInferenceResult::NoInference(reason) => {
-            episode.wrench_inference_reason = Some(format!("no_inference:{reason:?}"));
-            episode.posterior_support_friction_interval = Some(prior);
+            let mut cadence_handled = false;
+            if *reason == FrictionNoInferenceReason::PriorMeasurementIncompatible {
+                if let Some(orig_prior) = episode.support_friction_prior_before_first_onset {
+                    let mut against_orig = measurement.clone();
+                    against_orig.prior_support_friction = orig_prior;
+                    if let FrictionInferenceResult::Updated {
+                        interval: vs_orig, ..
+                    } = infer_support_friction(&against_orig)
+                    {
+                        // vs_orig is measurement∩original_prior; use it as the
+                        // cadence measurement_bounds input when the original
+                        // prior is the broad empirical prior.
+                        match apply_successive_probe_cadence(
+                            CADENCE_POLICY,
+                            prior,
+                            vs_orig,
+                            episode.first_slip_onset_interval,
+                            Some(orig_prior),
+                        ) {
+                            SuccessiveProbeCadenceOutcome::EscalatedHigherLoadFamily {
+                                interval,
+                                quarantined_first_interval,
+                                measurement_bounds,
+                            } => {
+                                belief.narrow_interval(
+                                    PhysicalParameter::SupportFriction,
+                                    interval,
+                                    &format!(
+                                        "cadence_prefer_higher_load_family:quarantined_first={quarantined_first_interval:?}:bounds={measurement_bounds:?}:digest={measurement_digest}"
+                                    ),
+                                );
+                                episode.wrench_inference_interval = Some(interval);
+                                episode.wrench_inference_reason = Some(format!(
+                                    "no_inference:{reason:?}:escalated_higher_load_family:{interval:?}"
+                                ));
+                                episode.posterior_support_friction_interval = Some(interval);
+                                episode.decision_audits.push(format!(
+                                    "successive_probe_cadence=escalated_higher_load_family;quarantined_first={quarantined_first_interval:?};posterior={interval:?}"
+                                ));
+                                cadence_handled = true;
+                            }
+                            SuccessiveProbeCadenceOutcome::RetainedFirst {
+                                retained_interval,
+                                quarantined_bounds,
+                            } => {
+                                episode.wrench_inference_reason = Some(format!(
+                                    "no_inference:{reason:?}:retained_first_out_of_family:{retained_interval:?}"
+                                ));
+                                episode.posterior_support_friction_interval =
+                                    Some(retained_interval);
+                                episode.decision_audits.push(format!(
+                                    "successive_probe_cadence=retained_first;quarantined_bounds={quarantined_bounds:?};posterior={retained_interval:?}"
+                                ));
+                                cadence_handled = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            if !cadence_handled {
+                episode.wrench_inference_reason = Some(format!("no_inference:{reason:?}"));
+                episode.posterior_support_friction_interval = Some(prior);
+            }
             if !blocked_action_keys.iter().any(|key| key == action_key) {
-                // Without a strict evidence-derived narrowing, this
-                // interaction cannot justify repeating the same probe.
+                // Without a strict same-prior narrowing, do not repeat this probe.
                 blocked_action_keys.push(action_key.to_owned());
             }
         }

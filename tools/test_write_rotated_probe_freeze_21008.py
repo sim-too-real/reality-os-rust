@@ -103,6 +103,35 @@ class WriteRotatedProbeFreeze21008Tests(unittest.TestCase):
             finally:
                 namespace.update(previous)
 
+    def test_clean_tree_authorize_replay_without_weakening_thresholds(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="freeze-21008-clean-") as tmp:
+            namespace, _, evidence, previous = self._prepare_case(Path(tmp))
+            try:
+                namespace["git_status_paths"] = lambda: []
+
+                code = MODULE["main"]()
+
+                verify = json.loads((evidence / "FREEZE_VERIFY.json").read_text(encoding="utf-8"))
+                freeze = json.loads((evidence / "FREEZE.json").read_text(encoding="utf-8"))
+                self.assertEqual(code, 0)
+                self.assertEqual(verify["status"], "PASS_CLEAN_TREE")
+                self.assertEqual(freeze["status"], "FROZEN_CLEAN_TREE_REPLAY_AUTHORIZED")
+                self.assertTrue(freeze["replay_authorized"])
+                self.assertIsNone(freeze["replay_block_reason"])
+                self.assertFalse(freeze["working_tree_changes_at_freeze"])
+                self.assertEqual(
+                    freeze["preserved_motion_inference_guard"]["minimum_planar_motion_m"],
+                    0.001,
+                )
+                self.assertEqual(
+                    freeze["preserved_motion_inference_guard"][
+                        "minimum_tangential_force_lower_bound_n"
+                    ],
+                    0.5,
+                )
+            finally:
+                namespace.update(previous)
+
     def test_bad_preflight_cannot_write_a_passing_freeze_or_return_zero(self) -> None:
         with tempfile.TemporaryDirectory(prefix="freeze-21008-bad-") as tmp:
             namespace, preflight, evidence, previous = self._prepare_case(Path(tmp))

@@ -1937,6 +1937,8 @@ fn synthetic_episode(
         wrench_inference_reason: None,
         prior_support_friction_interval: None,
         posterior_support_friction_interval: None,
+        first_slip_onset_interval: None,
+        support_friction_prior_before_first_onset: None,
     }
 }
 

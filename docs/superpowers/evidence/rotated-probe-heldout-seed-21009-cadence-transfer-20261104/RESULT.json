@@ -1,0 +1,38 @@
+{
+  "schema": "realityos.rotated_probe_diagnostic.result/v1",
+  "experiment_id": "rotated_probe_heldout_seed_21009_cadence_transfer_iiwa14_20261104_v1",
+  "completed_at_utc": "2026-11-04T12:27:40Z",
+  "classification": "CADENCE_POLICY_TRANSFER_HELDOUT_SUCCESS; SIMULATION_ONLY; NOT_ADMITTED",
+  "repository": "reality-os-rust",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21009:0",
+  "trial_seed": 21009,
+  "trial_index": 0,
+  "simulation_runs": 1,
+  "transfer_from": "rotated_probe_heldout_seed_21003_cadence_escalation_iiwa14_20261104_v1",
+  "treatment": {
+    "policy": "PreferHigherLoadFamilyOnIncompatible",
+    "outcome": "success",
+    "unauthorized_writes": 0,
+    "actions": ["probe:+x", "push:+x"],
+    "wrench_inference_reason": "updated:SlipOnset:quantity=OnsetOrStickingForceRatio",
+    "cadence_escalation_invoked": false,
+    "interpretation": "Independent seed (different object mu/geometry) succeeds under wired cadence policy without needing higher-load escalation; first SlipOnset alone proved push. Confirms policy is non-regressive on a held-out success path; does not re-exercise the escalation branch.",
+    "thresholds_changed": false
+  },
+  "offline_numeric_transfer": {
+    "test": "successive_probe_cadence_transfers_to_heldout_numeric_family",
+    "status": "PASS",
+    "note": "Distinct first/second intervals from 21003; PreferHigherLoadFamily still escalates to push-proving; RetainFirst does not"
+  },
+  "verification": {
+    "diagnostic_test": "iiwa_rotated_probe_unbracketed_motion_diagnostic_capture",
+    "exit": 0,
+    "wall_time_s": 257.82,
+    "expected_episode_outcome": "success",
+    "expected_wrench_inference_reason": "any"
+  },
+  "admission_status": "NOT_ADMITTED",
+  "metal": false,
+  "shop_release": false,
+  "viewport_admits": false
+}

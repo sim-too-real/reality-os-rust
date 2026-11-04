@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Build and validate the prepare-only freeze for held-out seed 21008.
+"""Build and validate the freeze for held-out seed 21008.
 
-Does not run the simulator and does not git-commit. Replay remains blocked
-until these freeze bytes are committed and FREEZE_VERIFY still PASSes.
+Does not run the simulator and does not git-commit.
+
+- Dirty working tree + passing checks → PASS_WORKING_TREE; replay blocked.
+- Clean working tree + passing checks → PASS_CLEAN_TREE; replay_authorized=true
+  for the exact command in FREEZE.json (still SIMULATION_ONLY / NOT_ADMITTED).
+  Commit the updated freeze before treating source identity as closed.
 """
 from __future__ import annotations
 
@@ -165,6 +169,8 @@ def main() -> int:
     }
     required_checks = list(checks)
     passed = all(checks[name] is True for name in required_checks)
+    clean_tree = passed and not working_tree_paths
+    replay_authorized = clean_tree
 
     first_action_preflight = {
         "authorized_action_key": preflight.get("authorized_action_key"),
@@ -180,13 +186,21 @@ def main() -> int:
         "experiment_id": "rotated_probe_heldout_seed_21008_iiwa14_20261104_v1",
         "frozen_at_utc": now,
         "status": (
-            "FROZEN_WORKING_TREE_AWAITING_COMMIT_BEFORE_REPLAY"
-            if passed
-            else "INVALID_WORKING_TREE_PREFLIGHT"
+            "FROZEN_CLEAN_TREE_REPLAY_AUTHORIZED"
+            if replay_authorized
+            else (
+                "FROZEN_WORKING_TREE_AWAITING_COMMIT_BEFORE_REPLAY"
+                if passed
+                else "INVALID_WORKING_TREE_PREFLIGHT"
+            )
         ),
         "classification": (
             "HELD_OUT_SEED_DIAGNOSTIC; TRANSIT_TRACE_CAPTURE; ABORT_PATH_SEAL; "
-            "WORKING_TREE_FREEZE; SIMULATION_ONLY; NOT_ADMITTED"
+            + (
+                "CLEAN_TREE_FREEZE; SIMULATION_ONLY; NOT_ADMITTED"
+                if replay_authorized
+                else "WORKING_TREE_FREEZE; SIMULATION_ONLY; NOT_ADMITTED"
+            )
         ),
         "repository": "reality-os-rust",
         "branch": "main",
@@ -194,9 +208,14 @@ def main() -> int:
         "working_tree_changes_at_freeze": bool(working_tree_paths),
         "working_tree_change_paths": working_tree_paths,
         "working_tree_change_purpose": (
-            "Offline failure-class tooling and prepare/freeze evidence for 21008. "
-            "Capture path hashes below bind the diagnostic code; replay stays blocked "
-            "until this freeze is committed."
+            "Clean-tree re-verify after the 21008 freeze evidence landed on main; "
+            "replay_authorized for the exact FREEZE command without weakening Governor gates."
+            if replay_authorized
+            else (
+                "Offline failure-class tooling and prepare/freeze evidence for 21008. "
+                "Capture path hashes below bind the diagnostic code; replay stays blocked "
+                "until this freeze is committed and re-verified on a clean tree."
+            )
         ),
         "prior_seeds": "21004-21007 one-run budgets consumed; 21007 source-identity closed",
         "trial_id": trial_id,
@@ -240,15 +259,29 @@ def main() -> int:
         "diagnostic_intervention": (
             "New seed after 21007: verify transit abort can seal diagnostic evidence without "
             "weakening unexpected-contact gate. Commit freeze before replay."
+            if not replay_authorized
+            else (
+                "Clean-tree re-verify: transit abort should seal diagnostic evidence without "
+                "weakening unexpected-contact gate. Run the exact FREEZE command once; "
+                "commit this authorize freeze for source identity before claiming closed."
+            )
         ),
-        "replay_authorized": False,
-        "replay_block_reason": "freeze_not_committed" if passed else "freeze_checks_failed",
+        "replay_authorized": replay_authorized,
+        "replay_block_reason": (
+            None
+            if replay_authorized
+            else ("freeze_not_committed" if passed else "freeze_checks_failed")
+        ),
     }
     verify = {
         "schema": "realityos.rotated_probe_diagnostic.freeze_verify/v1",
         "experiment_id": freeze["experiment_id"],
         "verified_at_utc": now,
-        "status": "PASS_WORKING_TREE" if passed else "FAIL_WORKING_TREE",
+        "status": (
+            "PASS_CLEAN_TREE"
+            if replay_authorized
+            else ("PASS_WORKING_TREE" if passed else "FAIL_WORKING_TREE")
+        ),
         "checks": {
             **checks,
             "required_check_failures": [name for name in required_checks if checks[name] is not True],
@@ -270,7 +303,8 @@ def main() -> int:
                 "crates/verify/src/manipulation_benchmark/execution.rs"
             ),
             "mujoco_worker_sha256": source_hashes.get("crates/verify/mujoco_worker.py"),
-            "replay_authorized": False,
+            "replay_authorized": replay_authorized,
+            "clean_tree": clean_tree,
         },
         "admission_status": "NOT_ADMITTED",
         "metal": False,

@@ -1,0 +1,40 @@
+{
+  "schema": "realityos.rotated_probe_diagnostic.result/v1",
+  "experiment_id": "rotated_probe_heldout_seed_21003_cadence_escalation_iiwa14_20261104_v1",
+  "completed_at_utc": "2026-11-04T12:20:25Z",
+  "classification": "CADENCE_ESCALATION_PAIRED_REPLAY_SUCCESS; SIMULATION_ONLY; NOT_ADMITTED",
+  "repository": "reality-os-rust",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21003:0",
+  "trial_seed": 21003,
+  "trial_index": 0,
+  "simulation_runs": 1,
+  "baseline_sealed_21003": {
+    "outcome": "unexpected_refusal",
+    "refusal_code": "NO_JUSTIFIED_CURRENT_ACTION",
+    "actions": ["probe:+x", "probe:+x"],
+    "posterior": [0.2590453156056787, 0.33705505290410587],
+    "inference": "no_inference:EmptyIntersection / PriorMeasurementIncompatible"
+  },
+  "treatment": {
+    "policy": "PreferHigherLoadFamilyOnIncompatible",
+    "outcome": "success",
+    "unauthorized_writes": 0,
+    "actions": ["probe:+x", "probe:+x", "push:+x"],
+    "cadence_audit": "successive_probe_cadence=escalated_higher_load_family;quarantined_first=[0.2590453156056787, 0.33705505290410587];posterior=[0.4173207930536931, 0.491342106128889]",
+    "wrench_inference_reason": "no_inference:PriorMeasurementIncompatible:escalated_higher_load_family:[0.4173207930536931, 0.491342106128889]",
+    "thresholds_changed": false,
+    "force_contact_gates": "1 mm / 0.5 N unchanged"
+  },
+  "verification": {
+    "diagnostic_test": "iiwa_rotated_probe_unbracketed_motion_diagnostic_capture",
+    "exit": 0,
+    "wall_time_s": 295.01,
+    "sidecar_present": true,
+    "expected_episode_outcome": "success",
+    "expected_wrench_inference_reason": "any"
+  },
+  "admission_status": "NOT_ADMITTED",
+  "metal": false,
+  "shop_release": false,
+  "viewport_admits": false
+}

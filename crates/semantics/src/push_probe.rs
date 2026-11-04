@@ -650,7 +650,12 @@ pub enum FrictionNoInferenceReason {
     TimeSkewExceeded,
     NonPositiveNormalLoad,
     Unidentifiable,
+    /// Single-measurement friction bounds are empty (lo > hi).
     EmptyIntersection,
+    /// Measurement bounds are non-empty but do not overlap the prior support.
+    /// Distinct from EmptyIntersection so successive-probe cadence failures are
+    /// not conflated with malformed single-measurement intervals.
+    PriorMeasurementIncompatible,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -1031,21 +1036,147 @@ pub fn infer_support_friction(measurement: &PushProbeMeasurement) -> FrictionInf
     if bounds.iter().any(|value| !value.is_finite()) || bounds[0] < 0.0 {
         return fail(FrictionNoInferenceReason::Unidentifiable);
     }
+    match intersect_measurement_bounds_with_prior(
+        bounds,
+        measurement.prior_support_friction,
+    ) {
+        Ok(interval) => FrictionInferenceResult::Updated {
+            interval,
+            mode,
+            inferred_quantity: FrictionInferredQuantity::OnsetOrStickingForceRatio,
+        },
+        Err(reason) => fail(reason),
+    }
+}
+
+/// Intersect single-measurement friction bounds with the prior support.
+///
+/// - empty measurement bounds → `EmptyIntersection`
+/// - non-empty bounds outside prior → `PriorMeasurementIncompatible`
+pub fn intersect_measurement_bounds_with_prior(
+    bounds: [f64; 2],
+    prior_support_friction: [f64; 2],
+) -> Result<[f64; 2], FrictionNoInferenceReason> {
     if bounds[0] > bounds[1] {
-        return fail(FrictionNoInferenceReason::EmptyIntersection);
+        return Err(FrictionNoInferenceReason::EmptyIntersection);
     }
     let interval = [
-        measurement.prior_support_friction[0].max(bounds[0]),
-        measurement.prior_support_friction[1].min(bounds[1]),
+        prior_support_friction[0].max(bounds[0]),
+        prior_support_friction[1].min(bounds[1]),
     ];
     if interval[0] > interval[1] {
-        return fail(FrictionNoInferenceReason::EmptyIntersection);
+        return Err(FrictionNoInferenceReason::PriorMeasurementIncompatible);
     }
-    FrictionInferenceResult::Updated {
-        interval,
-        mode,
-        inferred_quantity: FrictionInferredQuantity::OnsetOrStickingForceRatio,
+    Ok(interval)
+}
+
+/// Cadence policy for successive probes after a first SlipOnset narrowing.
+///
+/// Single-measurement `infer_support_friction` stays strict. These policies only
+/// resolve what the belief should do when a later onset is prior-incompatible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SuccessiveProbeCadencePolicy {
+    /// Status quo: prior-incompatible later onsets reject.
+    StrictIntersect,
+    /// Keep the first SlipOnset posterior; quarantine the later bounds.
+    RetainFirstOnPriorIncompatible,
+    /// When later bounds sit entirely above the first SlipOnset posterior,
+    /// quarantine the first as under-load/provisional and accept
+    /// later ∩ prior_before_first_onset (higher load family).
+    PreferHigherLoadFamilyOnIncompatible,
+}
+
+/// Result of applying a successive-probe cadence policy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SuccessiveProbeCadenceOutcome {
+    Accepted {
+        interval: [f64; 2],
+    },
+    RetainedFirst {
+        retained_interval: [f64; 2],
+        quarantined_bounds: [f64; 2],
+    },
+    EscalatedHigherLoadFamily {
+        interval: [f64; 2],
+        quarantined_first_interval: [f64; 2],
+        measurement_bounds: [f64; 2],
+    },
+    Rejected {
+        reason: FrictionNoInferenceReason,
+    },
+}
+
+/// Resolve successive-probe belief when a new measurement may not intersect the
+/// current prior. Does not change force/contact thresholds.
+pub fn apply_successive_probe_cadence(
+    policy: SuccessiveProbeCadencePolicy,
+    current_prior: [f64; 2],
+    measurement_bounds: [f64; 2],
+    first_slip_onset: Option<[f64; 2]>,
+    prior_before_first_onset: Option<[f64; 2]>,
+) -> SuccessiveProbeCadenceOutcome {
+    match intersect_measurement_bounds_with_prior(measurement_bounds, current_prior) {
+        Ok(interval) => SuccessiveProbeCadenceOutcome::Accepted { interval },
+        Err(FrictionNoInferenceReason::EmptyIntersection) => {
+            SuccessiveProbeCadenceOutcome::Rejected {
+                reason: FrictionNoInferenceReason::EmptyIntersection,
+            }
+        }
+        Err(FrictionNoInferenceReason::PriorMeasurementIncompatible) => match policy {
+            SuccessiveProbeCadencePolicy::StrictIntersect => {
+                SuccessiveProbeCadenceOutcome::Rejected {
+                    reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
+                }
+            }
+            SuccessiveProbeCadencePolicy::RetainFirstOnPriorIncompatible => {
+                if first_slip_onset.is_some() {
+                    SuccessiveProbeCadenceOutcome::RetainedFirst {
+                        retained_interval: current_prior,
+                        quarantined_bounds: measurement_bounds,
+                    }
+                } else {
+                    SuccessiveProbeCadenceOutcome::Rejected {
+                        reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
+                    }
+                }
+            }
+            SuccessiveProbeCadencePolicy::PreferHigherLoadFamilyOnIncompatible => {
+                let (Some(first), Some(orig_prior)) =
+                    (first_slip_onset, prior_before_first_onset)
+                else {
+                    return SuccessiveProbeCadenceOutcome::Rejected {
+                        reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
+                    };
+                };
+                // Entirely above the first posterior → treat as a higher load family.
+                if !(measurement_bounds[0] > first[1]) {
+                    return SuccessiveProbeCadenceOutcome::Rejected {
+                        reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
+                    };
+                }
+                match intersect_measurement_bounds_with_prior(measurement_bounds, orig_prior) {
+                    Ok(interval) => SuccessiveProbeCadenceOutcome::EscalatedHigherLoadFamily {
+                        interval,
+                        quarantined_first_interval: first,
+                        measurement_bounds,
+                    },
+                    Err(reason) => SuccessiveProbeCadenceOutcome::Rejected { reason },
+                }
+            }
+        },
+        Err(reason) => SuccessiveProbeCadenceOutcome::Rejected { reason },
     }
+}
+
+/// Offline helper: lower bound at/above `mu_required` can prove planar push
+/// mechanics. Not an admission claim.
+pub fn friction_interval_proves_mu_required(interval: [f64; 2], mu_required: f64) -> bool {
+    interval[0].is_finite()
+        && interval[1].is_finite()
+        && interval[0] <= interval[1]
+        && interval[0] + 1e-12 >= mu_required
 }
 
 fn push_contact_pairs(bytes: &mut Vec<u8>, contact_pairs: &[ProbeContactPair]) {
