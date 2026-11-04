@@ -1179,6 +1179,89 @@ pub fn friction_interval_proves_mu_required(interval: [f64; 2], mu_required: f64
         && interval[0] + 1e-12 >= mu_required
 }
 
+/// Policy for the **first** SlipOnset when measurement bounds are prior-incompatible.
+///
+/// Distinct from [`SuccessiveProbeCadencePolicy`]: PreferHigherLoadFamily requires a
+/// prior first-onset posterior. These policies do not change contact/force Governor
+/// thresholds. Live `record_probe_measurement` stays on RetainDeclaredPrior until an
+/// authorized wire decides otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FirstOnsetOutsidePriorPolicy {
+    /// Status quo: keep declared prior; reject PriorMeasurementIncompatible.
+    RetainDeclaredPrior,
+    /// When first-onset bounds sit entirely above `prior.upper`, replace the prior
+    /// envelope with the measurement bounds (discards declared prior; research-only).
+    NarrowToMeasurementOnEntirelyAbovePrior,
+    /// Name the hole: declared prior is not credible for this scene; do not invent
+    /// an Updated interval.
+    RefusePriorEnvelopeAsNotCredible,
+}
+
+/// Result of applying a first-onset-outside-prior policy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FirstOnsetOutsidePriorOutcome {
+    AcceptedByIntersect {
+        interval: [f64; 2],
+    },
+    AcceptedByReplacingPrior {
+        interval: [f64; 2],
+        quarantined_prior: [f64; 2],
+    },
+    RefusedPriorEnvelope {
+        measurement_bounds: [f64; 2],
+        declared_prior: [f64; 2],
+    },
+    Rejected {
+        reason: FrictionNoInferenceReason,
+    },
+}
+
+/// Resolve first-onset belief when measurement may not intersect the declared prior.
+/// Does not change force/contact thresholds. Does not invent measurements.
+pub fn apply_first_onset_outside_prior(
+    policy: FirstOnsetOutsidePriorPolicy,
+    declared_prior: [f64; 2],
+    measurement_bounds: [f64; 2],
+) -> FirstOnsetOutsidePriorOutcome {
+    match intersect_measurement_bounds_with_prior(measurement_bounds, declared_prior) {
+        Ok(interval) => FirstOnsetOutsidePriorOutcome::AcceptedByIntersect { interval },
+        Err(FrictionNoInferenceReason::EmptyIntersection) => {
+            FirstOnsetOutsidePriorOutcome::Rejected {
+                reason: FrictionNoInferenceReason::EmptyIntersection,
+            }
+        }
+        Err(FrictionNoInferenceReason::PriorMeasurementIncompatible) => match policy {
+            FirstOnsetOutsidePriorPolicy::RetainDeclaredPrior => {
+                FirstOnsetOutsidePriorOutcome::Rejected {
+                    reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
+                }
+            }
+            FirstOnsetOutsidePriorPolicy::NarrowToMeasurementOnEntirelyAbovePrior => {
+                if !(measurement_bounds[0] > declared_prior[1]
+                    && measurement_bounds[0] <= measurement_bounds[1])
+                {
+                    return FirstOnsetOutsidePriorOutcome::Rejected {
+                        reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
+                    };
+                }
+                FirstOnsetOutsidePriorOutcome::AcceptedByReplacingPrior {
+                    interval: measurement_bounds,
+                    quarantined_prior: declared_prior,
+                }
+            }
+            FirstOnsetOutsidePriorPolicy::RefusePriorEnvelopeAsNotCredible => {
+                FirstOnsetOutsidePriorOutcome::RefusedPriorEnvelope {
+                    measurement_bounds,
+                    declared_prior,
+                }
+            }
+        },
+        Err(reason) => FirstOnsetOutsidePriorOutcome::Rejected { reason },
+    }
+}
+
 fn push_contact_pairs(bytes: &mut Vec<u8>, contact_pairs: &[ProbeContactPair]) {
     bytes.extend_from_slice(&(contact_pairs.len() as u64).to_le_bytes());
     for pair in contact_pairs {

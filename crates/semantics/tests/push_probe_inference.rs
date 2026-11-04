@@ -3,13 +3,14 @@ use realityos_semantics::physical_belief::{
     BeliefEpistemicStatus, BeliefEvidenceReference, PhysicalParameter, PhysicalParameterBelief,
 };
 use realityos_semantics::push_probe::{
-    apply_successive_probe_cadence, friction_interval_proves_mu_required, infer_support_friction,
+    apply_first_onset_outside_prior, apply_successive_probe_cadence,
+    friction_interval_proves_mu_required, infer_support_friction,
     intersect_measurement_bounds_with_prior, transform_sensor_wrench_to_support,
-    FrictionInferenceMode, FrictionInferenceResult, FrictionInferredQuantity,
-    FrictionNoInferenceReason, IntendedContactEvidence, ProbeContactPair, ProbeMotionWindow,
-    ProbeObjectPoseSample, ProbeObjectPoseTrace, PushProbeMeasurement,
-    SuccessiveProbeCadenceOutcome, SuccessiveProbeCadencePolicy, WrenchCompensation,
-    WrenchEvidenceOrigin, WrenchTransform,
+    FirstOnsetOutsidePriorOutcome, FirstOnsetOutsidePriorPolicy, FrictionInferenceMode,
+    FrictionInferenceResult, FrictionInferredQuantity, FrictionNoInferenceReason,
+    IntendedContactEvidence, ProbeContactPair, ProbeMotionWindow, ProbeObjectPoseSample,
+    ProbeObjectPoseTrace, PushProbeMeasurement, SuccessiveProbeCadenceOutcome,
+    SuccessiveProbeCadencePolicy, WrenchCompensation, WrenchEvidenceOrigin, WrenchTransform,
 };
 use realityos_semantics::sensor::WrenchSampleOrigin;
 
@@ -1091,6 +1092,107 @@ fn successive_probe_cadence_transfers_to_heldout_numeric_family() {
     assert!(matches!(
         retained,
         SuccessiveProbeCadenceOutcome::RetainedFirst { .. }
+    ));
+}
+
+#[test]
+fn first_onset_outside_prior_policies_on_21008_numbers() {
+    // Sealed 21008 FRICTION_BOUND_DIAGNOSIS: entirely_above_prior; no first SlipOnset.
+    let prior = [0.05, 0.8];
+    let bounds = [0.8410610796690302, 0.9046710475934353];
+    let mu_required = 0.3;
+
+    assert!(
+        !friction_interval_proves_mu_required(prior, mu_required),
+        "declared prior lower bound sits below mu_required"
+    );
+
+    let retained = apply_first_onset_outside_prior(
+        FirstOnsetOutsidePriorPolicy::RetainDeclaredPrior,
+        prior,
+        bounds,
+    );
+    assert_eq!(
+        retained,
+        FirstOnsetOutsidePriorOutcome::Rejected {
+            reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
+        }
+    );
+
+    // PreferHigherLoadFamily does not apply without a first-onset posterior.
+    let successive = apply_successive_probe_cadence(
+        SuccessiveProbeCadencePolicy::PreferHigherLoadFamilyOnIncompatible,
+        prior,
+        bounds,
+        None,
+        None,
+    );
+    assert_eq!(
+        successive,
+        SuccessiveProbeCadenceOutcome::Rejected {
+            reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
+        }
+    );
+
+    let refused = apply_first_onset_outside_prior(
+        FirstOnsetOutsidePriorPolicy::RefusePriorEnvelopeAsNotCredible,
+        prior,
+        bounds,
+    );
+    assert_eq!(
+        refused,
+        FirstOnsetOutsidePriorOutcome::RefusedPriorEnvelope {
+            measurement_bounds: bounds,
+            declared_prior: prior,
+        }
+    );
+
+    let narrowed = apply_first_onset_outside_prior(
+        FirstOnsetOutsidePriorPolicy::NarrowToMeasurementOnEntirelyAbovePrior,
+        prior,
+        bounds,
+    );
+    assert_eq!(
+        narrowed,
+        FirstOnsetOutsidePriorOutcome::AcceptedByReplacingPrior {
+            interval: bounds,
+            quarantined_prior: prior,
+        }
+    );
+    let FirstOnsetOutsidePriorOutcome::AcceptedByReplacingPrior { interval, .. } = narrowed
+    else {
+        panic!("narrow");
+    };
+    assert!(
+        friction_interval_proves_mu_required(interval, mu_required),
+        "narrow-to-measurement yields a push-proving lower bound on 21008 numbers"
+    );
+}
+
+#[test]
+fn first_onset_outside_prior_transfers_to_heldout_numeric_family() {
+    let prior = [0.05, 0.75];
+    let bounds = [0.82, 0.91];
+    let mu_required = 0.3;
+    assert!(bounds[0] > prior[1]);
+    let narrowed = apply_first_onset_outside_prior(
+        FirstOnsetOutsidePriorPolicy::NarrowToMeasurementOnEntirelyAbovePrior,
+        prior,
+        bounds,
+    );
+    let FirstOnsetOutsidePriorOutcome::AcceptedByReplacingPrior { interval, .. } = narrowed
+    else {
+        panic!("expected narrow on held-out family, got {narrowed:?}");
+    };
+    assert!(friction_interval_proves_mu_required(interval, mu_required));
+    let retained = apply_first_onset_outside_prior(
+        FirstOnsetOutsidePriorPolicy::RetainDeclaredPrior,
+        prior,
+        bounds,
+    );
+    assert!(matches!(
+        retained,
+        FirstOnsetOutsidePriorOutcome::Rejected { .. }
     ));
 }
 
