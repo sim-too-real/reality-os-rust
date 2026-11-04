@@ -204,6 +204,59 @@ class IndependentProbeIntervalReferenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ReplayError, "wrench-pose alignment mismatch"):
             verify_sidecar(mutated)
 
+    def test_structurally_verifies_runtime_contact_ambiguous_without_interval_replay(self):
+        sidecar = load_sidecar(23024)
+        mutated = copy.deepcopy(sidecar)
+        record = mutated["measurements"][0]
+        measurement = record["measurement"]
+        measurement["runtime_contact_ambiguous"] = True
+        record["inference"] = {"NoInference": "unexpected_contact"}
+        record["posterior_support_friction_interval"] = list(
+            measurement["prior_support_friction"]
+        )
+        record["measurement_digest"] = _measurement_digest(measurement)
+
+        report = verify_sidecar(mutated)
+
+        self.assertEqual(report["status"], "PASS_STRUCTURAL_AMBIGUOUS_CONTACT")
+        self.assertFalse(report["interval_replay_supported"])
+        self.assertEqual(
+            report["measurements"][0]["inference"],
+            "NoInference(UnexpectedContact)",
+        )
+        self.assertIsNone(report["measurements"][0]["first_xy_motion_bracket_s"])
+        self.assertTrue(report["measurements"][0]["runtime_contact_ambiguous"])
+
+    def test_rejects_ambiguous_contact_with_invented_updated_inference(self):
+        sidecar = load_sidecar(23024)
+        mutated = copy.deepcopy(sidecar)
+        record = mutated["measurements"][0]
+        measurement = record["measurement"]
+        measurement["runtime_contact_ambiguous"] = True
+        record["inference"] = {
+            "Updated": {"interval": [0.2, 0.3], "mode": "slip_onset"}
+        }
+        record["measurement_digest"] = _measurement_digest(measurement)
+
+        with self.assertRaisesRegex(ReplayError, "stored inference mismatch"):
+            verify_sidecar(mutated)
+
+    def test_sealed_21004_ambiguous_force_trace_structurally_passes_when_present(self):
+        path = (
+            ROOT
+            / "docs/superpowers/evidence"
+            / "rotated-probe-heldout-seed-21004-sidecar-capture-20261104"
+            / "PROBE_MEASUREMENT_SIDECAR.json"
+        )
+        if not path.is_file():
+            self.skipTest("gitignored 21004 sidecar not present locally")
+        report = verify_sidecar(json.loads(path.read_text(encoding="utf-8")))
+        self.assertEqual(report["status"], "PASS_STRUCTURAL_AMBIGUOUS_CONTACT")
+        self.assertEqual(
+            report["measurements"][0]["inference"],
+            "NoInference(UnexpectedContact)",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

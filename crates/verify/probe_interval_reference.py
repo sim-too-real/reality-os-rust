@@ -85,6 +85,27 @@ def _push_contact_pairs(data: bytearray, pairs: Any) -> None:
             _push_string(data, value)
 
 
+def _push_contact_force_samples(data: bytearray, samples: Any) -> None:
+    """Match crates/semantics push_probe::push_contact_force_samples."""
+    _require(isinstance(samples, list), "contact force samples must be an array")
+    data.extend(_u64(len(samples)))
+    for sample in samples:
+        _require(isinstance(sample, dict), "contact force sample must be an object")
+        pair = sample.get("contact_pair")
+        _require(isinstance(pair, dict), "contact force sample missing contact_pair")
+        _push_contact_pairs(data, [pair])
+        _push_f64s(data, sample.get("position_world_m"), 3)
+        _push_f64s(data, sample.get("frame"), 9)
+        _push_f64s(data, sample.get("friction"), 5)
+        _push_f64s(data, sample.get("force_local"), 3)
+        _push_f64s(data, sample.get("torque_local"), 3)
+        data.extend(_f64(sample.get("normal_force_n")))
+        data.extend(_f64(sample.get("tangential_force_n")))
+        available = sample.get("force_available")
+        _require(isinstance(available, bool), "contact force_available must be bool")
+        data.append(int(available))
+
+
 def _wrench_sample_digest(sample: dict[str, Any]) -> str:
     data = bytearray(b"realityos.wrench_sample/1\0")
     for key in (
@@ -123,8 +144,16 @@ def _validate_wrench_sample(sample: Any) -> None:
 
 def _pose_sample_digest(sample: dict[str, Any]) -> str:
     contacts = sample.get("contact_pairs")
-    _require(isinstance(contacts, list), "complete contact trace required")
-    data = bytearray(b"realityos.probe_object_pose_sample/2\0")
+    forces = sample.get("contact_force_samples")
+    if forces is not None:
+        _require(isinstance(forces, list), "contact force samples must be an array")
+        _require(isinstance(contacts, list), "complete contact trace required")
+        data = bytearray(b"realityos.probe_object_pose_sample/3\0")
+    elif contacts is not None:
+        _require(isinstance(contacts, list), "complete contact trace required")
+        data = bytearray(b"realityos.probe_object_pose_sample/2\0")
+    else:
+        data = bytearray(b"realityos.probe_object_pose_sample/1\0")
     _push_string(data, sample.get("object_id"))
     data.extend(_u64(sample.get("simulator_step")))
     sequence = sample.get("wrench_sequence")
@@ -133,7 +162,10 @@ def _pose_sample_digest(sample: dict[str, Any]) -> str:
     else:
         data.append(1)
         data.extend(_u64(sequence))
-    _push_contact_pairs(data, contacts)
+    if contacts is not None:
+        _push_contact_pairs(data, contacts)
+    if forces is not None:
+        _push_contact_force_samples(data, forces)
     data.extend(_f64(sample.get("capture_s")))
     _push_string(data, sample.get("clock_domain"))
     _push_f64s(data, sample.get("position_world_m"), 3)
@@ -145,17 +177,30 @@ def _trace_digest(trace: dict[str, Any]) -> str:
     samples = trace.get("samples")
     _require(isinstance(samples, list), "motion trace samples must be an array")
     start_contacts = trace.get("start_contact_pairs")
-    _require(isinstance(start_contacts, list), "complete contact trace required")
-    data = bytearray(b"realityos.probe_object_pose_trace/3\0")
+    has_contact = isinstance(start_contacts, list) and all(
+        isinstance(sample.get("contact_pairs"), list) for sample in samples
+    )
+    has_force = has_contact and all(
+        isinstance(sample.get("contact_force_samples"), list) for sample in samples
+    )
+    start_sequence = trace.get("start_wrench_sequence")
+    if has_force:
+        data = bytearray(b"realityos.probe_object_pose_trace/4\0")
+    elif has_contact:
+        data = bytearray(b"realityos.probe_object_pose_trace/3\0")
+    elif start_sequence is not None:
+        data = bytearray(b"realityos.probe_object_pose_trace/2\0")
+    else:
+        data = bytearray(b"realityos.probe_object_pose_trace/1\0")
     _push_string(data, trace.get("object_id"))
     _push_string(data, trace.get("clock_domain"))
     data.extend(_f64(trace.get("start_s")))
     _push_f64s(data, trace.get("start_position_world_m"), 3)
     _push_f64s(data, trace.get("start_orientation_world_wxyz"), 4)
-    start_sequence = trace.get("start_wrench_sequence")
     if start_sequence is not None:
         data.extend(_u64(start_sequence))
-    _push_contact_pairs(data, start_contacts)
+    if isinstance(start_contacts, list):
+        _push_contact_pairs(data, start_contacts)
     data.extend(_u64(len(samples)))
     for sample in samples:
         _push_string(data, sample.get("digest"))
@@ -468,16 +513,7 @@ def _validate_compensation(compensation: Any) -> None:
     _require(_is_sha256(digest) and digest == _sha256(data), "compensation digest mismatch")
 
 
-def _validate_measurement(measurement: Any) -> tuple[list[float], bool]:
-    _require(isinstance(measurement, dict), "measurement must be an object")
-    _require(measurement.get("origin") == "simulation", "unsupported evidence origin")
-    _require(not measurement.get("runtime_contact_ambiguous", False), "ambiguous runtime contact unsupported")
-    _require(not measurement.get("saturated", False), "saturated measurement unsupported")
-
-    mass = _valid_interval(measurement.get("mass_kg"), "mass")
-    _require(mass[0] > 0.0, "nonpositive mass")
-    prior = _valid_interval(measurement.get("prior_support_friction"), "prior friction")
-    _require(prior[0] >= 0.0, "negative friction prior")
+def _validate_intended_contact_identity(measurement: dict[str, Any]) -> tuple[str, str, str]:
     intended = measurement.get("intended_contact")
     _require(isinstance(intended, dict), "intended-contact evidence missing")
     epoch = measurement.get("current_observation_epoch")
@@ -489,6 +525,69 @@ def _validate_measurement(measurement: Any) -> tuple[list[float], bool]:
     target = intended.get("target_body_id")
     _require(isinstance(tool, str) and tool.strip(), "tool body missing")
     _require(isinstance(target, str) and target.strip() and target != tool, "target body invalid")
+    pairs = intended.get("plausible_contact_sets")
+    _require(isinstance(pairs, list) and pairs, "plausible contact sets missing")
+    _require(isinstance(pairs[0], list), "invalid intended-contact declaration")
+    return epoch, tool, target
+
+
+def _validate_ambiguous_runtime_contact_measurement(
+    measurement: dict[str, Any],
+) -> tuple[list[float], bool]:
+    """Structural verify for sealed unexpected-contact measurements.
+
+    Matches push_probe semantics: runtime_contact_ambiguous forbids friction
+    interval updates. Digests and NoInference(unexpected_contact) are checked;
+    slip-onset interval math is not invented.
+    """
+    _require(measurement.get("origin") == "simulation", "unsupported evidence origin")
+    _require(
+        measurement.get("runtime_contact_ambiguous", False) is True,
+        "expected runtime_contact_ambiguous",
+    )
+    _require(not measurement.get("saturated", False), "saturated measurement unsupported")
+    mass = _valid_interval(measurement.get("mass_kg"), "mass")
+    _require(mass[0] > 0.0, "nonpositive mass")
+    prior = _valid_interval(measurement.get("prior_support_friction"), "prior friction")
+    _require(prior[0] >= 0.0, "negative friction prior")
+    _validate_intended_contact_identity(measurement)
+    _validate_compensation(measurement.get("compensation"))
+    _validate_transform(measurement.get("sensor_to_support"))
+    motion = measurement.get("motion")
+    _require(isinstance(motion, dict), "motion window missing")
+    start_s, end_s = float(motion.get("start_s")), float(motion.get("end_s"))
+    _require(start_s >= 0.0 and end_s > start_s, "invalid motion window")
+    samples = measurement.get("samples")
+    _require(isinstance(samples, list) and samples, "ambiguous-contact measurement lacks samples")
+    for sample in samples:
+        _require(isinstance(sample, dict), "wrench sample must be an object")
+        digest = sample.get("digest")
+        _require(_is_sha256(digest), "wrench sample digest missing")
+    trace = measurement.get("motion_trace")
+    if trace is not None:
+        _require(isinstance(trace, dict), "motion_trace must be an object")
+        trace_digest = trace.get("digest")
+        _require(
+            _is_sha256(trace_digest) and trace_digest == _trace_digest(trace),
+            "motion trace digest mismatch",
+        )
+    # has_contact=False: interval replay path is intentionally not taken.
+    return prior, False
+
+
+def _validate_measurement(measurement: Any) -> tuple[list[float], bool]:
+    _require(isinstance(measurement, dict), "measurement must be an object")
+    _require(measurement.get("origin") == "simulation", "unsupported evidence origin")
+    if measurement.get("runtime_contact_ambiguous", False):
+        return _validate_ambiguous_runtime_contact_measurement(measurement)
+    _require(not measurement.get("saturated", False), "saturated measurement unsupported")
+
+    mass = _valid_interval(measurement.get("mass_kg"), "mass")
+    _require(mass[0] > 0.0, "nonpositive mass")
+    prior = _valid_interval(measurement.get("prior_support_friction"), "prior friction")
+    _require(prior[0] >= 0.0, "negative friction prior")
+    epoch, tool, target = _validate_intended_contact_identity(measurement)
+    intended = measurement["intended_contact"]
     pairs = intended.get("plausible_contact_sets")
     _require(isinstance(pairs, list) and len(pairs) == 1, "ambiguous intended-contact declaration")
     _require(isinstance(pairs[0], list), "invalid intended-contact declaration")
@@ -688,6 +787,9 @@ def _magnitude_interval(lower: float, upper: float) -> list[float]:
 
 
 def _recompute_inference(measurement: dict[str, Any], prior: list[float], has_contact: bool) -> tuple[dict[str, Any], list[float]]:
+    if measurement.get("runtime_contact_ambiguous", False):
+        # Matches crates/semantics push_probe: ambiguous contact → UnexpectedContact.
+        return {"NoInference": "unexpected_contact"}, prior
     if not has_contact:
         return {"NoInference": "no_intended_contact"}, prior
 
@@ -764,24 +866,34 @@ def _verify_sidecar(sidecar: dict[str, Any]) -> dict[str, Any]:
         stored_posterior = record.get("posterior_support_friction_interval")
         _assert_interval_equal(stored_posterior, posterior, "stored posterior interval mismatch")
 
-        trace = measurement["motion_trace"]
+        ambiguous = bool(measurement.get("runtime_contact_ambiguous", False))
+        trace = measurement.get("motion_trace")
         first_bracket = None
-        start = trace["start_position_world_m"]
-        previous_time = float(trace["start_s"])
-        for pose in trace["samples"]:
-            dx = float(pose["position_world_m"][0]) - float(start[0])
-            dy = float(pose["position_world_m"][1]) - float(start[1])
-            if math.hypot(dx, dy) > float(measurement["motion"]["pose_resolution_m"]):
-                first_bracket = [previous_time, float(pose["capture_s"])]
-                break
-            previous_time = float(pose["capture_s"])
+        if isinstance(trace, dict) and not ambiguous:
+            start = trace["start_position_world_m"]
+            previous_time = float(trace["start_s"])
+            for pose in trace["samples"]:
+                dx = float(pose["position_world_m"][0]) - float(start[0])
+                dy = float(pose["position_world_m"][1]) - float(start[1])
+                if math.hypot(dx, dy) > float(measurement["motion"]["pose_resolution_m"]):
+                    first_bracket = [previous_time, float(pose["capture_s"])]
+                    break
+                previous_time = float(pose["capture_s"])
 
         if "Updated" in recomputed:
             inference_name = "Updated(SlipOnset)"
             interval = recomputed["Updated"]["interval"]
+        elif recomputed.get("NoInference") == "unexpected_contact":
+            inference_name = "NoInference(UnexpectedContact)"
+            interval = prior
         else:
             inference_name = "NoInference(NoIntendedContact)"
             interval = prior
+        pose_count = (
+            len(trace["samples"])
+            if isinstance(trace, dict) and isinstance(trace.get("samples"), list)
+            else 0
+        )
         summaries.append(
             {
                 "action_key": record["action_key"],
@@ -791,19 +903,41 @@ def _verify_sidecar(sidecar: dict[str, Any]) -> dict[str, Any]:
                 "interval": interval,
                 "first_xy_motion_bracket_s": first_bracket,
                 "sample_count": len(measurement["samples"]),
-                "pose_sample_count": len(trace["samples"]),
-                "motion_trace_status": "verified",
+                "pose_sample_count": pose_count,
+                "motion_trace_status": "verified" if isinstance(trace, dict) else "absent",
+                "runtime_contact_ambiguous": ambiguous,
+                "interval_replay_supported": not ambiguous,
             }
         )
+
+    ambiguous_only = summaries and all(
+        row.get("runtime_contact_ambiguous") for row in summaries
+    )
+    mixed = any(row.get("runtime_contact_ambiguous") for row in summaries) and not ambiguous_only
+    if ambiguous_only:
+        status = "PASS_STRUCTURAL_AMBIGUOUS_CONTACT"
+    elif mixed:
+        status = "PASS_MIXED_AMBIGUOUS_CONTACT"
+    else:
+        status = "PASS"
 
     return {
         "format": OUTPUT_FORMAT,
         "schema_version": 1,
-        "status": "PASS",
+        "status": status,
         "trial_id": sidecar["trial_id"],
         "trial_digest": sidecar["trial_digest"],
         "measurement_count": len(summaries),
         "measurements": summaries,
+        "interval_replay_supported": status == "PASS",
+        "limitations": (
+            [
+                "runtime_contact_ambiguous measurements refuse friction-interval replay; "
+                "structural digests and NoInference(unexpected_contact) are verified only."
+            ]
+            if status != "PASS"
+            else []
+        ),
     }
 
 

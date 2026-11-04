@@ -1,0 +1,17 @@
+{
+  "schema": "realityos.probe_transit_abort_failure_class/v1",
+  "failure_class": "unexpected_contact_with_preserved_episode",
+  "outcome": "action_failed",
+  "failure_cause": "force_monitor_abort",
+  "refusal_code": "WRENCH_MONITOR_ABORTED_ACTION",
+  "abort_kind": "unexpected_contact",
+  "unauthorized_writes": 0,
+  "sidecar_status": "PASS_STRUCTURAL_AMBIGUOUS_CONTACT",
+  "episode_diagnostic_present": false,
+  "notes": [
+    "Governor refusal preserved; sealed ambiguous-contact sidecar structurally verified offline; inspect trace before any policy change."
+  ],
+  "governor_weakened": false,
+  "physical_test": false,
+  "admission_status": "NOT_ADMITTED"
+}

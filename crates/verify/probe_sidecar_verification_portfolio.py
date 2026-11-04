@@ -114,10 +114,17 @@ def verify_evidence_dir(path: Path, *, full_replay: bool = False) -> dict:
                 )
             row["measurement_count"] = len(measurements)
             row["result_recorded_sidecar_status"] = result_status
-            if result_status in {"PASS", "pass", "OK"}:
+            if result_status in {
+                "PASS",
+                "pass",
+                "OK",
+                "PASS_STRUCTURAL_AMBIGUOUS_CONTACT",
+                "PASS_MIXED_AMBIGUOUS_CONTACT",
+            }:
                 row["verification_status"] = "PASS_RECORDED_AT_SEAL"
                 row["notes"] = (
-                    "Non-empty sidecar; RESULT records offline_sidecar_verifier_status=PASS. "
+                    "Non-empty sidecar; RESULT records offline_sidecar_verifier_status="
+                    f"{result_status}. "
                     "Portfolio uses sealed status (full replay opt-in via --full-replay)."
                 )
             else:
