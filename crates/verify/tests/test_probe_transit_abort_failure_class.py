@@ -62,6 +62,24 @@ class ProbeTransitAbortFailureClassTests(unittest.TestCase):
         )
         self.assertFalse(report["governor_weakened"])
 
+    def test_seed_21008_first_onset_outside_prior_not_successive(self) -> None:
+        seed = EVIDENCE / "rotated-probe-heldout-seed-21008-20261104"
+        episode = json.loads((seed / "EPISODE.json").read_text(encoding="utf-8"))
+        result = json.loads((seed / "RESULT.json").read_text(encoding="utf-8"))
+        diagnosis = None
+        diagnosis_path = seed / "FRICTION_BOUND_DIAGNOSIS.json"
+        if diagnosis_path.is_file():
+            diagnosis = json.loads(diagnosis_path.read_text(encoding="utf-8"))
+        report = MOD["classify_episode"](
+            episode, result, inference_bound_diagnosis=diagnosis
+        )
+        self.assertEqual(
+            report["failure_class"],
+            "expected_success_blocked_by_first_onset_outside_prior",
+        )
+        self.assertIsNone(episode.get("first_slip_onset_interval"))
+        self.assertFalse(report["governor_weakened"])
+
 
 if __name__ == "__main__":
     unittest.main()

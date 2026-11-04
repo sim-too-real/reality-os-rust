@@ -2,7 +2,7 @@
   "schema": "realityos.rotated_probe_diagnostic.result/v1",
   "experiment_id": "rotated_probe_heldout_seed_21008_iiwa14_20261104_v1",
   "completed_at_utc": "2026-11-04T17:10:08Z",
-  "classification": "SIDECAR_CAPTURED; PRIOR_MEASUREMENT_INCOMPATIBLE; OFFLINE_VERIFIER_PASS; SIMULATION_ONLY; NOT_ADMITTED",
+  "classification": "SIDECAR_CAPTURED; PRIOR_MEASUREMENT_INCOMPATIBLE; FIRST_ONSET_OUTSIDE_PRIOR; OFFLINE_VERIFIER_PASS; SIMULATION_ONLY; NOT_ADMITTED",
   "repository": "reality-os-rust",
   "branch": "main",
   "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21008:0",
@@ -38,9 +38,11 @@
   "viewport_admits": false,
   "notes": [
     "Clean-tree authorized FREEZE replay sealed a non-empty probe-measurement sidecar.",
-    "Offline verifier PASSes with NoInference(PriorMeasurementIncompatible); empty prior\u2229measurement matches push_probe semantics without crashing.",
+    "Offline verifier PASSes with NoInference(PriorMeasurementIncompatible); empty prior∩measurement matches push_probe semantics without crashing.",
+    "Bound diagnosis: first SlipOnset entirely_above_prior ([0.841,0.905] vs prior [0.05,0.8]); first_slip_onset_interval=null so PreferHigherLoadFamily does not apply.",
     "Governor thresholds unchanged (1 mm / 0.5 N). SIMULATION_ONLY; NOT_ADMITTED."
   ],
-  "failure_class": "expected_success_blocked_by_successive_prior_incompatibility",
-  "failure_class_path": "FAILURE_CLASS.json"
+  "failure_class": "expected_success_blocked_by_first_onset_outside_prior",
+  "failure_class_path": "FAILURE_CLASS.json",
+  "friction_bound_diagnosis_path": "FRICTION_BOUND_DIAGNOSIS.json"
 }

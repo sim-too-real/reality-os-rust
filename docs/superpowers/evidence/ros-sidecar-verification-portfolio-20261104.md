@@ -15,7 +15,7 @@ measurements or weakening Governor gates, including after 21008 FREEZE replay?
 | 21005 sidecar capture | `PASS_RECORDED_AT_SEAL` | `PASS_STRUCTURAL_AMBIGUOUS_CONTACT` |
 | 21006 | `PASS_STRUCTURAL_NONEMPTY` | success path |
 | 21007 | `PASS_STRUCTURAL_NONEMPTY` | success path |
-| 21008 FREEZE replay | `PASS_RECORDED_AT_SEAL` | offline `PASS`; PriorMeasurementIncompatible |
+| 21008 FREEZE replay | `PASS_RECORDED_AT_SEAL` | offline `PASS`; first_onset_outside_prior |
 
 Portfolio: 7 seeds; fail_no_sidecar=2; pass=5; governor_weakened_any=false;
 invented_measurements_any=false.

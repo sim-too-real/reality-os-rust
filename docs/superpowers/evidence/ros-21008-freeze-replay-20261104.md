@@ -14,7 +14,8 @@ weakening Governor contact/force thresholds?
 | Clean-tree freeze | `replay_authorized=true`; 1 mm / 0.5 N unchanged |
 | Simulator run | 1 (budget consumed) |
 | Sidecar | sealed (gitignored locally; offline verify PASS) |
-| Failure class | `expected_success_blocked_by_successive_prior_incompatibility` |
+| Failure class | `expected_success_blocked_by_first_onset_outside_prior` |
+| Bound diagnosis | `entirely_above_prior` (~[0.841, 0.905] vs [0.05, 0.8]) |
 
 Harness outcome label `preserve_sealed_sidecar_or_typed_abort` accepted alongside
 `preserve_sealed_sidecar`.
@@ -24,5 +25,5 @@ Harness outcome label `preserve_sealed_sidecar_or_typed_abort` accepted alongsid
 ## Classification
 
 **VALIDATED_LEARNING** — E2E authorize→replay→sealed diagnostic without Governor
-weakening; successive prior incompatibility remains the research hole (not
-threshold lowering).
+weakening. Research hole is first-onset bounds above the declared prior (not
+successive PreferHigherLoad cadence, not threshold lowering).

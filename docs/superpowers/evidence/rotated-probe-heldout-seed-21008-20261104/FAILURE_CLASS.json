@@ -1,6 +1,6 @@
 {
   "schema": "realityos.probe_transit_abort_failure_class/v1",
-  "failure_class": "expected_success_blocked_by_successive_prior_incompatibility",
+  "failure_class": "expected_success_blocked_by_first_onset_outside_prior",
   "outcome": "unexpected_refusal",
   "failure_cause": "bridge_refusal",
   "refusal_code": "NO_JUSTIFIED_CURRENT_ACTION",
@@ -9,7 +9,8 @@
   "sidecar_status": "PASS",
   "episode_diagnostic_present": false,
   "notes": [
-    "Sealed probe measurements exist; empty prior\u2229measurement is successive-probe incompatibility, not a malformed single-measurement interval. Do not weaken Governor contact/force thresholds."
+    "Sealed probe measurement exists; first SlipOnset bounds sit outside the declared prior (often entirely above prior.upper) with no prior first-onset posterior to escalate from. PreferHigherLoadFamily does not apply. Do not weaken Governor contact/force thresholds; research prior envelope honesty or seed/physics match instead.",
+    "Offline bound diagnosis: measurement_bounds entirely_above_prior."
   ],
   "governor_weakened": false,
   "physical_test": false,

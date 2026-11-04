@@ -60,7 +60,12 @@ def classify_episode(
         else None
     ) or []
     prior_incompatible_offline = any(
-        row.get("diagnosis") == "measurement_bounds_do_not_overlap_prior"
+        row.get("diagnosis")
+        in {
+            "measurement_bounds_do_not_overlap_prior",
+            "entirely_above_prior",
+            "entirely_below_prior",
+        }
         for row in diagnosis_rows
         if isinstance(row, dict)
     )
@@ -130,14 +135,39 @@ def classify_episode(
         # 21003 pattern: first SlipOnset update narrows prior; later onset bounds
         # sit entirely outside that prior (offline: measurement_bounds_do_not_overlap_prior).
         if prior_incompatible_offline or "PriorMeasurementIncompatible" in wrench_inference_reason:
-            failure_class = (
-                "expected_success_blocked_by_successive_prior_incompatibility"
+            first_onset = episode.get("first_slip_onset_interval")
+            prior_before = episode.get("support_friction_prior_before_first_onset")
+            entirely_above = any(
+                row.get("diagnosis") == "entirely_above_prior"
+                for row in diagnosis_rows
+                if isinstance(row, dict)
             )
-            notes.append(
-                "Sealed probe measurements exist; empty prior∩measurement is successive-"
-                "probe incompatibility, not a malformed single-measurement interval. "
-                "Do not weaken Governor contact/force thresholds."
-            )
+            # PreferHigherLoadFamily only applies after a first SlipOnset narrowing.
+            # First onset entirely above the declared prior is a distinct hole.
+            if first_onset is None and prior_before is None:
+                failure_class = (
+                    "expected_success_blocked_by_first_onset_outside_prior"
+                )
+                notes.append(
+                    "Sealed probe measurement exists; first SlipOnset bounds sit outside "
+                    "the declared prior (often entirely above prior.upper) with no prior "
+                    "first-onset posterior to escalate from. PreferHigherLoadFamily does "
+                    "not apply. Do not weaken Governor contact/force thresholds; research "
+                    "prior envelope honesty or seed/physics match instead."
+                )
+                if entirely_above:
+                    notes.append(
+                        "Offline bound diagnosis: measurement_bounds entirely_above_prior."
+                    )
+            else:
+                failure_class = (
+                    "expected_success_blocked_by_successive_prior_incompatibility"
+                )
+                notes.append(
+                    "Sealed probe measurements exist; empty prior∩measurement is successive-"
+                    "probe incompatibility after a first SlipOnset narrowing. "
+                    "Do not weaken Governor contact/force thresholds."
+                )
         else:
             failure_class = "expected_success_blocked_by_empty_friction_intersection"
             notes.append(

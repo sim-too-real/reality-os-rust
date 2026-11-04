@@ -12,7 +12,9 @@ replay sealed `EPISODE.json` + gitignored `PROBE_MEASUREMENT_SIDECAR.json`.
 | Episode outcome | `unexpected_refusal` / `NO_JUSTIFIED_CURRENT_ACTION` |
 | Wrench inference | `no_inference:PriorMeasurementIncompatible` |
 | Offline sidecar verify | **PASS** (`NoInference(PriorMeasurementIncompatible)`) |
-| Failure class | `expected_success_blocked_by_successive_prior_incompatibility` |
+| Failure class | `expected_success_blocked_by_first_onset_outside_prior` |
+| Bound diagnosis | `entirely_above_prior` (~[0.841, 0.905] vs prior [0.05, 0.8]) |
+| First SlipOnset posterior | `null` (PreferHigherLoadFamily does not apply) |
 | Governor weakened | **false** |
 | Admission | `NOT_ADMITTED`; metal/shop_release/viewport_admits=false |
 
@@ -21,6 +23,9 @@ replay sealed `EPISODE.json` + gitignored `PROBE_MEASUREMENT_SIDECAR.json`.
 Offline `probe_interval_reference` previously crashed on empty prior∩measurement.
 It now matches `push_probe`: return `NoInference(prior_measurement_incompatible)`
 and keep posterior = prior.
+
+First onset outside the declared prior is a distinct failure class from successive
+probe incompatibility after a narrowed first-onset posterior.
 
 ## Non-claims
 
