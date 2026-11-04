@@ -809,7 +809,10 @@ def _recompute_inference(measurement: dict[str, Any], prior: list[float], has_co
     _require(all(math.isfinite(value) for value in bounds) and bounds[0] >= 0.0, "unidentifiable friction bounds")
     _require(bounds[0] <= bounds[1], "empty friction bounds")
     interval = [max(prior[0], bounds[0]), min(prior[1], bounds[1])]
-    _require(interval[0] <= interval[1], "empty prior intersection")
+    # Matches crates/semantics push_probe: empty prior∩measurement →
+    # PriorMeasurementIncompatible (NoInference), not a hard verifier crash.
+    if interval[0] > interval[1]:
+        return {"NoInference": "prior_measurement_incompatible"}, prior
     return {"Updated": {"interval": interval, "mode": "slip_onset"}}, interval
 
 
@@ -886,8 +889,14 @@ def _verify_sidecar(sidecar: dict[str, Any]) -> dict[str, Any]:
         elif recomputed.get("NoInference") == "unexpected_contact":
             inference_name = "NoInference(UnexpectedContact)"
             interval = prior
-        else:
+        elif recomputed.get("NoInference") == "prior_measurement_incompatible":
+            inference_name = "NoInference(PriorMeasurementIncompatible)"
+            interval = prior
+        elif recomputed.get("NoInference") == "no_intended_contact":
             inference_name = "NoInference(NoIntendedContact)"
+            interval = prior
+        else:
+            inference_name = f"NoInference({recomputed.get('NoInference')})"
             interval = prior
         pose_count = (
             len(trace["samples"])

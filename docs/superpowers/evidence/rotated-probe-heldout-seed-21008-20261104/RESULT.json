@@ -1,0 +1,46 @@
+{
+  "schema": "realityos.rotated_probe_diagnostic.result/v1",
+  "experiment_id": "rotated_probe_heldout_seed_21008_iiwa14_20261104_v1",
+  "completed_at_utc": "2026-11-04T17:10:08Z",
+  "classification": "SIDECAR_CAPTURED; PRIOR_MEASUREMENT_INCOMPATIBLE; OFFLINE_VERIFIER_PASS; SIMULATION_ONLY; NOT_ADMITTED",
+  "repository": "reality-os-rust",
+  "branch": "main",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21008:0",
+  "trial_seed": 21008,
+  "trial_index": 0,
+  "simulation_runs": 1,
+  "verification": {
+    "seal_gate_status": "PASS_SIDECAR_PRESENT",
+    "seal_allowed": true,
+    "sidecar_bytes": 51378993,
+    "measurement_record_count": 1,
+    "offline_sidecar_verifier_status": "PASS",
+    "offline_sidecar_verifier_error": null,
+    "interval_replay_supported": true,
+    "unauthorized_writes": 0,
+    "governor_weakened": false,
+    "thresholds_changed": false,
+    "invented_measurements": false
+  },
+  "episode": {
+    "path": "EPISODE.json",
+    "outcome": "unexpected_refusal",
+    "failure_cause": "bridge_refusal",
+    "refusal_code": "NO_JUSTIFIED_CURRENT_ACTION",
+    "wrench_inference_reason": "no_inference:PriorMeasurementIncompatible",
+    "actions": [
+      "probe:+x"
+    ]
+  },
+  "admission_status": "NOT_ADMITTED",
+  "metal": false,
+  "shop_release": false,
+  "viewport_admits": false,
+  "notes": [
+    "Clean-tree authorized FREEZE replay sealed a non-empty probe-measurement sidecar.",
+    "Offline verifier PASSes with NoInference(PriorMeasurementIncompatible); empty prior\u2229measurement matches push_probe semantics without crashing.",
+    "Governor thresholds unchanged (1 mm / 0.5 N). SIMULATION_ONLY; NOT_ADMITTED."
+  ],
+  "failure_class": "expected_success_blocked_by_successive_prior_incompatibility",
+  "failure_class_path": "FAILURE_CLASS.json"
+}

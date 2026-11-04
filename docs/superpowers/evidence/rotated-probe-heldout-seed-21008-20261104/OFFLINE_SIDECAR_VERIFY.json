@@ -1,0 +1,34 @@
+{
+  "format": "realityos.independent_probe_interval_reference",
+  "schema_version": 1,
+  "status": "PASS",
+  "trial_id": "v7:development:menagerie_iiwa14:push_probe_replan:21008:0",
+  "trial_digest": "3d49822a090ab05015d658205fd3219fc3762564cb16795e5493b68197b03cfa",
+  "measurement_count": 1,
+  "measurements": [
+    {
+      "action_key": "probe:+x",
+      "measurement_digest": "3f5575c4c8becbbf800af90bc3697406db54ec0ee54f19aa4d5298ee58a117b5",
+      "inference": "NoInference(PriorMeasurementIncompatible)",
+      "prior_support_friction_interval": [
+        0.05,
+        0.8
+      ],
+      "interval": [
+        0.05,
+        0.8
+      ],
+      "first_xy_motion_bracket_s": [
+        22.921999999998175,
+        22.923999999998173
+      ],
+      "sample_count": 5446,
+      "pose_sample_count": 5445,
+      "motion_trace_status": "verified",
+      "runtime_contact_ambiguous": false,
+      "interval_replay_supported": true
+    }
+  ],
+  "interval_replay_supported": true,
+  "limitations": []
+}

@@ -3,8 +3,7 @@
 ## Question
 
 Can offline verification of sealed probe sidecars complete without inventing
-measurements or weakening Governor gates, including after fresh 21004/21005
-captures?
+measurements or weakening Governor gates, including after 21008 FREEZE replay?
 
 ## Measured
 
@@ -16,11 +15,12 @@ captures?
 | 21005 sidecar capture | `PASS_RECORDED_AT_SEAL` | `PASS_STRUCTURAL_AMBIGUOUS_CONTACT` |
 | 21006 | `PASS_STRUCTURAL_NONEMPTY` | success path |
 | 21007 | `PASS_STRUCTURAL_NONEMPTY` | success path |
+| 21008 FREEZE replay | `PASS_RECORDED_AT_SEAL` | offline `PASS`; PriorMeasurementIncompatible |
 
-Portfolio: 6 seeds; fail_no_sidecar=2; pass=4; governor_weakened_any=false;
+Portfolio: 7 seeds; fail_no_sidecar=2; pass=5; governor_weakened_any=false;
 invented_measurements_any=false.
 
 ## Classification
 
-**SIGNIFICANT_ADVANCE** for capture transfer; historical empty-sidecar seeds
-remain explicit measured negatives.
+**SIGNIFICANT_ADVANCE** for capture transfer + 21008 authorize→replay; historical
+empty-sidecar seeds remain explicit measured negatives.

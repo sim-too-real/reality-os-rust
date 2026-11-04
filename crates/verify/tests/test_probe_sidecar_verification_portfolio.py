@@ -85,6 +85,19 @@ class ProbeSidecarVerificationPortfolioTests(unittest.TestCase):
         self.assertFalse(row["invented_measurements"])
         self.assertGreater(row.get("measurement_count") or 0, 0)
 
+    def test_21008_records_prior_incompatible_pass_at_seal(self) -> None:
+        path = EVIDENCE / "rotated-probe-heldout-seed-21008-20261104"
+        if not (path / "RESULT.json").is_file():
+            self.skipTest("21008 RESULT not present")
+        row = verify_evidence_dir(path)
+        self.assertEqual(row["verification_status"], "PASS_RECORDED_AT_SEAL")
+        self.assertEqual(row["result_recorded_sidecar_status"], "PASS")
+        self.assertEqual(
+            row["failure_class_after_verification"],
+            "expected_success_blocked_by_successive_prior_incompatibility",
+        )
+        self.assertFalse(row["governor_weakened"])
+
     def test_empty_sidecar_file_is_fail_empty(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)

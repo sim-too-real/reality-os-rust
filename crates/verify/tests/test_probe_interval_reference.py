@@ -257,6 +257,23 @@ class IndependentProbeIntervalReferenceTests(unittest.TestCase):
             "NoInference(UnexpectedContact)",
         )
 
+    def test_sealed_21008_prior_incompatible_matches_no_inference_without_crash(self):
+        path = (
+            ROOT
+            / "docs/superpowers/evidence"
+            / "rotated-probe-heldout-seed-21008-20261104"
+            / "PROBE_MEASUREMENT_SIDECAR.json"
+        )
+        if not path.is_file():
+            self.skipTest("gitignored 21008 sidecar not present locally")
+        report = verify_sidecar(json.loads(path.read_text(encoding="utf-8")))
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(
+            report["measurements"][0]["inference"],
+            "NoInference(PriorMeasurementIncompatible)",
+        )
+        self.assertFalse(report["measurements"][0]["runtime_contact_ambiguous"])
+
 
 if __name__ == "__main__":
     unittest.main()

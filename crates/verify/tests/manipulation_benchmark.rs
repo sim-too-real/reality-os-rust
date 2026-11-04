@@ -5813,7 +5813,7 @@ fn iiwa_rotated_probe_unbracketed_motion_diagnostic_capture() {
                 Some("WRENCH_MONITOR_ABORTED_ACTION")
             );
         }
-        "preserve_sealed_sidecar" => {
+        "preserve_sealed_sidecar" | "preserve_sealed_sidecar_or_typed_abort" => {
             assert!(
                 matches!(
                     episode.outcome,

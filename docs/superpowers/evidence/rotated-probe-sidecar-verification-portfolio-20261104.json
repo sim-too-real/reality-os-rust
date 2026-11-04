@@ -1,8 +1,8 @@
 {
   "schema": "realityos.probe_sidecar_verification_portfolio/v1",
-  "seed_count": 6,
+  "seed_count": 7,
   "fail_no_sidecar_count": 2,
-  "pass_count": 4,
+  "pass_count": 5,
   "governor_weakened_any": false,
   "invented_measurements_any": false,
   "rows": [
@@ -117,9 +117,28 @@
       "verification_status": "PASS_STRUCTURAL_NONEMPTY",
       "notes": "Non-empty sidecar present; RESULT did not record PASS. Structural portfolio pass only; run --full-replay for independent verify.",
       "failure_class_after_verification": "task_success"
+    },
+    {
+      "seed_dir": "rotated-probe-heldout-seed-21008-20261104",
+      "sidecar_path": "PROBE_MEASUREMENT_SIDECAR.json",
+      "sidecar_present": true,
+      "episode_diagnostic": {
+        "present": false,
+        "status": "ABSENT",
+        "trial_id_match": null,
+        "trial_digest_match": null
+      },
+      "governor_weakened": false,
+      "admission_status": "NOT_ADMITTED",
+      "invented_measurements": false,
+      "measurement_count": 1,
+      "result_recorded_sidecar_status": "PASS",
+      "verification_status": "PASS_RECORDED_AT_SEAL",
+      "notes": "Non-empty sidecar; RESULT records offline_sidecar_verifier_status=PASS. Portfolio uses sealed status (full replay opt-in via --full-replay).",
+      "failure_class_after_verification": "expected_success_blocked_by_successive_prior_incompatibility"
     }
   ],
-  "conclusion": "Sidecar verification completed offline for sealed seeds. Historical 21004/21005 remain FAIL_NO_SIDECAR with episode-diagnostic integrity checked; fresh 21004/21005 sidecar captures PASS structurally (PASS_RECORDED_AT_SEAL / PASS_STRUCTURAL_AMBIGUOUS_CONTACT). Do not invent measurements or weaken contact/force gates. Next: owner-gated 21008 replay or non-ambiguous intended-contact capture for interval-replay science.",
+  "conclusion": "Sidecar verification completed offline for sealed seeds. Historical 21004/21005 remain FAIL_NO_SIDECAR with episode-diagnostic integrity checked; fresh 21004/21005 sidecar captures PASS structurally (PASS_RECORDED_AT_SEAL / PASS_STRUCTURAL_AMBIGUOUS_CONTACT). 21008 clean-tree FREEZE replay sealed PriorMeasurementIncompatible with offline verifier PASS; Governor thresholds unchanged. Do not invent measurements or weaken contact/force gates. Next: cadence/inference research for successive prior incompatibility, or non-ambiguous intended-contact capture for Updated(SlipOnset) transfer.",
   "admission_status": "NOT_ADMITTED",
   "metal": false,
   "shop_release": false,

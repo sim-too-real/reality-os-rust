@@ -31,6 +31,7 @@ DEFAULT_SEEDS = [
     "rotated-probe-heldout-seed-21005-sidecar-capture-20261104",
     "rotated-probe-heldout-seed-21006-20261104",
     "rotated-probe-heldout-seed-21007-20261104",
+    "rotated-probe-heldout-seed-21008-20261104",
 ]
 
 
@@ -157,12 +158,22 @@ def _attach_failure_class(
     if episode_path.is_file() and result_path.is_file():
         episode = json.loads(episode_path.read_text(encoding="utf-8"))
         result = json.loads(result_path.read_text(encoding="utf-8"))
-        # Reflect completed offline verification into classification inputs.
+        # Prefer RESULT's sealed offline verifier status; portfolio wrapper statuses
+        # like PASS_RECORDED_AT_SEAL are not failure-class inputs.
         treated = json.loads(json.dumps(result))
         treated.setdefault("verification", {})
-        treated["verification"]["offline_sidecar_verifier_status"] = row[
-            "verification_status"
-        ]
+        sealed_status = row.get("result_recorded_sidecar_status") or (
+            (result.get("verification") or {}).get("offline_sidecar_verifier_status")
+        )
+        if sealed_status:
+            treated["verification"]["offline_sidecar_verifier_status"] = sealed_status
+        elif row.get("verification_status") not in {
+            "PASS_RECORDED_AT_SEAL",
+            "PASS_STRUCTURAL_NONEMPTY",
+        }:
+            treated["verification"]["offline_sidecar_verifier_status"] = row[
+                "verification_status"
+            ]
         report = classify_episode(
             episode, treated, evidence_dir=path
         )
@@ -203,9 +214,11 @@ def build_portfolio(seed_dirs: list[str], *, full_replay: bool = False) -> dict:
             "Historical 21004/21005 remain FAIL_NO_SIDECAR with episode-diagnostic integrity "
             "checked; fresh 21004/21005 sidecar captures PASS structurally "
             "(PASS_RECORDED_AT_SEAL / PASS_STRUCTURAL_AMBIGUOUS_CONTACT). "
+            "21008 clean-tree FREEZE replay sealed PriorMeasurementIncompatible with "
+            "offline verifier PASS; Governor thresholds unchanged. "
             "Do not invent measurements or weaken contact/force gates. "
-            "Next: owner-gated 21008 replay or non-ambiguous intended-contact capture "
-            "for interval-replay science."
+            "Next: cadence/inference research for successive prior incompatibility, "
+            "or non-ambiguous intended-contact capture for Updated(SlipOnset) transfer."
         ),
         "admission_status": "NOT_ADMITTED",
         "metal": False,
