@@ -1668,3 +1668,110 @@ fn matched_trials_next_action_from_belief_after_reprobe_on_21008_and_heldout() {
         NextProbeActionDecision::RejectedNotContinuing { .. }
     ));
 }
+
+#[test]
+fn matched_trials_offline_complete_probe_pipeline_on_21008_and_heldout() {
+    use realityos_semantics::push_probe::{
+        claim_live_write_from_offline_pipeline, run_offline_complete_probe_pipeline,
+        FirstOnsetOutsidePriorPolicy, NextProbeActionDecision, PriorEnvelopeRefuseContinuation,
+        ProbeTaskContinuationDecision,
+    };
+
+    let mu_required = 0.3;
+    let policy = FirstOnsetOutsidePriorPolicy::NarrowWhenRelativeMissAtMost {
+        max_relative_miss: 0.05,
+    };
+    let prior_21008 = [0.05, 0.75];
+    let bounds_21008 = [0.8410610796690302, 0.9046710475934353];
+
+    // 21008 large miss + RequestReprobe + recovered measurement → complete with belief.
+    let recovered = run_offline_complete_probe_pipeline(
+        policy,
+        prior_21008,
+        bounds_21008,
+        mu_required,
+        PriorEnvelopeRefuseContinuation::RequestReprobe,
+        Some([0.4, 0.7]),
+    );
+    assert!(matches!(
+        recovered.continuation,
+        ProbeTaskContinuationDecision::RequestReprobeAfterPriorEnvelopeRefuse { .. }
+    ));
+    assert!(recovered.completed_with_belief);
+    assert!(matches!(
+        recovered.next_action,
+        Some(NextProbeActionDecision::ProceedCompleteTaskWithBelief { .. })
+    ));
+    assert!(!recovered.live_write_authorized);
+    assert!(recovered.simulation_only);
+    assert_eq!(recovered.admission_status, "NOT_ADMITTED");
+    assert!(!claim_live_write_from_offline_pipeline(&recovered));
+
+    // Ablation: stop-as-refuse cannot complete even if a "reprobe" value is supplied.
+    let stopped = run_offline_complete_probe_pipeline(
+        policy,
+        prior_21008,
+        bounds_21008,
+        mu_required,
+        PriorEnvelopeRefuseContinuation::StopAsCorrectRefuse,
+        Some([0.4, 0.7]),
+    );
+    assert!(!stopped.completed_with_belief);
+    assert!(matches!(
+        stopped.next_action,
+        Some(NextProbeActionDecision::HoldAfterCorrectRefuse { .. })
+    ));
+    assert!(stopped.after_reprobe.is_none());
+
+    // RequestReprobe without measurement refuses proceed.
+    let pending_only = run_offline_complete_probe_pipeline(
+        policy,
+        prior_21008,
+        bounds_21008,
+        mu_required,
+        PriorEnvelopeRefuseContinuation::RequestReprobe,
+        None,
+    );
+    assert!(!pending_only.completed_with_belief);
+    assert!(matches!(
+        pending_only.next_action,
+        Some(NextProbeActionDecision::RejectedNotContinuing { .. })
+    ));
+
+    // Held-out small miss: pipeline continues and completes without reprobe.
+    let prior_small = [0.05, 0.8];
+    let bounds_small = [0.81, 0.85];
+    let small = run_offline_complete_probe_pipeline(
+        policy,
+        prior_small,
+        bounds_small,
+        mu_required,
+        PriorEnvelopeRefuseContinuation::RequestReprobe,
+        None,
+    );
+    assert!(matches!(
+        small.continuation,
+        ProbeTaskContinuationDecision::ContinueProbeWithBelief {
+            proves_mu_required: true,
+            ..
+        }
+    ));
+    assert!(small.completed_with_belief);
+    assert!(small.after_reprobe.is_none());
+    assert!(!claim_live_write_from_offline_pipeline(&small));
+
+    // Still-miss after reprobe: hold, not complete.
+    let still_miss = run_offline_complete_probe_pipeline(
+        policy,
+        prior_21008,
+        bounds_21008,
+        mu_required,
+        PriorEnvelopeRefuseContinuation::RequestReprobe,
+        Some([0.86, 0.92]),
+    );
+    assert!(!still_miss.completed_with_belief);
+    assert!(matches!(
+        still_miss.next_action,
+        Some(NextProbeActionDecision::HoldAfterCorrectRefuse { .. })
+    ));
+}

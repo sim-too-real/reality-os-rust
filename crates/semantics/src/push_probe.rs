@@ -1572,6 +1572,128 @@ pub fn blind_proceed_ignoring_belief_proof(
     }
 }
 
+/// End-to-end offline complete-probe pipeline: first-onset → continuation →
+/// optional after-reprobe → next-action. Composes existing gates; does not
+/// invent μ, change Governor thresholds, or authorize live writes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OfflineCompleteProbePipelineReport {
+    pub schema: String,
+    pub first_onset: FirstOnsetOutsidePriorOutcome,
+    pub continuation: ProbeTaskContinuationDecision,
+    pub after_reprobe: Option<AfterReprobeFeedbackDecision>,
+    pub next_action: Option<NextProbeActionDecision>,
+    pub completed_with_belief: bool,
+    /// Always false — pipeline is SIMULATION_ONLY research.
+    pub live_write_authorized: bool,
+    pub simulation_only: bool,
+    pub admission_status: String,
+}
+
+pub const OFFLINE_COMPLETE_PROBE_PIPELINE_SCHEMA: &str =
+    "realityos.offline-complete-probe-pipeline/v1";
+
+/// Run the offline complete-probe pipeline on one sealed first-onset scene.
+///
+/// When continuation is `RequestReprobeAfterPriorEnvelopeRefuse`, pass
+/// `reprobe_measurement` to incorporate feedback. Missing reprobe refuses proceed.
+pub fn run_offline_complete_probe_pipeline(
+    policy: FirstOnsetOutsidePriorPolicy,
+    declared_prior: [f64; 2],
+    first_onset_bounds: [f64; 2],
+    mu_required: f64,
+    refuse_continuation: PriorEnvelopeRefuseContinuation,
+    reprobe_measurement: Option<[f64; 2]>,
+) -> OfflineCompleteProbePipelineReport {
+    let first_onset =
+        apply_first_onset_outside_prior(policy, declared_prior, first_onset_bounds);
+    let continuation = probe_task_continuation_from_first_onset_with_replan(
+        &first_onset,
+        mu_required,
+        refuse_continuation,
+    );
+
+    let (after_reprobe, next_action) = match &continuation {
+        ProbeTaskContinuationDecision::ContinueProbeWithBelief {
+            interval,
+            proves_mu_required,
+        } => {
+            // First-onset already continues: map belief coverage to next action.
+            let feedback = AfterReprobeFeedbackDecision::ContinueProbeWithBelief {
+                interval: *interval,
+                proves_mu_required: *proves_mu_required,
+                new_measurement_bounds: first_onset_bounds,
+                declared_prior,
+            };
+            let next = next_probe_action_after_reprobe_feedback(&feedback, mu_required);
+            (None, Some(next))
+        }
+        ProbeTaskContinuationDecision::RequestReprobeAfterPriorEnvelopeRefuse { .. } => {
+            match reprobe_measurement {
+                Some(bounds) => {
+                    let after = probe_task_continuation_after_reprobe_measurement(
+                        &continuation,
+                        bounds,
+                        policy,
+                        mu_required,
+                    );
+                    let next = next_probe_action_after_reprobe_feedback(&after, mu_required);
+                    (Some(after), Some(next))
+                }
+                None => (
+                    None,
+                    Some(NextProbeActionDecision::RejectedNotContinuing {
+                        reason: "reprobe_measurement_required_after_request_reprobe".into(),
+                    }),
+                ),
+            }
+        }
+        ProbeTaskContinuationDecision::CorrectRefusePriorEnvelopeNotCredible => (
+            None,
+            Some(NextProbeActionDecision::HoldAfterCorrectRefuse {
+                reason: "stopped_as_correct_refuse_no_reprobe".into(),
+            }),
+        ),
+        ProbeTaskContinuationDecision::CorrectRefuseIncompatiblePrior => (
+            None,
+            Some(NextProbeActionDecision::HoldAfterCorrectRefuse {
+                reason: "incompatible_prior_at_first_onset".into(),
+            }),
+        ),
+        ProbeTaskContinuationDecision::RejectedOther { reason } => (
+            None,
+            Some(NextProbeActionDecision::RejectedNotContinuing {
+                reason: format!("first_onset_rejected:{reason:?}"),
+            }),
+        ),
+    };
+
+    let completed_with_belief = matches!(
+        next_action,
+        Some(NextProbeActionDecision::ProceedCompleteTaskWithBelief { .. })
+    );
+
+    OfflineCompleteProbePipelineReport {
+        schema: OFFLINE_COMPLETE_PROBE_PIPELINE_SCHEMA.into(),
+        first_onset,
+        continuation,
+        after_reprobe,
+        next_action,
+        completed_with_belief,
+        live_write_authorized: false,
+        simulation_only: true,
+        admission_status: "NOT_ADMITTED".into(),
+    }
+}
+
+/// Negative control: claiming a live write from offline pipeline completion.
+pub fn claim_live_write_from_offline_pipeline(
+    report: &OfflineCompleteProbePipelineReport,
+) -> bool {
+    // Always refuse — completed_with_belief is not live authorization.
+    let _ = report.completed_with_belief;
+    false
+}
+
 /// Offline honesty metric when first-onset bounds sit entirely above `prior.upper`.
 ///
 /// Returns `(measurement.lower − prior.upper) / prior.upper` when the geometry is
