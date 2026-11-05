@@ -1185,7 +1185,7 @@ pub fn friction_interval_proves_mu_required(interval: [f64; 2], mu_required: f64
 /// prior first-onset posterior. These policies do not change contact/force Governor
 /// thresholds. Live `record_probe_measurement` stays on RetainDeclaredPrior until an
 /// authorized wire decides otherwise.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FirstOnsetOutsidePriorPolicy {
     /// Status quo: keep declared prior; reject PriorMeasurementIncompatible.
@@ -1196,6 +1196,10 @@ pub enum FirstOnsetOutsidePriorPolicy {
     /// Name the hole: declared prior is not credible for this scene; do not invent
     /// an Updated interval.
     RefusePriorEnvelopeAsNotCredible,
+    /// Narrow only when the relative prior-envelope miss is at most `max_relative_miss`.
+    /// Larger misses refuse the declared prior as not credible (offline research).
+    /// Does not change Governor force/contact thresholds or live write paths.
+    NarrowWhenRelativeMissAtMost { max_relative_miss: f64 },
 }
 
 /// Result of applying a first-onset-outside-prior policy.
@@ -1257,8 +1261,314 @@ pub fn apply_first_onset_outside_prior(
                     declared_prior,
                 }
             }
+            FirstOnsetOutsidePriorPolicy::NarrowWhenRelativeMissAtMost {
+                max_relative_miss,
+            } => {
+                if !(max_relative_miss.is_finite() && max_relative_miss >= 0.0) {
+                    return FirstOnsetOutsidePriorOutcome::Rejected {
+                        reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
+                    };
+                }
+                if !(measurement_bounds[0] > declared_prior[1]
+                    && measurement_bounds[0] <= measurement_bounds[1]
+                    && declared_prior[1] > 0.0)
+                {
+                    return FirstOnsetOutsidePriorOutcome::Rejected {
+                        reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
+                    };
+                }
+                let relative_miss =
+                    (measurement_bounds[0] - declared_prior[1]) / declared_prior[1];
+                if relative_miss <= max_relative_miss {
+                    FirstOnsetOutsidePriorOutcome::AcceptedByReplacingPrior {
+                        interval: measurement_bounds,
+                        quarantined_prior: declared_prior,
+                    }
+                } else {
+                    FirstOnsetOutsidePriorOutcome::RefusedPriorEnvelope {
+                        measurement_bounds,
+                        declared_prior,
+                    }
+                }
+            }
         },
         Err(reason) => FirstOnsetOutsidePriorOutcome::Rejected { reason },
+    }
+}
+
+/// Offline complete-task continuation decision under a first-onset policy outcome.
+///
+/// Maps belief outcomes to whether a probe task should continue with an Updated
+/// friction interval or correctly refuse. Does **not** change Governor force /
+/// contact thresholds and does **not** wire live `record_probe_measurement`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProbeTaskContinuationDecision {
+    ContinueProbeWithBelief {
+        interval: [f64; 2],
+        proves_mu_required: bool,
+    },
+    CorrectRefuseIncompatiblePrior,
+    CorrectRefusePriorEnvelopeNotCredible,
+    /// Correct refuse of the declared prior, plus a typed replan request to
+    /// re-probe under an expanded/redeclared envelope. Does **not** invent μ,
+    /// prove μ_required, change Governor thresholds, or authorize live writes.
+    RequestReprobeAfterPriorEnvelopeRefuse {
+        measurement_bounds: [f64; 2],
+        declared_prior: [f64; 2],
+    },
+    RejectedOther {
+        reason: FrictionNoInferenceReason,
+    },
+}
+
+/// How to map a prior-envelope refuse into the next complete-task action.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PriorEnvelopeRefuseContinuation {
+    /// Stop with CorrectRefusePriorEnvelopeNotCredible only.
+    StopAsCorrectRefuse,
+    /// Request a replan/reprobe without inventing belief or proving μ.
+    RequestReprobe,
+}
+
+pub fn probe_task_continuation_from_first_onset(
+    outcome: &FirstOnsetOutsidePriorOutcome,
+    mu_required: f64,
+) -> ProbeTaskContinuationDecision {
+    probe_task_continuation_from_first_onset_with_replan(
+        outcome,
+        mu_required,
+        PriorEnvelopeRefuseContinuation::StopAsCorrectRefuse,
+    )
+}
+
+/// Same as [`probe_task_continuation_from_first_onset`], with explicit replan
+/// policy when the declared prior envelope is refused as not credible.
+pub fn probe_task_continuation_from_first_onset_with_replan(
+    outcome: &FirstOnsetOutsidePriorOutcome,
+    mu_required: f64,
+    refuse_continuation: PriorEnvelopeRefuseContinuation,
+) -> ProbeTaskContinuationDecision {
+    match outcome {
+        FirstOnsetOutsidePriorOutcome::AcceptedByIntersect { interval }
+        | FirstOnsetOutsidePriorOutcome::AcceptedByReplacingPrior { interval, .. } => {
+            ProbeTaskContinuationDecision::ContinueProbeWithBelief {
+                interval: *interval,
+                proves_mu_required: friction_interval_proves_mu_required(*interval, mu_required),
+            }
+        }
+        FirstOnsetOutsidePriorOutcome::RefusedPriorEnvelope {
+            measurement_bounds,
+            declared_prior,
+        } => match refuse_continuation {
+            PriorEnvelopeRefuseContinuation::StopAsCorrectRefuse => {
+                ProbeTaskContinuationDecision::CorrectRefusePriorEnvelopeNotCredible
+            }
+            PriorEnvelopeRefuseContinuation::RequestReprobe => {
+                ProbeTaskContinuationDecision::RequestReprobeAfterPriorEnvelopeRefuse {
+                    measurement_bounds: *measurement_bounds,
+                    declared_prior: *declared_prior,
+                }
+            }
+        },
+        FirstOnsetOutsidePriorOutcome::Rejected {
+            reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
+        } => ProbeTaskContinuationDecision::CorrectRefuseIncompatiblePrior,
+        FirstOnsetOutsidePriorOutcome::Rejected { reason } => {
+            ProbeTaskContinuationDecision::RejectedOther {
+                reason: reason.clone(),
+            }
+        }
+    }
+}
+
+/// Feedback step after a typed RequestReprobe: incorporate a new measurement
+/// against the same declared prior and first-onset policy.
+///
+/// Does **not** invent μ, change Governor thresholds, authorize live writes, or
+/// turn a RequestReprobe into Continue without a new measurement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AfterReprobeFeedbackDecision {
+    ContinueProbeWithBelief {
+        interval: [f64; 2],
+        proves_mu_required: bool,
+        new_measurement_bounds: [f64; 2],
+        declared_prior: [f64; 2],
+    },
+    CorrectRefusePriorEnvelopeStillNotCredible {
+        new_measurement_bounds: [f64; 2],
+        declared_prior: [f64; 2],
+    },
+    CorrectRefuseIncompatiblePrior {
+        new_measurement_bounds: [f64; 2],
+        declared_prior: [f64; 2],
+    },
+    RejectedMissingPendingReprobe,
+    RejectedInvalidReprobeMeasurement {
+        reason: String,
+    },
+    RejectedOther {
+        reason: FrictionNoInferenceReason,
+    },
+}
+
+pub fn probe_task_continuation_after_reprobe_measurement(
+    pending: &ProbeTaskContinuationDecision,
+    new_measurement_bounds: [f64; 2],
+    policy: FirstOnsetOutsidePriorPolicy,
+    mu_required: f64,
+) -> AfterReprobeFeedbackDecision {
+    let ProbeTaskContinuationDecision::RequestReprobeAfterPriorEnvelopeRefuse {
+        declared_prior,
+        ..
+    } = pending
+    else {
+        return AfterReprobeFeedbackDecision::RejectedMissingPendingReprobe;
+    };
+    if !(new_measurement_bounds[0].is_finite()
+        && new_measurement_bounds[1].is_finite()
+        && new_measurement_bounds[0] <= new_measurement_bounds[1]
+        && new_measurement_bounds[0] >= 0.0)
+    {
+        return AfterReprobeFeedbackDecision::RejectedInvalidReprobeMeasurement {
+            reason: "non_finite_or_unordered_or_negative_reprobe_bounds".into(),
+        };
+    }
+    let outcome =
+        apply_first_onset_outside_prior(policy, *declared_prior, new_measurement_bounds);
+    match probe_task_continuation_from_first_onset(&outcome, mu_required) {
+        ProbeTaskContinuationDecision::ContinueProbeWithBelief {
+            interval,
+            proves_mu_required,
+        } => AfterReprobeFeedbackDecision::ContinueProbeWithBelief {
+            interval,
+            proves_mu_required,
+            new_measurement_bounds,
+            declared_prior: *declared_prior,
+        },
+        ProbeTaskContinuationDecision::CorrectRefusePriorEnvelopeNotCredible
+        | ProbeTaskContinuationDecision::RequestReprobeAfterPriorEnvelopeRefuse { .. } => {
+            // After a second refuse, stop — do not auto-loop RequestReprobe here.
+            AfterReprobeFeedbackDecision::CorrectRefusePriorEnvelopeStillNotCredible {
+                new_measurement_bounds,
+                declared_prior: *declared_prior,
+            }
+        }
+        ProbeTaskContinuationDecision::CorrectRefuseIncompatiblePrior => {
+            AfterReprobeFeedbackDecision::CorrectRefuseIncompatiblePrior {
+                new_measurement_bounds,
+                declared_prior: *declared_prior,
+            }
+        }
+        ProbeTaskContinuationDecision::RejectedOther { reason } => {
+            AfterReprobeFeedbackDecision::RejectedOther { reason }
+        }
+    }
+}
+
+/// Next complete-task action after after-reprobe feedback.
+///
+/// Uses belief coverage of `mu_required` — does **not** invent μ, lower Governor
+/// thresholds, authorize live writes, or treat Continue-without-proof as success.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum NextProbeActionDecision {
+    /// Belief proves required μ — offline allow a complete-task attempt.
+    ProceedCompleteTaskWithBelief {
+        interval: [f64; 2],
+        mu_required: f64,
+        declared_prior: [f64; 2],
+    },
+    /// Continue path exists but belief does not prove μ — hold / refuse escalate.
+    HoldRefuseInsufficientBeliefCoverage {
+        interval: [f64; 2],
+        mu_required: f64,
+        declared_prior: [f64; 2],
+    },
+    /// Feedback was a correct refuse — do not proceed.
+    HoldAfterCorrectRefuse {
+        reason: String,
+    },
+    /// Feedback rejected — do not proceed.
+    RejectedNotContinuing {
+        reason: String,
+    },
+    /// Negative control: claiming proceed while `proves_mu_required` is false.
+    RejectedBlindProceedWithoutBeliefProof,
+}
+
+/// Map after-reprobe feedback to the next offline complete-task action.
+pub fn next_probe_action_after_reprobe_feedback(
+    feedback: &AfterReprobeFeedbackDecision,
+    mu_required: f64,
+) -> NextProbeActionDecision {
+    if !(mu_required.is_finite() && mu_required > 0.0) {
+        return NextProbeActionDecision::RejectedNotContinuing {
+            reason: "non_positive_or_non_finite_mu_required".into(),
+        };
+    }
+    match feedback {
+        AfterReprobeFeedbackDecision::ContinueProbeWithBelief {
+            interval,
+            proves_mu_required,
+            declared_prior,
+            ..
+        } => {
+            if *proves_mu_required {
+                NextProbeActionDecision::ProceedCompleteTaskWithBelief {
+                    interval: *interval,
+                    mu_required,
+                    declared_prior: *declared_prior,
+                }
+            } else {
+                NextProbeActionDecision::HoldRefuseInsufficientBeliefCoverage {
+                    interval: *interval,
+                    mu_required,
+                    declared_prior: *declared_prior,
+                }
+            }
+        }
+        AfterReprobeFeedbackDecision::CorrectRefusePriorEnvelopeStillNotCredible { .. } => {
+            NextProbeActionDecision::HoldAfterCorrectRefuse {
+                reason: "prior_envelope_still_not_credible_after_reprobe".into(),
+            }
+        }
+        AfterReprobeFeedbackDecision::CorrectRefuseIncompatiblePrior { .. } => {
+            NextProbeActionDecision::HoldAfterCorrectRefuse {
+                reason: "incompatible_prior_after_reprobe".into(),
+            }
+        }
+        AfterReprobeFeedbackDecision::RejectedMissingPendingReprobe => {
+            NextProbeActionDecision::RejectedNotContinuing {
+                reason: "missing_pending_reprobe".into(),
+            }
+        }
+        AfterReprobeFeedbackDecision::RejectedInvalidReprobeMeasurement { reason } => {
+            NextProbeActionDecision::RejectedNotContinuing {
+                reason: format!("invalid_reprobe_measurement:{reason}"),
+            }
+        }
+        AfterReprobeFeedbackDecision::RejectedOther { reason } => {
+            NextProbeActionDecision::RejectedNotContinuing {
+                reason: format!("other:{reason:?}"),
+            }
+        }
+    }
+}
+
+/// Negative control: claim proceed after Continue even when belief does not prove μ.
+pub fn blind_proceed_ignoring_belief_proof(
+    feedback: &AfterReprobeFeedbackDecision,
+) -> NextProbeActionDecision {
+    match feedback {
+        AfterReprobeFeedbackDecision::ContinueProbeWithBelief {
+            proves_mu_required, ..
+        } if !*proves_mu_required => {
+            NextProbeActionDecision::RejectedBlindProceedWithoutBeliefProof
+        }
+        other => next_probe_action_after_reprobe_feedback(other, 0.3),
     }
 }
 

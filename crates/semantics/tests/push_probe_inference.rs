@@ -1198,6 +1198,185 @@ fn first_onset_outside_prior_transfers_to_heldout_numeric_family() {
 }
 
 #[test]
+fn probe_task_continuation_diverges_on_21008_retain_vs_narrow() {
+    use realityos_semantics::push_probe::probe_task_continuation_from_first_onset;
+    use realityos_semantics::push_probe::ProbeTaskContinuationDecision;
+
+    // Sealed 21008 numbers — complete-task continuation under competing policies.
+    let prior = [0.05, 0.75];
+    let bounds = [0.8410610796690302, 0.9046710475934353];
+    let mu_required = 0.3;
+
+    let retain = apply_first_onset_outside_prior(
+        FirstOnsetOutsidePriorPolicy::RetainDeclaredPrior,
+        prior,
+        bounds,
+    );
+    let retain_task = probe_task_continuation_from_first_onset(&retain, mu_required);
+    assert_eq!(
+        retain_task,
+        ProbeTaskContinuationDecision::CorrectRefuseIncompatiblePrior
+    );
+
+    let narrow = apply_first_onset_outside_prior(
+        FirstOnsetOutsidePriorPolicy::NarrowToMeasurementOnEntirelyAbovePrior,
+        prior,
+        bounds,
+    );
+    let narrow_task = probe_task_continuation_from_first_onset(&narrow, mu_required);
+    match narrow_task {
+        ProbeTaskContinuationDecision::ContinueProbeWithBelief {
+            interval,
+            proves_mu_required,
+        } => {
+            assert_eq!(interval, bounds);
+            assert!(proves_mu_required);
+        }
+        other => panic!("narrow must continue probe with proving belief, got {other:?}"),
+    }
+}
+
+#[test]
+fn matched_trials_miss_margin_gate_vs_narrow_on_21008_and_heldout() {
+    use realityos_semantics::push_probe::probe_task_continuation_from_first_onset;
+    use realityos_semantics::push_probe::ProbeTaskContinuationDecision;
+
+    // Competing belief interventions; Governor thresholds untouched; offline only.
+    let mu_required = 0.3;
+    let max_relative_miss = 0.05;
+
+    // 21008 sealed: relative miss ≈ 0.121 > 0.05 → gated refuse; bare Narrow continues.
+    let prior_21008 = [0.05, 0.75];
+    let bounds_21008 = [0.8410610796690302, 0.9046710475934353];
+    let narrow_21008 = apply_first_onset_outside_prior(
+        FirstOnsetOutsidePriorPolicy::NarrowToMeasurementOnEntirelyAbovePrior,
+        prior_21008,
+        bounds_21008,
+    );
+    let gated_21008 = apply_first_onset_outside_prior(
+        FirstOnsetOutsidePriorPolicy::NarrowWhenRelativeMissAtMost {
+            max_relative_miss,
+        },
+        prior_21008,
+        bounds_21008,
+    );
+    assert!(matches!(
+        probe_task_continuation_from_first_onset(&narrow_21008, mu_required),
+        ProbeTaskContinuationDecision::ContinueProbeWithBelief {
+            proves_mu_required: true,
+            ..
+        }
+    ));
+    assert_eq!(
+        probe_task_continuation_from_first_onset(&gated_21008, mu_required),
+        ProbeTaskContinuationDecision::CorrectRefusePriorEnvelopeNotCredible
+    );
+
+    // Held-out small miss: relative ≈ 0.0125 ≤ 0.05 → both continue with belief.
+    let prior_small = [0.05, 0.8];
+    let bounds_small = [0.81, 0.85];
+    let narrow_small = apply_first_onset_outside_prior(
+        FirstOnsetOutsidePriorPolicy::NarrowToMeasurementOnEntirelyAbovePrior,
+        prior_small,
+        bounds_small,
+    );
+    let gated_small = apply_first_onset_outside_prior(
+        FirstOnsetOutsidePriorPolicy::NarrowWhenRelativeMissAtMost {
+            max_relative_miss,
+        },
+        prior_small,
+        bounds_small,
+    );
+    for outcome in [&narrow_small, &gated_small] {
+        match probe_task_continuation_from_first_onset(outcome, mu_required) {
+            ProbeTaskContinuationDecision::ContinueProbeWithBelief {
+                interval,
+                proves_mu_required,
+            } => {
+                assert_eq!(interval, bounds_small);
+                assert!(proves_mu_required);
+            }
+            other => panic!("small-miss must continue with belief, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn matched_trials_reprobe_replan_vs_stop_refuse_on_21008_and_heldout() {
+    use realityos_semantics::push_probe::{
+        probe_task_continuation_from_first_onset_with_replan, PriorEnvelopeRefuseContinuation,
+        ProbeTaskContinuationDecision,
+    };
+
+    // Competing complete-task interventions after a gated prior-envelope refuse.
+    // Does not change Governor thresholds or invent μ / prove μ_required.
+    let mu_required = 0.3;
+    let prior_21008 = [0.05, 0.75];
+    let bounds_21008 = [0.8410610796690302, 0.9046710475934353];
+    let gated_21008 = apply_first_onset_outside_prior(
+        FirstOnsetOutsidePriorPolicy::NarrowWhenRelativeMissAtMost {
+            max_relative_miss: 0.05,
+        },
+        prior_21008,
+        bounds_21008,
+    );
+    let stop = probe_task_continuation_from_first_onset_with_replan(
+        &gated_21008,
+        mu_required,
+        PriorEnvelopeRefuseContinuation::StopAsCorrectRefuse,
+    );
+    let replan = probe_task_continuation_from_first_onset_with_replan(
+        &gated_21008,
+        mu_required,
+        PriorEnvelopeRefuseContinuation::RequestReprobe,
+    );
+    assert_eq!(
+        stop,
+        ProbeTaskContinuationDecision::CorrectRefusePriorEnvelopeNotCredible
+    );
+    match replan {
+        ProbeTaskContinuationDecision::RequestReprobeAfterPriorEnvelopeRefuse {
+            measurement_bounds,
+            declared_prior,
+        } => {
+            assert_eq!(measurement_bounds, bounds_21008);
+            assert_eq!(declared_prior, prior_21008);
+        }
+        other => panic!("21008 gated refuse+replan must request reprobe, got {other:?}"),
+    }
+    // Replan must not silently become a continue-with-belief (unsafe acceptance).
+    assert!(!matches!(
+        replan,
+        ProbeTaskContinuationDecision::ContinueProbeWithBelief { .. }
+    ));
+
+    // Held-out small miss: gated Narrow continues; replan policy unused on continue path.
+    let prior_small = [0.05, 0.8];
+    let bounds_small = [0.81, 0.85];
+    let gated_small = apply_first_onset_outside_prior(
+        FirstOnsetOutsidePriorPolicy::NarrowWhenRelativeMissAtMost {
+            max_relative_miss: 0.05,
+        },
+        prior_small,
+        bounds_small,
+    );
+    match probe_task_continuation_from_first_onset_with_replan(
+        &gated_small,
+        mu_required,
+        PriorEnvelopeRefuseContinuation::RequestReprobe,
+    ) {
+        ProbeTaskContinuationDecision::ContinueProbeWithBelief {
+            interval,
+            proves_mu_required,
+        } => {
+            assert_eq!(interval, bounds_small);
+            assert!(proves_mu_required);
+        }
+        other => panic!("small-miss must continue with belief even under replan policy, got {other:?}"),
+    }
+}
+
+#[test]
 fn prior_envelope_miss_margin_quantifies_21008_and_heldout() {
     let prior = [0.05, 0.8];
     let bounds = [0.8410610796690302, 0.9046710475934353];
@@ -1311,4 +1490,181 @@ fn legacy_parameter_belief_defaults_evidence_to_empty() {
     let restored: realityos_semantics::physical_belief::ParameterBelief =
         serde_json::from_value(stored).expect("old beliefs remain readable");
     assert!(restored.evidence.is_empty());
+}
+
+#[test]
+fn matched_trials_after_reprobe_feedback_on_21008_and_heldout() {
+    use realityos_semantics::push_probe::{
+        probe_task_continuation_after_reprobe_measurement,
+        probe_task_continuation_from_first_onset_with_replan, AfterReprobeFeedbackDecision,
+        FirstOnsetOutsidePriorPolicy, PriorEnvelopeRefuseContinuation,
+        ProbeTaskContinuationDecision,
+    };
+
+    let mu_required = 0.3;
+    let policy = FirstOnsetOutsidePriorPolicy::NarrowWhenRelativeMissAtMost {
+        max_relative_miss: 0.05,
+    };
+    let prior_21008 = [0.05, 0.75];
+    let bounds_21008 = [0.8410610796690302, 0.9046710475934353];
+    let gated_21008 = apply_first_onset_outside_prior(policy, prior_21008, bounds_21008);
+    let pending = probe_task_continuation_from_first_onset_with_replan(
+        &gated_21008,
+        mu_required,
+        PriorEnvelopeRefuseContinuation::RequestReprobe,
+    );
+    assert!(matches!(
+        pending,
+        ProbeTaskContinuationDecision::RequestReprobeAfterPriorEnvelopeRefuse { .. }
+    ));
+
+    // Without pending RequestReprobe: must not continue.
+    let stop_only = ProbeTaskContinuationDecision::CorrectRefusePriorEnvelopeNotCredible;
+    assert_eq!(
+        probe_task_continuation_after_reprobe_measurement(
+            &stop_only,
+            [0.2, 0.4],
+            policy,
+            mu_required,
+        ),
+        AfterReprobeFeedbackDecision::RejectedMissingPendingReprobe
+    );
+
+    // Second probe still entirely above prior with large miss → refuse again (not Continue).
+    let still_miss = probe_task_continuation_after_reprobe_measurement(
+        &pending,
+        [0.86, 0.92],
+        policy,
+        mu_required,
+    );
+    assert!(matches!(
+        still_miss,
+        AfterReprobeFeedbackDecision::CorrectRefusePriorEnvelopeStillNotCredible { .. }
+    ));
+    assert!(!matches!(
+        still_miss,
+        AfterReprobeFeedbackDecision::ContinueProbeWithBelief { .. }
+    ));
+
+    // Second probe intersects prior → Continue with belief (offline feedback success).
+    let recovered = probe_task_continuation_after_reprobe_measurement(
+        &pending,
+        [0.4, 0.7],
+        policy,
+        mu_required,
+    );
+    match recovered {
+        AfterReprobeFeedbackDecision::ContinueProbeWithBelief {
+            interval,
+            proves_mu_required,
+            declared_prior,
+            ..
+        } => {
+            assert_eq!(declared_prior, prior_21008);
+            assert!(proves_mu_required);
+            assert!(interval[0] <= interval[1]);
+        }
+        other => panic!("overlapping reprobe should continue with belief, got {other:?}"),
+    }
+
+    // Held-out: invalid bounds rejected; no unsafe accept from garbage measurement.
+    assert!(matches!(
+        probe_task_continuation_after_reprobe_measurement(
+            &pending,
+            [f64::NAN, 0.5],
+            policy,
+            mu_required,
+        ),
+        AfterReprobeFeedbackDecision::RejectedInvalidReprobeMeasurement { .. }
+    ));
+}
+
+#[test]
+fn matched_trials_next_action_from_belief_after_reprobe_on_21008_and_heldout() {
+    use realityos_semantics::push_probe::{
+        blind_proceed_ignoring_belief_proof, next_probe_action_after_reprobe_feedback,
+        probe_task_continuation_after_reprobe_measurement,
+        probe_task_continuation_from_first_onset_with_replan, AfterReprobeFeedbackDecision,
+        FirstOnsetOutsidePriorPolicy, NextProbeActionDecision,
+        PriorEnvelopeRefuseContinuation, ProbeTaskContinuationDecision,
+    };
+
+    let mu_required = 0.3;
+    let policy = FirstOnsetOutsidePriorPolicy::NarrowWhenRelativeMissAtMost {
+        max_relative_miss: 0.05,
+    };
+    let prior_21008 = [0.05, 0.75];
+    let bounds_21008 = [0.8410610796690302, 0.9046710475934353];
+    let gated_21008 = apply_first_onset_outside_prior(policy, prior_21008, bounds_21008);
+    let pending = probe_task_continuation_from_first_onset_with_replan(
+        &gated_21008,
+        mu_required,
+        PriorEnvelopeRefuseContinuation::RequestReprobe,
+    );
+    assert!(matches!(
+        pending,
+        ProbeTaskContinuationDecision::RequestReprobeAfterPriorEnvelopeRefuse { .. }
+    ));
+
+    // Recovered overlapping reprobe → Continue with belief that proves μ → proceed.
+    let recovered = probe_task_continuation_after_reprobe_measurement(
+        &pending,
+        [0.4, 0.7],
+        policy,
+        mu_required,
+    );
+    let proceed = next_probe_action_after_reprobe_feedback(&recovered, mu_required);
+    assert!(matches!(
+        proceed,
+        NextProbeActionDecision::ProceedCompleteTaskWithBelief { .. }
+    ));
+
+    // Still-miss after reprobe → hold after correct refuse (not proceed).
+    let still_miss = probe_task_continuation_after_reprobe_measurement(
+        &pending,
+        [0.86, 0.92],
+        policy,
+        mu_required,
+    );
+    let hold = next_probe_action_after_reprobe_feedback(&still_miss, mu_required);
+    assert!(matches!(
+        hold,
+        NextProbeActionDecision::HoldAfterCorrectRefuse { .. }
+    ));
+    assert!(!matches!(
+        hold,
+        NextProbeActionDecision::ProceedCompleteTaskWithBelief { .. }
+    ));
+
+    // Negative control: Continue without proof must not blind-proceed.
+    let continue_unproven = AfterReprobeFeedbackDecision::ContinueProbeWithBelief {
+        interval: [0.5, 0.6],
+        proves_mu_required: false,
+        new_measurement_bounds: [0.5, 0.6],
+        declared_prior: prior_21008,
+    };
+    assert_eq!(
+        next_probe_action_after_reprobe_feedback(&continue_unproven, mu_required),
+        NextProbeActionDecision::HoldRefuseInsufficientBeliefCoverage {
+            interval: [0.5, 0.6],
+            mu_required,
+            declared_prior: prior_21008,
+        }
+    );
+    assert_eq!(
+        blind_proceed_ignoring_belief_proof(&continue_unproven),
+        NextProbeActionDecision::RejectedBlindProceedWithoutBeliefProof
+    );
+
+    // Held-out: invalid measurement → rejected not continuing (no unsafe accept).
+    let invalid = probe_task_continuation_after_reprobe_measurement(
+        &pending,
+        [f64::NAN, 0.5],
+        policy,
+        mu_required,
+    );
+    assert!(matches!(
+        next_probe_action_after_reprobe_feedback(&invalid, mu_required),
+        NextProbeActionDecision::RejectedNotContinuing { .. }
+    ));
 }
