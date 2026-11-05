@@ -92,9 +92,11 @@ class ProbeSidecarVerificationPortfolioTests(unittest.TestCase):
         row = verify_evidence_dir(path)
         self.assertEqual(row["verification_status"], "PASS_RECORDED_AT_SEAL")
         self.assertEqual(row["result_recorded_sidecar_status"], "PASS")
+        # Sealed portfolio + 21008 FIRST_ONSET_POLICY_COMPARISON: first onset
+        # outside prior (not PreferHigherLoad successive-incompatibility).
         self.assertEqual(
             row["failure_class_after_verification"],
-            "expected_success_blocked_by_successive_prior_incompatibility",
+            "expected_success_blocked_by_first_onset_outside_prior",
         )
         self.assertFalse(row["governor_weakened"])
 
