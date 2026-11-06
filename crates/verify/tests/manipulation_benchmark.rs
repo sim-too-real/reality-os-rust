@@ -4231,21 +4231,13 @@ fn historical_grasp_failure_reaches_verified_hold_within_frozen_limits() {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let trial_dir = repo_root
         .join("docs/superpowers/evidence/manipulation-reliability-generality-8f090bc/trials");
+    // Under tool-object friction mapping, only these seeds still upgrade to
+    // verified hold within the frozen 5 mm follow residual. 6_21 / 26_41 tip
+    // over the gate; 50_65 diverges — see sibling frozen honesty tests.
+    // Do not lower the 5 mm gate or disable friction pairing to enlarge this set.
     let fixtures = [
         (
-            "v5_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_6_21.json",
-            false,
-        ),
-        (
-            "v5_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_26_41.json",
-            false,
-        ),
-        (
             "v5_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_30_45.json",
-            false,
-        ),
-        (
-            "v5_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_50_65.json",
             false,
         ),
         (
@@ -4321,8 +4313,9 @@ fn historical_grasp_failure_reaches_verified_hold_within_frozen_limits() {
         assert_eq!(
             episode.hold_verified,
             Some(true),
-            "{file}: {:?}",
-            episode.grasp_verifier_evidence
+            "{file}: evidence={:?} follow_residual={:?}",
+            episode.grasp_verifier_evidence,
+            episode.grasp_object_follow_residual_m
         );
         assert_eq!(episode.outcome, TrialOutcome::Success, "{file}");
         let ee_lift = episode
@@ -4349,6 +4342,153 @@ fn historical_grasp_failure_reaches_verified_hold_within_frozen_limits() {
             "{file}"
         );
     }
+}
+
+#[test]
+fn historical_grasp_follow_residual_refusals_under_friction_mapping() {
+    // Seeds that historically failed on lift (with residual under 5 mm) and used
+    // to upgrade to Success before tool-object friction pairing. With pairing
+    // they refuse hold just above the frozen 5 mm gate. Keep the gate.
+    let _mujoco_guard = lock_mujoco_test();
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let trial_dir = repo_root
+        .join("docs/superpowers/evidence/manipulation-reliability-generality-8f090bc/trials");
+    let fixtures = [
+        "v5_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_6_21.json",
+        "v5_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_26_41.json",
+    ];
+    let bundle = grasp_fixture_bundle();
+    for file in fixtures {
+        let record: BenchmarkTrialRecord = serde_json::from_slice(
+            &std::fs::read(trial_dir.join(file)).expect("frozen historical grasp trial exists"),
+        )
+        .expect("historical trial record parses");
+        let legacy = record
+            .trial
+            .expect("historical record contains its resolved input");
+        let historical_episode = record
+            .episode
+            .as_ref()
+            .expect("frozen historical trial has its original outcome");
+        assert_eq!(legacy.expectation, TrialExpectation::ExpectedSuccess, "{file}");
+        assert_eq!(
+            historical_episode.outcome,
+            TrialOutcome::ActionFailed,
+            "{file}"
+        );
+        assert_eq!(
+            historical_episode.failure_cause,
+            Some(FailureCause::HoldNotVerified),
+            "{file}"
+        );
+        assert!(
+            historical_episode
+                .grasp_object_follow_residual_m
+                .is_some_and(|residual| residual <= 0.005),
+            "{file}: archived residual was under the 5 mm gate: {:?}",
+            historical_episode.grasp_object_follow_residual_m
+        );
+
+        let trial = upgrade_trial_for_current_execution(legacy)
+            .expect("historical scenario upgrades without resampling");
+        let episode = run_test_benchmark_trial(&bundle, &trial, simulation_admission(120.0))
+            .unwrap_or_else(|error| panic!("current runner executes {file}: {error}"));
+
+        assert_eq!(episode.unauthorized_writes, 0, "{file}");
+        assert_eq!(episode.acquisition_verified, Some(true), "{file}");
+        assert_eq!(
+            episode.hold_verified,
+            Some(false),
+            "{file}: evidence={:?} follow_residual={:?}",
+            episode.grasp_verifier_evidence,
+            episode.grasp_object_follow_residual_m
+        );
+        assert_eq!(episode.outcome, TrialOutcome::ActionFailed, "{file}");
+        assert_eq!(
+            episode.failure_cause,
+            Some(FailureCause::HoldNotVerified),
+            "{file}"
+        );
+        assert!(
+            episode
+                .grasp_verifier_evidence
+                .iter()
+                .any(|item| item == "bounded_vertical_lift_verified"),
+            "{file}: {:?}",
+            episode.grasp_verifier_evidence
+        );
+        assert!(
+            episode
+                .grasp_verifier_evidence
+                .iter()
+                .any(|item| item == "object_follow_residual_exceeds_five_mm"),
+            "{file}: {:?}",
+            episode.grasp_verifier_evidence
+        );
+        let residual = episode
+            .grasp_object_follow_residual_m
+            .expect("hold verifier measures follow residual");
+        assert!(
+            residual > 0.005,
+            "{file}: residual must remain above the frozen 5 mm gate: {residual}"
+        );
+        assert!(
+            residual < 0.007,
+            "{file}: residual tip-over should stay near the gate (observed ~5.2–5.5 mm): {residual}"
+        );
+    }
+}
+
+#[test]
+fn historical_grasp_50_65_runtime_divergence_under_friction_mapping() {
+    // Historically HoldNotVerified; under friction mapping the current runner
+    // surfaces RuntimeDivergence instead of a verified hold. Freeze that honesty.
+    let _mujoco_guard = lock_mujoco_test();
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let trial_path = repo_root.join(
+        "docs/superpowers/evidence/manipulation-reliability-generality-8f090bc/trials/v5_grasp_fixture_arm_gripper_lift_pinch_grasp_lift_50_65.json",
+    );
+    let record: BenchmarkTrialRecord = serde_json::from_slice(
+        &std::fs::read(&trial_path).expect("frozen historical grasp trial exists"),
+    )
+    .expect("historical trial record parses");
+    let legacy = record
+        .trial
+        .expect("historical record contains its resolved input");
+    let historical_episode = record
+        .episode
+        .as_ref()
+        .expect("frozen historical trial has its original outcome");
+    assert_eq!(legacy.expectation, TrialExpectation::ExpectedSuccess);
+    assert_eq!(historical_episode.outcome, TrialOutcome::ActionFailed);
+    assert_eq!(
+        historical_episode.failure_cause,
+        Some(FailureCause::HoldNotVerified)
+    );
+
+    let trial = upgrade_trial_for_current_execution(legacy)
+        .expect("historical scenario upgrades without resampling");
+    let episode = run_test_benchmark_trial(
+        &grasp_fixture_bundle(),
+        &trial,
+        simulation_admission(120.0),
+    )
+    .unwrap_or_else(|error| panic!("current runner executes 50_65: {error}"));
+
+    assert_eq!(episode.unauthorized_writes, 0);
+    assert_eq!(episode.outcome, TrialOutcome::UnexpectedRefusal);
+    assert_eq!(
+        episode.failure_cause,
+        Some(FailureCause::RuntimeDivergence)
+    );
+    assert_eq!(episode.hold_verified, None);
+    assert!(
+        episode
+            .actions
+            .iter()
+            .any(|action| action.runtime_divergence),
+        "friction-era 50_65 must expose runtime divergence"
+    );
 }
 
 #[test]
