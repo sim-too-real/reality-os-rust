@@ -4370,7 +4370,11 @@ fn historical_grasp_follow_residual_refusals_under_friction_mapping() {
             .episode
             .as_ref()
             .expect("frozen historical trial has its original outcome");
-        assert_eq!(legacy.expectation, TrialExpectation::ExpectedSuccess, "{file}");
+        assert_eq!(
+            legacy.expectation,
+            TrialExpectation::ExpectedSuccess,
+            "{file}"
+        );
         assert_eq!(
             historical_episode.outcome,
             TrialOutcome::ActionFailed,
@@ -4468,19 +4472,13 @@ fn historical_grasp_50_65_runtime_divergence_under_friction_mapping() {
 
     let trial = upgrade_trial_for_current_execution(legacy)
         .expect("historical scenario upgrades without resampling");
-    let episode = run_test_benchmark_trial(
-        &grasp_fixture_bundle(),
-        &trial,
-        simulation_admission(120.0),
-    )
-    .unwrap_or_else(|error| panic!("current runner executes 50_65: {error}"));
+    let episode =
+        run_test_benchmark_trial(&grasp_fixture_bundle(), &trial, simulation_admission(120.0))
+            .unwrap_or_else(|error| panic!("current runner executes 50_65: {error}"));
 
     assert_eq!(episode.unauthorized_writes, 0);
     assert_eq!(episode.outcome, TrialOutcome::UnexpectedRefusal);
-    assert_eq!(
-        episode.failure_cause,
-        Some(FailureCause::RuntimeDivergence)
-    );
+    assert_eq!(episode.failure_cause, Some(FailureCause::RuntimeDivergence));
     assert_eq!(episode.hold_verified, None);
     assert!(
         episode
