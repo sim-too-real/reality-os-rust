@@ -6148,6 +6148,82 @@ fn empty_probe_measurement_sidecar_reports_absent_records() {
     );
 }
 
+/// When a probe-trace FREEZE sets
+/// `acceptance.replay_initial_observation_evidence_required`, the replay episode
+/// must bind to preflight via `verify_matches_episode` (exact observation bytes,
+/// digest, and simulator time). Fail closed if the freeze requires the bind but
+/// preflight is absent.
+fn enforce_freeze_replay_initial_observation_evidence(
+    freeze: &Value,
+    preflight: Option<&FirstActionPreflightV1>,
+    episode: &realityos_verify::manipulation_benchmark::BenchmarkEpisode,
+) {
+    let required = freeze["acceptance"]["replay_initial_observation_evidence_required"]
+        .as_bool()
+        .unwrap_or(false);
+    if !required {
+        return;
+    }
+    let preflight = preflight.expect(
+        "FREEZE acceptance.replay_initial_observation_evidence_required requires PREFLIGHT",
+    );
+    preflight
+        .verify_matches_episode(episode)
+        .expect("FREEZE requires replay initial-observation evidence to match preflight");
+}
+
+#[test]
+fn freeze_acceptance_requires_replay_initial_observation_evidence_offline() {
+    let evidence_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/superpowers/evidence/grasp-lift-margin-20261102")
+        .join("fresh-out-of-cohort-probe-replay-v1-23020-20261102");
+    let freeze: Value = serde_json::from_slice(
+        &std::fs::read(evidence_dir.join("FREEZE.json")).expect("frozen protocol"),
+    )
+    .expect("freeze JSON");
+    assert_eq!(
+        freeze["acceptance"]["replay_initial_observation_evidence_required"],
+        true
+    );
+    let preflight: FirstActionPreflightV1 = serde_json::from_slice(
+        &std::fs::read(evidence_dir.join("PREFLIGHT.json")).expect("frozen preflight"),
+    )
+    .expect("preflight JSON");
+    let result: Value = serde_json::from_slice(
+        &std::fs::read(evidence_dir.join("RESULT.json")).expect("frozen replay result"),
+    )
+    .expect("replay result JSON");
+    let episode: realityos_verify::manipulation_benchmark::BenchmarkEpisode =
+        serde_json::from_value(result["complete_episode"].clone()).expect("frozen episode");
+
+    enforce_freeze_replay_initial_observation_evidence(&freeze, Some(&preflight), &episode);
+
+    let mut stripped = result["complete_episode"].clone();
+    stripped
+        .as_object_mut()
+        .expect("episode object")
+        .remove("initial_observation_evidence");
+    let stripped_episode: realityos_verify::manipulation_benchmark::BenchmarkEpisode =
+        serde_json::from_value(stripped).expect("stripped episode");
+    assert_eq!(
+        preflight.verify_matches_episode(&stripped_episode),
+        Err("replay is missing its initial-observation evidence".into()),
+        "FREEZE-required observation bind must fail closed when replay evidence is stripped"
+    );
+
+    let mut no_requirement = freeze.clone();
+    no_requirement["acceptance"]["replay_initial_observation_evidence_required"] =
+        serde_json::json!(false);
+    // Without the FREEZE flag, the ignored probe-trace harness does not assert
+    // the observation bind (legacy packs). Stripped evidence is then allowed by
+    // this gate alone.
+    enforce_freeze_replay_initial_observation_evidence(
+        &no_requirement,
+        Some(&preflight),
+        &stripped_episode,
+    );
+}
+
 #[test]
 fn first_action_preflight_verifier_rejects_legacy_and_binds_replay_observation() {
     let evidence_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -6882,6 +6958,11 @@ fn probe_pose_trace_replays_frozen_v4_ur5e_trial() {
             "runtime's first authorized action must match preflight"
         );
     }
+    enforce_freeze_replay_initial_observation_evidence(
+        &freeze,
+        first_action_preflight.as_ref(),
+        &episode,
+    );
     let result = serde_json::json!({
         "experiment_id": freeze["experiment_id"],
         "classification": "SIMULATION_ONLY; PER_STEP_CONTACT_TRACE_CONTRACT",
