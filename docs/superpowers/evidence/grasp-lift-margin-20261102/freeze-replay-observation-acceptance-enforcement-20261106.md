@@ -26,3 +26,9 @@ No frozen RESULT was rewritten. No MuJoCo trial was re-run.
 cargo test -p realityos-verify --test manipulation_benchmark freeze_acceptance_requires_replay_initial_observation_evidence_offline -- --exact --nocapture
 cargo test -p realityos-verify --test manipulation_benchmark first_action_preflight_verifier_rejects_legacy_and_binds_replay_observation -- --exact --nocapture
 ```
+
+## CI
+
+The default `authority` `verify` job (non-MuJoCo) runs both offline commands above
+on every push/PR via `.github/workflows/authority.yml`. Full MuJoCo
+`manipulation_benchmark` cases remain in `verify-mujoco` only.

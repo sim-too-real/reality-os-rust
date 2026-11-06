@@ -52,8 +52,10 @@ jobs:
           print("tier2 smoke ok", rec.get("n_instances"), rec.get("verdict"))
           PY
       - name: test
-        # The manipulation benchmark needs MuJoCo and pinned Menagerie models.
-        # verify-mujoco runs that file. This job keeps the tests that do not.
+        # Full manipulation_benchmark needs MuJoCo and pinned Menagerie models;
+        # verify-mujoco runs those. This job keeps non-MuJoCo tests, including
+        # the offline FREEZE replay-observation acceptance regressions that only
+        # read frozen JSON (no simulator, no frozen trial re-run).
         run: |
           set -euo pipefail
           skips=(
@@ -70,6 +72,12 @@ jobs:
             --test physical_experiment_decision \
             --test production_mujoco_reasoner \
             -- "${skips[@]}"
+          cargo test -p realityos-verify --test manipulation_benchmark \
+            freeze_acceptance_requires_replay_initial_observation_evidence_offline \
+            -- --exact
+          cargo test -p realityos-verify --test manipulation_benchmark \
+            first_action_preflight_verifier_rejects_legacy_and_binds_replay_observation \
+            -- --exact
 
   verify-mujoco:
     runs-on: ubuntu-latest
