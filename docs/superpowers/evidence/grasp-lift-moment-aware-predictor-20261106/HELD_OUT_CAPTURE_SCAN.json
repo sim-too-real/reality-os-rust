@@ -1,0 +1,18 @@
+{
+  "schema": "realityos.grasp_lift_moment_aware_predictor.held_out_capture_scan/v1",
+  "contract_freeze_id": "grasp-lift-moment-aware-held-out-capture-contract-2026-11-07-v1",
+  "result_json_with_contact_wrenches_outside_exclude": [],
+  "independent_count": 0,
+  "min_independent_trials_required": 2,
+  "development_controls_excluded": [
+    "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21006:21",
+    "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25"
+  ],
+  "status": "blocked_missing_independent_contact_wrench_trials",
+  "opened_held_out_validation": false,
+  "authority": {
+    "admission_status": "NOT_ADMITTED",
+    "authorizes_hardware": false,
+    "authorizes_full_lift_replay": false
+  }
+}

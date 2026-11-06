@@ -1,0 +1,33 @@
+{
+  "schema": "realityos.grasp_lift_moment_aware_predictor.held_out_capture_contract/v1",
+  "freeze_id": "grasp-lift-moment-aware-held-out-capture-contract-2026-11-07-v1",
+  "purpose": "Name the minimum independent evidence required to open held-out validation of the post-close moment-aware hold predictor. Does not invent trials.",
+  "development_controls_excluded": [
+    "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21006:21",
+    "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25"
+  ],
+  "required_per_independent_trial": [
+    "RESULT.json under docs/superpowers/evidence with contact_wrenches on post_close grasp_contact_audits",
+    "object mass / weight consistent with the frozen predictor inputs",
+    "bilateral contact normals and force vectors (including vertical share)",
+    "actuator utilization or raw actuator force at post_close",
+    "trial id distinct from the two development controls",
+    "no full-lift replay authorization implied by capture alone"
+  ],
+  "acceptance_to_open_held_out": {
+    "min_independent_trials": 2,
+    "must_not_reuse_development_controls": true,
+    "predictor_must_still_refuse_or_accept_per_observed_first_lift": true
+  },
+  "search": {
+    "root": "docs/superpowers/evidence",
+    "exclude_paths": [
+      "docs/superpowers/evidence/grasp-lift-wrench-trace-20261103"
+    ]
+  },
+  "authority": {
+    "admission_status": "NOT_ADMITTED",
+    "authorizes_hardware": false,
+    "authorizes_full_lift_replay": false
+  }
+}
