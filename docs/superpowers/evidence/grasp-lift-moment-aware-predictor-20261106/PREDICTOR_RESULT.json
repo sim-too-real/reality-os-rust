@@ -1,0 +1,84 @@
+{
+  "schema": "realityos.grasp_lift_moment_aware_post_close_predictor/v1",
+  "classification": "OFFLINE_SIMULATION_PREDICTOR; TWO_FROZEN_DEVELOPMENT_CONTROLS; NOT_ADMITTED",
+  "freeze_sha256": "30A1CC816BA4BA65358152776C04B1EC71809C8DDBA0650BDA73D9A1B7FBD3B9",
+  "result_sha256": "6A920F0544ABAFBE26D366D0CB5D1F228F03D7C70FABB45872A0AEBFE55B00C9",
+  "model_xml_sha256": "96638449987EB8CE6D900063F2FCF279D792C2C60F72F44282CF150C61D57904",
+  "source_trace": "docs/superpowers/evidence/grasp-lift-wrench-trace-20261103",
+  "method": "Post-close only: refuse if scalar \u03bc\u00d7normal < weight, or if actuator utilization >= 0.98 while |Fz|/\u03a3|F| < 0.15 (saturated horizontal pinch).",
+  "capability": {
+    "scalar_false_accept_21006": true,
+    "predictor_refuses_21006": true,
+    "predictor_refuses_21010": true,
+    "catches_scalar_false_accept": true
+  },
+  "trials": [
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25",
+      "observed_outcome": "unexpected_refusal",
+      "object_weight_n": 1.4191443528878773,
+      "prediction": {
+        "decision": "refuse_lift",
+        "refuse_reasons": [
+          "scalar_proxy_below_weight"
+        ],
+        "scalar_capacity_proxy_n": 0.5945239028039028,
+        "scalar_proxy_to_weight_ratio": 0.4189312395135003,
+        "post_close_vertical_force_n": 0.10616502147715445,
+        "post_close_force_vertical_fraction": 0.05453288976732168,
+        "post_close_net_moment_norm_nm": 0.01857483771005443,
+        "actuator_peak_n": 1.059593027205468,
+        "actuator_utilization": 0.5433810395925478,
+        "contact_wrench_count": 2,
+        "thresholds": {
+          "actuator_cap_n": 1.95,
+          "vertical_fraction_min": 0.15,
+          "actuator_util_refuse": 0.98
+        }
+      },
+      "scalar_proxy_would_accept": false,
+      "first_lift_vertical_force_n": 0.5617318451654894,
+      "first_lift_supports_weight": false
+    },
+    {
+      "trial_id": "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21006:21",
+      "observed_outcome": "action_failed",
+      "object_weight_n": 2.1919716676624335,
+      "prediction": {
+        "decision": "refuse_lift",
+        "refuse_reasons": [
+          "saturated_horizontal_pinch_negligible_vertical_share"
+        ],
+        "scalar_capacity_proxy_n": 2.6275748468201185,
+        "scalar_proxy_to_weight_ratio": 1.1987266466916617,
+        "post_close_vertical_force_n": -0.0004051744164383015,
+        "post_close_force_vertical_fraction": 0.00010341992536075545,
+        "post_close_net_moment_norm_nm": 0.017340172873914494,
+        "actuator_peak_n": 1.95,
+        "actuator_utilization": 1.0,
+        "contact_wrench_count": 4,
+        "thresholds": {
+          "actuator_cap_n": 1.95,
+          "vertical_fraction_min": 0.15,
+          "actuator_util_refuse": 0.98
+        }
+      },
+      "scalar_proxy_would_accept": true,
+      "first_lift_vertical_force_n": 1.2945332444700335,
+      "first_lift_supports_weight": false
+    }
+  ],
+  "authority": {
+    "admission_status": "NOT_ADMITTED",
+    "metal": false,
+    "shop_release": false,
+    "viewport_admits": false,
+    "authorizes_hardware": false
+  },
+  "limits": [
+    "Two frozen development controls only; not held-out validation.",
+    "Simulation contact evidence only; not physical measurement.",
+    "Does not change runtime grasp gates or authorize lift.",
+    "Archived friction-mapping caveat from wrench-trace CHECKPOINT still applies."
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "schema": "realityos.grasp_lift_moment_aware_predictor_freeze/v1",
+  "freeze_id": "grasp-lift-moment-aware-predictor-20261106-v1",
+  "source_trace": "docs/superpowers/evidence/grasp-lift-wrench-trace-20261103",
+  "hypothesis": "A post-close-only predictor that refuses saturated horizontal pinches with negligible vertical force share catches the scalar μ×normal false accept on frozen trial 21006:21 while still refusing 21010:25.",
+  "method": {
+    "inputs": "first bilateral post_close grasp_contact_audits from frozen RESULT",
+    "refuse_if": [
+      "scalar_proxy = mu_lower * sum(normal) < object_weight",
+      "actuator_utilization >= 0.98 AND |Fz|/sum(|F|) < 0.15"
+    ],
+    "no_full_lift_replay": true
+  },
+  "acceptance": {
+    "catches_scalar_false_accept_21006": true,
+    "refuses_21010": true,
+    "authorizes_hardware": false,
+    "admission_status": "NOT_ADMITTED"
+  },
+  "artifacts": {
+    "predictor": "predict_hold_from_post_close.py",
+    "result": "PREDICTOR_RESULT.json",
+    "verification": "INDEPENDENT_VERIFICATION.json",
+    "report": "RESULT.md"
+  }
+}

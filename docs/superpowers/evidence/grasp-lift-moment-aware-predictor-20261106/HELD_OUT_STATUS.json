@@ -1,0 +1,21 @@
+{
+  "schema": "realityos.grasp_lift_moment_aware_predictor.held_out_status/v1",
+  "status": "blocked_missing_independent_contact_wrench_trials",
+  "development_controls": [
+    "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21006:21",
+    "v7:grasp_fixture:arm_gripper_lift:pinch_grasp_lift:21010:25"
+  ],
+  "search": {
+    "root": "docs/superpowers/evidence",
+    "other_RESULT_json_with_contact_wrenches": 0
+  },
+  "limits": [
+    "Does not authorize full-lift replay.",
+    "Does not change runtime gates.",
+    "admission_status remains NOT_ADMITTED."
+  ],
+  "authority": {
+    "admission_status": "NOT_ADMITTED",
+    "authorizes_hardware": false
+  }
+}

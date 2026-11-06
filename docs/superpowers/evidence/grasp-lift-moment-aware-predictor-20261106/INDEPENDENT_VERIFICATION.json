@@ -1,0 +1,74 @@
+{
+  "schema": "realityos.grasp_lift_moment_aware_predictor.independent/v1",
+  "status": "PASS",
+  "package_sha256": "3A2126B5D6A8A805645F78315E49C55D5D255221F0E088D673D97650569ECC31",
+  "checks": [
+    {
+      "name": "freeze_bound",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "result_bound",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "two_trials",
+      "ok": true,
+      "detail": 2
+    },
+    {
+      "name": "21010:25_scalar_ratio",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "21010:25_scalar_flag",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "21010:25_refuse",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "21006:21_scalar_ratio",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "21006:21_scalar_flag",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "21006:21_refuse",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "catches_false_accept",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "refuses_21006",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "refuses_21010",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "authority_closed",
+      "ok": true,
+      "detail": null
+    }
+  ],
+  "failed": [],
+  "admission_status": "NOT_ADMITTED"
+}
