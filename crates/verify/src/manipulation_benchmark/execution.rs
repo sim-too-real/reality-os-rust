@@ -913,8 +913,12 @@ fn scenario_objects_with_grasp_friction(
         .as_f64()
         .filter(|value| value.is_finite() && *value >= 0.0)
         .ok_or_else(|| "grasp friction target coefficient is invalid".to_string())?;
-    let gripper = gripper
-        .ok_or_else(|| "grasp friction target has no selected gripper resource".to_string())?;
+    // Missing gripper: leave objects unchanged. Expected-refusal paths (unavailable /
+    // unsupported gripper) must reach ValidRefusal, not InvalidTrial. Friction
+    // pairing is applied only when a gripper resource is still present.
+    let Some(gripper) = gripper else {
+        return Ok(objects);
+    };
     let finger_bodies = gripper.finger_bodies.clone();
     let mut seen_finger_bodies = std::collections::BTreeSet::new();
     if finger_bodies.is_empty()
@@ -1021,9 +1025,11 @@ fn run_benchmark_trial_inner(
             };
             qualified_resources.push(resource);
         }
-        apply_grasp_fault_observation(&trial.scenario, &mut qualified_resources);
     }
 
+    // Map tool-object friction while discovered grippers are still present.
+    // GripperUnavailable faults clear resources for reasoner observation afterward;
+    // applying friction after that clear used to InvalidTrial expected refusals.
     let worker_objects = if trial.task == BenchmarkTask::PinchGraspLift {
         scenario_objects_with_grasp_friction(
             &trial.scenario.objects,
@@ -1034,6 +1040,10 @@ fn run_benchmark_trial_inner(
     } else {
         trial.scenario.objects.clone()
     };
+
+    if trial.task == BenchmarkTask::PinchGraspLift {
+        apply_grasp_fault_observation(&trial.scenario, &mut qualified_resources);
+    }
 
     let loaded = match wrench_profile {
         Some(profile) => {
@@ -6171,13 +6181,12 @@ mod grasp_contact_wrench_tests {
     }
 
     #[test]
-    fn worker_friction_mapping_fails_closed_without_a_selected_gripper() {
+    fn worker_friction_mapping_skips_pairing_without_a_selected_gripper() {
         let objects = vec![json!({"name":"obj0", "friction":0.4})];
-        assert_eq!(
-            scenario_objects_with_grasp_friction(&objects, "obj0", None)
-                .expect_err("friction pair needs finger bodies"),
-            "grasp friction target has no selected gripper resource"
-        );
+        let prepared = scenario_objects_with_grasp_friction(&objects, "obj0", None)
+            .expect("missing gripper leaves objects unchanged for refusal paths");
+        assert_eq!(prepared[0].get("tool_object_friction_bodies"), None);
+        assert_eq!(prepared[0]["friction"], json!(0.4));
     }
 
     fn audit_json(state: &Value) -> Vec<Value> {
