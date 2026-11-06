@@ -1036,10 +1036,7 @@ pub fn infer_support_friction(measurement: &PushProbeMeasurement) -> FrictionInf
     if bounds.iter().any(|value| !value.is_finite()) || bounds[0] < 0.0 {
         return fail(FrictionNoInferenceReason::Unidentifiable);
     }
-    match intersect_measurement_bounds_with_prior(
-        bounds,
-        measurement.prior_support_friction,
-    ) {
+    match intersect_measurement_bounds_with_prior(bounds, measurement.prior_support_friction) {
         Ok(interval) => FrictionInferenceResult::Updated {
             interval,
             mode,
@@ -1143,15 +1140,15 @@ pub fn apply_successive_probe_cadence(
                 }
             }
             SuccessiveProbeCadencePolicy::PreferHigherLoadFamilyOnIncompatible => {
-                let (Some(first), Some(orig_prior)) =
-                    (first_slip_onset, prior_before_first_onset)
+                let (Some(first), Some(orig_prior)) = (first_slip_onset, prior_before_first_onset)
                 else {
                     return SuccessiveProbeCadenceOutcome::Rejected {
                         reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
                     };
                 };
                 // Entirely above the first posterior → treat as a higher load family.
-                if !(measurement_bounds[0] > first[1]) {
+                if measurement_bounds[0].partial_cmp(&first[1]) != Some(std::cmp::Ordering::Greater)
+                {
                     return SuccessiveProbeCadenceOutcome::Rejected {
                         reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
                     };
@@ -1261,9 +1258,7 @@ pub fn apply_first_onset_outside_prior(
                     declared_prior,
                 }
             }
-            FirstOnsetOutsidePriorPolicy::NarrowWhenRelativeMissAtMost {
-                max_relative_miss,
-            } => {
+            FirstOnsetOutsidePriorPolicy::NarrowWhenRelativeMissAtMost { max_relative_miss } => {
                 if !(max_relative_miss.is_finite() && max_relative_miss >= 0.0) {
                     return FirstOnsetOutsidePriorOutcome::Rejected {
                         reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
@@ -1277,8 +1272,7 @@ pub fn apply_first_onset_outside_prior(
                         reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
                     };
                 }
-                let relative_miss =
-                    (measurement_bounds[0] - declared_prior[1]) / declared_prior[1];
+                let relative_miss = (measurement_bounds[0] - declared_prior[1]) / declared_prior[1];
                 if relative_miss <= max_relative_miss {
                     FirstOnsetOutsidePriorOutcome::AcceptedByReplacingPrior {
                         interval: measurement_bounds,
@@ -1376,9 +1370,7 @@ pub fn probe_task_continuation_from_first_onset_with_replan(
             reason: FrictionNoInferenceReason::PriorMeasurementIncompatible,
         } => ProbeTaskContinuationDecision::CorrectRefuseIncompatiblePrior,
         FirstOnsetOutsidePriorOutcome::Rejected { reason } => {
-            ProbeTaskContinuationDecision::RejectedOther {
-                reason: reason.clone(),
-            }
+            ProbeTaskContinuationDecision::RejectedOther { reason: *reason }
         }
     }
 }
@@ -1436,8 +1428,7 @@ pub fn probe_task_continuation_after_reprobe_measurement(
             reason: "non_finite_or_unordered_or_negative_reprobe_bounds".into(),
         };
     }
-    let outcome =
-        apply_first_onset_outside_prior(policy, *declared_prior, new_measurement_bounds);
+    let outcome = apply_first_onset_outside_prior(policy, *declared_prior, new_measurement_bounds);
     match probe_task_continuation_from_first_onset(&outcome, mu_required) {
         ProbeTaskContinuationDecision::ContinueProbeWithBelief {
             interval,
@@ -1488,13 +1479,9 @@ pub enum NextProbeActionDecision {
         declared_prior: [f64; 2],
     },
     /// Feedback was a correct refuse — do not proceed.
-    HoldAfterCorrectRefuse {
-        reason: String,
-    },
+    HoldAfterCorrectRefuse { reason: String },
     /// Feedback rejected — do not proceed.
-    RejectedNotContinuing {
-        reason: String,
-    },
+    RejectedNotContinuing { reason: String },
     /// Negative control: claiming proceed while `proves_mu_required` is false.
     RejectedBlindProceedWithoutBeliefProof,
 }
@@ -1604,8 +1591,7 @@ pub fn run_offline_complete_probe_pipeline(
     refuse_continuation: PriorEnvelopeRefuseContinuation,
     reprobe_measurement: Option<[f64; 2]>,
 ) -> OfflineCompleteProbePipelineReport {
-    let first_onset =
-        apply_first_onset_outside_prior(policy, declared_prior, first_onset_bounds);
+    let first_onset = apply_first_onset_outside_prior(policy, declared_prior, first_onset_bounds);
     let continuation = probe_task_continuation_from_first_onset_with_replan(
         &first_onset,
         mu_required,
@@ -1686,9 +1672,7 @@ pub fn run_offline_complete_probe_pipeline(
 }
 
 /// Negative control: claiming a live write from offline pipeline completion.
-pub fn claim_live_write_from_offline_pipeline(
-    report: &OfflineCompleteProbePipelineReport,
-) -> bool {
+pub fn claim_live_write_from_offline_pipeline(report: &OfflineCompleteProbePipelineReport) -> bool {
     // Always refuse — completed_with_belief is not live authorization.
     let _ = report.completed_with_belief;
     false
@@ -1732,7 +1716,7 @@ pub fn prior_envelope_miss_margin(
             reason: "non_finite_or_unordered_interval".into(),
         };
     }
-    if !(declared_prior[1] > 0.0) {
+    if declared_prior[1].partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
         return PriorEnvelopeMissMargin::InvalidInputs {
             reason: "non_positive_prior_upper".into(),
         };

@@ -3022,9 +3022,8 @@ fn record_probe_measurement(
             inferred_quantity,
         } => {
             episode.wrench_inference_interval = Some(*interval);
-            episode.wrench_inference_reason = Some(format!(
-                "updated:{mode:?}:quantity={inferred_quantity:?}"
-            ));
+            episode.wrench_inference_reason =
+                Some(format!("updated:{mode:?}:quantity={inferred_quantity:?}"));
             match belief.intersect_support_friction_with_probe(*interval, &measurement) {
                 Ok(posterior) => {
                     episode.posterior_support_friction_interval = Some(posterior);

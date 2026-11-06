@@ -1160,8 +1160,7 @@ fn first_onset_outside_prior_policies_on_21008_numbers() {
             quarantined_prior: prior,
         }
     );
-    let FirstOnsetOutsidePriorOutcome::AcceptedByReplacingPrior { interval, .. } = narrowed
-    else {
+    let FirstOnsetOutsidePriorOutcome::AcceptedByReplacingPrior { interval, .. } = narrowed else {
         panic!("narrow");
     };
     assert!(
@@ -1181,8 +1180,7 @@ fn first_onset_outside_prior_transfers_to_heldout_numeric_family() {
         prior,
         bounds,
     );
-    let FirstOnsetOutsidePriorOutcome::AcceptedByReplacingPrior { interval, .. } = narrowed
-    else {
+    let FirstOnsetOutsidePriorOutcome::AcceptedByReplacingPrior { interval, .. } = narrowed else {
         panic!("expected narrow on held-out family, got {narrowed:?}");
     };
     assert!(friction_interval_proves_mu_required(interval, mu_required));
@@ -1254,9 +1252,7 @@ fn matched_trials_miss_margin_gate_vs_narrow_on_21008_and_heldout() {
         bounds_21008,
     );
     let gated_21008 = apply_first_onset_outside_prior(
-        FirstOnsetOutsidePriorPolicy::NarrowWhenRelativeMissAtMost {
-            max_relative_miss,
-        },
+        FirstOnsetOutsidePriorPolicy::NarrowWhenRelativeMissAtMost { max_relative_miss },
         prior_21008,
         bounds_21008,
     );
@@ -1281,9 +1277,7 @@ fn matched_trials_miss_margin_gate_vs_narrow_on_21008_and_heldout() {
         bounds_small,
     );
     let gated_small = apply_first_onset_outside_prior(
-        FirstOnsetOutsidePriorPolicy::NarrowWhenRelativeMissAtMost {
-            max_relative_miss,
-        },
+        FirstOnsetOutsidePriorPolicy::NarrowWhenRelativeMissAtMost { max_relative_miss },
         prior_small,
         bounds_small,
     );
@@ -1372,7 +1366,9 @@ fn matched_trials_reprobe_replan_vs_stop_refuse_on_21008_and_heldout() {
             assert_eq!(interval, bounds_small);
             assert!(proves_mu_required);
         }
-        other => panic!("small-miss must continue with belief even under replan policy, got {other:?}"),
+        other => {
+            panic!("small-miss must continue with belief even under replan policy, got {other:?}")
+        }
     }
 }
 
@@ -1405,7 +1401,6 @@ fn prior_envelope_miss_margin_quantifies_21008_and_heldout() {
         PriorEnvelopeMissMargin::NotEntirelyAbovePrior { .. }
     ));
 }
-
 
 #[test]
 fn measurement_digest_binds_sample_values_origin_and_transform() {
@@ -1585,8 +1580,8 @@ fn matched_trials_next_action_from_belief_after_reprobe_on_21008_and_heldout() {
         blind_proceed_ignoring_belief_proof, next_probe_action_after_reprobe_feedback,
         probe_task_continuation_after_reprobe_measurement,
         probe_task_continuation_from_first_onset_with_replan, AfterReprobeFeedbackDecision,
-        FirstOnsetOutsidePriorPolicy, NextProbeActionDecision,
-        PriorEnvelopeRefuseContinuation, ProbeTaskContinuationDecision,
+        FirstOnsetOutsidePriorPolicy, NextProbeActionDecision, PriorEnvelopeRefuseContinuation,
+        ProbeTaskContinuationDecision,
     };
 
     let mu_required = 0.3;

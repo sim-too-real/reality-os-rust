@@ -137,14 +137,36 @@ def classify_episode(
         if prior_incompatible_offline or "PriorMeasurementIncompatible" in wrench_inference_reason:
             first_onset = episode.get("first_slip_onset_interval")
             prior_before = episode.get("support_friction_prior_before_first_onset")
+            # Sealed 21003 episodes may omit first_slip_* episode fields; recover the
+            # successive pattern from offline diagnosis (Updated/slip_onset then
+            # measurement_bounds_do_not_overlap_prior). Do not relabel that as
+            # first-onset-outside-prior.
+            diagnosis_had_slip_onset_update = any(
+                isinstance(row, dict)
+                and (
+                    row.get("diagnosis") == "updated"
+                    or (
+                        isinstance(row.get("inference"), dict)
+                        and isinstance(row["inference"].get("Updated"), dict)
+                        and row["inference"]["Updated"].get("mode") == "slip_onset"
+                    )
+                )
+                for row in diagnosis_rows
+            )
+            had_first_onset_narrowing = (
+                first_onset is not None
+                or prior_before is not None
+                or diagnosis_had_slip_onset_update
+            )
             entirely_above = any(
-                row.get("diagnosis") == "entirely_above_prior"
+                row.get("diagnosis")
+                in {"entirely_above_prior", "measurement_bounds_do_not_overlap_prior"}
                 for row in diagnosis_rows
                 if isinstance(row, dict)
             )
             # PreferHigherLoadFamily only applies after a first SlipOnset narrowing.
             # First onset entirely above the declared prior is a distinct hole.
-            if first_onset is None and prior_before is None:
+            if not had_first_onset_narrowing:
                 failure_class = (
                     "expected_success_blocked_by_first_onset_outside_prior"
                 )
