@@ -107,7 +107,7 @@ impl ScenarioSuiteManifest {
         let invalid = |message: &str| BenchmarkError::InvalidManifest(message.into());
         if self.schema_version != 1
             || self.suite_id.trim().is_empty()
-            || !matches!(self.suite_version, 2 | 3 | 4)
+            || !matches!(self.suite_version, 2..=4)
         {
             return Err(invalid("unsupported or empty scenario suite identity"));
         }

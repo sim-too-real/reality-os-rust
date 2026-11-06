@@ -607,11 +607,11 @@ impl FirstActionPreflightV1 {
         if self
             .authorized_action_key
             .as_deref()
-            .map_or(false, |action| action.trim().is_empty())
+            .is_some_and(|action| action.trim().is_empty())
             || self
                 .refusal_code
                 .as_deref()
-                .map_or(false, |refusal| refusal.trim().is_empty())
+                .is_some_and(|refusal| refusal.trim().is_empty())
         {
             return Err("first-action preflight action or refusal is empty".into());
         }
@@ -2297,14 +2297,14 @@ fn execute_push_witness(
                 let current_position = body_position(&state, &request.scene.object_id)?;
                 let step_delta = sub3(current_position, prior_position);
                 let start_delta = sub3(current_position, audit.motion.start_position);
-                let probe_pose_samples = is_probe
-                    .then(|| {
-                        audit.object_pose_trace[pose_trace_start..]
-                            .iter()
-                            .map(|sample| (sample.capture_s, sample.position_world_m))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
+                let probe_pose_samples = if is_probe {
+                    audit.object_pose_trace[pose_trace_start..]
+                        .iter()
+                        .map(|sample| (sample.capture_s, sample.position_world_m))
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
                 let observed_probe_trace = !probe_pose_samples.is_empty();
                 if observed_probe_trace {
                     let observations = probe_pose_samples
@@ -5654,8 +5654,10 @@ mod witness_tests {
 
     #[test]
     fn gradual_motion_below_force_gate_is_retained_as_unresolved() {
-        let mut motion = PushMotionAudit::default();
-        motion.started = true;
+        let mut motion = PushMotionAudit {
+            started: true,
+            ..Default::default()
+        };
         observe_probe_motion_sample(&mut motion, [0.0006, 0.0, 0.0], 1.002, Some(0.49));
         observe_probe_motion_sample(&mut motion, [0.0012, 0.0, 0.0], 1.004, Some(0.49));
         observe_probe_motion_sample(&mut motion, [0.0018, 0.0, 0.0], 1.006, Some(0.49));
@@ -5686,8 +5688,10 @@ mod witness_tests {
 
     #[test]
     fn force_resolved_motion_records_onset_without_unresolved_flag() {
-        let mut motion = PushMotionAudit::default();
-        motion.started = true;
+        let mut motion = PushMotionAudit {
+            started: true,
+            ..Default::default()
+        };
         observe_probe_motion_sample(&mut motion, [0.0011, 0.0, 0.0], 2.0, Some(0.5));
 
         assert_eq!(motion.first_motion_s, Some(2.0));
@@ -5697,8 +5701,10 @@ mod witness_tests {
 
     #[test]
     fn probe_motion_trace_catches_force_resolved_motion_inside_a_control_batch() {
-        let mut motion = PushMotionAudit::default();
-        motion.started = true;
+        let mut motion = PushMotionAudit {
+            started: true,
+            ..Default::default()
+        };
         let samples = [
             (1.002, [0.0006, 0.0, 0.0], Some(0.8)),
             (1.004, [0.0011, 0.0, 0.0], Some(0.8)),
@@ -5711,8 +5717,10 @@ mod witness_tests {
         assert!(!motion.unresolved_motion_before_force);
         assert_eq!(motion.end_position, [0.0012, 0.0, 0.0]);
 
-        let mut unresolved = PushMotionAudit::default();
-        unresolved.started = true;
+        let mut unresolved = PushMotionAudit {
+            started: true,
+            ..Default::default()
+        };
         let weak_force_samples = [
             (1.002, [0.0006, 0.0, 0.0], Some(0.49)),
             (1.004, [0.0011, 0.0, 0.0], Some(0.49)),

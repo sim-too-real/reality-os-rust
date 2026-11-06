@@ -1071,6 +1071,18 @@ pub fn contact_force_on_geom(contact_wrench: [f64; 6], is_geom1: bool) -> [f64; 
     contact_wrench.map(|value| sign * value)
 }
 
+/// Sum all contact loads on the instrumented tool subtree, including contacts
+/// with bodies that were not the task's expected target.
+pub fn aggregate_contact_wrenches(contributions: &[[f64; 6]]) -> [f64; 6] {
+    let mut total = [0.0; 6];
+    for wrench in contributions {
+        for axis in 0..6 {
+            total[axis] += wrench[axis];
+        }
+    }
+    total
+}
+
 #[cfg(test)]
 mod probe_pose_trace_tests {
     use super::{parse_probe_pose_samples, WrenchSensorError};
@@ -1216,16 +1228,4 @@ mod probe_pose_trace_tests {
             WrenchSensorError::Worker("object_pose_contact_pairs")
         ));
     }
-}
-
-/// Sum all contact loads on the instrumented tool subtree, including contacts
-/// with bodies that were not the task's expected target.
-pub fn aggregate_contact_wrenches(contributions: &[[f64; 6]]) -> [f64; 6] {
-    let mut total = [0.0; 6];
-    for wrench in contributions {
-        for axis in 0..6 {
-            total[axis] += wrench[axis];
-        }
-    }
-    total
 }
