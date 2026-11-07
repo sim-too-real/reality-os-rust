@@ -1,0 +1,23 @@
+{
+  "schema": "realityos.grasp_lift_moment_aware_predictor.held_out_probe_bridge/v1",
+  "contract_freeze_id": "grasp-lift-moment-aware-held-out-capture-contract-2026-11-07-v1",
+  "probe_schema_version": 1,
+  "compatible_with": "simtooreal-probe.PolicyTraceEvent/v1",
+  "independent_count": 0,
+  "min_independent_trials_required": 2,
+  "candidate_result_paths": [],
+  "events_emitted": 0,
+  "events_path": null,
+  "status": "blocked_missing_independent_contact_wrench_trials",
+  "opened_held_out_validation": false,
+  "beyond_so101": {
+    "claim": "typed_probe_envelope_bridge_for_held_out_contact_wrench",
+    "so101_frozen_probe_replay": false,
+    "note": "Bridge is robotics capture schema beyond SO-101 fixture replay; does not invent trials."
+  },
+  "authority": {
+    "admission_status": "NOT_ADMITTED",
+    "authorizes_hardware": false,
+    "authorizes_full_lift_replay": false
+  }
+}
